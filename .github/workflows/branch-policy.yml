@@ -20,10 +20,11 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
 
-          echo "Validating ${HEAD} -> ${BASE}"
+          echo "Validating ${HEAD} -> ${BASE} (actor: ${ACTOR})"
 
           if [[ "${BASE}" == "main" ]]; then
             if [[ "${HEAD}" != "dev" ]]; then
@@ -34,11 +35,17 @@ jobs:
           fi
 
           if [[ "${BASE}" == "dev" ]]; then
-            if [[ ! "${HEAD}" =~ ^milestone/[a-z0-9][a-z0-9-]*$ ]]; then
-              echo "Pull requests to dev must come from milestone/<milestone-slug>."
-              exit 1
+            if [[ "${HEAD}" =~ ^milestone/[a-z0-9][a-z0-9-]*$ ]]; then
+              exit 0
             fi
-            exit 0
+
+            if [[ "${ACTOR}" == "dependabot[bot]" && "${HEAD}" =~ ^dependabot/ ]]; then
+              echo "Allowing Dependabot maintenance PR directly to dev."
+              exit 0
+            fi
+
+            echo "Pull requests to dev must come from milestone/<milestone-slug>, except Dependabot maintenance PRs."
+            exit 1
           fi
 
           if [[ "${BASE}" =~ ^milestone/[a-z0-9][a-z0-9-]*$ ]]; then
