@@ -321,7 +321,13 @@ A documentação é fragmentada por responsabilidade, mas deve formar uma navega
 ```text
 docs/
 ├── README.md
+├── PIPELINE.md
 ├── architecture.md
+├── module-api.md
+├── shared-primitives.md
+├── runtime-composition.md
+├── CONTRACTS.md
+├── ARTIFACTS.md
 ├── development.md
 ├── repository-settings.md
 └── versioning.md
@@ -330,10 +336,18 @@ docs/
 Responsabilidades:
 
 - `docs/README.md`, índice e mapa de navegação;
-- `docs/architecture.md`, arquitetura e decisões transversais;
+- `docs/PIPELINE.md`, fluxo completo da entrada ao `ContextMapArtifact`;
+- `docs/architecture.md`, ownership, dependências e regras arquiteturais;
+- `docs/module-api.md`, superfície pública e imports permitidos entre capabilities;
+- `docs/shared-primitives.md`, critérios para tipos transversais no namespace `shared`;
+- `docs/runtime-composition.md`, composition root e limite da orquestração;
+- `docs/CONTRACTS.md`, contratos públicos e semântica dos dados entre módulos;
+- `docs/ARTIFACTS.md`, persistência, immutability, lineage e reprodutibilidade;
 - `docs/development.md`, fluxo Git, padrões de código e documentação;
 - `docs/repository-settings.md`, configuração e políticas do GitHub;
 - `docs/versioning.md`, versionamento e releases.
+
+A lista canônica e a responsabilidade de cada documento estão em [`docs/README.md`](README.md); esta seção não deve divergir dela.
 
 ### 6.2 Documentação de módulo
 
@@ -344,9 +358,11 @@ src/contextmap/<module>/
 ├── ...
 └── docs/
     ├── README.md
-    ├── architecture.md
+    ├── pipeline.md
     ├── contracts.md
-    └── pipeline.md
+    ├── architecture.md
+    ├── evaluation.md
+    └── backends.md
 ```
 
 Não é obrigatório criar todos os arquivos. A documentação deve crescer apenas quando existe conteúdo real.

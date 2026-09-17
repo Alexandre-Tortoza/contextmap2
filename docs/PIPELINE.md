@@ -394,7 +394,42 @@ CLIP ou AlphaCLIP podem produzir suporte visual para uma hipótese.
 - suporte acumulado por Semantic Fusion;
 - probabilidade calibrada.
 
-### 2.10 Saída da percepção
+### 2.10 Semantic Refinement opcional
+
+Estágio opcional que pode consolidar `SemanticClaim[]` e `SemanticScore[]` de 2.8/2.9 em um conjunto menor e priorizado de hipóteses, por exemplo removendo redundância trivial entre claims equivalentes ou aplicando uma política explícita de priorização.
+
+Não é um requisito da Solution 1, da mesma forma que Semantic Scoring e Point Representation são opcionais.
+
+Regras:
+
+- não inventa evidência nova; só reorganiza o que já existe;
+- não sobrescreve nem descarta silenciosamente as claims/scores de origem — o resultado refinado preserva referência a elas;
+- ausência deste estágio deve produzir um `PerceptionResult` igualmente válido, apenas com as claims/scores originais não refinadas.
+
+### 2.11 Evidence Assembly
+
+Reúne as evidências produzidas pelo branch de Visual Perception em uma única estrutura, sem reinterpretá-las:
+
+- `Region2D[]` (via Region Evidence Views);
+- `VisualFeature[]`, dense e region;
+- `SemanticClaim[]`, refinadas ou não;
+- `SemanticScore[]`, quando produzido;
+- `SceneContext`, quando produzido.
+
+Evidence Assembly é agregação, não fusão nem interpretação. Nenhuma evidência recebida é descartada silenciosamente; a ausência de um canal opcional (Scene Interpretation, Semantic Scoring, Semantic Refinement) fica explícita na estrutura montada, não implícita.
+
+### 2.12 Audit
+
+Valida a evidência montada antes de permitir a emissão do `PerceptionResult`, reforçando os invariantes já definidos para o pipeline e para os contratos:
+
+- toda claim referencia uma região ou observação existente;
+- toda `VisualFeature` declara `embedding_space` explícito;
+- confidence ausente permanece `None`, nunca convertida para `0.0`/`1.0`;
+- inconsistências geram warning/erro registrado, nunca falha silenciosa.
+
+Auditoria é o mecanismo concreto que materializa, neste estágio, o princípio de auditabilidade descrito em [architecture.md](architecture.md#auditabilidade-como-requisito-arquitetural). O que Audit produz é diagnóstico: pode alimentar `events.jsonl`/`debug/` do `PerceptionRunArtifact` (ver [ARTIFACTS.md](ARTIFACTS.md)), mas nenhum estágio downstream depende de `debug/` para funcionar.
+
+### 2.13 Saída da percepção
 
 Um resultado representa uma inferência sobre **uma observação física em um run específico**:
 
