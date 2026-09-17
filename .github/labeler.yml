@@ -1,0 +1,65 @@
+"area: input":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/input/**"
+          - "src/**/adapters/**"
+          - "config/**"
+
+"area: perception":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/perception/**"
+          - "src/**/vision/**"
+
+"area: geometry":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/geometry/**"
+          - "src/**/projection/**"
+
+"area: association":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/association/**"
+
+"area: fusion":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/fusion/**"
+
+"area: semantics":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/semantic*/**"
+          - "src/**/context/**"
+
+"area: relations":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/relation*/**"
+          - "src/**/graph/**"
+
+"area: artifact":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/artifact/**"
+          - "src/**/serialization/**"
+          - "schemas/**"
+
+"area: evaluation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "benchmarks/**"
+          - "tests/**"
+          - "evaluation/**"
+
+"type: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+
+"type: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"

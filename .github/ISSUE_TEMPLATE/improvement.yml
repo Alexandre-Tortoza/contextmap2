@@ -1,0 +1,37 @@
+name: Improvement
+description: Propose a new capability or improvement to the validated path
+title: "feat: "
+labels:
+  - "type: feature"
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What limitation or requirement does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the smallest implementation that could address the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: How will we determine whether this improves the generated map or system reliability?
+    validations:
+      required: true
+  - type: dropdown
+    id: artifact
+    attributes:
+      label: Artifact impact
+      options:
+        - No artifact change expected
+        - Compatible artifact change expected
+        - Incompatible artifact change may be required
+    validations:
+      required: true

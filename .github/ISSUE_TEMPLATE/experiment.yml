@@ -1,0 +1,43 @@
+name: Research experiment
+description: Define a measurable research hypothesis before implementation
+title: "experiment: "
+labels:
+  - "type: experiment"
+  - "status: needs-validation"
+body:
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: State the expected effect in a form that can be confirmed or rejected.
+      placeholder: "Replacing X with Y should improve metric Z because..."
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline
+      description: Describe the current path and the exact baseline configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Experimental change
+      description: Describe the isolated change being tested.
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Evaluation
+      description: Define dataset/fixture, metrics, acceptance criteria, and expected artifacts.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Decision rule
+      description: Explain what result would justify keeping, revising, or discarding the experiment.
+    validations:
+      required: true
