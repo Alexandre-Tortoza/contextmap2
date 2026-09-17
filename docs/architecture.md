@@ -1,72 +1,103 @@
-# Solution 1 architecture
+# Arquitetura da Solution 1
 
-Solution 1 is deliberately narrow. Its purpose is to validate one reproducible path from synchronized sensor observations to a portable contextual map artifact.
+A Solution 1 é deliberadamente restrita. Seu objetivo é validar um caminho reproduzível desde observações sincronizadas de sensores até um artefato contextual portátil.
 
 ```mermaid
 flowchart LR
-    A[Source] --> B[Input adapter]
-    B --> C[Normalized frame]
-    C --> D[Visual perception]
-    C --> E[Geometry and pose]
-    D --> F[Spatial association]
+    A[Fonte] --> B[Adaptador de entrada]
+    B --> C[Frame normalizado]
+    C --> D[Percepção visual]
+    C --> E[Geometria e pose]
+    D --> F[Associação espacial]
     E --> F
-    F --> G[Multi-view fusion]
-    G --> H[Map state]
-    H --> I[Artifact serializer]
-    I --> J[Versioned artifact]
+    F --> G[Fusão multi-view]
+    G --> H[Estado do mapa]
+    H --> I[Serialização do artefato]
+    I --> J[Artefato versionado]
 ```
 
-## Boundaries
+## Limites
 
-This repository owns the generation, validation, and serialization of the contextual map.
+Este repositório é responsável por gerar, validar e serializar o mapa contextual.
 
-The following are intentionally outside the repository boundary:
+Estão intencionalmente fora de seu limite:
 
-- web or desktop viewers;
-- natural-language query interfaces;
-- search applications;
-- navigation stacks;
-- planners and agents;
-- dashboards and operator interfaces.
+- viewers web ou desktop;
+- interfaces de consulta em linguagem natural;
+- aplicações de busca;
+- stacks de navegação;
+- planners e agentes;
+- dashboards e interfaces de operação.
 
-Those systems should consume the exported artifact through its documented schema rather than importing implementation details from the mapping pipeline.
+Esses sistemas devem consumir o artefato exportado por meio de seu schema documentado, sem importar detalhes internos do pipeline de mapeamento.
 
-## Core data flow
+## Fluxo principal de dados
 
-The first implementation should converge on explicit contracts between these stages:
+A primeira implementação deve convergir para contratos explícitos entre as etapas:
 
 ```mermaid
 flowchart TD
-    A[Raw sensor sample] --> B[FrameBundle]
+    A[Amostra bruta de sensor] --> B[FrameBundle]
     B --> C[Observation2D]
     C --> D[SpatialObservation]
-    D --> E[Associated evidence]
-    E --> F[Persistent entity state]
-    F --> G[Relations and scene context]
-    G --> H[Context map artifact]
+    D --> E[Evidência associada]
+    E --> F[Estado persistente de entidade]
+    F --> G[Relações e contexto de cena]
+    G --> H[Artefato de mapa contextual]
 ```
 
-The exact classes and schemas are intentionally not frozen yet. They should be defined from the smallest vertical slice that can be evaluated end to end.
+As classes e schemas exatos ainda não estão congelados. Eles devem emergir do menor vertical slice que possa ser avaliado ponta a ponta.
 
-## Design rules
+## Regras de design
 
-1. Input-specific code terminates at the normalized observation boundary.
-2. Model-specific code must not define the persisted map schema.
-3. Every persisted semantic claim keeps confidence and provenance when available.
-4. Multi-view fusion should preserve evidence rather than only the final label.
-5. The artifact must be readable without loading perception models.
-6. Consumer-specific behavior must not leak into map generation.
-7. Experimental paths stay isolated until they demonstrate measurable value.
+1. Código específico de fonte termina na fronteira de observações normalizadas.
+2. Código específico de modelo não define o schema persistido do mapa.
+3. Toda claim semântica persistida preserva confiança e provenance quando disponíveis.
+4. Fusão multi-view deve preservar evidência, não apenas o label final.
+5. O artefato deve ser legível sem carregar modelos de percepção.
+6. Comportamento específico de consumidores não deve vazar para a geração do mapa.
+7. Caminhos experimentais permanecem isolados até demonstrarem valor mensurável.
+8. Módulos expõem contratos públicos próprios e não dependem de internals ou backends de outros módulos.
+9. Runtime compõe implementações concretas, mas não concentra comportamento científico ou de domínio.
+10. Clean Code, SOLID, KISS, DRY e YAGNI são aplicados de forma pragmática conforme [development.md](development.md).
 
-## Validation target
+## Organização por capabilities
 
-Evaluation should eventually answer questions at the map level, for example:
+A arquitetura inicial prevê capabilities como:
 
-- are repeated observations associated with the correct persistent entity;
-- does semantic fusion improve or degrade confidence across views;
-- are 3D positions geometrically consistent;
-- are required relations represented correctly;
-- can an independent consumer reconstruct the required contextual information from the artifact alone;
-- does serialization preserve all information required for reproducibility.
+```text
+ingestion
+visual_perception
+state_estimation
+geometric_mapping
+sensor_association
+point_representation
+semantic_fusion
+semantic_mapping
+spatial_relations
+artifact
+runtime
+```
 
-Component metrics remain useful, but they are supporting metrics rather than the final definition of success.
+A responsabilidade final e os contratos de cada capability são definidos pelas issues arquiteturais e documentados junto ao módulo quando implementados.
+
+Documentação específica fica em:
+
+```text
+src/contextmap/<module>/docs/
+```
+
+A integração global dessa documentação é mantida por [docs/README.md](README.md).
+
+## Alvo de validação
+
+A avaliação deve responder questões no nível do mapa, por exemplo:
+
+- observações repetidas são associadas à entidade persistente correta;
+- fusão semântica melhora ou degrada confiança entre diferentes views;
+- posições 3D permanecem geometricamente consistentes;
+- relações necessárias são representadas corretamente;
+- um consumidor independente consegue reconstruir o contexto necessário usando apenas o artefato;
+- a serialização preserva todas as informações necessárias para reprodutibilidade.
+
+Métricas de componentes continuam úteis, mas são métricas de suporte e não a definição final de sucesso.
