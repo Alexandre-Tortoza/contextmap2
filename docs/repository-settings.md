@@ -38,7 +38,7 @@ Configuração recomendada:
 
 ## Política de branches
 
-O fluxo oficial é:
+O fluxo oficial para desenvolvimento humano é:
 
 ```text
 <type>/<issue-number>-<slug>
@@ -62,10 +62,13 @@ main
 ### `dev`
 
 - integra milestones concluídas;
-- origem esperada: `milestone/*`;
+- origem normal: `milestone/*`;
+- aceita PRs automáticos `dependabot/*` somente quando o ator é `dependabot[bot]`;
 - CI obrigatório antes do merge;
 - force push bloqueado;
 - exclusão bloqueada quando possível.
+
+A exceção do Dependabot existe apenas para manutenção automatizada de dependências. Ela não autoriza branches humanas a ignorarem milestones e nunca permite promoção direta para `main`.
 
 ### `milestone/*`
 
@@ -99,6 +102,22 @@ chore
 
 A branch deve abrir PR para a branch da milestone correspondente, nunca diretamente para `dev` ou `main`.
 
+### Dependabot
+
+O arquivo `.github/dependabot.yml` configura `dev` como `target-branch` para atualizações de Python e GitHub Actions.
+
+O caminho automatizado é:
+
+```text
+dependabot/*
+    ↓
+dev
+    ↓
+main
+```
+
+Esse caminho continua sujeito a CI e demais checks aplicáveis. A branch policy valida também o ator do PR para impedir que uma branch humana com prefixo `dependabot/` utilize a exceção.
+
 ### `qa`
 
 A branch `qa` pode permanecer temporariamente no repositório por histórico ou compatibilidade, mas não faz parte do fluxo padrão e não deve ser usada como etapa de promoção.
@@ -110,6 +129,7 @@ O workflow `Branch policy` valida:
 ```text
 issue branch -> milestone/*
 milestone/*  -> dev
+dependabot/* -> dev   # somente dependabot[bot]
 dev          -> main
 ```
 
