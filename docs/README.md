@@ -36,11 +36,12 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 2. [architecture.md](architecture.md), boundaries, ownership, dependências e regras arquiteturais.
 3. [module-api.md](module-api.md), superfície pública, encapsulamento e imports permitidos entre capabilities.
 4. [shared-primitives.md](shared-primitives.md), critérios para tipos transversais e limites do namespace `shared`.
-5. [CONTRACTS.md](CONTRACTS.md), contratos públicos, identidades e semântica dos dados que cruzam módulos.
-6. [ARTIFACTS.md](ARTIFACTS.md), persistência, immutability, lineage, debug e reprodutibilidade.
-7. [development.md](development.md), fluxo de desenvolvimento, branches, commits, Python e qualidade.
-8. [repository-settings.md](repository-settings.md), políticas esperadas do GitHub e checks.
-9. [versioning.md](versioning.md), Semantic Versioning e releases.
+5. [runtime-composition.md](runtime-composition.md), composition root, configuração, optional stages e limite da orquestração.
+6. [CONTRACTS.md](CONTRACTS.md), contratos públicos, identidades e semântica dos dados que cruzam módulos.
+7. [ARTIFACTS.md](ARTIFACTS.md), persistência, immutability, lineage, debug e reprodutibilidade.
+8. [development.md](development.md), fluxo de desenvolvimento, branches, commits, Python e qualidade.
+9. [repository-settings.md](repository-settings.md), políticas esperadas do GitHub e checks.
+10. [versioning.md](versioning.md), Semantic Versioning e releases.
 
 ## Mapa da documentação
 
@@ -52,6 +53,7 @@ flowchart TD
     R --> A[architecture.md]
     R --> API[module-api.md]
     R --> SH[shared-primitives.md]
+    R --> RC[runtime-composition.md]
     R --> C[CONTRACTS.md]
     R --> AR[ARTIFACTS.md]
     R --> D[development.md]
@@ -61,6 +63,7 @@ flowchart TD
     A --> M[docs específicos dos módulos]
     API --> M
     SH --> M
+    RC --> M
     P --> M
     C --> M
 
@@ -80,6 +83,7 @@ flowchart TD
 | `architecture.md` | Quem é responsável por cada capability e quem pode depender de quem? |
 | `module-api.md` | O que uma capability expõe publicamente e como outras capabilities podem importá-la? |
 | `shared-primitives.md` | Quais conceitos podem ser compartilhados sem perder ownership de domínio? |
+| `runtime-composition.md` | Onde implementations são construídas e como runtime orquestra sem absorver lógica científica? |
 | `CONTRACTS.md` | Qual é o significado dos objetos que atravessam as fronteiras entre módulos? |
 | `ARTIFACTS.md` | Como runs e resultados são persistidos, auditados e reutilizados? |
 | `development.md` | Como uma mudança deve ser implementada e integrada? |
