@@ -1,0 +1,43 @@
+name: Branch policy
+
+on:
+  pull_request:
+    branches: [main, qa, dev]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate promotion path
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          echo "Validating ${HEAD} -> ${BASE}"
+
+          if [[ "${BASE}" == "main" && "${HEAD}" != "qa" ]]; then
+            echo "Pull requests to main must come from qa."
+            exit 1
+          fi
+
+          if [[ "${BASE}" == "qa" && "${HEAD}" != "dev" ]]; then
+            echo "Pull requests to qa must come from dev."
+            exit 1
+          fi
+
+          if [[ "${BASE}" == "dev" ]]; then
+            case "${HEAD}" in
+              feat/*|fix/*|research/*|experiment/*|refactor/*|test/*|docs/*|ci/*|chore/*)
+                exit 0
+                ;;
+              *)
+                echo "Pull requests to dev must use an approved branch prefix."
+                exit 1
+                ;;
+            esac
+          fi
