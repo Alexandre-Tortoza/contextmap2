@@ -1,16 +1,16 @@
-# Repository settings
+# Configuração do repositório
 
-This document records the intended GitHub repository settings so they can be audited alongside the source code.
+Este documento registra as configurações esperadas do GitHub para que possam ser auditadas junto ao código.
 
-## Repository metadata
+## Metadados
 
-Description:
+Descrição:
 
 ```text
 Persistent 3D contextual map generation from synchronized robotic sensor data.
 ```
 
-Suggested topics:
+Tópicos sugeridos:
 
 ```text
 robotics
@@ -25,65 +25,151 @@ scene-graphs
 research
 ```
 
-## Merge policy
+## Política de merge
 
-Recommended repository settings:
+Configuração recomendada:
 
-- default branch: `main`;
-- allow squash merge: enabled;
-- allow rebase merge: enabled;
-- allow merge commits: disabled;
-- automatically delete head branches after merge: enabled;
-- allow auto-merge: optional after required checks are configured.
+- branch padrão: `main`;
+- squash merge: habilitado;
+- rebase merge: habilitado;
+- merge commit: desabilitado;
+- exclusão automática da branch de origem após merge: habilitada;
+- auto-merge: opcional depois que os checks obrigatórios estiverem estáveis.
 
-## Branch policy
+## Política de branches
+
+O fluxo oficial é:
+
+```text
+<type>/<issue-number>-<slug>
+    ↓
+milestone/<milestone-slug>
+    ↓
+dev
+    ↓
+main
+```
 
 ### `main`
 
-- changes arrive through pull requests;
-- expected source branch is `qa`;
-- require CI before merge;
-- require conversation resolution;
-- block force pushes;
-- block branch deletion.
-
-### `qa`
-
-- changes arrive through pull requests;
-- expected source branch is `dev`;
-- require CI before merge;
-- block force pushes;
-- block branch deletion.
+- recebe mudanças apenas por pull request;
+- origem esperada: `dev`;
+- CI obrigatório antes do merge;
+- conversas de review devem estar resolvidas;
+- force push bloqueado;
+- exclusão bloqueada.
 
 ### `dev`
 
-- integration branch for short-lived development and research branches;
-- require CI before merge when branch rules are enabled;
-- block force pushes where practical.
+- integra milestones concluídas;
+- origem esperada: `milestone/*`;
+- CI obrigatório antes do merge;
+- force push bloqueado;
+- exclusão bloqueada quando possível.
 
-The `Branch policy` GitHub Action also validates the expected promotion path for pull requests.
+### `milestone/*`
 
-## Required checks
+- criada a partir de `dev`;
+- integra somente branches das issues pertencentes à milestone;
+- recebe PRs no formato `<type>/<issue-number>-<slug>`;
+- não recebe implementação direta;
+- deve passar CI antes de ser promovida para `dev`.
 
-Once GitHub branch rules are enabled, the minimum required checks should include:
+### Branches de issue
+
+Branches de issue são criadas a partir da branch da milestone e seguem:
+
+```text
+<type>/<issue-number>-<slug>
+```
+
+Tipos permitidos:
+
+```text
+feat
+fix
+research
+experiment
+refactor
+test
+docs
+ci
+chore
+```
+
+A branch deve abrir PR para a branch da milestone correspondente, nunca diretamente para `dev` ou `main`.
+
+### `qa`
+
+A branch `qa` pode permanecer temporariamente no repositório por histórico ou compatibilidade, mas não faz parte do fluxo padrão e não deve ser usada como etapa de promoção.
+
+## Políticas automatizadas
+
+O workflow `Branch policy` valida:
+
+```text
+issue branch -> milestone/*
+milestone/*  -> dev
+dev          -> main
+```
+
+Ele também rejeita branches de issue fora do padrão:
+
+```text
+<type>/<issue-number>-<slug>
+```
+
+O workflow `Commit policy` valida todos os commits de um pull request e exige:
+
+- subject compatível com Conventional Commits;
+- corpo não vazio com contexto da alteração.
+
+O workflow `CI` executa quality gates em pull requests e pushes de `main`, `dev` e `milestone/*`.
+
+## Checks obrigatórios
+
+Quando regras de proteção estiverem habilitadas, os checks mínimos devem incluir:
 
 ```text
 CI / quality
 Branch policy / validate
+Commit policy / validate
 ```
 
-CodeQL should remain enabled for `main`, but it does not need to block early research changes unless the repository security policy requires it.
+CodeQL deve permanecer habilitado para `main`. Durante a fase inicial de pesquisa, ele não precisa bloquear toda mudança intermediária, a menos que a política de segurança exija.
+
+## Pull requests
+
+PRs devem usar Conventional Commits no título e o template do repositório.
+
+O template deve exigir:
+
+- issue relacionada;
+- milestone e branch de destino;
+- resumo e motivação;
+- validação;
+- impacto em artefatos e contratos;
+- impacto arquitetural e documental;
+- checklist de qualidade.
 
 ## Releases
 
-Only `main` should be tagged for release. Release tags follow `vMAJOR.MINOR.PATCH`; `v0.x.y` remains the validation series.
+Somente `main` recebe tags de release.
 
-## Repository security
+Tags seguem:
 
-Recommended GitHub features:
+```text
+vMAJOR.MINOR.PATCH
+```
 
-- Dependabot alerts and security updates;
-- secret scanning where available;
+A série `v0.x.y` permanece como série de validação enquanto os contratos externos ainda estiverem evoluindo.
+
+## Segurança
+
+Recursos recomendados:
+
+- Dependabot alerts e security updates;
+- secret scanning quando disponível;
 - private vulnerability reporting;
 - CodeQL scanning;
-- branch rules for `main` and `qa`.
+- regras de proteção para `main`, `dev` e, quando viável, padrão `milestone/*`.

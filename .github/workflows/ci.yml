@@ -2,9 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main, qa, dev]
+    branches:
+      - main
+      - dev
+      - "milestone/**"
   pull_request:
-    branches: [main, qa, dev]
+    branches:
+      - main
+      - dev
+      - "milestone/**"
 
 permissions:
   contents: read
