@@ -85,15 +85,22 @@ Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para a entrada rápida e [docs/devel
 
 ## Documentação
 
-A documentação global começa em [docs/README.md](docs/README.md).
+O ponto de entrada canônico é [docs/README.md](docs/README.md).
 
-Documentação específica de capabilities fica junto ao módulo em:
+Para entender o sistema, a ordem principal é:
+
+1. [Pipeline completo](docs/PIPELINE.md), fluxo da fonte registrada até o `ContextMapArtifact`.
+2. [Arquitetura](docs/architecture.md), capabilities, ownership, dependências e boundaries.
+3. [Contratos](docs/CONTRACTS.md), tipos públicos, identidades e semântica dos dados entre módulos.
+4. [Artefatos e lineage](docs/ARTIFACTS.md), persistência, immutability, debug, integridade e reprodutibilidade.
+
+Documentação específica de uma capability fica junto ao módulo:
 
 ```text
 src/contextmap/<module>/docs/
 ```
 
-O índice global integra os documentos existentes sem duplicar decisões transversais.
+A documentação é fragmentada por responsabilidade, mas integrada por links a partir do índice global.
 
 ## Versionamento
 

@@ -1,75 +1,145 @@
 # Documentação do ContextMap2
 
-Este diretório é o ponto de entrada da documentação global do ContextMap2. A documentação é distribuída entre decisões transversais e documentação específica de cada capability, mas deve permanecer navegável como um único conjunto.
+Este diretório é o ponto de entrada da documentação global do ContextMap2.
 
-## Mapa global
+O objetivo da documentação principal é permitir que uma pessoa entenda **o que o projeto produz, como o pipeline funciona, quais contratos conectam os módulos e como os resultados permanecem reproduzíveis** sem precisar reconstruir essas decisões a partir das issues.
+
+> A documentação descreve a arquitetura alvo da **Solution 1**. Uma capability documentada pode ainda estar planejada ou em implementação. O fato de uma etapa aparecer no pipeline não significa, por si só, que ela já esteja concluída no código.
+
+## O que é o ContextMap2
+
+O ContextMap2 transforma observações robóticas registradas, como RGB, LiDAR, IMU, pose e calibração, em um mapa contextual 3D portátil e versionado.
+
+O produto final do repositório é um `ContextMapArtifact` que conecta:
+
+- geometria 3D persistente;
+- entidades semânticas resolvidas;
+- relações espaciais entre entidades;
+- evidências e provenance suficientes para explicar de onde cada resultado veio.
+
+```mermaid
+flowchart LR
+    A[Dados registrados] --> B[Sequência canônica]
+    B --> C[Percepção + estado + geometria]
+    C --> D[Associação 2D ↔ 3D]
+    D --> E[Fusão semântica]
+    E --> F[Entidades persistentes]
+    F --> G[Relações espaciais]
+    G --> H[ContextMapArtifact]
+```
+
+Visualização, busca em linguagem natural, navegação, planejamento, agentes e dashboards são **consumidores externos**. Eles não pertencem ao núcleo deste repositório.
+
+## Ordem recomendada de leitura
+
+1. [PIPELINE.md](PIPELINE.md), fluxo completo da entrada ao `ContextMapArtifact`.
+2. [architecture.md](architecture.md), boundaries, ownership, dependências e regras arquiteturais.
+3. [CONTRACTS.md](CONTRACTS.md), contratos públicos, identidades e semântica dos dados que cruzam módulos.
+4. [ARTIFACTS.md](ARTIFACTS.md), persistência, immutability, lineage, debug e reprodutibilidade.
+5. [development.md](development.md), fluxo de desenvolvimento, branches, commits, Python e qualidade.
+6. [repository-settings.md](repository-settings.md), políticas esperadas do GitHub e checks.
+7. [versioning.md](versioning.md), Semantic Versioning e releases.
+
+## Mapa da documentação
 
 ```mermaid
 flowchart TD
-    D[docs/README.md] --> A[architecture.md]
-    D --> DEV[development.md]
-    D --> R[repository-settings.md]
-    D --> V[versioning.md]
+    R[docs/README.md]
 
-    A --> M[Documentação dos módulos]
-    M --> MD[src/contextmap/<module>/docs/README.md]
-    MD --> C[contracts.md]
-    MD --> P[pipeline.md]
-    MD --> MA[architecture.md]
+    R --> P[PIPELINE.md]
+    R --> A[architecture.md]
+    R --> C[CONTRACTS.md]
+    R --> AR[ARTIFACTS.md]
+    R --> D[development.md]
+    R --> RS[repository-settings.md]
+    R --> V[versioning.md]
+
+    A --> M[docs específicos dos módulos]
+    P --> M
+    C --> M
+
+    M --> MR[src/contextmap/<module>/docs/README.md]
+    MR --> MP[pipeline.md]
+    MR --> MC[contracts.md]
+    MR --> MA[architecture.md]
+    MR --> ME[evaluation.md]
+    MR --> MB[backends.md]
 ```
 
-## Documentos globais
+## Responsabilidade de cada documento
 
-- [Arquitetura](architecture.md), limites do sistema, fluxo principal e regras arquiteturais transversais.
-- [Desenvolvimento](development.md), branches, commits, PRs, Python, docstrings, princípios de código e organização documental.
-- [Configuração do repositório](repository-settings.md), políticas esperadas do GitHub, merges, checks e branches.
-- [Versionamento](versioning.md), Semantic Versioning, releases e critérios de publicação.
-- [Contribuindo](../CONTRIBUTING.md), entrada rápida para quem vai abrir uma alteração.
+| Documento | Pergunta principal |
+| --- | --- |
+| `PIPELINE.md` | Como os dados percorrem o sistema do sensor ao mapa contextual? |
+| `architecture.md` | Quem é responsável por cada capability e quem pode depender de quem? |
+| `CONTRACTS.md` | Qual é o significado dos objetos que atravessam as fronteiras entre módulos? |
+| `ARTIFACTS.md` | Como runs e resultados são persistidos, auditados e reutilizados? |
+| `development.md` | Como uma mudança deve ser implementada e integrada? |
+| `repository-settings.md` | Como o GitHub deve reforçar o fluxo de desenvolvimento? |
+| `versioning.md` | Como versões e releases são identificadas? |
+
+## Pipeline em uma linha
+
+```text
+raw source
+→ ingestion
+→ visual perception + state estimation
+→ geometric mapping
+→ sensor association
+→ optional point representation
+→ semantic fusion
+→ semantic mapping
+→ entity resolution
+→ spatial relations
+→ ContextMapArtifact
+```
+
+O detalhamento completo, incluindo branches paralelos e contratos intermediários, está em [PIPELINE.md](PIPELINE.md).
 
 ## Documentação por módulo
 
-Cada capability implementada pode manter documentação em:
+Decisões globais pertencem a `docs/`. Detalhes internos de uma capability pertencem ao próprio módulo:
 
 ```text
 src/contextmap/<module>/docs/
+├── README.md
+├── pipeline.md       # quando o fluxo interno exigir detalhamento
+├── contracts.md      # quando houver contratos públicos ou invariantes próprios
+├── architecture.md   # quando houver decisões estruturais próprias
+├── evaluation.md     # quando houver métricas/protocolo de avaliação
+└── backends.md       # quando houver múltiplos backends reais
 ```
 
-O ponto de entrada obrigatório, quando o módulo possuir documentação própria, é:
+Arquivos complementares só devem existir quando houver conteúdo real. O objetivo é fragmentar por responsabilidade, não multiplicar arquivos vazios.
 
-```text
-src/contextmap/<module>/docs/README.md
-```
+## Integração da documentação
 
-Arquivos complementares devem existir somente quando houver conteúdo real, por exemplo:
+A documentação é fragmentada fisicamente, mas forma um único grafo de conhecimento.
 
-```text
-architecture.md
-contracts.md
-pipeline.md
-evaluation.md
-backends.md
-```
+- `docs/` contém decisões transversais ao sistema;
+- cada módulo documenta apenas seu domínio e suas fronteiras;
+- conteúdo global é referenciado por link, não copiado para cada módulo;
+- documentação de upstream/downstream deve apontar para o contrato público relevante;
+- uma alteração arquitetural ou de contrato deve atualizar código e documentação no mesmo PR;
+- `docs/README.md` é o índice canônico dos pontos de entrada globais.
 
-## Integração
+## Estado da arquitetura
 
-A divisão entre documentação global e local segue responsabilidade de domínio.
+A Solution 1 é **pre-alpha** e evolui por milestones. Os documentos principais descrevem o desenho canônico que as milestones devem materializar.
 
-- decisões que afetam múltiplos módulos pertencem a `docs/`;
-- contratos, pipeline e comportamento internos de uma capability pertencem ao `docs/` do módulo;
-- um módulo referencia a documentação global aplicável em vez de copiar suas regras;
-- quando módulos dependem conceitualmente entre si, a documentação deve usar links entre os documentos públicos relevantes;
-- alterações arquiteturais ou de contrato devem atualizar código e documentação no mesmo PR.
+Ao ler uma etapa do pipeline, diferencie:
 
-## Registro de módulos
+- **contrato**, semântica que deve permanecer estável na fronteira do módulo;
+- **backend**, implementação substituível de uma capability;
+- **pipeline canônico**, configuração escolhida para a validação da Solution 1;
+- **experimento**, alternativa que não substitui silenciosamente o baseline;
+- **artefato**, resultado persistido e imutável de uma execução.
 
-À medida que os módulos forem materializados no código, seus pontos de entrada devem ser adicionados nesta seção. O índice só deve apontar para documentação existente, evitando links para estruturas ainda não implementadas.
+## Regras de escrita
 
-A arquitetura inicial prevê capabilities como `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation`, `semantic_fusion`, `semantic_mapping`, `spatial_relations`, `artifact` e `runtime`. A responsabilidade final de cada uma deve seguir as decisões registradas em [architecture.md](architecture.md).
-
-## Regras de idioma e formato
-
-- documentação Markdown em PT-BR;
-- docstrings Python em inglês;
-- comentários explicativos de código em PT-BR;
-- Mermaid preferido para fluxos, dependências, pipelines e estados quando melhorar a compreensão;
-- nomes de tipos, APIs e contratos preservam os identificadores reais do código, normalmente em inglês.
+- Markdown em PT-BR;
+- nomes de APIs, classes e contratos permanecem em inglês;
+- Mermaid é preferido para fluxos, dependências, estados e lineage quando reduzir ambiguidade;
+- exemplos devem ser pequenos e ligados a uma decisão real;
+- documentos globais não devem repetir detalhes que pertencem ao `docs/` de um módulo;
+- arquitetura planejada nunca deve ser apresentada como funcionalidade já implementada.
