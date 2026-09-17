@@ -1,34 +1,58 @@
-## Summary
+## Issue e milestone
 
-Describe the change and why it is needed.
+- Issue: #
+- Milestone:
+- Branch de destino: `milestone/<slug>`
 
-## Type
+## Resumo
+
+Descreva a mudança e por que ela é necessária.
+
+## Tipo
 
 - [ ] Feature
 - [ ] Fix
 - [ ] Research
 - [ ] Experiment
 - [ ] Refactor
-- [ ] Tests / benchmark
-- [ ] Documentation
-- [ ] CI / maintenance
+- [ ] Testes / benchmark
+- [ ] Documentação
+- [ ] CI / manutenção
 
-## Validation
+## Decisão de implementação
 
-Describe how the change was validated. Include metrics, benchmark outputs, fixtures, or generated artifacts when map quality may be affected.
+Explique a abordagem adotada, os principais trade-offs e qualquer decisão arquitetural que precise permanecer compreensível no futuro.
 
-## Impact on generated artifacts
+## Validação
 
-- [ ] No artifact/schema change
-- [ ] Compatible artifact/schema change
-- [ ] Incompatible artifact/schema change
+Descreva como a alteração foi validada. Inclua testes, métricas, benchmarks, fixtures ou artefatos gerados quando a mudança afetar a qualidade do mapa.
 
-If the artifact changes, describe the affected fields, provenance, migration expectations, and validation performed.
+## Impacto em contratos e artefatos
+
+- [ ] Sem alteração de contrato/schema
+- [ ] Alteração compatível de contrato/schema
+- [ ] Alteração incompatível de contrato/schema
+
+Se houver alteração, descreva os campos afetados, provenance, compatibilidade, migração e validação realizada.
+
+## Impacto arquitetural e documental
+
+- [ ] Sem alteração arquitetural pública
+- [ ] Arquitetura/documentação atualizada no mesmo PR
+- [ ] Documentação específica do módulo atualizada
+- [ ] `docs/README.md` atualizado quando um novo ponto de entrada documental foi criado
+
+Descreva decisões relevantes quando aplicável.
 
 ## Checklist
 
-- [ ] `make check` passes locally
-- [ ] Tests cover the relevant behavior
-- [ ] Experimental behavior is isolated from the validated path
-- [ ] Documentation reflects externally visible changes
-- [ ] No dataset-specific assumption was introduced without being documented
+- [ ] A branch segue `<type>/<issue-number>-<slug>`
+- [ ] Este PR aponta para a branch da milestone, não diretamente para `dev` ou `main`
+- [ ] Commits seguem Conventional Commits e possuem corpo descritivo
+- [ ] `make check` passa localmente
+- [ ] Testes cobrem o comportamento relevante
+- [ ] Docstrings públicas estão em inglês e seguem Google style
+- [ ] Comentários explicativos e documentação Markdown estão em PT-BR
+- [ ] Clean Code, SOLID, KISS, DRY e YAGNI foram aplicados sem abstração especulativa
+- [ ] Comportamento experimental está isolado do caminho validado
+- [ ] Nenhuma suposição específica de dataset foi introduzida sem documentação

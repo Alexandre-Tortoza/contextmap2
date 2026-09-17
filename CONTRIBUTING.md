@@ -1,77 +1,104 @@
-# Contributing
+# Contribuindo
 
-ContextMap2 is currently validating Solution 1. Contributions should favor reproducibility, measurable map quality, and small changes that can be evaluated independently.
+O ContextMap2 está validando a Solution 1. Contribuições devem priorizar reprodutibilidade, qualidade mensurável do mapa, rastreabilidade e mudanças pequenas o suficiente para serem avaliadas de forma independente.
 
-## Branch flow
+As regras completas de desenvolvimento estão em [docs/development.md](docs/development.md).
 
-Use the following flow for normal development:
+## Fluxo obrigatório
+
+Toda alteração deve estar associada a uma issue e à milestone responsável pelo trabalho.
 
 ```text
-feature / research branch
-        ↓
-       dev
-        ↓
-        qa
-        ↓
-       main
+issue
+  ↓
+<type>/<issue-number>-<slug>
+  ↓
+milestone/<milestone-slug>
+  ↓
+dev
+  ↓
+main
 ```
 
-Recommended branch prefixes:
+Regras principais:
 
-- `feat/`, new product behavior;
-- `fix/`, defect correction;
-- `research/`, implementation based on a research hypothesis;
-- `experiment/`, temporary or comparative experiment;
-- `refactor/`, structural change without intended behavioral change;
-- `test/`, test or benchmark work;
-- `docs/`, documentation only;
-- `ci/`, pipeline or automation changes;
-- `chore/`, repository maintenance.
+- a branch da issue nasce da branch da milestone;
+- o PR da issue aponta para `milestone/<milestone-slug>`;
+- a branch da milestone nasce de `dev`;
+- a milestone concluída abre PR para `dev`;
+- `dev` abre PR para `main` após validação integrada;
+- `qa` não faz parte do fluxo padrão;
+- não fazer push direto em `main`, `dev` ou branches de milestone.
+
+Branches de issue usam:
+
+```text
+<type>/<issue-number>-<slug>
+```
+
+Prefixos aceitos: `feat/`, `fix/`, `research/`, `experiment/`, `refactor/`, `test/`, `docs/`, `ci/` e `chore/`.
+
+## Commits
+
+Todos os commits seguem Conventional Commits e devem possuir corpo descritivo.
+
+```text
+<type>(<scope>): <summary>
+
+<contexto, motivo e impacto da alteração>
+
+Refs: #<issue>
+```
+
+Use `BREAKING CHANGE:` quando houver incompatibilidade de contrato.
 
 ## Pull requests
 
-Pull requests should be focused and include:
+Todo PR deve registrar:
 
-- the problem or hypothesis;
-- the implementation approach;
-- how the change was validated;
-- metrics or artifacts when the change affects map quality;
-- known limitations or follow-up work.
+- issue relacionada;
+- milestone e branch de destino;
+- problema ou hipótese;
+- abordagem adotada;
+- validação realizada;
+- impacto arquitetural, de contrato ou de documentação;
+- métricas ou artefatos quando houver impacto científico;
+- limitações conhecidas quando aplicável.
 
-Use semantic PR titles, for example:
-
-```text
-feat: add normalized frame contract
-fix: preserve calibration provenance during serialization
-research: evaluate temporal fusion strategy
-experiment: compare region discovery backends
-refactor: isolate artifact serialization
-```
+O título do PR também segue Conventional Commits.
 
 ## Quality gates
 
-Run the complete local check before requesting review:
+Antes de solicitar revisão:
 
 ```bash
 make check
 ```
 
-The CI verifies formatting, linting, static typing, and tests.
+## Python
 
-## Research changes
+- identificadores e APIs em inglês;
+- docstrings em inglês, Google style;
+- módulos, classes, funções e métodos públicos devem possuir docstring;
+- privados não triviais devem documentar contratos, invariantes, efeitos ou exceções relevantes;
+- comentários explicativos ficam em PT-BR e devem explicar principalmente o porquê;
+- documentação Markdown fica em PT-BR.
 
-Research-oriented changes should avoid silently replacing a baseline. When testing a new method:
+O projeto aplica Clean Code, SOLID, KISS, DRY e YAGNI de forma pragmática. KISS e YAGNI devem evitar abstrações especulativas; DRY não deve forçar generalizações prematuras; SOLID não deve criar camadas sem responsabilidade real.
 
-1. state the expected improvement;
-2. preserve a reproducible baseline when practical;
-3. define the metric that can confirm or reject the hypothesis;
-4. record the configuration used for the run;
-5. keep dataset-specific workarounds outside the general path unless their value is demonstrated more broadly.
+## Documentação
 
-## Dependencies
+A documentação é integrada em duas camadas:
 
-Avoid adding heavy runtime dependencies until they are required by a validated implementation path. Model-specific dependencies should remain isolated from domain contracts whenever possible.
+- `docs/`, decisões e convenções globais;
+- `src/contextmap/<module>/docs/`, documentação específica de domínio e módulo.
+
+`docs/README.md` é o índice global. Cada módulo documentado deve possuir um `docs/README.md` próprio e ser referenciado pelo índice global. Conteúdo transversal deve ser linkado, não copiado.
+
+## Pesquisa
+
+Mudanças de pesquisa devem declarar hipótese, baseline, métrica, configuração e evidência de validação. Um caminho experimental não substitui silenciosamente o baseline validado.
 
 ## Releases
 
-Do not create release tags for unreviewed experimental states. Version tags are created from validated commits according to [docs/versioning.md](docs/versioning.md).
+Tags são produzidas somente a partir de `main` e seguem [docs/versioning.md](docs/versioning.md).

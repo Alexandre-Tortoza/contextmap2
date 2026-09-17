@@ -1,10 +1,14 @@
-# Versioning and releases
+# Versionamento e releases
 
-ContextMap2 uses Semantic Versioning tags in the form `vMAJOR.MINOR.PATCH`.
+O ContextMap2 usa Semantic Versioning com tags no formato:
 
-## Validation stage
+```text
+vMAJOR.MINOR.PATCH
+```
 
-While Solution 1 is still being validated, releases remain under major version zero:
+## Fase de validação
+
+Enquanto a Solution 1 estiver em validação, releases permanecem na versão major zero:
 
 ```text
 v0.1.0
@@ -14,24 +18,45 @@ v0.2.1
 
 Use:
 
-- `PATCH` for compatible fixes, documentation corrections, and small internal improvements that do not intentionally change the artifact contract;
-- `MINOR` for new capabilities, measurable pipeline changes, or artifact/schema evolution during the validation stage;
-- `MAJOR` only after a stable external artifact contract exists and incompatible changes need to be communicated clearly.
+- `PATCH` para correções compatíveis, documentação e pequenas melhorias internas que não alteram intencionalmente o contrato do artefato;
+- `MINOR` para novas capabilities, mudanças mensuráveis de pipeline ou evolução compatível do artefato/schema durante a fase de validação;
+- `MAJOR` somente depois que existir um contrato externo estável e mudanças incompatíveis precisarem ser comunicadas formalmente.
 
-## Release requirements
+## Origem das releases
 
-A release tag should point to a commit that:
+Somente commits presentes em `main` podem receber tags de release.
 
-- passes CI;
-- has the relevant evaluation evidence recorded;
-- has no known artifact corruption or serialization regression;
-- documents incompatible schema changes;
-- is reproducible from committed configuration and source code.
+O fluxo esperado é:
 
-## Automation
+```text
+issue branch
+    ↓
+milestone/*
+    ↓
+dev
+    ↓
+main
+    ↓
+vMAJOR.MINOR.PATCH
+```
 
-Pushing a tag matching `v*.*.*` starts the release workflow. The workflow validates the tag shape, builds the Python distribution, uploads the build output as a workflow artifact, and creates a GitHub Release.
+Uma branch de issue ou milestone nunca deve ser tagueada diretamente.
 
-Releases in the `v0.x.y` series are marked as pre-releases automatically.
+## Requisitos de release
 
-The repository does not publish to PyPI during the Solution 1 validation stage.
+Uma tag de release deve apontar para um commit que:
+
+- passe a CI;
+- tenha a evidência de avaliação relevante registrada;
+- não possua corrupção conhecida de artefato ou regressão de serialização;
+- documente mudanças incompatíveis de schema;
+- seja reproduzível a partir da configuração e do código versionados;
+- tenha sido promovido pelo fluxo normal até `main`.
+
+## Automação
+
+Ao publicar uma tag que corresponda a `v*.*.*`, o workflow de release valida o formato da versão, gera a distribuição Python, publica o build como artifact do workflow e cria uma GitHub Release.
+
+Releases da série `v0.x.y` são marcadas como pre-release automaticamente.
+
+O repositório não publica no PyPI durante a fase de validação da Solution 1.

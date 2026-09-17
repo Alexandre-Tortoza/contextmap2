@@ -1,15 +1,17 @@
-# Security policy
+# Política de segurança
 
-## Supported versions
+## Versões suportadas
 
-ContextMap2 is currently pre-alpha. Only the latest commit on the actively maintained branches is supported while Solution 1 is under validation.
+O ContextMap2 está atualmente em pre-alpha. Enquanto a Solution 1 estiver em validação, somente o estado mais recente das branches ativamente mantidas recebe suporte.
 
-## Reporting a vulnerability
+## Reportando uma vulnerabilidade
 
-Do not publish credentials, tokens, private datasets, personal data, or exploitable security details in a public issue.
+Não publique credenciais, tokens, datasets privados, dados pessoais ou detalhes exploráveis de segurança em uma issue pública.
 
-For ordinary defects that do not expose sensitive information, use the bug report template. For security-sensitive reports, use GitHub's private vulnerability reporting when it is enabled for the repository.
+Para defeitos comuns que não exponham informações sensíveis, use o template de bug. Para problemas sensíveis de segurança, use o private vulnerability reporting do GitHub quando estiver habilitado para o repositório.
 
-## Research data
+## Dados de pesquisa
 
-Do not commit raw datasets, ROS bags, model checkpoints, generated artifacts containing sensitive information, or secrets. Large research inputs and outputs should be referenced through documented external storage and reproducible manifests.
+Não faça commit de datasets brutos, ROS bags, checkpoints de modelos, artefatos gerados contendo informações sensíveis ou secrets.
+
+Entradas e saídas grandes de pesquisa devem ser referenciadas por meio de armazenamento externo documentado e manifests reproduzíveis.

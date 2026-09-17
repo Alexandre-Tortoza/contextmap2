@@ -1,47 +1,47 @@
 # ContextMap2
 
-ContextMap2 is a research implementation for generating persistent 3D contextual map artifacts from synchronized robotic sensor data.
+O ContextMap2 é uma implementação de pesquisa para gerar artefatos persistentes de mapas contextuais 3D a partir de dados sincronizados de sensores robóticos.
 
-The current repository is intentionally focused on **Solution 1**: build one minimal end-to-end path, measure the quality of the generated map, and validate the representation before expanding the system.
+O repositório está intencionalmente focado na **Solution 1**: construir um caminho mínimo ponta a ponta, medir a qualidade do mapa gerado e validar a representação antes de expandir o sistema.
 
-## Goal
+## Objetivo
 
-The system receives synchronized observations such as RGB, LiDAR or depth, pose, calibration, and timestamps, then produces a portable and versioned contextual map artifact containing the evidence required by downstream robotics research.
+O sistema recebe observações sincronizadas, como RGB, LiDAR ou profundidade, pose, calibração e timestamps, e produz um artefato contextual portátil e versionado contendo as evidências necessárias para pesquisas robóticas downstream.
 
 ```mermaid
 flowchart LR
-    A[Sensor data] --> B[Input adapter]
-    B --> C[Normalized observations]
-    C --> D[Perception]
-    D --> E[2D to 3D association]
-    E --> F[Multi-view fusion]
-    F --> G[Context map]
-    G --> H[Portable artifact]
+    A[Dados dos sensores] --> B[Adaptador de entrada]
+    B --> C[Observações normalizadas]
+    C --> D[Percepção]
+    D --> E[Associação 2D para 3D]
+    E --> F[Fusão multi-view]
+    F --> G[Mapa contextual]
+    G --> H[Artefato portátil]
 ```
 
-The generated artifact is the boundary of this repository. Visualization, natural-language search, navigation, planning, agents, and other consumers should live in separate projects and consume the exported map.
+O artefato gerado é a fronteira deste repositório. Visualização, busca em linguagem natural, navegação, planejamento, agentes e outros consumidores devem existir em projetos separados e consumir o mapa exportado.
 
-## Current scope
+## Escopo atual
 
-Solution 1 should establish and validate:
+A Solution 1 deve estabelecer e validar:
 
-- canonical sensor and observation contracts;
-- one reproducible input path;
-- visual perception and geometric association;
-- multi-view evidence aggregation;
-- contextual entities and relations required by the map;
-- artifact schema, serialization, validation, and provenance;
-- evaluation that measures the quality of the final map, not only isolated model outputs.
+- contratos canônicos de sensores e observações;
+- um caminho de entrada reproduzível;
+- percepção visual e associação geométrica;
+- agregação de evidência multi-view;
+- entidades contextuais e relações necessárias ao mapa;
+- schema, serialização, validação e provenance do artefato;
+- avaliação que meça a qualidade do mapa final, não apenas saídas isoladas de modelos.
 
-A component should not become part of the main pipeline only because it works qualitatively. Experimental additions should have an explicit hypothesis and measurable effect on map quality.
+Um componente não deve entrar no pipeline principal apenas porque funciona qualitativamente. Adições experimentais precisam de uma hipótese explícita e de efeito mensurável sobre a qualidade do mapa.
 
-## Repository status
+## Estado do repositório
 
-**Pre-alpha.** Interfaces and artifact schemas may change while Solution 1 is being validated. Releases remain in the `v0.x.y` series until the first representation is considered stable enough for external consumers.
+**Pre-alpha.** Interfaces e schemas de artefato podem mudar enquanto a Solution 1 estiver sendo validada. Releases permanecem na série `v0.x.y` até que a primeira representação esteja estável o suficiente para consumidores externos.
 
-## Development
+## Desenvolvimento
 
-Python 3.11 or newer is required.
+Python 3.11 ou superior é obrigatório.
 
 ```bash
 python -m venv .venv
@@ -50,7 +50,7 @@ python -m pip install -e '.[dev]'
 make check
 ```
 
-Useful commands:
+Comandos úteis:
 
 ```bash
 make lint
@@ -60,21 +60,56 @@ make test
 make build
 ```
 
-## Branches
+## Fluxo de branches
 
-- `main`, validated state intended to remain reproducible;
-- `qa`, candidate changes under validation;
-- `dev`, integration branch for active development;
-- short-lived branches such as `feat/*`, `fix/*`, `research/*`, `experiment/*`, `refactor/*`, `docs/*`, and `chore/*`.
+O desenvolvimento segue issues e milestones:
 
-Changes should normally move through `dev` and `qa` before reaching `main` once the initial repository bootstrap is complete.
+```text
+<type>/<issue-number>-<slug>
+    ↓
+milestone/<milestone-slug>
+    ↓
+dev
+    ↓
+main
+```
 
-## Versioning
+- `main`, estado validado e origem das releases;
+- `dev`, integração de milestones concluídas;
+- `milestone/*`, integração das issues de um marco específico;
+- branches de issue como `feat/38-canonical-sensor-contract` ou `docs/187-development-workflow`.
 
-Git tags use Semantic Versioning in the form `vMAJOR.MINOR.PATCH`. During the validation stage, releases use `v0.MINOR.PATCH`. Pushing a valid version tag triggers the release pipeline and generates build artifacts automatically.
+A branch `qa` não faz parte do fluxo padrão atual.
 
-See [docs/versioning.md](docs/versioning.md) for the release policy and [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
+Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para a entrada rápida e [docs/development.md](docs/development.md) para as regras completas.
 
-## License
+## Documentação
 
-GNU Affero General Public License v3.0. See [LICENSE](LICENSE).
+O ponto de entrada canônico é [docs/README.md](docs/README.md).
+
+Para entender o sistema, a ordem principal é:
+
+1. [Pipeline completo](docs/PIPELINE.md), fluxo da fonte registrada até o `ContextMapArtifact`.
+2. [Arquitetura](docs/architecture.md), capabilities, ownership, dependências e boundaries.
+3. [Contratos](docs/CONTRACTS.md), tipos públicos, identidades e semântica dos dados entre módulos.
+4. [Artefatos e lineage](docs/ARTIFACTS.md), persistência, immutability, debug, integridade e reprodutibilidade.
+
+Documentação específica de uma capability fica junto ao módulo:
+
+```text
+src/contextmap/<module>/docs/
+```
+
+A documentação é fragmentada por responsabilidade, mas integrada por links a partir do índice global.
+
+## Versionamento
+
+Tags Git usam Semantic Versioning no formato `vMAJOR.MINOR.PATCH`. Durante a fase de validação, releases usam `v0.MINOR.PATCH`.
+
+Uma tag válida deve apontar para `main` e dispara o pipeline de release.
+
+Consulte [docs/versioning.md](docs/versioning.md) para a política completa.
+
+## Licença
+
+GNU Affero General Public License v3.0. Consulte [LICENSE](LICENSE).

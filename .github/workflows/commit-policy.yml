@@ -1,0 +1,51 @@
+name: Commit policy
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+      - "milestone/**"
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Conventional Commits and descriptive bodies
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          subject_pattern='^(feat|fix|research|experiment|refactor|test|docs|ci|chore|build|perf|revert)(\([a-z0-9][a-z0-9-]*\))?!?: .+'
+          failed=0
+
+          while read -r commit; do
+            subject="$(git show -s --format=%s "${commit}")"
+            body="$(git show -s --format=%b "${commit}" | sed '/^[[:space:]]*$/d')"
+
+            echo "Checking ${commit:0:8}: ${subject}"
+
+            if [[ ! "${subject}" =~ ${subject_pattern} ]]; then
+              echo "Invalid Conventional Commit subject: ${subject}"
+              failed=1
+            fi
+
+            if [[ -z "${body}" ]]; then
+              echo "Commit ${commit:0:8} must include a descriptive body with context."
+              failed=1
+            fi
+          done < <(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")
+
+          exit "${failed}"
