@@ -2,7 +2,10 @@ name: Branch policy
 
 on:
   pull_request:
-    branches: [main, qa, dev]
+    branches:
+      - main
+      - dev
+      - "milestone/**"
     types: [opened, synchronize, reopened, edited]
 
 permissions:
@@ -17,27 +20,41 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
         run: |
-          echo "Validating ${HEAD} -> ${BASE}"
+          set -euo pipefail
 
-          if [[ "${BASE}" == "main" && "${HEAD}" != "qa" ]]; then
-            echo "Pull requests to main must come from qa."
-            exit 1
-          fi
+          echo "Validating ${HEAD} -> ${BASE} (actor: ${ACTOR})"
 
-          if [[ "${BASE}" == "qa" && "${HEAD}" != "dev" ]]; then
-            echo "Pull requests to qa must come from dev."
-            exit 1
+          if [[ "${BASE}" == "main" ]]; then
+            if [[ "${HEAD}" != "dev" ]]; then
+              echo "Pull requests to main must come from dev."
+              exit 1
+            fi
+            exit 0
           fi
 
           if [[ "${BASE}" == "dev" ]]; then
-            case "${HEAD}" in
-              feat/*|fix/*|research/*|experiment/*|refactor/*|test/*|docs/*|ci/*|chore/*)
-                exit 0
-                ;;
-              *)
-                echo "Pull requests to dev must use an approved branch prefix."
-                exit 1
-                ;;
-            esac
+            if [[ "${HEAD}" =~ ^milestone/[a-z0-9][a-z0-9-]*$ ]]; then
+              exit 0
+            fi
+
+            if [[ "${ACTOR}" == "dependabot[bot]" && "${HEAD}" =~ ^dependabot/ ]]; then
+              echo "Allowing Dependabot maintenance PR directly to dev."
+              exit 0
+            fi
+
+            echo "Pull requests to dev must come from milestone/<milestone-slug>, except Dependabot maintenance PRs."
+            exit 1
           fi
+
+          if [[ "${BASE}" =~ ^milestone/[a-z0-9][a-z0-9-]*$ ]]; then
+            if [[ ! "${HEAD}" =~ ^(feat|fix|research|experiment|refactor|test|docs|ci|chore)/[0-9]+-[a-z0-9][a-z0-9-]*$ ]]; then
+              echo "Pull requests to milestone branches must use <type>/<issue-number>-<slug>."
+              exit 1
+            fi
+            exit 0
+          fi
+
+          echo "Unsupported pull request promotion path: ${HEAD} -> ${BASE}."
+          exit 1
