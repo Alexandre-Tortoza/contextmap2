@@ -103,9 +103,9 @@ A branch deve abrir PR para a branch da milestone correspondente, nunca diretame
 
 A branch `qa` pode permanecer temporariamente no repositório por histórico ou compatibilidade, mas não faz parte do fluxo padrão e não deve ser usada como etapa de promoção.
 
-## Branch policy automatizada
+## Políticas automatizadas
 
-O workflow `Branch policy` deve validar pelo menos:
+O workflow `Branch policy` valida:
 
 ```text
 issue branch -> milestone/*
@@ -113,11 +113,18 @@ milestone/*  -> dev
 dev          -> main
 ```
 
-Também deve rejeitar branch de issue que não siga o padrão:
+Ele também rejeita branches de issue fora do padrão:
 
 ```text
 <type>/<issue-number>-<slug>
 ```
+
+O workflow `Commit policy` valida todos os commits de um pull request e exige:
+
+- subject compatível com Conventional Commits;
+- corpo não vazio com contexto da alteração.
+
+O workflow `CI` executa quality gates em pull requests e pushes de `main`, `dev` e `milestone/*`.
 
 ## Checks obrigatórios
 
@@ -126,6 +133,7 @@ Quando regras de proteção estiverem habilitadas, os checks mínimos devem incl
 ```text
 CI / quality
 Branch policy / validate
+Commit policy / validate
 ```
 
 CodeQL deve permanecer habilitado para `main`. Durante a fase inicial de pesquisa, ele não precisa bloquear toda mudança intermediária, a menos que a política de segurança exija.
