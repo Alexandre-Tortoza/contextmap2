@@ -18,7 +18,9 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência).
+- `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticSupport`.
+
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), e [`ports.md`](ports.md) para os pontos de substituição de backend.
 
 ## Módulos consumidos
 
