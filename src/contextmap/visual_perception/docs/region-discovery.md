@@ -138,6 +138,25 @@ inline são avaliadas pixel a pixel. Uma máscara persistida sem box inspecioná
 de receber área ou overlap inventados. Constraints só são aplicadas quando a `PreparedImage` as
 declara explicitamente.
 
+## Evidência persistida e diagnostics
+
+`RegionDiscoveryEvidenceWriter` finaliza atomicamente `20-region-discovery/` e recusa sobrescrever
+um estágio existente. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
+contratuais. O manifest registra schema, backend, digest da política, nível de debug e hash de cada
+payload. Consumidores downstream não leem `debug/`.
+
+Os níveis são:
+
+- `none`: somente regiões, métricas e manifest;
+- `standard`: prepared-image reference, configuração efetiva, passes/timings, candidates,
+  accepted/rejected, merge decisions e overlays SVG;
+- `full`: conteúdo standard mais `region.json` e máscara PBM por região inline.
+
+Os overlays usam IDs canônicos e coordenadas da imagem preparada. O formato vetorial mantém a
+inspeção disponível sem introduzir uma biblioteca de imagem no domínio. Métricas preservam counts,
+motivos de rejeição, distribuição de área, merge ratio, duração por pass, warnings e memória quando
+o runtime a reporta.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
