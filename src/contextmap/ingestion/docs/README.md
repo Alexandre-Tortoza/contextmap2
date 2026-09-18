@@ -24,7 +24,7 @@ Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em obs
 - `CalibrationSet`/`CalibrationEntry` — calibração e frames de coordenadas canônicos; `CameraModel` (`PinholeCameraModel`/`FisheyeCameraModel`), `RigidTransform`, `validate_calibration_set()`.
 - `resolve_selection()` — lê um subconjunto determinístico de uma sequência; `SequenceSelection` (`FullSequenceSelection`/`FrameRangeSelection`/`TimestampRangeSelection`/`ExplicitIdsSelection`), `selection_identity()`.
 - `SourceAdapter` — fronteira (`Protocol`) que qualquer adapter de fonte concreto implementa; `SourceAdapterConfig`, `SourceTopicMapping`, `SourceAdapterCapabilities`, `SourceAdapterWarning`.
-- `contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter` — implementação concreta para ROS 1 (não reexportada por `contextmap.ingestion`; importada pelo path completo, como qualquer backend).
+- `contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter` / `contextmap.ingestion.adapters.ros2_bag.Ros2BagSourceAdapter` — implementações concretas para ROS 1/ROS 2 (não reexportadas por `contextmap.ingestion`; importadas pelo path completo, como qualquer backend).
 
 Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, e [`backends.md`](backends.md) para decisões específicas de cada adapter concreto.
 
@@ -38,11 +38,16 @@ Apenas `contextmap.shared` (`SourceTimestamp`).
 
 ## Fluxo interno (alto nível)
 
-Fonte bruta → adapter → eventos normalizados → índice temporal/sincronização → `SourceObservation` canônica → artefato de sequência persistido (`SequenceArtifactWriter`). Sincronização/agrupamento temporal, calibração completa, seleção/replay e adapters de fonte são issues separadas desta milestone — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
+Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `SourceObservation` canônica → sincronização/agrupamento temporal (`synchronize()`) → artefato de sequência persistido (`SequenceArtifactWriter`, com calibração opcional) → seleção/replay (`resolve_selection()`) para runs downstream — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
 
 ## Onde estão os documentos detalhados
 
-- [`contracts.md`](contracts.md) — campos, unidades, ownership, exemplos ROS 1/ROS 2.
+- [`contracts.md`](contracts.md) — campos, unidades, ownership, exemplos de mapeamento ROS 1/ROS 2.
 - [`artifact.md`](artifact.md) — formato do artefato de sequência persistido e layout do workspace local.
+- [`synchronization.md`](synchronization.md) — política de sincronização/agrupamento temporal e suas limitações conhecidas.
+- [`calibration.md`](calibration.md) — contrato de calibração e convenções de frame de coordenadas.
+- [`selection.md`](selection.md) — modelo de seleção e replay de sequência.
+- [`adapters.md`](adapters.md) — fronteira (`Protocol`) de source adapters.
+- [`backends.md`](backends.md) — decisões específicas de cada adapter concreto (ROS 1, ROS 2).
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e regras de dependência.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SourceObservation` no contexto global de contratos.

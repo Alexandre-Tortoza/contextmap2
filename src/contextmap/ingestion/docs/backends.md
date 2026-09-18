@@ -2,6 +2,10 @@
 
 Este documento complementa [`adapters.md`](adapters.md) com decisões específicas de cada implementação concreta de `SourceAdapter`.
 
+## Lógica compartilhada entre ROS 1 e ROS 2
+
+`src/contextmap/ingestion/adapters/_ros_common.py` (privado ao pacote `adapters/`) contém a decodificação de mensagem que é **idêntica** entre ROS 1 e ROS 2 — `rosbags` normaliza ambas as distribuições para os mesmos nomes de campo em `sensor_msgs/Image`, `PointCloud2`, `Imu` e `nav_msgs/Odometry`. A única diferença real entre as duas versões nas mensagens usadas aqui é o casing de `sensor_msgs/CameraInfo` (`D`/`K` maiúsculo no ROS 1, `d`/`k` minúsculo no ROS 2), tratada localmente em cada adapter via `_ros_common.build_camera_model()`, que recebe os valores já extraídos como primitivos.
+
 ## `Ros1BagSourceAdapter` (issue #44)
 
 `src/contextmap/ingestion/adapters/ros1_bag.py`.
@@ -31,3 +35,18 @@ Tópico obrigatório (`required_topics`) ausente do bag → `MissingRequiredTopi
 ### Fixtures de teste
 
 Os testes geram um bag ROS 1 sintético e determinístico em tempo de execução com `rosbags.rosbag1.Writer`, em vez de versionar um arquivo binário `.bag` no repositório — evita problemas de tamanho/licença e mantém a fixture auditável como código Python (`tests/ingestion/adapters/test_ros1_bag.py`).
+
+## `Ros2BagSourceAdapter` (issue #45)
+
+`src/contextmap/ingestion/adapters/ros2_bag.py`. Mesmo escopo v0, mesmas decisões de mapeamento e mesma política de erros/warnings do adapter ROS 1 (acima) — reaproveita `_ros_common.py` para toda a decodificação exceto `CameraInfo`, cujo casing de campo difere.
+
+### Diferenças reais em relação ao ROS 1
+
+- **Path**: um bag ROS 2 é um **diretório** (contém `metadata.yaml` + arquivo(s) de storage, tipicamente SQLite3), não um arquivo único como o `.bag` do ROS 1. `SourceAdapterConfig.path` aponta para esse diretório.
+- **Deserialização**: `rosbags` usa CDR (`typestore.deserialize_cdr`) para ROS 2, em vez de `deserialize_ros1`.
+- **`std_msgs/Header`**: o ROS 2 removeu o campo `seq` (nunca usado por este adapter — a identidade da observação já vem do índice por tópico, não de `seq`).
+- **`sensor_msgs/CameraInfo`**: campos `d`/`k`/`r`/`p` minúsculos, em vez de `D`/`K`/`R`/`P`.
+
+### Prova de contrato único
+
+`tests/ingestion/adapters/test_ros2_bag.py::test_ros1_and_ros2_adapters_produce_the_same_canonical_shape` decodifica a mesma imagem lógica de um bag ROS 1 e de um bag ROS 2 e verifica que o `ImageObservation` resultante é idêntico — demonstrando a exigência central da issue #45: "o mesmo código downstream consome sequências independente de qual ROS as produziu".

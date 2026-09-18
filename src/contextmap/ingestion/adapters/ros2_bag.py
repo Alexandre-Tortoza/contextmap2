@@ -1,21 +1,25 @@
-"""ROS 1 bag source adapter.
+"""ROS 2 bag source adapter.
 
-Reads a ROS 1 bag and decodes the topics named in the adapter's
-:class:`~contextmap.ingestion.source_adapter.SourceAdapterConfig` into
-canonical :data:`~contextmap.ingestion.models.SourceObservation` instances,
-never exposing a ROS message object across the
-:class:`~contextmap.ingestion.source_adapter.SourceAdapter` boundary. Uses
-the pure-Python ``rosbags`` library (optional dependency, extra
-``contextmap[ros1]``), so no ROS 1 installation is required — see
-``src/contextmap/ingestion/docs/adapters.md``.
+Reads a ROS 2 bag and decodes the topics named in the adapter's
+:class:`~contextmap.ingestion.source_adapter.SourceAdapterConfig` into the
+same canonical :data:`~contextmap.ingestion.models.SourceObservation`
+instances produced by :class:`~contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter`,
+through the same :class:`~contextmap.ingestion.source_adapter.SourceAdapter`
+boundary. Uses the pure-Python ``rosbags`` library (optional dependency,
+extra ``contextmap[ros1]`` — the extra name predates this adapter but
+covers both, since ``rosbags`` reads both bag formats), so no ROS 2
+installation is required — see ``src/contextmap/ingestion/docs/adapters.md``.
 
-v0 scope: RGB (``sensor_msgs/Image``), LiDAR (``sensor_msgs/PointCloud2``),
-IMU (``sensor_msgs/Imu``), external pose (``nav_msgs/Odometry``), and
-camera calibration (``sensor_msgs/CameraInfo``, via
-:meth:`Ros1BagSourceAdapter.read_calibration`). Static/dynamic TF
-(``tf2_msgs/TFMessage``) is not decoded in v0. Message decoding shared
-with the ROS 2 adapter lives in
-:mod:`contextmap.ingestion.adapters._ros_common`.
+v0 scope matches the ROS 1 adapter: RGB (``sensor_msgs/Image``), LiDAR
+(``sensor_msgs/PointCloud2``), IMU (``sensor_msgs/Imu``), external pose
+(``nav_msgs/Odometry``), and camera calibration
+(``sensor_msgs/CameraInfo``, via :meth:`Ros2BagSourceAdapter.read_calibration`).
+Static/dynamic TF (``tf2_msgs/TFMessage``) is not decoded in v0. Message
+decoding shared with the ROS 1 adapter lives in
+:mod:`contextmap.ingestion.adapters._ros_common`; the one real difference
+between the two ROS versions' relevant messages is ``CameraInfo``'s
+``D``/``K`` (ROS 1) vs ``d``/``k`` (ROS 2) field casing, handled locally
+in :meth:`Ros2BagSourceAdapter.read_calibration`.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from typing import Any
 
-from rosbags.rosbag1 import Reader
+from rosbags.rosbag2 import Reader
 from rosbags.typesys import Stores, get_typestore
 
 from contextmap.ingestion.adapters import _ros_common
@@ -48,22 +52,22 @@ from contextmap.ingestion.source_adapter import (
     SourceAdapterWarning,
 )
 
-_SOURCE_TYPE = "ros1_bag"
+_SOURCE_TYPE = "ros2_bag"
 
 
-class Ros1BagSourceAdapter:
-    """Reads a ROS 1 bag and yields canonical source observations."""
+class Ros2BagSourceAdapter:
+    """Reads a ROS 2 bag and yields canonical source observations."""
 
     def __init__(self, config: SourceAdapterConfig) -> None:
-        """Create an adapter for a configured ROS 1 bag.
+        """Create an adapter for a configured ROS 2 bag.
 
         Args:
-            config: Adapter configuration (path + topic mapping). By
-                convention ``config.source_type`` is ``"ros1_bag"``, but
-                this is not validated here.
+            config: Adapter configuration (path to the bag directory +
+                topic mapping). By convention ``config.source_type`` is
+                ``"ros2_bag"``, but this is not validated here.
         """
         self._config = config
-        self._typestore = get_typestore(Stores.ROS1_NOETIC)
+        self._typestore = get_typestore(Stores.ROS2_HUMBLE)
         self._warnings: list[SourceAdapterWarning] = []
 
     def capabilities(self) -> SourceAdapterCapabilities:
@@ -109,7 +113,7 @@ class Ros1BagSourceAdapter:
                 index = counters.get(topic, 0)
                 counters[topic] = index + 1
                 try:
-                    message = self._typestore.deserialize_ros1(rawdata, connection.msgtype)
+                    message = self._typestore.deserialize_cdr(rawdata, connection.msgtype)
                     observation = self._decode(
                         kind=topic_kinds[topic],
                         topic=topic,
@@ -153,18 +157,21 @@ class Ros1BagSourceAdapter:
                 connection for connection in reader.connections if connection.topic == topic
             ]
             for connection, _timestamp, rawdata in reader.messages(connections=connections):
-                last_message = self._typestore.deserialize_ros1(rawdata, connection.msgtype)
+                last_message = self._typestore.deserialize_cdr(rawdata, connection.msgtype)
         if last_message is None:
             return None
 
         sensor_id = SensorId(_ros_common.sanitize_topic(self._config.topics.rgb or topic))
         frame_id = FrameId(last_message.header.frame_id)
+        # ROS 2 sensor_msgs/CameraInfo uses lowercase field names (d/k),
+        # unlike ROS 1's uppercase D/K — the one real ROS-version
+        # difference this adapter handles locally.
         camera_model = _ros_common.build_camera_model(
             width=last_message.width,
             height=last_message.height,
-            k_matrix=last_message.K,
+            k_matrix=last_message.k,
             distortion_model_name=last_message.distortion_model,
-            distortion_coefficients=last_message.D,
+            distortion_coefficients=last_message.d,
         )
         calibration_id = CalibrationReferenceId(f"{sensor_id}-calib")
         entry = CalibrationEntry(
@@ -177,7 +184,7 @@ class Ros1BagSourceAdapter:
                 source_path=self._config.path,
                 original_values={
                     "distortion_model": last_message.distortion_model,
-                    "D": [float(value) for value in last_message.D],
+                    "d": [float(value) for value in last_message.d],
                 },
             ),
             content_hash=compute_content_hash(
@@ -219,7 +226,7 @@ class Ros1BagSourceAdapter:
         ]
         if missing:
             raise MissingRequiredTopicError(
-                f"required topics missing from ros1 bag {self._config.path!r}: {sorted(missing)}"
+                f"required topics missing from ros2 bag {self._config.path!r}: {sorted(missing)}"
             )
 
     def _decode(
