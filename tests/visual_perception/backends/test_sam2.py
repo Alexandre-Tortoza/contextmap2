@@ -5,6 +5,7 @@ import pytest
 
 from contextmap.visual_perception import ArtifactReference, BoundingBox, PreparedImage
 from contextmap.visual_perception.backends.sam2 import (
+    Sam2AutomaticMaskRuntime,
     Sam2Config,
     Sam2NativeProposal,
     Sam2RegionDiscovery,
@@ -128,3 +129,77 @@ def test_sam2_native_shape_errors_fail_explicitly() -> None:
 
     with pytest.raises(ValueError, match="mask length"):
         backend.discover(_input())
+
+
+def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
+    class NativeArray:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def tolist(self) -> object:
+            return self._value
+
+    class AutomaticMaskGenerator:
+        def __init__(self) -> None:
+            self.received: list[object] = []
+
+        def generate(self, image: object) -> list[dict[str, object]]:
+            self.received.append(image)
+            return [
+                {
+                    "segmentation": NativeArray(
+                        [
+                            [True, True, False, False],
+                            [False, True, False, False],
+                            [False, False, False, False],
+                            [False, False, False, False],
+                        ]
+                    ),
+                    "bbox": [1.0, 2.0, 2.0, 2.0],
+                    "area": 3,
+                    "predicted_iou": 0.91,
+                    "stability_score": 0.88,
+                }
+            ]
+
+    config = Sam2Config(checkpoint="facebook/sam2-hiera-large")
+    generator = AutomaticMaskGenerator()
+    runtime = Sam2AutomaticMaskRuntime(
+        mask_generator=generator,
+        image_loader=lambda discovery_input: ("pixels", discovery_input.discovery_pass.pass_id),
+        config_digest=config.digest,
+    )
+
+    proposals = runtime.predict(_input(), config)
+
+    assert generator.received == [("pixels", "tile-0002")]
+    assert proposals[0].box == (1.0, 2.0, 3.0, 4.0)
+    assert proposals[0].mask[:6] == (True, True, False, False, False, True)
+    assert proposals[0].predicted_iou == 0.91
+    assert dict(proposals[0].metadata)["area_pixels"] == 3
+
+
+def test_sam2_runtime_rejects_configuration_or_shape_drift() -> None:
+    class InvalidGenerator:
+        def generate(self, image: object) -> list[dict[str, object]]:
+            return [
+                {
+                    "segmentation": [[True]],
+                    "bbox": [0.0, 0.0, 1.0, 1.0],
+                    "area": 1,
+                    "predicted_iou": 0.9,
+                    "stability_score": 0.9,
+                }
+            ]
+
+    config = Sam2Config(checkpoint="sam2")
+    runtime = Sam2AutomaticMaskRuntime(
+        mask_generator=InvalidGenerator(),
+        image_loader=lambda discovery_input: object(),
+        config_digest=config.digest,
+    )
+
+    with pytest.raises(ValueError, match="mask dimensions"):
+        runtime.predict(_input(), config)
+    with pytest.raises(ValueError, match="configuration digest"):
+        runtime.predict(_input(), Sam2Config(checkpoint="another-sam2"))
