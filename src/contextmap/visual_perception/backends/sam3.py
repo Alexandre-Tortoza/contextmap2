@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
 from time import perf_counter
-from typing import Protocol
+from typing import Protocol, cast
 
 from ..discovery import BackendDiagnostics, DiscoveryInput, DiscoveryOutput
 from ..region_models import (
@@ -114,6 +115,62 @@ class Sam3Runtime(Protocol):
         ...
 
 
+class _Sam3ImageProcessor(Protocol):
+    """Minimum official SAM3 image processor surface used by the runtime."""
+
+    def set_image(self, image: object) -> object:
+        """Encode one image and return its inference state."""
+        ...
+
+    def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+        """Apply the configured proposal threshold to the processor state."""
+        ...
+
+    def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+        """Run text-conditioned image inference."""
+        ...
+
+
+class Sam3ImageProcessorRuntime:
+    """Execute the official SAM3 image processor text-prompt API."""
+
+    def __init__(
+        self,
+        *,
+        processor: _Sam3ImageProcessor,
+        image_loader: Callable[[DiscoveryInput], object],
+    ) -> None:
+        """Bind a loaded processor to a pass-aware image loader."""
+        self._processor = processor
+        self._image_loader = image_loader
+
+    def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
+        """Run supported official image inference without a strategy fallback."""
+        if config.strategy is not Sam3Strategy.TEXT_PROMPT:
+            raise ValueError("official SAM3 image runtime supports only text_prompt strategy")
+        if config.prompt is None:
+            raise ValueError("official SAM3 image runtime requires a text prompt")
+
+        image = self._image_loader(discovery_input)
+        state = self._processor.set_image(image)
+        state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
+        if state is None:
+            raise ValueError("SAM3 processor returned no inference state")
+        output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
+        width = int(discovery_input.discovery_pass.window.width)
+        height = int(discovery_input.discovery_pass.window.height)
+        proposals = _parse_image_processor_output(
+            output,
+            width=width,
+            height=height,
+            mask_threshold=config.mask_threshold,
+        )
+        return Sam3NativeOutput(
+            proposals=proposals,
+            metadata=(("runtime_api", "Sam3Processor.set_text_prompt"),),
+        )
+
+
 class Sam3RegionDiscovery:
     """Adapt configured SAM3 output to canonical RegionCandidate values."""
 
@@ -208,3 +265,84 @@ class Sam3RegionDiscovery:
 def _validate_unit_threshold(value: float, name: str) -> None:
     if not isfinite(value) or not 0 <= value <= 1:
         raise ValueError(f"SAM3 {name} must be between zero and one")
+
+
+def _parse_image_processor_output(
+    output: Mapping[str, object], *, width: int, height: int, mask_threshold: float
+) -> tuple[Sam3NativeProposal, ...]:
+    """Detach documented boxes, masks, and scores from SAM3 tensors."""
+    boxes = _native_sequence(output.get("boxes"), "boxes")
+    scores = _native_sequence(output.get("scores"), "scores")
+    mask_value = output.get("masks_logits", output.get("masks"))
+    masks = _native_sequence(mask_value, "masks")
+    if not (len(boxes) == len(scores) == len(masks)):
+        raise ValueError("SAM3 boxes, scores, and masks must have equal proposal counts")
+
+    proposals: list[Sam3NativeProposal] = []
+    for index, (box_value, score_value, mask_value) in enumerate(
+        zip(boxes, scores, masks, strict=True)
+    ):
+        box = _numeric_sequence(box_value, "box", length=4)
+        proposals.append(
+            Sam3NativeProposal(
+                proposal_id=f"sam3-{index:06d}",
+                box=cast(tuple[float, float, float, float], box),
+                mask=_probability_mask(
+                    mask_value,
+                    width=width,
+                    height=height,
+                    threshold=mask_threshold,
+                ),
+                score_name="concept_score",
+                score=_finite_number(score_value, "score"),
+                query_id=f"text-prompt-{index:06d}",
+                metadata=(("mask_threshold", mask_threshold),),
+            )
+        )
+    return tuple(proposals)
+
+
+def _probability_mask(
+    value: object, *, width: int, height: int, threshold: float
+) -> tuple[bool, ...]:
+    native = value.tolist() if hasattr(value, "tolist") else value
+    rows = _native_sequence(native, "mask")
+    if len(rows) == 1:
+        possible_rows = _native_sequence(rows[0], "mask channel")
+        if len(possible_rows) == height:
+            rows = possible_rows
+    if len(rows) != height:
+        raise ValueError("SAM3 mask dimensions must match the discovery pass")
+
+    flattened: list[bool] = []
+    for row in rows:
+        pixels = _native_sequence(row, "mask row")
+        if len(pixels) != width:
+            raise ValueError("SAM3 mask dimensions must match the discovery pass")
+        flattened.extend(_finite_number(pixel, "mask value") >= threshold for pixel in pixels)
+    return tuple(flattened)
+
+
+def _native_sequence(value: object, name: str) -> Sequence[object]:
+    native = value.tolist() if hasattr(value, "tolist") else value
+    if not isinstance(native, Sequence) or isinstance(native, (str, bytes)):
+        raise TypeError(f"SAM3 {name} must be a sequence")
+    return cast(Sequence[object], native)
+
+
+def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, ...]:
+    native = _native_sequence(value, name)
+    if len(native) != length:
+        raise ValueError(f"SAM3 {name} must contain {length} numbers")
+    return tuple(_finite_number(item, name) for item in native)
+
+
+def _finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"SAM3 {name} must be numeric")
+    result = float(value)
+    if not isfinite(result):
+        raise ValueError(f"SAM3 {name} must be finite")
+    return result
