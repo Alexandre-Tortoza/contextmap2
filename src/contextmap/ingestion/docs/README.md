@@ -17,8 +17,10 @@ Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em obs
 - `SourceObservation` — union das observações canônicas: `ImageObservation`, `LidarObservation`, `ImuObservation`, `ExternalPoseMeasurement`.
 - `SourceObservationId`, `SensorId`, `FrameId`, `CalibrationReferenceId` — identificadores tipados.
 - `SourceProvenance` — rastreabilidade até a fonte bruta.
+- `SequenceArtifactWriter`/`SequenceArtifactReader` — persistência local imutável de uma sequência ingerida; `SequenceArtifactManifest`, `SequenceArtifactFileEntry`, `SequenceArtifactId`.
+- `SequenceArtifactError`, `IncompleteSequenceArtifactError` — exceções semânticas de leitura/escrita do artefato.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, e [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local.
 
 ## Módulos consumidos
 
@@ -30,10 +32,11 @@ Apenas `contextmap.shared` (`SourceTimestamp`).
 
 ## Fluxo interno (alto nível)
 
-Fonte bruta → adapter → eventos normalizados → índice temporal/sincronização → `SourceObservation` canônica → artefato de sequência persistido. Este módulo (issue #38) define apenas o contrato de observação em memória; sincronização, persistência, calibração completa, seleção/replay e adapters são issues separadas desta milestone — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
+Fonte bruta → adapter → eventos normalizados → índice temporal/sincronização → `SourceObservation` canônica → artefato de sequência persistido (`SequenceArtifactWriter`). Sincronização/agrupamento temporal, calibração completa, seleção/replay e adapters de fonte são issues separadas desta milestone — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — campos, unidades, ownership, exemplos ROS 1/ROS 2.
+- [`artifact.md`](artifact.md) — formato do artefato de sequência persistido e layout do workspace local.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e regras de dependência.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SourceObservation` no contexto global de contratos.
