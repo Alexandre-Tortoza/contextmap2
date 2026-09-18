@@ -9,6 +9,15 @@ final semantic meaning, or 2D→3D projection. See
 capability documentation.
 """
 
+from contextmap.visual_perception.embedding_space import (
+    EmbeddingSpace,
+    EmbeddingSpaceMismatchError,
+    decode_embedding_space,
+    embedding_space_fingerprint,
+    encode_embedding_space,
+    ensure_compatible_embedding_spaces,
+    ensure_compatible_features,
+)
 from contextmap.visual_perception.evidence_set import (
     EvidenceSetError,
     ObservationEvidence,
@@ -88,6 +97,8 @@ __all__ = [
     "BackendProvenance",
     "BoundingBox2D",
     "ClaimId",
+    "EmbeddingSpace",
+    "EmbeddingSpaceMismatchError",
     "EvidenceSetError",
     "FeatureExtractor",
     "FeatureId",
@@ -128,10 +139,15 @@ __all__ = [
     "allocate_run_index",
     "assemble_perception_result",
     "claim_id_for",
+    "decode_embedding_space",
     "decode_perception_result",
     "decode_pipeline_preset",
+    "embedding_space_fingerprint",
+    "encode_embedding_space",
     "encode_perception_result",
     "encode_pipeline_preset",
+    "ensure_compatible_embedding_spaces",
+    "ensure_compatible_features",
     "execute_stage_graph",
     "feature_id_for",
     "perception_result_id_for",
