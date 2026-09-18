@@ -1,5 +1,11 @@
 """Public contracts for backend-agnostic visual perception evidence."""
 
+from .diagnostics import (
+    DebugLevel,
+    DiscoveryAuditRecord,
+    RegionDiscoveryEvidenceWriter,
+    WrittenDiscoveryEvidence,
+)
 from .discovery import (
     BackendDiagnostics,
     BorderPolicy,
@@ -55,6 +61,8 @@ __all__ = [
     "BoundingBox",
     "CoordinateConvention",
     "CropOperation",
+    "DebugLevel",
+    "DiscoveryAuditRecord",
     "DiscoveryInput",
     "DiscoveryOutput",
     "DiscoveryPass",
@@ -73,6 +81,7 @@ __all__ = [
     "Region2D",
     "RegionCandidate",
     "RegionDiscovery",
+    "RegionDiscoveryEvidenceWriter",
     "RegionIdentity",
     "RegionProvenance",
     "RejectedRegionCandidate",
@@ -82,6 +91,7 @@ __all__ = [
     "TilingConfig",
     "TransformationRecord",
     "ValidRegion",
+    "WrittenDiscoveryEvidence",
     "build_discovery_passes",
     "normalize_regions",
     "prepare_image",
