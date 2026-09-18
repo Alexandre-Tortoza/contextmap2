@@ -31,6 +31,10 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 
 Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
 
+## Testes de contrato ponta a ponta
+
+`tests/visual_perception/fakes.py` reúne implementações fake determinísticas de cada port (`FakeRegionDiscovery`, `FakeDenseFeatureExtractor`, `FakeRegionFeatureExtractor`, `FakeSemanticInterpreter`, `FakeFailingRegionDiscovery`) — sem GPU, download de modelo, ou dependência de rede — usadas por `tests/visual_perception/test_end_to_end.py` para validar o caminho completo: observação canônica → `PreparedImage` → grafo de estágios → `PerceptionResult` → `PerceptionRunArtifact` → `PerceptionRunReader` isolado → `PerceptionEvidenceSet` multi-run.
+
 ## Módulos consumidos
 
 `contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`, e futuramente sequência/seleção para orquestração).
