@@ -48,7 +48,7 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 
 ## Módulos que consomem este
 
-`sensor_association`, `state_estimation` (indiretamente via pose), `semantic_fusion` e demais capabilities a jusante, sempre através de `contextmap.visual_perception` (nunca de `contextmap.visual_perception.models` diretamente).
+`sensor_association`, `state_estimation` (indiretamente via pose), `semantic_fusion`, `evaluation` e demais capabilities a jusante, sempre através de `contextmap.visual_perception` (nunca de `contextmap.visual_perception.models` diretamente).
 
 ## Onde estão os documentos detalhados
 
