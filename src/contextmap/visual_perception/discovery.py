@@ -1,0 +1,419 @@
+"""Backend-neutral discovery passes and deterministic coordinate remapping."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from typing import Protocol, runtime_checkable
+
+from .image_preparation import PreparedImage
+from .region_models import (
+    ArtifactReference,
+    BoundingBox,
+    InlineMask,
+    JsonScalar,
+    RegionCandidate,
+    RejectedRegionCandidate,
+    RejectionReason,
+)
+
+
+class PassKind(StrEnum):
+    """Kinds of spatial inputs presented to a discovery backend."""
+
+    FULL_FRAME = "full_frame"
+    TILE = "tile"
+
+
+class BorderPolicy(StrEnum):
+    """Policies for proposals that touch an internal tile border."""
+
+    KEEP = "keep"
+    REJECT_INTERNAL_BORDER = "reject_internal_border"
+
+
+@dataclass(frozen=True, slots=True)
+class BackendDiagnostics:
+    """Canonical timing and diagnostic summary emitted by a backend call."""
+
+    duration_ms: float
+    proposal_count: int
+    warnings: tuple[str, ...]
+    metadata: tuple[tuple[str, JsonScalar], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate timing, counts, and inspectable metadata."""
+        if self.duration_ms < 0:
+            raise ValueError("backend duration_ms must be non-negative")
+        if self.proposal_count < 0:
+            raise ValueError("backend proposal_count must be non-negative")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible diagnostic record."""
+        return {
+            "duration_ms": self.duration_ms,
+            "proposal_count": self.proposal_count,
+            "warnings": list(self.warnings),
+            "metadata": [{"name": key, "value": value} for key, value in self.metadata],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryPass:
+    """One image window and scale presented to a discovery backend."""
+
+    pass_id: str
+    kind: PassKind
+    window: BoundingBox
+    scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        """Validate stable identity and scale."""
+        if not self.pass_id:
+            raise ValueError("discovery pass id must not be empty")
+        if self.scale <= 0:
+            raise ValueError("discovery pass scale must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible pass definition."""
+        return {
+            "pass_id": self.pass_id,
+            "kind": self.kind.value,
+            "window": self.window.to_dict(),
+            "scale": self.scale,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TilingConfig:
+    """Configure one deterministic overlapping tile grid."""
+
+    tile_width: int
+    tile_height: int
+    overlap_x: int = 0
+    overlap_y: int = 0
+    border_policy: BorderPolicy = BorderPolicy.KEEP
+    scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        """Reject grids that cannot advance deterministically."""
+        if self.tile_width <= 0 or self.tile_height <= 0:
+            raise ValueError("tile dimensions must be positive")
+        if self.overlap_x < 0 or self.overlap_y < 0:
+            raise ValueError("tile overlaps must be non-negative")
+        if self.overlap_x >= self.tile_width or self.overlap_y >= self.tile_height:
+            raise ValueError("tile overlap must be smaller than its tile dimension")
+        if self.scale <= 0:
+            raise ValueError("tile scale must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryPassConfig:
+    """Configure full-frame and optional tiled discovery passes."""
+
+    include_full_frame: bool = True
+    tiling: TilingConfig | None = None
+    additional_tilings: tuple[TilingConfig, ...] = ()
+    max_candidates_per_pass: int | None = None
+
+    def __post_init__(self) -> None:
+        """Require at least one pass and valid optional budgets."""
+        if not self.include_full_frame and self.tiling is None and not self.additional_tilings:
+            raise ValueError("discovery configuration must enable at least one pass")
+        if self.max_candidates_per_pass is not None and self.max_candidates_per_pass <= 0:
+            raise ValueError("max_candidates_per_pass must be positive when configured")
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryInput:
+    """Canonical input for one replaceable Region Discovery backend call."""
+
+    prepared_image: PreparedImage
+    discovery_pass: DiscoveryPass
+    perception_run_id: str
+    perception_result_id: str
+
+    def __post_init__(self) -> None:
+        """Require inference identities distinct from the physical frame."""
+        if not self.perception_run_id or not self.perception_result_id:
+            raise ValueError("perception run and result ids must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryOutput:
+    """Canonical candidate and diagnostics output from one backend invocation."""
+
+    candidates: tuple[RegionCandidate, ...]
+    diagnostics: BackendDiagnostics
+
+    def __post_init__(self) -> None:
+        """Keep reported and materialized proposal counts consistent."""
+        if self.diagnostics.proposal_count != len(self.candidates):
+            raise ValueError("backend proposal_count must equal the number of candidates")
+
+
+@runtime_checkable
+class RegionDiscovery(Protocol):
+    """Replaceable capability that proposes regions for one discovery pass."""
+
+    def discover(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
+        """Produce backend-neutral candidates for one prepared image pass."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryRunResult:
+    """Globally remapped proposals, rejections, passes, and backend diagnostics."""
+
+    candidates: tuple[RegionCandidate, ...]
+    rejected: tuple[RejectedRegionCandidate, ...]
+    passes: tuple[DiscoveryPass, ...]
+    diagnostics: tuple[BackendDiagnostics, ...]
+
+
+def build_discovery_passes(
+    prepared_image: PreparedImage,
+    config: DiscoveryPassConfig | None = None,
+) -> tuple[DiscoveryPass, ...]:
+    """Build full-frame and tile passes in deterministic row-major order."""
+    if config is None:
+        config = DiscoveryPassConfig()
+    passes: list[DiscoveryPass] = []
+    if config.include_full_frame:
+        passes.append(
+            DiscoveryPass(
+                pass_id="full-frame",
+                kind=PassKind.FULL_FRAME,
+                window=BoundingBox(
+                    x_min=0,
+                    y_min=0,
+                    x_max=prepared_image.width,
+                    y_max=prepared_image.height,
+                ),
+            )
+        )
+
+    tilings = (() if config.tiling is None else (config.tiling,)) + config.additional_tilings
+    for tiling_index, tiling in enumerate(tilings):
+        x_positions = _tile_positions(prepared_image.width, tiling.tile_width, tiling.overlap_x)
+        y_positions = _tile_positions(prepared_image.height, tiling.tile_height, tiling.overlap_y)
+        tile_index = 0
+        prefix = "tile" if len(tilings) == 1 else f"tile-s{tiling_index:02d}"
+        for y_min in y_positions:
+            for x_min in x_positions:
+                x_max = min(x_min + tiling.tile_width, prepared_image.width)
+                y_max = min(y_min + tiling.tile_height, prepared_image.height)
+                passes.append(
+                    DiscoveryPass(
+                        pass_id=f"{prefix}-{tile_index:04d}",
+                        kind=PassKind.TILE,
+                        window=BoundingBox(
+                            x_min=x_min,
+                            y_min=y_min,
+                            x_max=x_max,
+                            y_max=y_max,
+                        ),
+                        scale=tiling.scale,
+                    )
+                )
+                tile_index += 1
+    return tuple(passes)
+
+
+def run_discovery_passes(
+    *,
+    prepared_image: PreparedImage,
+    backend: RegionDiscovery,
+    perception_run_id: str,
+    perception_result_id: str,
+    config: DiscoveryPassConfig | None = None,
+) -> DiscoveryRunResult:
+    """Execute configured passes and remap every accepted proposal globally."""
+    if config is None:
+        config = DiscoveryPassConfig()
+    passes = build_discovery_passes(prepared_image, config)
+    candidates: list[RegionCandidate] = []
+    rejected: list[RejectedRegionCandidate] = []
+    diagnostics: list[BackendDiagnostics] = []
+
+    tiling_by_pass = _tiling_by_pass(passes, config)
+    for discovery_pass in passes:
+        discovery_input = DiscoveryInput(
+            prepared_image=prepared_image,
+            discovery_pass=discovery_pass,
+            perception_run_id=perception_run_id,
+            perception_result_id=perception_result_id,
+        )
+        output = backend.discover(discovery_input)
+        diagnostics.append(output.diagnostics)
+        pass_candidates = output.candidates
+        if config.max_candidates_per_pass is not None:
+            kept = pass_candidates[: config.max_candidates_per_pass]
+            for candidate in pass_candidates[config.max_candidates_per_pass :]:
+                rejected.append(
+                    _rejection(
+                        discovery_pass,
+                        candidate,
+                        RejectionReason.REGION_BUDGET_EXCEEDED,
+                        "candidate exceeded configured per-pass budget",
+                    )
+                )
+            pass_candidates = kept
+
+        for candidate in pass_candidates:
+            _validate_backend_candidate(candidate, discovery_input)
+            tiling = tiling_by_pass.get(discovery_pass.pass_id)
+            if tiling is not None and _reject_for_internal_border(
+                candidate, discovery_pass, prepared_image, tiling.border_policy
+            ):
+                rejected.append(
+                    _rejection(
+                        discovery_pass,
+                        candidate,
+                        RejectionReason.TILE_BORDER_TRUNCATION,
+                        "candidate touches an internal tile border",
+                    )
+                )
+                continue
+            candidates.append(_remap_candidate(candidate, discovery_pass, prepared_image))
+
+    return DiscoveryRunResult(
+        candidates=tuple(candidates),
+        rejected=tuple(rejected),
+        passes=passes,
+        diagnostics=tuple(diagnostics),
+    )
+
+
+def _tile_positions(length: int, tile_size: int, overlap: int) -> tuple[int, ...]:
+    if length <= tile_size:
+        return (0,)
+    last_start = length - tile_size
+    positions = list(range(0, last_start + 1, tile_size - overlap))
+    if positions[-1] != last_start:
+        positions.append(last_start)
+    return tuple(positions)
+
+
+def _tiling_by_pass(
+    passes: tuple[DiscoveryPass, ...], config: DiscoveryPassConfig
+) -> dict[str, TilingConfig]:
+    tilings = (() if config.tiling is None else (config.tiling,)) + config.additional_tilings
+    mapping: dict[str, TilingConfig] = {}
+    if not tilings:
+        return mapping
+    tile_passes = [item for item in passes if item.kind is PassKind.TILE]
+    cursor = 0
+    for tiling in tilings:
+        # Cada grid pode ser reconhecido pelo número determinístico de janelas.
+        pass_count = len(
+            _tile_positions(
+                int(max(item.window.x_max for item in passes)),
+                tiling.tile_width,
+                tiling.overlap_x,
+            )
+        ) * len(
+            _tile_positions(
+                int(max(item.window.y_max for item in passes)),
+                tiling.tile_height,
+                tiling.overlap_y,
+            )
+        )
+        for item in tile_passes[cursor : cursor + pass_count]:
+            mapping[item.pass_id] = tiling
+        cursor += pass_count
+    return mapping
+
+
+def _validate_backend_candidate(
+    candidate: RegionCandidate, discovery_input: DiscoveryInput
+) -> None:
+    discovery_pass = discovery_input.discovery_pass
+    expected_dimensions = (int(discovery_pass.window.width), int(discovery_pass.window.height))
+    if (candidate.image_width, candidate.image_height) != expected_dimensions:
+        raise ValueError("backend candidate dimensions must match discovery pass dimensions")
+    if candidate.source_observation_id != discovery_input.prepared_image.source_observation_id:
+        raise ValueError("backend candidate source observation does not match discovery input")
+    if candidate.perception_run_id != discovery_input.perception_run_id:
+        raise ValueError("backend candidate perception run does not match discovery input")
+    if candidate.perception_result_id != discovery_input.perception_result_id:
+        raise ValueError("backend candidate perception result does not match discovery input")
+    if candidate.provenance.discovery_pass_id != discovery_pass.pass_id:
+        raise ValueError("backend candidate provenance does not match discovery pass")
+
+
+def _reject_for_internal_border(
+    candidate: RegionCandidate,
+    discovery_pass: DiscoveryPass,
+    prepared_image: PreparedImage,
+    policy: BorderPolicy,
+) -> bool:
+    if policy is BorderPolicy.KEEP or candidate.bounding_box is None:
+        return False
+    box = candidate.bounding_box
+    window = discovery_pass.window
+    touches_left = box.x_min <= 0 and window.x_min > 0
+    touches_top = box.y_min <= 0 and window.y_min > 0
+    touches_right = box.x_max >= window.width and window.x_max < prepared_image.width
+    touches_bottom = box.y_max >= window.height and window.y_max < prepared_image.height
+    return touches_left or touches_top or touches_right or touches_bottom
+
+
+def _remap_candidate(
+    candidate: RegionCandidate,
+    discovery_pass: DiscoveryPass,
+    prepared_image: PreparedImage,
+) -> RegionCandidate:
+    x_offset = int(discovery_pass.window.x_min)
+    y_offset = int(discovery_pass.window.y_min)
+    box = candidate.bounding_box
+    remapped_box = None
+    if box is not None:
+        remapped_box = BoundingBox(
+            x_min=box.x_min + x_offset,
+            y_min=box.y_min + y_offset,
+            x_max=box.x_max + x_offset,
+            y_max=box.y_max + y_offset,
+        )
+    mask = candidate.mask
+    if isinstance(mask, InlineMask):
+        mask = _expand_mask(mask, prepared_image.width, prepared_image.height, x_offset, y_offset)
+    elif isinstance(mask, ArtifactReference) and discovery_pass.kind is PassKind.TILE:
+        raise ValueError("tile mask artifact cannot be remapped without decoded geometry")
+    return replace(
+        candidate,
+        candidate_id=f"{discovery_pass.pass_id}/{candidate.candidate_id}",
+        image_width=prepared_image.width,
+        image_height=prepared_image.height,
+        bounding_box=remapped_box,
+        mask=mask,
+    )
+
+
+def _expand_mask(
+    mask: InlineMask,
+    output_width: int,
+    output_height: int,
+    x_offset: int,
+    y_offset: int,
+) -> InlineMask:
+    data = [False] * (output_width * output_height)
+    for y in range(mask.height):
+        for x in range(mask.width):
+            if mask.value_at(x, y):
+                data[(y + y_offset) * output_width + x + x_offset] = True
+    return InlineMask(width=output_width, height=output_height, data=tuple(data))
+
+
+def _rejection(
+    discovery_pass: DiscoveryPass,
+    candidate: RegionCandidate,
+    reason: RejectionReason,
+    detail: str,
+) -> RejectedRegionCandidate:
+    return RejectedRegionCandidate(
+        candidate_id=f"{discovery_pass.pass_id}/{candidate.candidate_id}",
+        reason=reason,
+        detail=detail,
+        discovery_pass_id=discovery_pass.pass_id,
+    )

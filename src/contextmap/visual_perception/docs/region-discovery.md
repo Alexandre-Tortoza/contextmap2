@@ -67,6 +67,23 @@ O contrato não pinta pixels excluídos de preto nem altera a observação físi
 imagem preparada e as constraints separadamente, evitando que uma alteração visual silenciosa seja
 confundida com evidência do sensor.
 
+## Passes e tiling
+
+O baseline executa um único pass `full_frame`. `DiscoveryPassConfig` pode adicionar um ou mais
+grids de tiles com tamanho, overlap, escala e budget por pass explícitos. As janelas são geradas em
+ordem row-major e o último tile de cada eixo é alinhado ao limite da imagem para garantir cobertura
+sem produzir coordenadas fora do espaço preparado.
+
+O port `RegionDiscovery` recebe `DiscoveryInput` e devolve `RegionCandidate` mais diagnostics. A
+orquestração não contém branches para SAM2, SAM3 ou Florence-2. Propostas locais de tiles são
+remapeadas para a imagem preparada, recebem ID prefixado pelo pass e preservam o ID nativo em
+provenance. Máscaras inline são expandidas no espaço global; uma máscara externa de tile sem
+geometria decodificada é rejeitada porque não pode ser remapeada de forma verificável.
+
+`BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
+`REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
+Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
