@@ -133,9 +133,7 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
             self.calls.append(("image", image))
             return {"image_state": "encoded"}
 
-        def set_confidence_threshold(
-            self, threshold: float, state: object = None
-        ) -> object:
+        def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
             self.calls.append(("threshold", threshold))
             return state
 
