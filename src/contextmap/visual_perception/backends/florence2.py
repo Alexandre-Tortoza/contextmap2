@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from math import isfinite
 from time import perf_counter
-from typing import Protocol
+from typing import Protocol, cast
 
 from ..discovery import BackendDiagnostics, DiscoveryInput, DiscoveryOutput
 from ..region_models import (
@@ -17,6 +18,18 @@ from ..region_models import (
     JsonScalar,
     RegionCandidate,
     RegionProvenance,
+)
+
+_REGION_TASKS = frozenset(
+    {
+        "<REGION_PROPOSAL>",
+        "<OD>",
+        "<DENSE_REGION_CAPTION>",
+        "<CAPTION_TO_PHRASE_GROUNDING>",
+        "<REFERRING_EXPRESSION_SEGMENTATION>",
+        "<REGION_TO_SEGMENTATION>",
+        "<OPEN_VOCABULARY_DETECTION>",
+    }
 )
 
 
@@ -43,6 +56,8 @@ class Florence2Config:
             raise ValueError("Florence-2 region discovery task must not be empty")
         if not isfinite(self.box_threshold) or not 0 <= self.box_threshold <= 1:
             raise ValueError("Florence-2 box_threshold must be between zero and one")
+        if self.task not in _REGION_TASKS:
+            raise ValueError("Florence-2 task must be a supported region-producing task")
         keys = [key for key, _ in self.generation_settings]
         if any(not key for key in keys) or len(set(keys)) != len(keys):
             raise ValueError("Florence-2 generation setting names must be non-empty and unique")
@@ -100,6 +115,88 @@ class Florence2Runtime(Protocol):
     ) -> Florence2NativeOutput:
         """Execute the configured Florence region task and parse its output."""
         ...
+
+
+class _ModelInputs(Protocol):
+    """Device-transfer surface of Transformers model inputs."""
+
+    def to(self, device: str) -> Mapping[str, object]:
+        """Move tensors to the explicitly configured device."""
+        ...
+
+
+class _Florence2Model(Protocol):
+    """Minimum Transformers Florence-2 generation surface."""
+
+    def generate(self, **kwargs: object) -> object:
+        """Generate native output token ids."""
+        ...
+
+
+class _Florence2Processor(Protocol):
+    """Minimum official Florence-2 processor surface."""
+
+    def __call__(self, *, text: str, images: object, return_tensors: str) -> _ModelInputs:
+        """Create model inputs for an image and task prompt."""
+        ...
+
+    def batch_decode(self, sequences: object, *, skip_special_tokens: bool) -> Sequence[str]:
+        """Decode generated tokens while retaining geometry tokens."""
+        ...
+
+    def post_process_generation(
+        self, text: str, *, task: str, image_size: tuple[int, int]
+    ) -> Mapping[str, object]:
+        """Parse generated text with the official task parser."""
+        ...
+
+
+class TransformersFlorence2Runtime:
+    """Execute the official Transformers Florence-2 inference flow."""
+
+    def __init__(
+        self,
+        *,
+        model: _Florence2Model,
+        processor: _Florence2Processor,
+        image_loader: Callable[[DiscoveryInput], object],
+    ) -> None:
+        """Bind loaded model components to a pass-aware image loader."""
+        self._model = model
+        self._processor = processor
+        self._image_loader = image_loader
+
+    def predict(
+        self, discovery_input: DiscoveryInput, config: Florence2Config
+    ) -> Florence2NativeOutput:
+        """Generate and parse one configured Florence-2 region task."""
+        width = int(discovery_input.discovery_pass.window.width)
+        height = int(discovery_input.discovery_pass.window.height)
+        task_prompt = f"{config.task}{config.prompt or ''}"
+        image = self._image_loader(discovery_input)
+        inputs = self._processor(
+            text=task_prompt,
+            images=image,
+            return_tensors="pt",
+        ).to(config.device)
+        generation_settings = dict(config.generation_settings)
+        conflicts = set(inputs).intersection(generation_settings)
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
+            raise ValueError(f"Florence-2 generation settings duplicate model inputs: {names}")
+        generated_ids = self._model.generate(**inputs, **generation_settings)
+        decoded = self._processor.batch_decode(generated_ids, skip_special_tokens=False)
+        if len(decoded) != 1:
+            raise ValueError("Florence-2 runtime expects exactly one decoded result per image")
+        parsed = self._processor.post_process_generation(
+            decoded[0],
+            task=config.task,
+            image_size=(width, height),
+        )
+        task_result = parsed.get(config.task)
+        if not isinstance(task_result, Mapping):
+            raise ValueError("Florence-2 task parser did not return structured region output")
+        return _parse_task_result(task_result, width=width, height=height)
 
 
 class Florence2RegionDiscovery:
@@ -206,3 +303,151 @@ class Florence2RegionDiscovery:
             ),
             native_metadata=native_metadata,
         )
+
+
+def _parse_task_result(
+    result: Mapping[str, object], *, width: int, height: int
+) -> Florence2NativeOutput:
+    """Convert official parsed boxes and polygons into detached region values."""
+    regions: list[Florence2NativeRegion] = []
+    boxes = _optional_sequence(result.get("bboxes"), "bboxes")
+    box_labels = _labels(result, preferred="bboxes_labels", fallback="labels") if boxes else ()
+    scores = _optional_sequence(result.get("scores"), "scores")
+    _validate_optional_parallel(box_labels, len(boxes), "box labels")
+    _validate_optional_parallel(scores, len(boxes), "box scores")
+
+    for index, box_value in enumerate(boxes):
+        box = _numeric_sequence(box_value, "bbox", length=4)
+        regions.append(
+            Florence2NativeRegion(
+                proposal_id=f"florence2-box-{index:06d}",
+                box=cast(tuple[float, float, float, float], box),
+                score=None if not scores else _finite_number(scores[index], "score"),
+                parsed_text=None if not box_labels else _text(box_labels[index], "box label"),
+                metadata=(("geometry_source", "official_post_process_bbox"),),
+            )
+        )
+
+    polygons = _optional_sequence(result.get("polygons"), "polygons")
+    polygon_labels = (
+        _labels(result, preferred="polygons_labels", fallback="labels") if polygons else ()
+    )
+    _validate_optional_parallel(polygon_labels, len(polygons), "polygon labels")
+    for index, polygon_value in enumerate(polygons):
+        mask, box = _rasterize_polygons(polygon_value, width=width, height=height)
+        regions.append(
+            Florence2NativeRegion(
+                proposal_id=f"florence2-polygon-{index:06d}",
+                box=box,
+                score=None,
+                mask=mask,
+                parsed_text=(
+                    None if not polygon_labels else _text(polygon_labels[index], "polygon label")
+                ),
+                metadata=(("geometry_source", "official_post_process_polygon"),),
+            )
+        )
+
+    if not regions:
+        raise ValueError("Florence-2 task parser returned no box or polygon geometry")
+    return Florence2NativeOutput(
+        regions=tuple(regions),
+        parsing_diagnostics=(
+            ("box_count", len(boxes)),
+            ("polygon_count", len(polygons)),
+        ),
+    )
+
+
+def _rasterize_polygons(
+    value: object, *, width: int, height: int
+) -> tuple[tuple[bool, ...], tuple[float, float, float, float]]:
+    """Rasterize Florence polygon coordinates at pixel centers without SDK objects."""
+    raw = _required_sequence(value, "polygon region")
+    if raw and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in raw):
+        contour_values: Sequence[object] = (raw,)
+    else:
+        contour_values = raw
+
+    contours: list[tuple[tuple[float, float], ...]] = []
+    for contour_value in contour_values:
+        coordinates = _required_sequence(contour_value, "polygon contour")
+        if len(coordinates) < 6 or len(coordinates) % 2:
+            raise ValueError("Florence-2 polygon contours require at least three coordinate pairs")
+        numbers = tuple(_finite_number(item, "polygon coordinate") for item in coordinates)
+        contours.append(tuple(zip(numbers[::2], numbers[1::2], strict=True)))
+
+    if not contours:
+        raise ValueError("Florence-2 polygon region must contain at least one contour")
+    x_values = [point[0] for contour in contours for point in contour]
+    y_values = [point[1] for contour in contours for point in contour]
+    box = (min(x_values), min(y_values), max(x_values), max(y_values))
+    mask = tuple(
+        any(_point_in_polygon(x + 0.5, y + 0.5, contour) for contour in contours)
+        for y in range(height)
+        for x in range(width)
+    )
+    return mask, box
+
+
+def _point_in_polygon(x: float, y: float, contour: tuple[tuple[float, float], ...]) -> bool:
+    """Return whether a pixel center lies inside one polygon contour."""
+    inside = False
+    previous_x, previous_y = contour[-1]
+    for current_x, current_y in contour:
+        crosses_y = (current_y > y) != (previous_y > y)
+        if crosses_y:
+            boundary_x = (previous_x - current_x) * (y - current_y) / (
+                previous_y - current_y
+            ) + current_x
+            if x < boundary_x:
+                inside = not inside
+        previous_x, previous_y = current_x, current_y
+    return inside
+
+
+def _labels(result: Mapping[str, object], *, preferred: str, fallback: str) -> Sequence[object]:
+    value = result.get(preferred)
+    if value is None:
+        value = result.get(fallback)
+    return _optional_sequence(value, preferred)
+
+
+def _validate_optional_parallel(values: Sequence[object], count: int, name: str) -> None:
+    if values and len(values) != count:
+        raise ValueError(f"Florence-2 {name} must match its geometry count")
+
+
+def _optional_sequence(value: object, name: str) -> Sequence[object]:
+    if value is None:
+        return ()
+    return _required_sequence(value, name)
+
+
+def _required_sequence(value: object, name: str) -> Sequence[object]:
+    native = value.tolist() if hasattr(value, "tolist") else value
+    if not isinstance(native, Sequence) or isinstance(native, (str, bytes)):
+        raise TypeError(f"Florence-2 {name} must be a sequence")
+    return cast(Sequence[object], native)
+
+
+def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, ...]:
+    native = _required_sequence(value, name)
+    if len(native) != length:
+        raise ValueError(f"Florence-2 {name} must contain {length} numbers")
+    return tuple(_finite_number(item, name) for item in native)
+
+
+def _finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"Florence-2 {name} must be numeric")
+    result = float(value)
+    if not isfinite(result):
+        raise ValueError(f"Florence-2 {name} must be finite")
+    return result
+
+
+def _text(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"Florence-2 {name} must be text")
+    return value
