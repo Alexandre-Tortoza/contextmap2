@@ -9,6 +9,11 @@ final semantic meaning, or 2D→3D projection. See
 capability documentation.
 """
 
+from contextmap.visual_perception.evidence_set import (
+    EvidenceSetError,
+    ObservationEvidence,
+    PerceptionEvidenceSet,
+)
 from contextmap.visual_perception.identity import (
     claim_id_for,
     feature_id_for,
@@ -68,11 +73,14 @@ __all__ = [
     "BackendProvenance",
     "BoundingBox2D",
     "ClaimId",
+    "EvidenceSetError",
     "FeatureExtractor",
     "FeatureId",
     "FeatureScope",
     "HypothesisRole",
     "IncompleteRunArtifactError",
+    "ObservationEvidence",
+    "PerceptionEvidenceSet",
     "PerceptionResult",
     "PerceptionResultId",
     "PerceptionRun",
