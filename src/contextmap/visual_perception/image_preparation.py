@@ -255,7 +255,7 @@ def prepare_image(
 
 
 def _integer_extent(value: float, name: str) -> int:
-    if not value.is_integer():
+    if not float(value).is_integer():
         raise ValueError(f"{name} must be an integer number of pixels")
     return int(value)
 
