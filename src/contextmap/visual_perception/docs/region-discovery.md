@@ -120,6 +120,24 @@ O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e tex
 como provenance/metadata de descoberta; não geram `SemanticClaim`. Um futuro adapter Florence-2
 para interpretação semântica deve implementar outro port, mesmo que compartilhe o runtime carregado.
 
+## Normalização, merge e geometry freeze
+
+`normalize_regions` aplica a mesma política a propostas de SAM2, SAM3, Florence-2 e fakes. A ordem
+é: validar geometria, aplicar limites de área, verificar valid/exclusion masks declaradas, detectar
+duplicatas por IoU ou containment, aplicar budget e criar `Region2D` imutável. Nenhuma regra usa
+label semântico ou compara scores de backends diferentes.
+
+A ordem canônica é pelo `candidate_id`, tornando IDs `region-0001`, `region-0002` e decisões de
+budget reproduzíveis. No merge, a primeira geometria canônica permanece como representante e todas
+as propostas contribuintes e respectivas provenances são preservadas. A proposta incorporada gera
+tanto `MergeDecision` quanto uma rejeição `merged_duplicate`, portanto não desaparece dos
+diagnostics.
+
+Os thresholds e budgets vivem em `NormalizationConfig`; seu digest acompanha o resultado. Máscaras
+inline são avaliadas pixel a pixel. Uma máscara persistida sem box inspecionável é rejeitada em vez
+de receber área ou overlap inventados. Constraints só são aplicadas quando a `PreparedImage` as
+declara explicitamente.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
