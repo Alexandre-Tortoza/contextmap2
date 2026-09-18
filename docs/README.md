@@ -127,6 +127,8 @@ Arquivos complementares só devem existir quando houver conteúdo real. O objeti
 Módulos com documentação própria:
 
 - [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração e adapters de fonte.
+- [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual canônica, pipeline, persistência e proveniência de percepção.
+- [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 
 ## Integração da documentação
 
