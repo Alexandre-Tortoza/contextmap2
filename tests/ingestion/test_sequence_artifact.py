@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from contextmap.ingestion import (
     SequenceArtifactError,
     SequenceArtifactReader,
     SequenceArtifactWriter,
+    SequenceProvenance,
     SourceObservationId,
     SourceProvenance,
 )
@@ -311,3 +313,62 @@ def test_read_calibration_returns_none_when_never_set(tmp_path: Path) -> None:
     reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
 
     assert reader.read_calibration() is None
+
+
+def _sequence_provenance() -> SequenceProvenance:
+    return SequenceProvenance(
+        source_type="dataset",
+        source_path="fixtures/example",
+        source_content_hash="sha256:aaaa",
+        configuration_hash="sha256:bbbb",
+        adapter_type="dataset",
+    )
+
+
+def test_provenance_round_trips_through_the_artifact(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_provenance(_sequence_provenance())
+    manifest = writer.finalize()
+
+    artifact_dir = tmp_path / "sequences" / "corridor-02" / manifest.artifact_id
+    assert (artifact_dir / "provenance" / "provenance.json").is_file()
+
+    reader = SequenceArtifactReader(artifact_dir)
+    provenance = reader.read_provenance()
+
+    assert provenance is not None
+    assert provenance.source_type == "dataset"
+    assert provenance.configuration_hash == "sha256:bbbb"
+    assert reader.verify_integrity() == []
+
+
+def test_read_provenance_returns_none_when_never_set(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+
+    assert reader.read_provenance() is None
+
+
+def test_verify_integrity_detects_an_index_payload_cross_reference_error(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    manifest = writer.finalize()
+    artifact_dir = tmp_path / "sequences" / "corridor-02" / manifest.artifact_id
+
+    index_path = artifact_dir / "index.jsonl"
+    lines = index_path.read_text(encoding="utf-8").splitlines()
+    first_record = json.loads(lines[0])
+    first_record["payload_path"] = "rgb/does-not-exist.bin"
+    lines[0] = json.dumps(first_record)
+    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    reader = SequenceArtifactReader(artifact_dir)
+    problems = reader.verify_integrity()
+
+    assert any(
+        "payload_path" in problem and "not present in manifest" in problem for problem in problems
+    )

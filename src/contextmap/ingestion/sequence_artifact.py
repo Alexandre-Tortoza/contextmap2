@@ -50,6 +50,11 @@ from contextmap.ingestion.models import (
     SourceProvenance,
     observation_modality,
 )
+from contextmap.ingestion.sequence_provenance import (
+    SequenceProvenance,
+    decode_provenance,
+    encode_provenance,
+)
 from contextmap.shared import SourceTimestamp
 
 SCHEMA_VERSION = "0.1.0"
@@ -61,6 +66,7 @@ SequenceArtifactId = NewType("SequenceArtifactId", str)
 _MANIFEST_FILENAME = "manifest.json"
 _INDEX_FILENAME = "index.jsonl"
 _CALIBRATION_FILENAME = "calibration/calibration.json"
+_PROVENANCE_FILENAME = "provenance/provenance.json"
 _MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = dict.fromkeys(MODALITY_NAMES, 0)
 
 
@@ -151,7 +157,21 @@ class SequenceArtifactWriter:
         self._observations: list[SourceObservation] = []
         self._seen_observation_ids: set[str] = set()
         self._calibration: CalibrationSet | None = None
+        self._provenance: SequenceProvenance | None = None
         self._finalized = False
+
+    def set_provenance(self, provenance: SequenceProvenance) -> None:
+        """Attach the sequence's provenance/content-identity metadata.
+
+        Args:
+            provenance: Provenance to persist alongside the artifact.
+
+        Raises:
+            SequenceArtifactError: If called after :meth:`finalize`.
+        """
+        if self._finalized:
+            raise SequenceArtifactError("cannot set provenance after finalize()")
+        self._provenance = provenance
 
     def set_calibration(self, calibration_set: CalibrationSet) -> None:
         """Attach the sequence's calibration set, written by :meth:`finalize`.
@@ -211,7 +231,9 @@ class SequenceArtifactWriter:
         self._tmp_dir.mkdir(parents=True, exist_ok=False)
         try:
             manifest = self._write_contents()
-            problems = _check_file_inventory(self._tmp_dir, manifest)
+            problems = _check_file_inventory(
+                self._tmp_dir, manifest
+            ) + _check_index_cross_references(self._tmp_dir, manifest)
             if problems:
                 raise SequenceArtifactError(
                     f"internal consistency check failed before finalize: {problems}"
@@ -257,6 +279,17 @@ class SequenceArtifactWriter:
                 _file_entry(_CALIBRATION_FILENAME, calibration_content.encode("utf-8"))
             )
 
+        if self._provenance is not None:
+            provenance_content = json.dumps(
+                encode_provenance(self._provenance), indent=2, sort_keys=True
+            )
+            provenance_path = self._tmp_dir / _PROVENANCE_FILENAME
+            provenance_path.parent.mkdir(parents=True, exist_ok=True)
+            provenance_path.write_text(provenance_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_PROVENANCE_FILENAME, provenance_content.encode("utf-8"))
+            )
+
         manifest = SequenceArtifactManifest(
             artifact_id=self._artifact_id,
             sequence_name=self._sequence_name,
@@ -296,17 +329,34 @@ class SequenceArtifactReader:
         return self._manifest
 
     def verify_integrity(self) -> list[str]:
-        """Check the file inventory against what is actually on disk.
+        """Check the artifact's file inventory and internal cross-references.
 
-        This is a basic structural check (missing files, size mismatches,
-        hash mismatches). The full integrity/content-identity command is
-        delivered by the sequence provenance and integrity issue in this
-        milestone.
+        Detects: missing files referenced by the manifest, size/content
+        hash mismatches, and index.jsonl records whose ``payload_path``
+        does not resolve to a file in the manifest's file inventory
+        (an invalid index-to-payload cross-reference). An incompatible
+        schema version is instead raised by :meth:`__init__`/:func:`_load_manifest`,
+        since a reader that does not understand the schema cannot safely
+        interpret anything else about the artifact.
 
         Returns:
             A list of human-readable problems; empty means no problem found.
         """
-        return _check_file_inventory(self._root, self._manifest)
+        return _check_file_inventory(self._root, self._manifest) + _check_index_cross_references(
+            self._root, self._manifest
+        )
+
+    def read_provenance(self) -> SequenceProvenance | None:
+        """Read this sequence's provenance/content-identity metadata, when written.
+
+        Returns:
+            The provenance, or ``None`` if the artifact was finalized
+            without one (e.g. by a writer predating this contract).
+        """
+        provenance_path = self._root / _PROVENANCE_FILENAME
+        if not provenance_path.is_file():
+            return None
+        return decode_provenance(json.loads(provenance_path.read_text(encoding="utf-8")))
 
     def read_calibration(self) -> CalibrationSet | None:
         """Read this sequence's calibration set, when one was written.
@@ -571,4 +621,26 @@ def _check_file_inventory(root: Path, manifest: SequenceArtifactManifest) -> lis
         digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
         if digest != entry.content_hash:
             problems.append(f"content hash mismatch for {entry.path}")
+    return problems
+
+
+def _check_index_cross_references(root: Path, manifest: SequenceArtifactManifest) -> list[str]:
+    problems: list[str] = []
+    known_paths = {entry.path for entry in manifest.file_inventory}
+    index_path = root / _INDEX_FILENAME
+    if not index_path.is_file():
+        return problems  # already reported by _check_file_inventory
+
+    with index_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            record = json.loads(stripped)
+            payload_path = record.get("payload_path")
+            if payload_path is not None and payload_path not in known_paths:
+                problems.append(
+                    f"{_INDEX_FILENAME} line {line_number} references payload_path "
+                    f"{payload_path!r} not present in manifest file_inventory"
+                )
     return problems

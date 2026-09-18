@@ -46,6 +46,13 @@ from contextmap.ingestion.sequence_artifact import (
     SequenceArtifactReader,
     SequenceArtifactWriter,
 )
+from contextmap.ingestion.sequence_provenance import (
+    SequenceProvenance,
+    compute_configuration_hash,
+    compute_content_identity,
+    compute_source_content_hash,
+    current_code_version,
+)
 from contextmap.ingestion.sequence_selection import (
     ExplicitIdsSelection,
     FrameRangeSelection,
@@ -113,6 +120,7 @@ __all__ = [
     "SequenceArtifactManifest",
     "SequenceArtifactReader",
     "SequenceArtifactWriter",
+    "SequenceProvenance",
     "SequenceSelection",
     "SequenceSelectionError",
     "SequenceSelectionResult",
@@ -130,6 +138,10 @@ __all__ = [
     "TimestampRangeSelection",
     "UnsupportedSourceMessageError",
     "camera_model_kind",
+    "compute_configuration_hash",
+    "compute_content_identity",
+    "compute_source_content_hash",
+    "current_code_version",
     "decode_selection",
     "encode_selection",
     "observation_modality",
