@@ -13,8 +13,12 @@ workspace/
             ├── index.jsonl
             ├── rgb/
             │   └── <observation-id>.bin
-            └── pointcloud/
-                └── <observation-id>.bin
+            ├── pointcloud/
+            │   └── <observation-id>.bin
+            ├── calibration/
+            │   └── calibration.json      # opcional, ver calibration.md
+            └── provenance/
+                └── provenance.json        # opcional, ver provenance.md
 ```
 
 O path não é o contrato semântico — `manifest.json` é o ponto autoritativo, conforme `docs/ARTIFACTS.md`.
@@ -23,8 +27,8 @@ O path não é o contrato semântico — `manifest.json` é o ponto autoritativo
 
 - **Índice em JSON Lines, não Parquet.** O documento da issue cita `index.parquet` como candidato, mas `pyproject.toml` ainda não tem nenhuma dependência de runtime (`dependencies = []`). Adicionar `pyarrow`/`pandas` só para o índice não se justifica no v0 (YAGNI); `index.jsonl` é inspecionável com ferramentas de texto padrão e não introduz dependência nova. Revisitar se o volume de observações tornar leitura linha-a-linha um gargalo real.
 - **IMU e pose externa ficam inline no índice.** Esses registros são pequenos (poucos floats); não há payload binário grande a separar, então não existem diretórios `imu/`/`external_pose/` no v0.
-- **`calibration/`, `provenance/`, `diagnostics/` não são criados por este writer.** São candidatos citados pela issue, mas pertencem a contratos ainda não definidos por esta milestone: calibração completa (#41), provenance/integridade estendida (#46) e diagnostics estruturados (#47). Criar diretórios vazios antecipando essas issues violaria a regra de não antecipar estrutura sem conteúdo real (`docs/development.md`, YAGNI). Essas issues podem estender o writer para popular esses diretórios quando seus contratos existirem.
-- **Identidade de conteúdo completa é escopo de #46.** O manifest já registra hash SHA-256 e tamanho por arquivo (`file_inventory`), suficiente para detectar corrupção/arquivo ausente hoje; regras de "mesma fonte + mesma configuração" ficam para a issue de provenance/integrity.
+- **`calibration/` e `provenance/` são opcionais, populados apenas quando `set_calibration()`/`set_provenance()` são chamados** (issues #41 e #46, respectivamente). `diagnostics/` continua não criado por este writer — pertence a #47.
+- **Identidade de conteúdo** é responsabilidade de `contextmap.ingestion.sequence_provenance` (#46), não deste módulo — o manifest só registra hash/tamanho por arquivo (suficiente para detectar corrupção); regras de "mesma fonte + mesma configuração" vivem em `provenance.json`, ver [`provenance.md`](provenance.md).
 
 ## `manifest.json`
 
@@ -54,7 +58,7 @@ Um objeto JSON por linha, um por observação, na ordem em que foi adicionada ao
 
 ## Leitura
 
-`SequenceArtifactReader(artifact_dir)` abre um artefato existente, expõe `manifest`, `list_observations()` (todas as observações decodificadas, na ordem do índice), `get_observation(observation_id)` (busca por identidade) e `verify_integrity()` (lista de problemas estruturais; lista vazia = artefato íntegro, conforme o inventário do manifest).
+`SequenceArtifactReader(artifact_dir)` abre um artefato existente, expõe `manifest`, `list_observations()` (todas as observações decodificadas, na ordem do índice), `get_observation(observation_id)` (busca por identidade), `read_calibration()`/`read_provenance()` (`None` quando não persistidos) e `verify_integrity()` (lista de problemas estruturais, incluindo cross-references inválidas entre `index.jsonl` e o inventário de arquivos — ver [`provenance.md`](provenance.md); lista vazia = artefato íntegro).
 
 ## Reabertura sem a fonte original
 
