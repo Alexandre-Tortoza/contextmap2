@@ -230,3 +230,29 @@ class ExternalPoseMeasurement(_SourceObservationBase):
 
 SourceObservation = ImageObservation | LidarObservation | ImuObservation | ExternalPoseMeasurement
 """Any canonical, backend-agnostic sensor observation produced by ingestion."""
+
+MODALITY_NAMES: frozenset[str] = frozenset({"image", "lidar", "imu", "external_pose"})
+"""Canonical modality names, one per :data:`SourceObservation` variant."""
+
+
+def observation_modality(observation: SourceObservation) -> str:
+    """Return the canonical modality name of a source observation.
+
+    Args:
+        observation: Any canonical source observation.
+
+    Returns:
+        One of the names in :data:`MODALITY_NAMES`.
+
+    Raises:
+        TypeError: If ``observation`` is not a recognized modality type.
+    """
+    if isinstance(observation, ImageObservation):
+        return "image"
+    if isinstance(observation, LidarObservation):
+        return "lidar"
+    if isinstance(observation, ImuObservation):
+        return "imu"
+    if isinstance(observation, ExternalPoseMeasurement):
+        return "external_pose"
+    raise TypeError(f"unsupported observation type: {type(observation)!r}")

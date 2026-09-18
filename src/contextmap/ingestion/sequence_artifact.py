@@ -28,6 +28,7 @@ from typing import Any, NewType
 from uuid import uuid4
 
 from contextmap.ingestion.models import (
+    MODALITY_NAMES,
     CalibrationReferenceId,
     ExternalPoseMeasurement,
     FrameId,
@@ -41,6 +42,7 @@ from contextmap.ingestion.models import (
     SourceObservation,
     SourceObservationId,
     SourceProvenance,
+    observation_modality,
 )
 from contextmap.shared import SourceTimestamp
 
@@ -52,12 +54,7 @@ SequenceArtifactId = NewType("SequenceArtifactId", str)
 
 _MANIFEST_FILENAME = "manifest.json"
 _INDEX_FILENAME = "index.jsonl"
-_MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = {
-    "image": 0,
-    "lidar": 0,
-    "imu": 0,
-    "external_pose": 0,
-}
+_MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = dict.fromkeys(MODALITY_NAMES, 0)
 
 
 class SequenceArtifactError(Exception):
@@ -333,10 +330,10 @@ def _encode_observation(
         "calibration_id": (
             str(observation.calibration_id) if observation.calibration_id is not None else None
         ),
+        "modality": observation_modality(observation),
     }
 
     if isinstance(observation, ImageObservation):
-        record["modality"] = "image"
         record["width"] = observation.width
         record["height"] = observation.height
         record["encoding"] = observation.encoding.value
@@ -345,7 +342,6 @@ def _encode_observation(
         return record, (payload_path, observation.data)
 
     if isinstance(observation, LidarObservation):
-        record["modality"] = "lidar"
         record["point_count"] = observation.point_count
         record["point_step_bytes"] = observation.point_step_bytes
         record["is_dense"] = observation.is_dense
@@ -363,7 +359,6 @@ def _encode_observation(
         return record, (payload_path, observation.data)
 
     if isinstance(observation, ImuObservation):
-        record["modality"] = "imu"
         record["linear_acceleration"] = (
             list(observation.linear_acceleration)
             if observation.linear_acceleration is not None
@@ -378,7 +373,6 @@ def _encode_observation(
         return record, None
 
     if isinstance(observation, ExternalPoseMeasurement):
-        record["modality"] = "external_pose"
         record["parent_frame"] = str(observation.parent_frame)
         record["translation"] = list(observation.translation)
         record["orientation"] = list(observation.orientation)
