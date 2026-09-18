@@ -21,8 +21,9 @@ Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em obs
 - `SequenceArtifactError`, `IncompleteSequenceArtifactError` — exceções semânticas de leitura/escrita do artefato.
 - `synchronize()` — agrupa observações em `ProcessingObservation`s auditáveis; `SynchronizationConfig`, `ModalityAssociation`, `SynchronizationDiagnostics`, `DroppedEvent`.
 - `observation_modality()`, `MODALITY_NAMES` — utilitário para consumir `SourceObservation` de forma genérica por modalidade.
+- `CalibrationSet`/`CalibrationEntry` — calibração e frames de coordenadas canônicos; `CameraModel` (`PinholeCameraModel`/`FisheyeCameraModel`), `RigidTransform`, `validate_calibration_set()`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, e [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, e [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame.
 
 ## Módulos consumidos
 

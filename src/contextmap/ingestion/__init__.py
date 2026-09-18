@@ -7,6 +7,19 @@ persists them as a reusable, immutable sequence artifact. See
 documentation.
 """
 
+from contextmap.ingestion.calibration import (
+    CalibrationEntry,
+    CalibrationError,
+    CalibrationProvenance,
+    CalibrationSet,
+    CameraModel,
+    DistortionModel,
+    FisheyeCameraModel,
+    PinholeCameraModel,
+    RigidTransform,
+    camera_model_kind,
+    validate_calibration_set,
+)
 from contextmap.ingestion.models import (
     MODALITY_NAMES,
     CalibrationReferenceId,
@@ -44,9 +57,16 @@ from contextmap.ingestion.synchronization import (
 
 __all__ = [
     "MODALITY_NAMES",
+    "CalibrationEntry",
+    "CalibrationError",
+    "CalibrationProvenance",
     "CalibrationReferenceId",
+    "CalibrationSet",
+    "CameraModel",
+    "DistortionModel",
     "DroppedEvent",
     "ExternalPoseMeasurement",
+    "FisheyeCameraModel",
     "FrameId",
     "ImageEncoding",
     "ImageObservation",
@@ -54,9 +74,11 @@ __all__ = [
     "IncompleteSequenceArtifactError",
     "LidarObservation",
     "ModalityAssociation",
+    "PinholeCameraModel",
     "PointFieldDataType",
     "PointFieldDescriptor",
     "ProcessingObservation",
+    "RigidTransform",
     "SensorId",
     "SequenceArtifactError",
     "SequenceArtifactFileEntry",
@@ -69,6 +91,8 @@ __all__ = [
     "SourceProvenance",
     "SynchronizationConfig",
     "SynchronizationDiagnostics",
+    "camera_model_kind",
     "observation_modality",
     "synchronize",
+    "validate_calibration_set",
 ]

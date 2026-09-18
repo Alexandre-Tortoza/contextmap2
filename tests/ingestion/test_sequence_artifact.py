@@ -3,6 +3,10 @@ from pathlib import Path
 import pytest
 
 from contextmap.ingestion import (
+    CalibrationEntry,
+    CalibrationProvenance,
+    CalibrationReferenceId,
+    CalibrationSet,
     ExternalPoseMeasurement,
     FrameId,
     ImageEncoding,
@@ -10,6 +14,7 @@ from contextmap.ingestion import (
     ImuObservation,
     IncompleteSequenceArtifactError,
     LidarObservation,
+    PinholeCameraModel,
     PointFieldDataType,
     PointFieldDescriptor,
     SensorId,
@@ -19,6 +24,7 @@ from contextmap.ingestion import (
     SourceObservationId,
     SourceProvenance,
 )
+from contextmap.ingestion.calibration import compute_content_hash
 from contextmap.shared import SourceTimestamp
 
 
@@ -261,3 +267,47 @@ def test_verify_integrity_detects_a_content_hash_mismatch(tmp_path: Path) -> Non
     problems = reader.verify_integrity()
 
     assert any("hash mismatch" in problem for problem in problems)
+
+
+def _calibration_set() -> CalibrationSet:
+    model = PinholeCameraModel(width=2, height=1, fx=1.0, fy=1.0, cx=1.0, cy=0.5)
+    entry = CalibrationEntry(
+        calibration_id=CalibrationReferenceId("front_camera-calib"),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        camera_model=model,
+        provenance=CalibrationProvenance(source_type="dataset", source_path="fixtures/calib.yaml"),
+        content_hash=compute_content_hash(
+            sensor_id=SensorId("front_camera"),
+            frame_id=FrameId("front_camera_optical"),
+            camera_model=model,
+        ),
+    )
+    return CalibrationSet(entries={entry.calibration_id: entry}, static_transforms=())
+
+
+def test_calibration_round_trips_through_the_artifact(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_calibration(_calibration_set())
+    manifest = writer.finalize()
+
+    artifact_dir = tmp_path / "sequences" / "corridor-02" / manifest.artifact_id
+    assert (artifact_dir / "calibration" / "calibration.json").is_file()
+
+    reader = SequenceArtifactReader(artifact_dir)
+    calibration = reader.read_calibration()
+
+    assert calibration is not None
+    assert calibration.entries.keys() == {CalibrationReferenceId("front_camera-calib")}
+    assert reader.verify_integrity() == []
+
+
+def test_read_calibration_returns_none_when_never_set(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+
+    assert reader.read_calibration() is None

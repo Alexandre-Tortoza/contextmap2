@@ -27,6 +27,12 @@ from pathlib import Path
 from typing import Any, NewType
 from uuid import uuid4
 
+from contextmap.ingestion.calibration import (
+    CalibrationSet,
+    decode_calibration_set,
+    encode_calibration_set,
+    ensure_valid_calibration_set,
+)
 from contextmap.ingestion.models import (
     MODALITY_NAMES,
     CalibrationReferenceId,
@@ -54,6 +60,7 @@ SequenceArtifactId = NewType("SequenceArtifactId", str)
 
 _MANIFEST_FILENAME = "manifest.json"
 _INDEX_FILENAME = "index.jsonl"
+_CALIBRATION_FILENAME = "calibration/calibration.json"
 _MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = dict.fromkeys(MODALITY_NAMES, 0)
 
 
@@ -143,7 +150,25 @@ class SequenceArtifactWriter:
         self._tmp_dir = sequence_dir / f".tmp-{self._artifact_id}-{uuid4().hex[:8]}"
         self._observations: list[SourceObservation] = []
         self._seen_observation_ids: set[str] = set()
+        self._calibration: CalibrationSet | None = None
         self._finalized = False
+
+    def set_calibration(self, calibration_set: CalibrationSet) -> None:
+        """Attach the sequence's calibration set, written by :meth:`finalize`.
+
+        Args:
+            calibration_set: Calibration and coordinate-frame inventory for
+                this sequence.
+
+        Raises:
+            SequenceArtifactError: If called after :meth:`finalize`.
+            CalibrationError: If ``calibration_set`` is invalid; see
+                :func:`~contextmap.ingestion.calibration.validate_calibration_set`.
+        """
+        if self._finalized:
+            raise SequenceArtifactError("cannot set calibration after finalize()")
+        ensure_valid_calibration_set(calibration_set)
+        self._calibration = calibration_set
 
     def add_observation(self, observation: SourceObservation) -> None:
         """Queue an observation to be written by :meth:`finalize`.
@@ -221,6 +246,17 @@ class SequenceArtifactWriter:
         (self._tmp_dir / _INDEX_FILENAME).write_text(index_content, encoding="utf-8")
         file_entries.append(_file_entry(_INDEX_FILENAME, index_content.encode("utf-8")))
 
+        if self._calibration is not None:
+            calibration_content = json.dumps(
+                encode_calibration_set(self._calibration), indent=2, sort_keys=True
+            )
+            calibration_path = self._tmp_dir / _CALIBRATION_FILENAME
+            calibration_path.parent.mkdir(parents=True, exist_ok=True)
+            calibration_path.write_text(calibration_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_CALIBRATION_FILENAME, calibration_content.encode("utf-8"))
+            )
+
         manifest = SequenceArtifactManifest(
             artifact_id=self._artifact_id,
             sequence_name=self._sequence_name,
@@ -271,6 +307,19 @@ class SequenceArtifactReader:
             A list of human-readable problems; empty means no problem found.
         """
         return _check_file_inventory(self._root, self._manifest)
+
+    def read_calibration(self) -> CalibrationSet | None:
+        """Read this sequence's calibration set, when one was written.
+
+        Returns:
+            The calibration set, or ``None`` if the artifact was finalized
+            without one (e.g. by a writer predating the calibration
+            contract, or a source with no calibration available).
+        """
+        calibration_path = self._root / _CALIBRATION_FILENAME
+        if not calibration_path.is_file():
+            return None
+        return decode_calibration_set(json.loads(calibration_path.read_text(encoding="utf-8")))
 
     def list_observations(self) -> list[SourceObservation]:
         """Return every observation in the artifact, in index order.
