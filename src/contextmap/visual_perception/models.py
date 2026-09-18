@@ -356,3 +356,71 @@ class PerceptionResult:
         for claim in self.claims:
             if claim.region_id is not None and claim.region_id not in region_ids:
                 raise ValueError(f"claim references unknown region_id: {claim.region_id!r}")
+
+
+@dataclass(frozen=True, kw_only=True)
+class PreparedImage:
+    """The image-preparation output consumed by discovery/extraction/interpretation ports.
+
+    This is Visual Perception Core's canonical contract for "an image
+    ready for capability backends to consume" — any image-preparation
+    implementation (resize, rectification, cropping, valid-area masking,
+    ...) must produce this shape. The transformations actually applied
+    are recorded for audit, but their specific parameters/implementation
+    are not part of this core contract.
+
+    Attributes:
+        source_observation_id: The physical observation this was
+            prepared from.
+        payload_reference: Reference to the prepared image payload
+            (e.g. a debug/output file path) — never raw pixel data
+            inline.
+        width: Prepared image width in pixels.
+        height: Prepared image height in pixels.
+        transformations: Human-readable, ordered record of the
+            preparation steps applied, e.g. ``("resize", "rectify")``.
+            Empty when the source observation was used unmodified.
+    """
+
+    source_observation_id: SourceObservationId
+    payload_reference: str
+    width: int
+    height: int
+    transformations: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        """Validate the prepared image has positive extent.
+
+        Raises:
+            ValueError: If ``width`` or ``height`` is not positive.
+        """
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("width and height must be positive")
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticSupport:
+    """A scorer's assessment of how well visual evidence supports one SemanticClaim.
+
+    Scoring never mutates the original claim: it produces a separate,
+    referenceable judgement, keeping the claim itself immutable evidence.
+
+    Attributes:
+        claim_id: The claim being scored.
+        support_score: Score in ``[0, 1]``: how well the visual evidence
+            supports the claim.
+        provenance: Backend that produced this support judgement.
+    """
+
+    claim_id: ClaimId
+    support_score: float
+    provenance: BackendProvenance
+
+    def __post_init__(self) -> None:
+        """Validate ``support_score`` is a valid score.
+
+        Raises:
+            ValueError: If ``support_score`` is outside ``[0, 1]``.
+        """
+        if not 0.0 <= self.support_score <= 1.0:
+            raise ValueError(f"support_score must be in [0, 1], got {self.support_score}")

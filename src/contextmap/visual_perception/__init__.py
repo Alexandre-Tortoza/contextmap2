@@ -20,17 +20,26 @@ from contextmap.visual_perception.models import (
     PerceptionResultId,
     PerceptionRun,
     PerceptionRunId,
+    PreparedImage,
     Region2D,
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticSupport,
     VisualFeature,
+)
+from contextmap.visual_perception.ports import (
+    FeatureExtractor,
+    RegionDiscovery,
+    SemanticInterpreter,
+    SemanticScorer,
 )
 
 __all__ = [
     "BackendProvenance",
     "BoundingBox2D",
     "ClaimId",
+    "FeatureExtractor",
     "FeatureId",
     "FeatureScope",
     "HypothesisRole",
@@ -38,9 +47,14 @@ __all__ = [
     "PerceptionResultId",
     "PerceptionRun",
     "PerceptionRunId",
+    "PreparedImage",
     "Region2D",
+    "RegionDiscovery",
     "RegionId",
     "SceneContext",
     "SemanticClaim",
+    "SemanticInterpreter",
+    "SemanticScorer",
+    "SemanticSupport",
     "VisualFeature",
 ]
