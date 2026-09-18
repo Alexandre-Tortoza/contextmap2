@@ -96,6 +96,12 @@ automatic mask generator. Seu digest determinístico acompanha cada proposta. `p
 O runtime recebe o `DiscoveryInput` completo, incluindo constraints explícitas, pass e tile. Erros
 de shape ou runtime interrompem a execução, sem fallback silencioso para outro backend.
 
+`Sam2AutomaticMaskRuntime` encapsula a API oficial `SAM2AutomaticMaskGenerator.generate`. Um
+loader injetado materializa exatamente a janela do pass como imagem HWC `uint8`; o runtime converte
+a box nativa XYWH para XYXY, destaca a máscara binária e preserva `predicted_iou`,
+`stability_score` e área. `from_model` constrói o generator com os thresholds e settings que
+participam do digest, sem tornar SAM2 dependência obrigatória do pacote principal.
+
 ## Backend SAM3
 
 `Sam3RegionDiscovery` é o adapter planejado para o baseline da Solution 1 e continua substituível
@@ -108,6 +114,12 @@ prompt aplicável e nome/semântica do score em provenance. Texto usado para obt
 publicado como `SemanticClaim`. Falha do runtime ou estratégia configurada é propagada; não existe
 fallback silencioso para outra estratégia ou backend.
 
+`Sam3ImageProcessorRuntime` integra o caminho oficial de imagem para `text_prompt`:
+`set_image`, `set_confidence_threshold` e `set_text_prompt`. Boxes, scores e probabilidades de
+máscara são destacados dos tensors antes de sair do runtime. As demais estratégias continuam
+distinguíveis no contrato, mas esse runtime as rejeita explicitamente até existir uma integração
+real específica; selecionar uma delas não aciona comportamento alternativo.
+
 ## Backend Florence-2
 
 `Florence2RegionDiscovery` atende somente ao port de descoberta de regiões. Sua configuração
@@ -119,6 +131,12 @@ O parser interno pode produzir box, máscara opcional, score opcional, texto par
 O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e texto parseado ficam
 como provenance/metadata de descoberta; não geram `SemanticClaim`. Um futuro adapter Florence-2
 para interpretação semântica deve implementar outro port, mesmo que compartilhe o runtime carregado.
+
+`TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
+move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
+chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões.
+Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser
+permanecem metadata de descoberta.
 
 ## Normalização, merge e geometry freeze
 
