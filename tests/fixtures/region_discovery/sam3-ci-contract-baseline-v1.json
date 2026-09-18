@@ -1,0 +1,89 @@
+{
+  "frame_selection": [
+    "synthetic-pinhole",
+    "synthetic-wide-angle"
+  ],
+  "frames": [
+    {
+      "accuracy": {
+        "coverage": 1.0,
+        "duplicate_region_rate": 0.0,
+        "mean_dice": 1.0,
+        "mean_iou": 1.0,
+        "over_segmentation_rate": 0.0,
+        "region_recall": 1.0,
+        "under_segmentation_rate": 0.0
+      },
+      "diagnostics": {
+        "accepted_region_count": 1,
+        "area_pixels": [
+          4.0
+        ],
+        "constraint_violation_count": 0,
+        "duplicate_merge_ratio": 0.0,
+        "invalid_geometry_count": 0,
+        "raw_candidate_count": 1,
+        "rejected_candidate_count": 0
+      },
+      "frame_id": "synthetic-pinhole",
+      "performance": {
+        "peak_memory_mb": 64.0,
+        "per_pass_runtime_ms": [
+          1.0
+        ],
+        "runtime_ms": 1.0
+      },
+      "source_condition": "synthetic_indoor_pinhole"
+    },
+    {
+      "accuracy": null,
+      "diagnostics": {
+        "accepted_region_count": 1,
+        "area_pixels": [
+          4.0
+        ],
+        "constraint_violation_count": 0,
+        "duplicate_merge_ratio": 0.0,
+        "invalid_geometry_count": 0,
+        "raw_candidate_count": 1,
+        "rejected_candidate_count": 0
+      },
+      "frame_id": "synthetic-wide-angle",
+      "performance": {
+        "peak_memory_mb": 64.0,
+        "per_pass_runtime_ms": [
+          1.2
+        ],
+        "runtime_ms": 1.2
+      },
+      "source_condition": "synthetic_outdoor_wide_angle"
+    }
+  ],
+  "metric_schema_version": "1.0.0",
+  "reference_set_version": "region-discovery-reference-v1",
+  "run": {
+    "backend_id": "sam3",
+    "backend_version": "ci-contract-v1",
+    "checkpoint": "test://sam3-deterministic-runtime",
+    "config_digest": "sha256:ci-contract-sam3-v1",
+    "execution_kind": "ci_contract",
+    "perception_artifact_id": "artifact-sam3-ci-contract-v1",
+    "perception_run_id": "run-sam3-ci-contract-v1",
+    "pipeline_graph_digest": "sha256:region-discovery-ci-pipeline-v1",
+    "strategy": "automatic",
+    "thresholds": {
+      "score": 0.5
+    },
+    "variables": {
+      "query_strategy": "automatic",
+      "tiling": false
+    }
+  },
+  "schema": "contextmap.region-discovery-evaluation/v1",
+  "summary": {
+    "mean_iou": 1.0,
+    "mean_region_recall": 1.0,
+    "mean_runtime_ms": 1.1,
+    "peak_memory_mb": 64.0
+  }
+}
