@@ -4,6 +4,7 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    CANONICAL_PRESET_V1,
     BackendProvenance,
     BoundingBox2D,
     EvidenceSetError,
@@ -55,6 +56,8 @@ def _write_run(
         sequence_artifact_id=sequence_artifact_id,
         selection_id="sha256:aaaa",
         enabled_capabilities=frozenset({"region_discovery"}),
+        pipeline_preset=CANONICAL_PRESET_V1,
+        configuration_digest="sha256:test",
         selection_label="frames",
         profile_label="fake",
     )

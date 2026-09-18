@@ -5,6 +5,7 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    CANONICAL_PRESET_V1,
     BackendProvenance,
     BoundingBox2D,
     IncompleteRunArtifactError,
@@ -60,6 +61,8 @@ def _write_run(
         sequence_artifact_id="corridor-02-a1b2c3",
         selection_id="sha256:aaaa",
         enabled_capabilities=frozenset({"region_discovery"}),
+        pipeline_preset=CANONICAL_PRESET_V1,
+        configuration_digest="sha256:test",
         selection_label="frames-0000-0010",
         profile_label="fake",
     )

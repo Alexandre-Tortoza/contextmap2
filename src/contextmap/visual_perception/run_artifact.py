@@ -26,19 +26,29 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception.models import PerceptionResult, PerceptionRunId
+from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
 from contextmap.visual_perception.serialization import (
     decode_perception_result,
     encode_perception_result,
 )
 from contextmap.visual_perception.service import StageOutcome
 
-SCHEMA_VERSION = "0.1.0"
-"""Perception run artifact schema version written and understood by this module."""
+if TYPE_CHECKING:
+    from contextmap.visual_perception.pipeline import PipelinePreset
+
+SCHEMA_VERSION = "0.2.0"
+"""Perception run artifact schema version written and understood by this module.
+
+Bumped from ``0.1.0`` to ``0.2.0`` when ``pipeline_preset``/
+``configuration_digest`` became required manifest fields (#55) — a
+pre-1.0 schema, so this is a breaking change rather than an additive
+one; no reader for ``0.1.0`` manifests is kept.
+"""
 
 _MANIFEST_FILENAME = "manifest.json"
 _README_FILENAME = "README.md"
@@ -83,6 +93,16 @@ class RunArtifactManifest:
         selection_id: Deterministic identity of the sequence selection
             processed.
         enabled_capabilities: Capability names enabled for this run.
+        pipeline_preset: The versioned
+            :class:`~contextmap.visual_perception.pipeline.PipelinePreset`
+            resolved for this run (see
+            :func:`~contextmap.visual_perception.pipeline.encode_pipeline_preset`),
+            so the exact stage graph and backend identities this run
+            used are inspectable without recomputing them.
+        configuration_digest: Deterministic
+            :meth:`~contextmap.visual_perception.pipeline.ResolvedPipeline.configuration_digest`
+            for this run's resolved pipeline — changes whenever the
+            preset content or a resolved backend's identity changes.
         schema_version: Run artifact schema version.
         created_at: ISO 8601 UTC creation timestamp.
         result_count: Number of ``PerceptionResult``s in this run.
@@ -99,6 +119,8 @@ class RunArtifactManifest:
     sequence_artifact_id: str
     selection_id: str
     enabled_capabilities: frozenset[str]
+    pipeline_preset: PipelinePreset
+    configuration_digest: str
     schema_version: str
     created_at: str
     result_count: int
@@ -121,6 +143,8 @@ class PerceptionRunWriter:
         sequence_artifact_id: str,
         selection_id: str,
         enabled_capabilities: frozenset[str],
+        pipeline_preset: PipelinePreset,
+        configuration_digest: str,
         selection_label: str,
         profile_label: str,
     ) -> None:
@@ -136,6 +160,12 @@ class PerceptionRunWriter:
             selection_id: Deterministic identity of the sequence
                 selection processed.
             enabled_capabilities: Capability names enabled for this run.
+            pipeline_preset: The
+                :class:`~contextmap.visual_perception.pipeline.PipelinePreset`
+                resolved for this run.
+            configuration_digest: This run's resolved pipeline
+                configuration digest (see
+                :meth:`~contextmap.visual_perception.pipeline.ResolvedPipeline.configuration_digest`).
             selection_label: Short, readable description of the
                 selection for the run directory name, e.g.
                 ``"frames-0120-0260"``.
@@ -149,6 +179,8 @@ class PerceptionRunWriter:
         self._sequence_artifact_id = sequence_artifact_id
         self._selection_id = selection_id
         self._enabled_capabilities = enabled_capabilities
+        self._pipeline_preset = pipeline_preset
+        self._configuration_digest = configuration_digest
         sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
         run_dir_name = f"run-{run_index:04d}__{selection_label}__{profile_label}"
         self._workspace_root = workspace_root
@@ -250,6 +282,8 @@ class PerceptionRunWriter:
             sequence_artifact_id=self._sequence_artifact_id,
             selection_id=self._selection_id,
             enabled_capabilities=self._enabled_capabilities,
+            pipeline_preset=self._pipeline_preset,
+            configuration_digest=self._configuration_digest,
             schema_version=SCHEMA_VERSION,
             created_at=datetime.now(UTC).isoformat(),
             result_count=len(self._results),
@@ -413,6 +447,8 @@ def _render_readme(manifest: RunArtifactManifest) -> str:
         f"- Selection: `{manifest.selection_id}`\n"
         f"- Run ID: `{manifest.run_id}`\n"
         f"- Enabled capabilities: {capabilities}\n"
+        f"- Pipeline preset: `{manifest.pipeline_preset.preset_id}`\n"
+        f"- Configuration digest: `{manifest.configuration_digest}`\n"
         f"- Created at: {manifest.created_at}\n"
         "\n"
         "## Results\n"
@@ -448,6 +484,8 @@ def _manifest_to_dict(manifest: RunArtifactManifest) -> dict[str, Any]:
         "sequence_artifact_id": manifest.sequence_artifact_id,
         "selection_id": manifest.selection_id,
         "enabled_capabilities": sorted(manifest.enabled_capabilities),
+        "pipeline_preset": encode_pipeline_preset(manifest.pipeline_preset),
+        "configuration_digest": manifest.configuration_digest,
         "schema_version": manifest.schema_version,
         "created_at": manifest.created_at,
         "result_count": manifest.result_count,
@@ -478,6 +516,8 @@ def _load_manifest(run_dir: Path) -> RunArtifactManifest:
         sequence_artifact_id=raw["sequence_artifact_id"],
         selection_id=raw["selection_id"],
         enabled_capabilities=frozenset(raw["enabled_capabilities"]),
+        pipeline_preset=decode_pipeline_preset(raw["pipeline_preset"]),
+        configuration_digest=raw["configuration_digest"],
         schema_version=schema_version,
         created_at=raw["created_at"],
         result_count=raw["result_count"],
