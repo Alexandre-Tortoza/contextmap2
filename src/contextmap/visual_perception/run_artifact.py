@@ -30,6 +30,12 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.feature_diagnostics import (
+    FeatureDebugLevel,
+    FeatureDiagnosticPreview,
+    FeatureExtractionDiagnostic,
+    write_feature_diagnostics,
+)
 from contextmap.visual_perception.feature_store import (
     FEATURE_INDEX_FILENAME,
     FeatureStoreReader,
@@ -156,6 +162,7 @@ class PerceptionRunWriter:
         configuration_digest: str,
         selection_label: str,
         profile_label: str,
+        feature_debug_level: FeatureDebugLevel = FeatureDebugLevel.NONE,
     ) -> None:
         """Create a writer for a new perception run artifact.
 
@@ -181,6 +188,9 @@ class PerceptionRunWriter:
             profile_label: Short, readable description of the enabled
                 backends for the run directory name, e.g.
                 ``"sam3-dinov2-gemini"``.
+            feature_debug_level: Amount of non-contractual Feature Extraction
+                debug evidence to persist. Required metrics are independent of
+                this level.
         """
         self._run_id = run_id
         self._run_index = run_index
@@ -190,6 +200,7 @@ class PerceptionRunWriter:
         self._enabled_capabilities = enabled_capabilities
         self._pipeline_preset = pipeline_preset
         self._configuration_digest = configuration_digest
+        self._feature_debug_level = feature_debug_level
         sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
         run_dir_name = f"run-{run_index:04d}__{selection_label}__{profile_label}"
         self._workspace_root = workspace_root
@@ -199,6 +210,8 @@ class PerceptionRunWriter:
         self._results: list[PerceptionResult] = []
         self._stage_outcomes: list[StageOutcome] = []
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
+        self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
+        self._feature_previews: list[FeatureDiagnosticPreview] = []
         self._finalized = False
 
     def add_result(self, result: PerceptionResult) -> None:
@@ -257,6 +270,26 @@ class PerceptionRunWriter:
         if self._finalized:
             raise RunArtifactError("cannot add feature payloads after finalize()")
         self._feature_payloads.append((feature, source_observation_id, array))
+
+    def add_feature_diagnostic(self, diagnostic: FeatureExtractionDiagnostic) -> None:
+        """Queue one structured Feature Extraction audit event.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add feature diagnostics after finalize()")
+        self._feature_diagnostics.append(diagnostic)
+
+    def add_feature_preview(self, preview: FeatureDiagnosticPreview) -> None:
+        """Queue one small human-only preview controlled by the debug level.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add feature previews after finalize()")
+        self._feature_previews.append(preview)
 
     def finalize(self) -> RunArtifactManifest:
         """Write every queued result/outcome and finalize the run atomically.
@@ -333,6 +366,17 @@ class PerceptionRunWriter:
                 _file_entry(
                     f"{_FEATURES_DIRNAME}/{FEATURE_INDEX_FILENAME}", index_path.read_bytes()
                 )
+            )
+
+        diagnostic_paths = write_feature_diagnostics(
+            run_root=self._tmp_dir,
+            diagnostics=self._feature_diagnostics,
+            previews=self._feature_previews,
+            debug_level=self._feature_debug_level,
+        )
+        for relative_path in diagnostic_paths:
+            file_entries.append(
+                _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
             )
 
         manifest = RunArtifactManifest(

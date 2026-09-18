@@ -35,6 +35,17 @@ from contextmap.visual_perception.evidence_set import (
     ObservationEvidence,
     PerceptionEvidenceSet,
 )
+from contextmap.visual_perception.feature_diagnostics import (
+    FEATURE_DEBUG_ROOT,
+    FEATURE_METRICS_PATH,
+    DenseFeatureDiagnostic,
+    FeatureDebugLevel,
+    FeatureDiagnosticPreview,
+    FeatureEventStatus,
+    FeatureExtractionDiagnostic,
+    RegionFeatureDiagnostic,
+    write_feature_diagnostics,
+)
 from contextmap.visual_perception.feature_store import (
     FEATURE_INDEX_FILENAME,
     FeaturePayloadEntry,
@@ -116,18 +127,25 @@ from contextmap.visual_perception.service import (
 
 __all__ = [
     "CANONICAL_PRESET_V1",
+    "FEATURE_DEBUG_ROOT",
     "FEATURE_INDEX_FILENAME",
+    "FEATURE_METRICS_PATH",
     "KNOWN_CAPABILITIES",
     "POOLING_POLICY",
     "BackendProvenance",
     "BoundingBox2D",
     "ClaimId",
+    "DenseFeatureDiagnostic",
     "DenseFeatureMap",
     "DenseFeatureSampling",
     "EmbeddingSpace",
     "EmbeddingSpaceMismatchError",
     "EmptyRegionSupportError",
     "EvidenceSetError",
+    "FeatureDebugLevel",
+    "FeatureDiagnosticPreview",
+    "FeatureEventStatus",
+    "FeatureExtractionDiagnostic",
     "FeatureExtractor",
     "FeatureId",
     "FeaturePayloadEntry",
@@ -152,6 +170,7 @@ __all__ = [
     "Region2D",
     "RegionAssociationError",
     "RegionDiscovery",
+    "RegionFeatureDiagnostic",
     "RegionId",
     "RegionPoolingDiagnostics",
     "RegionPoolingProvenance",
@@ -196,5 +215,6 @@ __all__ = [
     "region_id_for",
     "resolve_pipeline",
     "validate_pipeline_preset",
+    "write_feature_diagnostics",
     "write_feature_index",
 ]

@@ -15,8 +15,11 @@ workspace/
             │   ├── manifest.json                                      # ponto autoritativo
             │   ├── outputs/
             │   │   └── results.jsonl                                   # um PerceptionResult por linha
-            │   └── metrics/
-            │       └── stage-timings.jsonl                             # um StageOutcome por linha
+            │   ├── metrics/
+            │   │   ├── stage-timings.jsonl                             # um StageOutcome por linha
+            │   │   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
+            │   └── debug/
+            │       └── 30-feature-extraction/                          # somente standard/full
             └── run-0002__frames-0120-0260__sam3-dinov2-qwen/
                 └── ...
 ```
@@ -27,7 +30,7 @@ Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestam
 
 - **`outputs/results.jsonl`, não `outputs/results.parquet`.** Mesma decisão e mesmo motivo da issue #39 de Ingestion: nenhuma dependência de runtime nova (`pyarrow`/`pandas`) se justifica ainda; JSON Lines é inspecionável com ferramentas de texto padrão. Revisitar se o volume de resultados tornar leitura linha-a-linha um gargalo real.
 - **Um único `outputs/results.jsonl`, não arquivos separados `regions.jsonl`/`semantic-claims.jsonl`/`feature-index.jsonl`.** Cada `PerceptionResult` já carrega suas próprias `regions`/`features`/`claims` aninhadas (issue #48) — duplicar essa informação em índices paralelos seria redundância sem um caso de uso real ainda (YAGNI). `PerceptionRunReader.result(source_observation_id)` já permite lookup direto por observação sem escanear o diretório inteiro, satisfazendo o requisito real da issue.
-- **`debug/` por frame não é criado por este writer.** A estrutura ordenada `debug/frames/<frame>/00-input/ ... 90-output/` sugerida pela issue depende de conteúdo que ainda não existe neste milestone (overlays de região, crops, respostas de modelo — dependem de Region Discovery/Feature Extraction/Semantic Interpretation reais). Criar as pastas vazias antecipando esse conteúdo violaria YAGNI (`docs/development.md`). O writer já registra `StageOutcome` com timing/erro por estágio (`metrics/stage-timings.jsonl`), que é o auditável mínimo desta issue; backends futuros podem estender o writer para popular `debug/` quando tiverem conteúdo real.
+- **`debug/` só existe quando há conteúdo e nível `standard`/`full`.** Feature Extraction possui produtores concretos de metadata, suporte e previews (#72), então `PerceptionRunWriter` integra `FeatureExtractionDiagnostic` e `FeatureDiagnosticPreview` em `debug/30-feature-extraction/`. Nível `none` mantém apenas métricas obrigatórias; nenhum diretório vazio é materializado. Ver [`feature_diagnostics.md`](feature_diagnostics.md).
 - **`config.yaml`, `lineage.json`, `environment.json`, `events.jsonl` não são escritos no v0.** Nenhum destes tem produtor real ainda (configuração efetiva de backend, lineage de artefatos upstream, ambiente de execução, eventos granulares) — `manifest.json` já cobre a metadata mínima autoritativa (run_id, índice, sequência, seleção, capabilities, contagens). Adicionar esses arquivos vazios/parciais agora seria estrutura sem conteúdo real.
 
 ## Escrita atômica
