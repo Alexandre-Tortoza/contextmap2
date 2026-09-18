@@ -57,6 +57,8 @@ descobrir uma região pode aparecer na provenance, mas não cria automaticamente
 configuração, o resultado referencia o payload original e registra `transformations = []`. Resize,
 crop, rectification e normalization recebem a referência do payload materializado pelo adapter de
 imagem e produzem um `TransformationRecord` ordenado com dimensões de entrada/saída e parâmetros.
+Cada operação também exige `provenance_source`, que identifica a configuração, calibração ou
+política que solicitou a transformação e é serializada junto ao registro.
 
 `ValidRegion` restringe os pixels elegíveis e `ExclusionRegion` remove áreas nomeadas. Ambos são
 opcionais, precisam corresponder ao espaço de coordenadas final e registram motivo e origem da

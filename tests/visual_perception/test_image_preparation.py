@@ -57,10 +57,16 @@ def test_resize_and_crop_preserve_ordered_transform_provenance() -> None:
     prepared = prepare_image(
         source,
         operations=(
-            ResizeOperation(width=16, height=12, output_image=_reference("resized")),
+            ResizeOperation(
+                width=16,
+                height=12,
+                output_image=_reference("resized"),
+                provenance_source="camera-profile-v2",
+            ),
             CropOperation(
                 box=BoundingBox(x_min=2, y_min=1, x_max=12, y_max=9),
                 output_image=_reference("cropped"),
+                provenance_source="experiment-config-sha256:abc",
             ),
         ),
     )
@@ -70,11 +76,15 @@ def test_resize_and_crop_preserve_ordered_transform_provenance() -> None:
     assert [record.operation for record in prepared.transformations] == ["resize", "crop"]
     assert prepared.transformations[0].input_dimensions == (8, 6)
     assert prepared.transformations[0].output_dimensions == (16, 12)
+    assert prepared.transformations[0].provenance_source == "camera-profile-v2"
     assert prepared.transformations[1].parameters == (
         ("x_min", 2.0),
         ("y_min", 1.0),
         ("x_max", 12.0),
         ("y_max", 9.0),
+    )
+    assert prepared.transformations[1].to_dict()["provenance_source"] == (
+        "experiment-config-sha256:abc"
     )
 
 
@@ -119,8 +129,17 @@ def test_preparation_rejects_geometry_that_does_not_match_final_image_space() ->
                 CropOperation(
                     box=BoundingBox(x_min=0, y_min=0, x_max=5, y_max=2),
                     output_image=_reference("cropped"),
+                    provenance_source="test-config",
                 ),
             ),
+        )
+
+    with pytest.raises(ValueError, match="provenance source"):
+        ResizeOperation(
+            width=8,
+            height=6,
+            output_image=_reference("invalid-source"),
+            provenance_source="",
         )
 
     duplicate = ExclusionRegion(
