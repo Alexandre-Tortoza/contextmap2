@@ -58,6 +58,7 @@ class TransformationRecord:
     """Describe one applied image transformation in execution order."""
 
     operation: str
+    provenance_source: str
     parameters: tuple[tuple[str, JsonScalar], ...]
     input_dimensions: tuple[int, int]
     output_dimensions: tuple[int, int]
@@ -68,6 +69,8 @@ class TransformationRecord:
         """Validate the structured transformation record."""
         if not self.operation:
             raise ValueError("transformation operation must not be empty")
+        if not self.provenance_source:
+            raise ValueError("transformation provenance source must not be empty")
         _validate_dimensions(*self.input_dimensions)
         _validate_dimensions(*self.output_dimensions)
 
@@ -75,6 +78,7 @@ class TransformationRecord:
         """Return a JSON-compatible audit record."""
         return {
             "operation": self.operation,
+            "provenance_source": self.provenance_source,
             "parameters": [{"name": name, "value": value} for name, value in self.parameters],
             "input_dimensions": list(self.input_dimensions),
             "output_dimensions": list(self.output_dimensions),
@@ -129,10 +133,12 @@ class ResizeOperation:
     width: int
     height: int
     output_image: ArtifactReference
+    provenance_source: str
 
     def __post_init__(self) -> None:
         """Validate requested output dimensions."""
         _validate_dimensions(self.width, self.height)
+        _validate_operation_source(self.provenance_source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +147,11 @@ class CropOperation:
 
     box: BoundingBox
     output_image: ArtifactReference
+    provenance_source: str
+
+    def __post_init__(self) -> None:
+        """Require the configuration or policy that selected the crop."""
+        _validate_operation_source(self.provenance_source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,11 +160,13 @@ class RectifyOperation:
 
     calibration_id: str
     output_image: ArtifactReference
+    provenance_source: str
 
     def __post_init__(self) -> None:
         """Require the calibration identity used for rectification."""
         if not self.calibration_id:
             raise ValueError("rectification calibration_id must not be empty")
+        _validate_operation_source(self.provenance_source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,11 +175,13 @@ class NormalizeOperation:
 
     method: str
     output_image: ArtifactReference
+    provenance_source: str
 
     def __post_init__(self) -> None:
         """Require an explicit normalization method."""
         if not self.method:
             raise ValueError("normalization method must not be empty")
+        _validate_operation_source(self.provenance_source)
 
 
 PreparationOperation: TypeAlias = (
@@ -236,6 +251,7 @@ def prepare_image(
         records.append(
             TransformationRecord(
                 operation=operation_name,
+                provenance_source=operation.provenance_source,
                 parameters=parameters,
                 input_dimensions=input_dimensions,
                 output_dimensions=(width, height),
@@ -263,6 +279,11 @@ def _integer_extent(value: float, name: str) -> int:
 def _validate_dimensions(width: int, height: int) -> None:
     if width <= 0 or height <= 0:
         raise ValueError("image dimensions must be positive")
+
+
+def _validate_operation_source(value: str) -> None:
+    if not value:
+        raise ValueError("transformation provenance source must not be empty")
 
 
 def _validate_constraints(
