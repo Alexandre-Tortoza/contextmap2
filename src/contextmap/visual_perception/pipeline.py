@@ -38,6 +38,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from contextmap.visual_perception.dense_region_association import DenseFeatureMap
+from contextmap.visual_perception.feature_resolution_enhancement import (
+    enhance_feature_resolution,
+)
 from contextmap.visual_perception.models import (
     BackendProvenance,
     PreparedImage,
@@ -48,6 +52,7 @@ from contextmap.visual_perception.models import (
 )
 from contextmap.visual_perception.ports import (
     FeatureExtractor,
+    FeatureResolutionEnhancement,
     RegionDiscovery,
     SemanticInterpreter,
 )
@@ -165,6 +170,15 @@ def _run_feature_extractor(
     return backend.extract(image, regions=regions)  # type: ignore[arg-type]
 
 
+def _run_feature_resolution_enhancement(
+    backend: object, inputs: Mapping[str, object]
+) -> DenseFeatureMap:
+    assert isinstance(backend, FeatureResolutionEnhancement)
+    dense_map = inputs["dense_map"]
+    assert isinstance(dense_map, DenseFeatureMap)
+    return enhance_feature_resolution(dense_map, enhancer=backend)
+
+
 def _run_scene_interpretation(backend: object, inputs: Mapping[str, object]) -> SceneContext | None:
     assert isinstance(backend, SemanticInterpreter)
     image = inputs["image"]
@@ -184,6 +198,7 @@ def _run_region_interpretation(
 
 
 _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], object]] = {
+    "feature_resolution_enhancement": _run_feature_resolution_enhancement,
     "region_discovery": _run_region_discovery,
     "feature_extractor": _run_feature_extractor,
     "scene_interpretation": _run_scene_interpretation,

@@ -14,6 +14,7 @@ from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
     EmptyRegionSupportError,
+    FeatureResolutionEnhancementProvenance,
     RegionAssociationError,
     RegionPoolingDiagnostics,
     RegionPoolingProvenance,
@@ -45,6 +46,10 @@ from contextmap.visual_perception.feature_diagnostics import (
     FeatureExtractionDiagnostic,
     RegionFeatureDiagnostic,
     write_feature_diagnostics,
+)
+from contextmap.visual_perception.feature_resolution_enhancement import (
+    FeatureResolutionEnhancementError,
+    enhance_feature_resolution,
 )
 from contextmap.visual_perception.feature_store import (
     FEATURE_INDEX_FILENAME,
@@ -97,6 +102,7 @@ from contextmap.visual_perception.pipeline import (
 )
 from contextmap.visual_perception.ports import (
     FeatureExtractor,
+    FeatureResolutionEnhancement,
     RegionDiscovery,
     SemanticInterpreter,
     SemanticScorer,
@@ -150,6 +156,9 @@ __all__ = [
     "FeatureId",
     "FeaturePayloadEntry",
     "FeaturePayloadIntegrityError",
+    "FeatureResolutionEnhancement",
+    "FeatureResolutionEnhancementError",
+    "FeatureResolutionEnhancementProvenance",
     "FeatureScope",
     "FeatureStoreError",
     "FeatureStoreReader",
@@ -204,6 +213,7 @@ __all__ = [
     "encode_feature_payload_entry",
     "encode_perception_result",
     "encode_pipeline_preset",
+    "enhance_feature_resolution",
     "ensure_compatible_embedding_spaces",
     "ensure_compatible_features",
     "execute_stage_graph",

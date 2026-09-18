@@ -1,6 +1,6 @@
 # Capability ports
 
-Este documento descreve `src/contextmap/visual_perception/ports.py`: os quatro `Protocol`s que qualquer backend concreto de percepção visual implementa.
+Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `Protocol`s que backends concretos de percepção visual podem implementar.
 
 ## Mapeamento planejado capability/backend
 
@@ -15,6 +15,9 @@ FeatureExtractor
 ├── DINOv3
 ├── CLIP
 └── AlphaCLIP
+
+FeatureResolutionEnhancement
+└── backend aprendido futuro (opcional; nenhum default nesta milestone)
 
 SemanticInterpreter
 ├── Qwen
@@ -34,6 +37,7 @@ Os ports não codificam `RegionDiscovery -> FeatureExtractor -> SemanticInterpre
 
 ```text
 DINOv3 (dense)         requires: PreparedImage                    provides: VisualFeature[] (dense)
+resolution enhancement requires: DenseFeatureMap                  provides: DenseFeatureMap
 AlphaCLIP (region)     requires: PreparedImage + Region2D[]       provides: VisualFeature[] (region)
 Gemini (region)        requires: PreparedImage + Region2D[]       provides: SemanticClaim[]
 CLIP (scorer)          requires: SemanticClaim[] + PreparedImage  provides: SemanticSupport[]
@@ -46,6 +50,10 @@ Contrato canônico de "imagem pronta para os backends consumirem" (`contextmap.v
 ## `FeatureExtractor.required_scope()`
 
 Em vez de multiplicar tipos de port por escopo (dense/global/region), um único `FeatureExtractor` declara seu escopo via `required_scope()`. Um extrator dense/global só recebe `image`; um extrator region-scoped também recebe `regions`. Isso evita forçar uma assinatura mandatória `PreparedImage + Region2D[]` em extratores que não precisam de regiões (ex.: DINOv3 dense).
+
+## `FeatureResolutionEnhancement`
+
+É um port separado porque possui input/output de artifact, custo, falha e ativação próprios. Recebe um `DenseFeatureMap` já produzido e devolve outro `DenseFeatureMap`, com lineage completa em `FeatureResolutionEnhancementProvenance`. Não é um modo interno do DINO e não aparece no caminho canônico quando ausente da configuração.
 
 ## `SemanticScorer` nunca muta uma claim
 
