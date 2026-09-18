@@ -20,6 +20,12 @@ from contextmap.ingestion.calibration import (
     camera_model_kind,
     validate_calibration_set,
 )
+from contextmap.ingestion.diagnostics import (
+    ModalitySummary,
+    SequenceDiagnostics,
+    SequenceSummary,
+    summarize_observations,
+)
 from contextmap.ingestion.models import (
     MODALITY_NAMES,
     CalibrationReferenceId,
@@ -84,6 +90,13 @@ from contextmap.ingestion.synchronization import (
     SynchronizationDiagnostics,
     synchronize,
 )
+from contextmap.ingestion.validation import (
+    validate_frame_references,
+    validate_image_observation,
+    validate_lidar_observation,
+    validate_observations,
+    validate_timestamp_ordering,
+)
 
 __all__ = [
     "MODALITY_NAMES",
@@ -108,6 +121,7 @@ __all__ = [
     "LidarObservation",
     "MissingRequiredTopicError",
     "ModalityAssociation",
+    "ModalitySummary",
     "PinholeCameraModel",
     "PointFieldDataType",
     "PointFieldDescriptor",
@@ -120,10 +134,12 @@ __all__ = [
     "SequenceArtifactManifest",
     "SequenceArtifactReader",
     "SequenceArtifactWriter",
+    "SequenceDiagnostics",
     "SequenceProvenance",
     "SequenceSelection",
     "SequenceSelectionError",
     "SequenceSelectionResult",
+    "SequenceSummary",
     "SourceAdapter",
     "SourceAdapterCapabilities",
     "SourceAdapterConfig",
@@ -147,6 +163,12 @@ __all__ = [
     "observation_modality",
     "resolve_selection",
     "selection_identity",
+    "summarize_observations",
     "synchronize",
     "validate_calibration_set",
+    "validate_frame_references",
+    "validate_image_observation",
+    "validate_lidar_observation",
+    "validate_observations",
+    "validate_timestamp_ordering",
 ]

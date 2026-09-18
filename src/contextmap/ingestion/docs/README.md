@@ -26,8 +26,10 @@ Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em obs
 - `SourceAdapter` — fronteira (`Protocol`) que qualquer adapter de fonte concreto implementa; `SourceAdapterConfig`, `SourceTopicMapping`, `SourceAdapterCapabilities`, `SourceAdapterWarning`.
 - `contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter` / `contextmap.ingestion.adapters.ros2_bag.Ros2BagSourceAdapter` — implementações concretas para ROS 1/ROS 2 (não reexportadas por `contextmap.ingestion`; importadas pelo path completo, como qualquer backend).
 - `SequenceProvenance` — metadata de proveniência/identidade de conteúdo; `compute_content_identity()`, `compute_source_content_hash()`, `compute_configuration_hash()`, `current_code_version()`.
+- `validate_observations()` e as checagens individuais (`validate_image_observation()`, `validate_lidar_observation()`, `validate_timestamp_ordering()`, `validate_frame_references()`) — validação estrutural sobre observações decodificadas.
+- `summarize_observations()` — sumário legível de uma sequência; `SequenceSummary`, `ModalitySummary`, `SequenceDiagnostics`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, e [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
 
 ## Módulos consumidos
 
@@ -39,7 +41,7 @@ Apenas `contextmap.shared` (`SourceTimestamp`).
 
 ## Fluxo interno (alto nível)
 
-Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `SourceObservation` canônica → sincronização/agrupamento temporal (`synchronize()`) → artefato de sequência persistido (`SequenceArtifactWriter`, com calibração opcional) → seleção/replay (`resolve_selection()`) para runs downstream — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
+Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `SourceObservation` canônica → validação estrutural opcional (`validate_observations()`) → sincronização/agrupamento temporal (`synchronize()`) → artefato de sequência persistido (`SequenceArtifactWriter`, com calibração/provenance/diagnósticos opcionais) → seleção/replay (`resolve_selection()`) para runs downstream — ver [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md#1-ingestion).
 
 ## Onde estão os documentos detalhados
 
@@ -51,5 +53,7 @@ Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `Sou
 - [`adapters.md`](adapters.md) — fronteira (`Protocol`) de source adapters.
 - [`backends.md`](backends.md) — decisões específicas de cada adapter concreto (ROS 1, ROS 2).
 - [`provenance.md`](provenance.md) — proveniência, integridade e identidade de conteúdo.
+- [`validation.md`](validation.md) — validação estrutural de observações decodificadas.
+- [`diagnostics.md`](diagnostics.md) — sumário legível e diagnósticos persistidos.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e regras de dependência.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SourceObservation` no contexto global de contratos.

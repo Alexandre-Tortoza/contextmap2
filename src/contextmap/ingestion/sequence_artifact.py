@@ -33,6 +33,12 @@ from contextmap.ingestion.calibration import (
     encode_calibration_set,
     ensure_valid_calibration_set,
 )
+from contextmap.ingestion.diagnostics import (
+    SequenceDiagnostics,
+    decode_diagnostics_summary,
+    encode_diagnostics,
+    summarize_observations,
+)
 from contextmap.ingestion.models import (
     MODALITY_NAMES,
     CalibrationReferenceId,
@@ -67,6 +73,8 @@ _MANIFEST_FILENAME = "manifest.json"
 _INDEX_FILENAME = "index.jsonl"
 _CALIBRATION_FILENAME = "calibration/calibration.json"
 _PROVENANCE_FILENAME = "provenance/provenance.json"
+_DIAGNOSTICS_SUMMARY_FILENAME = "diagnostics/summary.json"
+_DIAGNOSTICS_WARNINGS_FILENAME = "diagnostics/warnings.jsonl"
 _MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = dict.fromkeys(MODALITY_NAMES, 0)
 
 
@@ -158,7 +166,27 @@ class SequenceArtifactWriter:
         self._seen_observation_ids: set[str] = set()
         self._calibration: CalibrationSet | None = None
         self._provenance: SequenceProvenance | None = None
+        self._diagnostic_warnings: tuple[str, ...] | None = None
         self._finalized = False
+
+    def set_diagnostics(self, *, warnings: Sequence[str] = ()) -> None:
+        """Enable writing diagnostics for this sequence.
+
+        The summary itself (per-modality counts/time-range, image
+        resolutions, point-cloud field layouts) is computed automatically
+        from the observations added to this writer; only warning text is
+        supplied by the caller.
+
+        Args:
+            warnings: Adapter/validation/synchronization warnings to
+                record alongside the summary, as human-readable text.
+
+        Raises:
+            SequenceArtifactError: If called after :meth:`finalize`.
+        """
+        if self._finalized:
+            raise SequenceArtifactError("cannot set diagnostics after finalize()")
+        self._diagnostic_warnings = tuple(warnings)
 
     def set_provenance(self, provenance: SequenceProvenance) -> None:
         """Attach the sequence's provenance/content-identity metadata.
@@ -290,6 +318,32 @@ class SequenceArtifactWriter:
                 _file_entry(_PROVENANCE_FILENAME, provenance_content.encode("utf-8"))
             )
 
+        if self._diagnostic_warnings is not None:
+            summary = summarize_observations(
+                self._observations, warning_count=len(self._diagnostic_warnings)
+            )
+            summary_content = json.dumps(
+                encode_diagnostics(SequenceDiagnostics(summary=summary, warnings=())),
+                indent=2,
+                sort_keys=True,
+            )
+            summary_path = self._tmp_dir / _DIAGNOSTICS_SUMMARY_FILENAME
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(summary_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_DIAGNOSTICS_SUMMARY_FILENAME, summary_content.encode("utf-8"))
+            )
+
+            warnings_content = "".join(
+                f"{json.dumps({'warning': warning})}\n" for warning in self._diagnostic_warnings
+            )
+            warnings_path = self._tmp_dir / _DIAGNOSTICS_WARNINGS_FILENAME
+            warnings_path.parent.mkdir(parents=True, exist_ok=True)
+            warnings_path.write_text(warnings_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_DIAGNOSTICS_WARNINGS_FILENAME, warnings_content.encode("utf-8"))
+            )
+
         manifest = SequenceArtifactManifest(
             artifact_id=self._artifact_id,
             sequence_name=self._sequence_name,
@@ -357,6 +411,29 @@ class SequenceArtifactReader:
         if not provenance_path.is_file():
             return None
         return decode_provenance(json.loads(provenance_path.read_text(encoding="utf-8")))
+
+    def read_diagnostics(self) -> SequenceDiagnostics | None:
+        """Read this sequence's diagnostics (summary + warnings), when written.
+
+        Returns:
+            The diagnostics, or ``None`` if the artifact was finalized
+            without calling
+            :meth:`SequenceArtifactWriter.set_diagnostics`.
+        """
+        summary_path = self._root / _DIAGNOSTICS_SUMMARY_FILENAME
+        if not summary_path.is_file():
+            return None
+        summary = decode_diagnostics_summary(json.loads(summary_path.read_text(encoding="utf-8")))
+
+        warnings_path = self._root / _DIAGNOSTICS_WARNINGS_FILENAME
+        warnings: list[str] = []
+        if warnings_path.is_file():
+            for line in warnings_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped:
+                    warnings.append(json.loads(stripped)["warning"])
+
+        return SequenceDiagnostics(summary=summary, warnings=tuple(warnings))
 
     def read_calibration(self) -> CalibrationSet | None:
         """Read this sequence's calibration set, when one was written.
