@@ -84,6 +84,18 @@ geometria decodificada é rejeitada porque não pode ser remapeada de forma veri
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.
 
+## Backend SAM2
+
+`Sam2RegionDiscovery` implementa o mesmo port usado pelos demais backends. O adapter recebe
+`Sam2Config` validada e um runtime injetado que isola carregamento de checkpoint, Torch e objetos
+do SDK. Apenas boxes, máscaras booleanas e scores escalares atravessam essa fronteira interna.
+
+A configuração efetiva inclui checkpoint, versão, device, precision, thresholds e parâmetros do
+automatic mask generator. Seu digest determinístico acompanha cada proposta. `predicted_iou` e
+`stability_score` mantêm seus nomes e significados SAM2; nenhum deles vira confidence universal.
+O runtime recebe o `DiscoveryInput` completo, incluindo constraints explícitas, pass e tile. Erros
+de shape ou runtime interrompem a execução, sem fallback silencioso para outro backend.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
