@@ -30,7 +30,13 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
-from contextmap.visual_perception.models import PerceptionResult, PerceptionRunId
+from contextmap.visual_perception.feature_store import (
+    FEATURE_INDEX_FILENAME,
+    FeatureStoreReader,
+    FeatureStoreWriter,
+    write_feature_index,
+)
+from contextmap.visual_perception.models import PerceptionResult, PerceptionRunId, VisualFeature
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
 from contextmap.visual_perception.serialization import (
     decode_perception_result,
@@ -39,6 +45,8 @@ from contextmap.visual_perception.serialization import (
 from contextmap.visual_perception.service import StageOutcome
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from contextmap.visual_perception.pipeline import PipelinePreset
 
 SCHEMA_VERSION = "0.2.0"
@@ -54,6 +62,7 @@ _MANIFEST_FILENAME = "manifest.json"
 _README_FILENAME = "README.md"
 _RESULTS_FILENAME = "outputs/results.jsonl"
 _METRICS_FILENAME = "metrics/stage-timings.jsonl"
+_FEATURES_DIRNAME = "outputs/features"
 _REGISTRY_FILENAME = "runs.json"
 
 
@@ -189,6 +198,7 @@ class PerceptionRunWriter:
         self._tmp_dir = sequence_dir / f".tmp-{run_dir_name}-{uuid4().hex[:8]}"
         self._results: list[PerceptionResult] = []
         self._stage_outcomes: list[StageOutcome] = []
+        self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
         self._finalized = False
 
     def add_result(self, result: PerceptionResult) -> None:
@@ -218,6 +228,35 @@ class PerceptionRunWriter:
         if self._finalized:
             raise RunArtifactError("cannot add stage outcomes after finalize()")
         self._stage_outcomes.extend(outcomes)
+
+    def add_feature_payload(
+        self,
+        feature: VisualFeature,
+        source_observation_id: SourceObservationId,
+        array: NDArray[Any],
+    ) -> None:
+        """Queue a feature's numerical payload to be persisted by :meth:`finalize`.
+
+        Persisting a feature's payload is opt-in per feature: a
+        ``VisualFeature`` whose payload was never queued here still
+        appears in ``outputs/results.jsonl`` with its metadata, just
+        without a loadable array in this run's feature store (see
+        :mod:`contextmap.visual_perception.feature_store`).
+
+        Args:
+            feature: The feature this array belongs to. Its ``shape``
+                and ``dtype`` must match ``array`` exactly (validated at
+                :meth:`finalize` time).
+            source_observation_id: The physical observation the feature
+                was produced for.
+            array: The array to persist.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add feature payloads after finalize()")
+        self._feature_payloads.append((feature, source_observation_id, array))
 
     def finalize(self) -> RunArtifactManifest:
         """Write every queued result/outcome and finalize the run atomically.
@@ -275,6 +314,27 @@ class PerceptionRunWriter:
         metrics_path.write_text(metrics_content, encoding="utf-8")
         file_entries.append(_file_entry(_METRICS_FILENAME, metrics_content.encode("utf-8")))
 
+        if self._feature_payloads:
+            feature_store_root = self._tmp_dir / _FEATURES_DIRNAME
+            feature_store = FeatureStoreWriter(feature_store_root)
+            for feature, source_observation_id, array in self._feature_payloads:
+                feature_store.write(feature, source_observation_id, array)
+            write_feature_index(feature_store_root, feature_store.entries())
+            for entry in feature_store.entries():
+                file_entries.append(
+                    RunArtifactFileEntry(
+                        path=f"{_FEATURES_DIRNAME}/{entry.payload_reference}",
+                        size_bytes=entry.size_bytes,
+                        content_hash=entry.content_hash,
+                    )
+                )
+            index_path = feature_store_root / FEATURE_INDEX_FILENAME
+            file_entries.append(
+                _file_entry(
+                    f"{_FEATURES_DIRNAME}/{FEATURE_INDEX_FILENAME}", index_path.read_bytes()
+                )
+            )
+
         manifest = RunArtifactManifest(
             run_id=self._run_id,
             run_index=self._run_index,
@@ -325,6 +385,17 @@ class PerceptionRunReader:
     def manifest(self) -> RunArtifactManifest:
         """The run's manifest."""
         return self._manifest
+
+    def feature_store(self) -> FeatureStoreReader:
+        """Open this run's feature payload store, without loading any array.
+
+        Returns:
+            A reader over ``outputs/features/`` — empty (no
+            ``feature_ids()``) when this run never persisted a feature
+            payload, since persisting is opt-in per feature (see
+            :meth:`PerceptionRunWriter.add_feature_payload`).
+        """
+        return FeatureStoreReader.open(self._root / _FEATURES_DIRNAME)
 
     def list_results(self) -> list[PerceptionResult]:
         """Return every result in this run.
