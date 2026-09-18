@@ -1,5 +1,17 @@
 """Public contracts for backend-agnostic visual perception evidence."""
 
+from .image_preparation import (
+    CropOperation,
+    ExclusionRegion,
+    NormalizeOperation,
+    PreparedImage,
+    RectifyOperation,
+    ResizeOperation,
+    SourceImage,
+    TransformationRecord,
+    ValidRegion,
+    prepare_image,
+)
 from .region_models import (
     ArtifactReference,
     BackendScore,
@@ -19,11 +31,21 @@ __all__ = [
     "BackendScore",
     "BoundingBox",
     "CoordinateConvention",
+    "CropOperation",
+    "ExclusionRegion",
     "InlineMask",
+    "NormalizeOperation",
+    "PreparedImage",
+    "RectifyOperation",
     "Region2D",
     "RegionCandidate",
     "RegionIdentity",
     "RegionProvenance",
     "RejectedRegionCandidate",
     "RejectionReason",
+    "ResizeOperation",
+    "SourceImage",
+    "TransformationRecord",
+    "ValidRegion",
+    "prepare_image",
 ]

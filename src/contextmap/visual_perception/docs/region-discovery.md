@@ -51,6 +51,22 @@ Tensors, objetos de SDK e handles de modelo ficam dentro do adapter. Prompt ou t
 descobrir uma região pode aparecer na provenance, mas não cria automaticamente um
 `SemanticClaim`.
 
+## Preparação de imagem e constraints
+
+`prepare_image` recebe uma `SourceImage` imutável e uma sequência explícita de operações. Sem
+configuração, o resultado referencia o payload original e registra `transformations = []`. Resize,
+crop, rectification e normalization recebem a referência do payload materializado pelo adapter de
+imagem e produzem um `TransformationRecord` ordenado com dimensões de entrada/saída e parâmetros.
+
+`ValidRegion` restringe os pixels elegíveis e `ExclusionRegion` remove áreas nomeadas. Ambos são
+opcionais, precisam corresponder ao espaço de coordenadas final e registram motivo e origem da
+configuração. A API não contém defaults para câmera fisheye, veículo, drone, rig ou dataset. Uma
+necessidade desse tipo deve ser declarada pelo preset/source config que criou a constraint.
+
+O contrato não pinta pixels excluídos de preto nem altera a observação física. Backends recebem a
+imagem preparada e as constraints separadamente, evitando que uma alteração visual silenciosa seja
+confundida com evidência do sensor.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
