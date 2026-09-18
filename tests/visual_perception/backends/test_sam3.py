@@ -6,6 +6,7 @@ import pytest
 from contextmap.visual_perception import ArtifactReference, BoundingBox, PreparedImage
 from contextmap.visual_perception.backends.sam3 import (
     Sam3Config,
+    Sam3ImageProcessorRuntime,
     Sam3NativeOutput,
     Sam3NativeProposal,
     Sam3RegionDiscovery,
@@ -113,3 +114,83 @@ def test_sam3_does_not_fall_back_when_configured_runtime_fails() -> None:
 
     with pytest.raises(RuntimeError, match="configured strategy is unavailable"):
         backend.discover(_input())
+
+
+def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> None:
+    class NativeArray:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def tolist(self) -> object:
+            return self._value
+
+    class ImageProcessor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def set_image(self, image: object) -> dict[str, object]:
+            self.calls.append(("image", image))
+            return {"image_state": "encoded"}
+
+        def set_confidence_threshold(
+            self, threshold: float, state: dict[str, object] | None = None
+        ) -> dict[str, object] | None:
+            self.calls.append(("threshold", threshold))
+            return state
+
+        def set_text_prompt(self, *, state: dict[str, object], prompt: str) -> dict[str, object]:
+            self.calls.append(("prompt", prompt))
+            return {
+                **state,
+                "boxes": NativeArray([[1.0, 1.0, 4.0, 3.0]]),
+                "scores": NativeArray([0.92]),
+                "masks_logits": NativeArray(
+                    [
+                        [
+                            [0.2, 0.8, 0.8, 0.2, 0.1],
+                            [0.2, 0.8, 0.8, 0.2, 0.1],
+                            [0.1, 0.1, 0.1, 0.1, 0.1],
+                            [0.1, 0.1, 0.1, 0.1, 0.1],
+                        ]
+                    ]
+                ),
+            }
+
+    processor = ImageProcessor()
+    runtime = Sam3ImageProcessorRuntime(
+        processor=processor,
+        image_loader=lambda discovery_input: ("image", discovery_input.discovery_pass.pass_id),
+    )
+    config = Sam3Config(
+        checkpoint="facebook/sam3",
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="movable item",
+        score_threshold=0.7,
+        mask_threshold=0.5,
+    )
+
+    output = runtime.predict(_input(), config)
+
+    assert processor.calls == [
+        ("image", ("image", "full-frame")),
+        ("threshold", 0.7),
+        ("prompt", "movable item"),
+    ]
+    assert output.proposals[0].box == (1.0, 1.0, 4.0, 3.0)
+    assert output.proposals[0].mask[1:3] == (True, True)
+    assert output.proposals[0].score == 0.92
+    assert output.proposals[0].query_id == "text-prompt-000000"
+
+
+def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallback() -> None:
+    class UnusedProcessor:
+        pass
+
+    runtime = Sam3ImageProcessorRuntime(
+        processor=UnusedProcessor(),
+        image_loader=lambda discovery_input: object(),
+    )
+    config = Sam3Config(checkpoint="sam3", strategy=Sam3Strategy.AUTOMATIC)
+
+    with pytest.raises(ValueError, match="supports only text_prompt"):
+        runtime.predict(_input(), config)
