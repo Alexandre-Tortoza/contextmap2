@@ -108,6 +108,18 @@ prompt aplicável e nome/semântica do score em provenance. Texto usado para obt
 publicado como `SemanticClaim`. Falha do runtime ou estratégia configurada é propagada; não existe
 fallback silencioso para outra estratégia ou backend.
 
+## Backend Florence-2
+
+`Florence2RegionDiscovery` atende somente ao port de descoberta de regiões. Sua configuração
+registra checkpoint, versão, device, precision, task, prompt opcional, threshold e generation
+settings. O task é obrigatório porque diferentes modos de Florence-2 têm semânticas de proposta
+distintas.
+
+O parser interno pode produzir box, máscara opcional, score opcional, texto parseado e diagnostics.
+O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e texto parseado ficam
+como provenance/metadata de descoberta; não geram `SemanticClaim`. Um futuro adapter Florence-2
+para interpretação semântica deve implementar outro port, mesmo que compartilhe o runtime carregado.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
