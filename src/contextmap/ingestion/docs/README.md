@@ -19,8 +19,10 @@ Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em obs
 - `SourceProvenance` — rastreabilidade até a fonte bruta.
 - `SequenceArtifactWriter`/`SequenceArtifactReader` — persistência local imutável de uma sequência ingerida; `SequenceArtifactManifest`, `SequenceArtifactFileEntry`, `SequenceArtifactId`.
 - `SequenceArtifactError`, `IncompleteSequenceArtifactError` — exceções semânticas de leitura/escrita do artefato.
+- `synchronize()` — agrupa observações em `ProcessingObservation`s auditáveis; `SynchronizationConfig`, `ModalityAssociation`, `SynchronizationDiagnostics`, `DroppedEvent`.
+- `observation_modality()`, `MODALITY_NAMES` — utilitário para consumir `SourceObservation` de forma genérica por modalidade.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, e [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, e [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas.
 
 ## Módulos consumidos
 

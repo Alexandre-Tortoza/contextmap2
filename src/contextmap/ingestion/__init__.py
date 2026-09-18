@@ -8,6 +8,7 @@ documentation.
 """
 
 from contextmap.ingestion.models import (
+    MODALITY_NAMES,
     CalibrationReferenceId,
     ExternalPoseMeasurement,
     FrameId,
@@ -21,6 +22,7 @@ from contextmap.ingestion.models import (
     SourceObservation,
     SourceObservationId,
     SourceProvenance,
+    observation_modality,
 )
 from contextmap.ingestion.sequence_artifact import (
     IncompleteSequenceArtifactError,
@@ -31,9 +33,19 @@ from contextmap.ingestion.sequence_artifact import (
     SequenceArtifactReader,
     SequenceArtifactWriter,
 )
+from contextmap.ingestion.synchronization import (
+    DroppedEvent,
+    ModalityAssociation,
+    ProcessingObservation,
+    SynchronizationConfig,
+    SynchronizationDiagnostics,
+    synchronize,
+)
 
 __all__ = [
+    "MODALITY_NAMES",
     "CalibrationReferenceId",
+    "DroppedEvent",
     "ExternalPoseMeasurement",
     "FrameId",
     "ImageEncoding",
@@ -41,8 +53,10 @@ __all__ = [
     "ImuObservation",
     "IncompleteSequenceArtifactError",
     "LidarObservation",
+    "ModalityAssociation",
     "PointFieldDataType",
     "PointFieldDescriptor",
+    "ProcessingObservation",
     "SensorId",
     "SequenceArtifactError",
     "SequenceArtifactFileEntry",
@@ -53,4 +67,8 @@ __all__ = [
     "SourceObservation",
     "SourceObservationId",
     "SourceProvenance",
+    "SynchronizationConfig",
+    "SynchronizationDiagnostics",
+    "observation_modality",
+    "synchronize",
 ]
