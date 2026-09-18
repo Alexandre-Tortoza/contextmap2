@@ -22,7 +22,9 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 
 - `execute_stage_graph()`/`assemble_perception_result()` — executor de grafo de estágios e montagem de `PerceptionResult`; `StageDefinition`, `StageOutcome`, `StageStatus`, `StageGraphError`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, e [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas.
+- `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()` — geradores de identidade determinística.
+
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, e [`identity.md`](identity.md) para a cadeia completa de rastreabilidade.
 
 ## Módulos consumidos
 

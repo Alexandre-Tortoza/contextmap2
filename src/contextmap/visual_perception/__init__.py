@@ -9,6 +9,12 @@ final semantic meaning, or 2D→3D projection. See
 capability documentation.
 """
 
+from contextmap.visual_perception.identity import (
+    claim_id_for,
+    feature_id_for,
+    perception_result_id_for,
+    region_id_for,
+)
 from contextmap.visual_perception.models import (
     BackendProvenance,
     BoundingBox2D,
@@ -72,5 +78,9 @@ __all__ = [
     "StageStatus",
     "VisualFeature",
     "assemble_perception_result",
+    "claim_id_for",
     "execute_stage_graph",
+    "feature_id_for",
+    "perception_result_id_for",
+    "region_id_for",
 ]
