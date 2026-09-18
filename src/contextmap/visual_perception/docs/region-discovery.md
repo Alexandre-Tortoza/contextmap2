@@ -96,6 +96,18 @@ automatic mask generator. Seu digest determinístico acompanha cada proposta. `p
 O runtime recebe o `DiscoveryInput` completo, incluindo constraints explícitas, pass e tile. Erros
 de shape ou runtime interrompem a execução, sem fallback silencioso para outro backend.
 
+## Backend SAM3
+
+`Sam3RegionDiscovery` é o adapter planejado para o baseline da Solution 1 e continua substituível
+pelo mesmo port. `Sam3Config` torna checkpoint, versão, device, precision, thresholds e estratégia
+parte do digest da execução. Estratégias `automatic`, `text_prompt`, `point_grid`, `tracker` e `pcs`
+são distintas; `text_prompt` exige prompt, enquanto `automatic` rejeita prompt oculto.
+
+O runtime retorna propostas escalares, warnings e métricas próprias. O adapter preserva query ID,
+prompt aplicável e nome/semântica do score em provenance. Texto usado para obter a máscara não é
+publicado como `SemanticClaim`. Falha do runtime ou estratégia configurada é propagada; não existe
+fallback silencioso para outra estratégia ou backend.
+
 ## Geometry freeze
 
 Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
