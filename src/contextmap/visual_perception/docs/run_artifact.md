@@ -41,3 +41,9 @@ Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.
 ## `serialization.py`
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
+
+## Reprodutibilidade do pipeline resolvido (issue #55, `schema_version` 0.2.0)
+
+`manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
+
+Esta é uma quebra de schema pré-1.0 (`0.1.0` → `0.2.0`, ambos os campos são obrigatórios): nenhum leitor para manifests `0.1.0` é mantido, seguindo a mesma postura de todo o resto deste milestone (schema versionado, mas sem compromisso de compatibilidade retroativa antes de 1.0).

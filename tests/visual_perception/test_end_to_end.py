@@ -26,6 +26,7 @@ from fakes import (
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    CANONICAL_PRESET_V1,
     PerceptionEvidenceSet,
     PerceptionResult,
     PerceptionResultId,
@@ -186,6 +187,8 @@ def test_end_to_end_persists_reopens_and_groups_via_multi_run_evidence_set(tmp_p
             enabled_capabilities=frozenset(
                 {"region_discovery", "feature_extractor", "semantic_interpreter"}
             ),
+            pipeline_preset=CANONICAL_PRESET_V1,
+            configuration_digest="sha256:test",
             selection_label="frames",
             profile_label="fake",
         )
