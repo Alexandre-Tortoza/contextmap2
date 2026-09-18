@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from importlib import import_module
 from math import isfinite
 from time import perf_counter
-from typing import Protocol
+from typing import Protocol, cast
 
 from ..discovery import BackendDiagnostics, DiscoveryInput, DiscoveryOutput
 from ..region_models import (
@@ -67,6 +69,7 @@ class Sam2NativeProposal:
     mask: tuple[bool, ...]
     predicted_iou: float
     stability_score: float
+    metadata: tuple[tuple[str, JsonScalar], ...] = ()
 
     def __post_init__(self) -> None:
         """Validate native scalar output before canonical normalization."""
@@ -84,6 +87,82 @@ class Sam2Runtime(Protocol):
     ) -> tuple[Sam2NativeProposal, ...]:
         """Run SAM2 and return scalar-only native proposals."""
         ...
+
+
+class _AutomaticMaskGenerator(Protocol):
+    """Minimum official SAM2 automatic-mask generator surface used here."""
+
+    def generate(self, image: object) -> list[dict[str, object]]:
+        """Return official automatic-mask records for one image."""
+        ...
+
+
+class Sam2AutomaticMaskRuntime:
+    """Execute and isolate the official SAM2 automatic-mask generator API."""
+
+    def __init__(
+        self,
+        *,
+        mask_generator: _AutomaticMaskGenerator,
+        image_loader: Callable[[DiscoveryInput], object],
+        config_digest: str,
+    ) -> None:
+        """Bind a configured generator to an explicit prepared-image loader."""
+        if not config_digest:
+            raise ValueError("SAM2 runtime configuration digest must not be empty")
+        self._mask_generator = mask_generator
+        self._image_loader = image_loader
+        self._config_digest = config_digest
+
+    @classmethod
+    def from_model(
+        cls,
+        *,
+        model: object,
+        image_loader: Callable[[DiscoveryInput], object],
+        config: Sam2Config,
+    ) -> Sam2AutomaticMaskRuntime:
+        """Construct the official generator lazily from a loaded SAM2 model.
+
+        The optional dependency remains inside this infrastructure module. The
+        supplied loader must materialize the configured discovery pass as an HWC
+        uint8 image accepted by SAM2.
+        """
+        settings = dict(config.automatic_mask_settings)
+        reserved = {"model", "pred_iou_thresh", "stability_score_thresh", "output_mode"}
+        conflicts = reserved.intersection(settings)
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
+            raise ValueError(f"SAM2 automatic mask settings duplicate owned fields: {names}")
+        module = import_module("sam2.automatic_mask_generator")
+        generator_type = module.SAM2AutomaticMaskGenerator
+        generator = generator_type(
+            model=model,
+            pred_iou_thresh=config.predicted_iou_threshold,
+            stability_score_thresh=config.stability_threshold,
+            output_mode="binary_mask",
+            **settings,
+        )
+        return cls(
+            mask_generator=generator,
+            image_loader=image_loader,
+            config_digest=config.digest,
+        )
+
+    def predict(
+        self, discovery_input: DiscoveryInput, config: Sam2Config
+    ) -> tuple[Sam2NativeProposal, ...]:
+        """Run official SAM2 inference and detach every SDK-native value."""
+        if config.digest != self._config_digest:
+            raise ValueError("SAM2 runtime configuration digest does not match the active config")
+        width = int(discovery_input.discovery_pass.window.width)
+        height = int(discovery_input.discovery_pass.window.height)
+        image = self._image_loader(discovery_input)
+        records = self._mask_generator.generate(image)
+        return tuple(
+            _parse_automatic_mask_record(record, index=index, width=width, height=height)
+            for index, record in enumerate(records)
+        )
 
 
 class Sam2RegionDiscovery:
@@ -164,10 +243,68 @@ class Sam2RegionDiscovery:
                 discovery_pass_id=discovery_input.discovery_pass.pass_id,
                 native_proposal_id=proposal.proposal_id,
             ),
-            native_metadata=(("stability_score", proposal.stability_score),),
+            native_metadata=(
+                ("stability_score", proposal.stability_score),
+                *proposal.metadata,
+            ),
         )
 
 
 def _validate_unit_threshold(value: float, name: str) -> None:
     if not isfinite(value) or not 0 <= value <= 1:
         raise ValueError(f"SAM2 {name} must be between zero and one")
+
+
+def _parse_automatic_mask_record(
+    record: Mapping[str, object], *, index: int, width: int, height: int
+) -> Sam2NativeProposal:
+    """Convert one documented SAM2 automatic-mask record to scalar containers."""
+    box = _numeric_sequence(record.get("bbox"), "bbox", length=4)
+    x, y, box_width, box_height = box
+    area = _finite_number(record.get("area"), "area")
+    return Sam2NativeProposal(
+        proposal_id=f"sam2-{index:06d}",
+        box=(x, y, x + box_width, y + box_height),
+        mask=_binary_mask(record.get("segmentation"), width=width, height=height),
+        predicted_iou=_finite_number(record.get("predicted_iou"), "predicted_iou"),
+        stability_score=_finite_number(record.get("stability_score"), "stability_score"),
+        metadata=(("area_pixels", area),),
+    )
+
+
+def _binary_mask(value: object, *, width: int, height: int) -> tuple[bool, ...]:
+    native = value.tolist() if hasattr(value, "tolist") else value
+    if not isinstance(native, Sequence) or isinstance(native, (str, bytes)):
+        raise TypeError("SAM2 segmentation must be a two-dimensional binary mask")
+    rows = cast(Sequence[object], native)
+    if len(rows) != height:
+        raise ValueError("SAM2 segmentation mask dimensions must match the discovery pass")
+    flattened: list[bool] = []
+    for row in rows:
+        if not isinstance(row, Sequence) or isinstance(row, (str, bytes)) or len(row) != width:
+            raise ValueError("SAM2 segmentation mask dimensions must match the discovery pass")
+        for item in row:
+            if item not in (False, True, 0, 1):
+                raise TypeError("SAM2 segmentation mask must contain binary values")
+            flattened.append(bool(item))
+    return tuple(flattened)
+
+
+def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, ...]:
+    native = value.tolist() if hasattr(value, "tolist") else value
+    if (
+        not isinstance(native, Sequence)
+        or isinstance(native, (str, bytes))
+        or len(native) != length
+    ):
+        raise ValueError(f"SAM2 {name} must contain {length} numbers")
+    return tuple(_finite_number(item, name) for item in native)
+
+
+def _finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"SAM2 {name} must be numeric")
+    result = float(value)
+    if not isfinite(result):
+        raise ValueError(f"SAM2 {name} must be finite")
+    return result
