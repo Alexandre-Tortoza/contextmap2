@@ -64,6 +64,7 @@ class PointFieldDataType(Enum):
 
     FLOAT32 = "float32"
     FLOAT64 = "float64"
+    INT8 = "int8"
     INT16 = "int16"
     INT32 = "int32"
     UINT8 = "uint8"

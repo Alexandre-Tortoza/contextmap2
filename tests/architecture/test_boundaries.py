@@ -85,6 +85,7 @@ HEAVY_SDK_ROOTS = frozenset(
         "rclpy",
         "rosbag",
         "rosbag2_py",
+        "rosbags",
         "segment_anything",
     }
 )
