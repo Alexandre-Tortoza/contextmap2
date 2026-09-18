@@ -372,3 +372,47 @@ def test_verify_integrity_detects_an_index_payload_cross_reference_error(tmp_pat
     assert any(
         "payload_path" in problem and "not present in manifest" in problem for problem in problems
     )
+
+
+def test_diagnostics_round_trip_through_the_artifact(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_diagnostics(warnings=["imu topic not available"])
+    manifest = writer.finalize()
+
+    artifact_dir = tmp_path / "sequences" / "corridor-02" / manifest.artifact_id
+    assert (artifact_dir / "diagnostics" / "summary.json").is_file()
+    assert (artifact_dir / "diagnostics" / "warnings.jsonl").is_file()
+
+    reader = SequenceArtifactReader(artifact_dir)
+    diagnostics = reader.read_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics.warnings == ("imu topic not available",)
+    assert diagnostics.summary.modality_summaries["image"].count == 2
+    assert diagnostics.summary.warning_count == 1
+    assert reader.verify_integrity() == []
+
+
+def test_read_diagnostics_returns_none_when_never_set(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+
+    assert reader.read_diagnostics() is None
+
+
+def test_set_diagnostics_with_no_warnings_still_writes_a_summary(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_diagnostics()
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    diagnostics = reader.read_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics.warnings == ()
+    assert diagnostics.summary.warning_count == 0

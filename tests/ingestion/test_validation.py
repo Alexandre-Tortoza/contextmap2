@@ -1,0 +1,98 @@
+from fixtures import (
+    build_calibration_set,
+    build_image_with_data_size_mismatch,
+    build_lidar_with_inconsistent_fields,
+    build_non_monotonic_observations,
+    build_observation_with_unknown_frame,
+    build_valid_sequence,
+)
+
+from contextmap.ingestion import (
+    FrameId,
+    ImageEncoding,
+    ImageObservation,
+    SensorId,
+    SourceObservationId,
+    SourceProvenance,
+    validate_frame_references,
+    validate_image_observation,
+    validate_lidar_observation,
+    validate_observations,
+    validate_timestamp_ordering,
+)
+from contextmap.shared import SourceTimestamp
+
+
+def test_valid_sequence_has_no_problems() -> None:
+    observations = build_valid_sequence()
+
+    assert validate_observations(observations, calibration=build_calibration_set()) == []
+
+
+def test_valid_image_observation_has_no_problems() -> None:
+    image = next(obs for obs in build_valid_sequence() if obs.observation_id == "frame-0001")
+
+    assert validate_image_observation(image) == []  # type: ignore[arg-type]
+
+
+def test_detects_image_data_size_mismatch() -> None:
+    problems = validate_image_observation(build_image_with_data_size_mismatch())
+
+    assert any("does not match" in problem for problem in problems)
+
+
+def test_detects_lidar_data_size_and_field_offset_problems() -> None:
+    problems = validate_lidar_observation(build_lidar_with_inconsistent_fields())
+
+    assert any("out of range" in problem for problem in problems)
+
+
+def test_detects_non_monotonic_timestamps_on_the_same_clock() -> None:
+    problems = validate_timestamp_ordering(build_non_monotonic_observations())
+
+    assert any("non-monotonic" in problem for problem in problems)
+
+
+def test_allows_duplicate_timestamps_by_default() -> None:
+    observations = build_valid_sequence()
+    duplicate = [observations[0], observations[0]]
+
+    assert validate_timestamp_ordering(duplicate) == []
+
+
+def test_rejects_duplicate_timestamps_when_disallowed() -> None:
+    observations = build_valid_sequence()
+    duplicate = [observations[0], observations[0]]
+
+    problems = validate_timestamp_ordering(duplicate, allow_duplicates=False)
+
+    assert any("duplicate timestamp" in problem for problem in problems)
+
+
+def test_timestamps_on_different_clocks_are_never_compared() -> None:
+    later_but_different_clock = ImageObservation(
+        observation_id=SourceObservationId("frame-other-clock"),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="other-clock"),
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/corridor"),
+        width=1,
+        height=1,
+        encoding=ImageEncoding.RGB8,
+        data=b"\x00\x00\x00",
+    )
+    observations = [*build_valid_sequence(), later_but_different_clock]
+
+    assert validate_timestamp_ordering(observations) == []
+
+
+def test_detects_unknown_frame_reference() -> None:
+    problems = validate_frame_references(
+        [build_observation_with_unknown_frame()], build_calibration_set()
+    )
+
+    assert any("not a known calibration frame" in problem for problem in problems)
+
+
+def test_frame_reference_check_is_a_no_op_without_calibration() -> None:
+    assert validate_frame_references([build_observation_with_unknown_frame()], None) == []
