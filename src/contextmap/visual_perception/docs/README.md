@@ -25,6 +25,7 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 - `PipelinePreset`, `StageSpec`, `CANONICAL_PRESET_V1`, `KNOWN_CAPABILITIES` — presets de pipeline versionados e o grafo de estágios declarativo; `resolve_pipeline()`/`ResolvedPipeline`, `validate_pipeline_preset()`, `encode_pipeline_preset()`/`decode_pipeline_preset()`, `PipelineConfigError`, `StageBackendFactory`.
 
 - `EmbeddingSpace` — o que `VisualFeature.embedding_space_id` identifica; `embedding_space_fingerprint()`, `ensure_compatible_embedding_spaces()`/`ensure_compatible_features()`, `EmbeddingSpaceMismatchError`, `encode_embedding_space()`/`decode_embedding_space()`.
+- `DenseFeatureMap`/`DenseFeatureSampling` — geometria explícita entre o payload denso e a imagem preparada; `map_box_to_grid_cells()`/`pool_region_feature()` fazem associação e pooling mask-aware determinísticos com `RegionPoolingDiagnostics` e proveniência auditável.
 
 - `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()` — geradores de identidade determinística.
 
@@ -34,7 +35,7 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 
 - `PerceptionEvidenceSet` — view de leitura sobre múltiplos runs selecionados explicitamente; `ObservationEvidence`, `EvidenceSetError`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`dense_region_association.md`](dense_region_association.md) para a transformação espacial e o pooling mask-aware, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
 
 ## Testes de contrato ponta a ponta
 
