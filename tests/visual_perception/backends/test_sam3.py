@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from hashlib import sha256
 
 import pytest
@@ -128,18 +129,20 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
 
-        def set_image(self, image: object) -> dict[str, object]:
+        def set_image(self, image: object) -> object:
             self.calls.append(("image", image))
             return {"image_state": "encoded"}
 
         def set_confidence_threshold(
-            self, threshold: float, state: dict[str, object] | None = None
-        ) -> dict[str, object] | None:
+            self, threshold: float, state: object = None
+        ) -> object:
             self.calls.append(("threshold", threshold))
             return state
 
-        def set_text_prompt(self, *, state: dict[str, object], prompt: str) -> dict[str, object]:
+        def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
             self.calls.append(("prompt", prompt))
+            if not isinstance(state, dict):
+                raise TypeError("test state must be a dictionary")
             return {
                 **state,
                 "boxes": NativeArray([[1.0, 1.0, 4.0, 3.0]]),
@@ -184,7 +187,14 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
 
 def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallback() -> None:
     class UnusedProcessor:
-        pass
+        def set_image(self, image: object) -> object:
+            raise AssertionError("unsupported strategy must fail before inference")
+
+        def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+            raise AssertionError("unsupported strategy must fail before inference")
+
+        def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+            raise AssertionError("unsupported strategy must fail before inference")
 
     runtime = Sam3ImageProcessorRuntime(
         processor=UnusedProcessor(),
