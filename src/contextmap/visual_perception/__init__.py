@@ -26,6 +26,13 @@ from .image_preparation import (
     ValidRegion,
     prepare_image,
 )
+from .normalization import (
+    MergeDecision,
+    MergeKind,
+    NormalizationConfig,
+    NormalizationResult,
+    normalize_regions,
+)
 from .region_models import (
     ArtifactReference,
     BackendScore,
@@ -55,6 +62,10 @@ __all__ = [
     "DiscoveryRunResult",
     "ExclusionRegion",
     "InlineMask",
+    "MergeDecision",
+    "MergeKind",
+    "NormalizationConfig",
+    "NormalizationResult",
     "NormalizeOperation",
     "PassKind",
     "PreparedImage",
@@ -72,6 +83,7 @@ __all__ = [
     "TransformationRecord",
     "ValidRegion",
     "build_discovery_passes",
+    "normalize_regions",
     "prepare_image",
     "run_discovery_passes",
 ]
