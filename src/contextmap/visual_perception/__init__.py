@@ -23,6 +23,17 @@ from contextmap.visual_perception.evidence_set import (
     ObservationEvidence,
     PerceptionEvidenceSet,
 )
+from contextmap.visual_perception.feature_store import (
+    FEATURE_INDEX_FILENAME,
+    FeaturePayloadEntry,
+    FeaturePayloadIntegrityError,
+    FeatureStoreError,
+    FeatureStoreReader,
+    FeatureStoreWriter,
+    decode_feature_payload_entry,
+    encode_feature_payload_entry,
+    write_feature_index,
+)
 from contextmap.visual_perception.identity import (
     claim_id_for,
     feature_id_for,
@@ -93,6 +104,7 @@ from contextmap.visual_perception.service import (
 
 __all__ = [
     "CANONICAL_PRESET_V1",
+    "FEATURE_INDEX_FILENAME",
     "KNOWN_CAPABILITIES",
     "BackendProvenance",
     "BoundingBox2D",
@@ -102,7 +114,12 @@ __all__ = [
     "EvidenceSetError",
     "FeatureExtractor",
     "FeatureId",
+    "FeaturePayloadEntry",
+    "FeaturePayloadIntegrityError",
     "FeatureScope",
+    "FeatureStoreError",
+    "FeatureStoreReader",
+    "FeatureStoreWriter",
     "HypothesisRole",
     "IncompleteRunArtifactError",
     "ObservationEvidence",
@@ -140,10 +157,12 @@ __all__ = [
     "assemble_perception_result",
     "claim_id_for",
     "decode_embedding_space",
+    "decode_feature_payload_entry",
     "decode_perception_result",
     "decode_pipeline_preset",
     "embedding_space_fingerprint",
     "encode_embedding_space",
+    "encode_feature_payload_entry",
     "encode_perception_result",
     "encode_pipeline_preset",
     "ensure_compatible_embedding_spaces",
@@ -155,4 +174,5 @@ __all__ = [
     "region_id_for",
     "resolve_pipeline",
     "validate_pipeline_preset",
+    "write_feature_index",
 ]
