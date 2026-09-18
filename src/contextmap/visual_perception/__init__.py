@@ -34,6 +34,15 @@ from contextmap.visual_perception.ports import (
     SemanticInterpreter,
     SemanticScorer,
 )
+from contextmap.visual_perception.service import (
+    StageDefinition,
+    StageGraphError,
+    StageOutcome,
+    StageRunner,
+    StageStatus,
+    assemble_perception_result,
+    execute_stage_graph,
+)
 
 __all__ = [
     "BackendProvenance",
@@ -56,5 +65,12 @@ __all__ = [
     "SemanticInterpreter",
     "SemanticScorer",
     "SemanticSupport",
+    "StageDefinition",
+    "StageGraphError",
+    "StageOutcome",
+    "StageRunner",
+    "StageStatus",
     "VisualFeature",
+    "assemble_perception_result",
+    "execute_stage_graph",
 ]

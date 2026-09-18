@@ -20,7 +20,9 @@ Transformar uma `SourceObservation` física (Ingestion) em evidência visual can
 
 - `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticSupport`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), e [`ports.md`](ports.md) para os pontos de substituição de backend.
+- `execute_stage_graph()`/`assemble_perception_result()` — executor de grafo de estágios e montagem de `PerceptionResult`; `StageDefinition`, `StageOutcome`, `StageStatus`, `StageGraphError`.
+
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, e [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas.
 
 ## Módulos consumidos
 
