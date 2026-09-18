@@ -1,0 +1,59 @@
+# Region Discovery
+
+Region Discovery propõe geometria 2D para uma execução de Visual Perception. A capability
+preserva evidência geométrica e provenance, sem decidir identidade persistente, label final ou
+suporte 3D.
+
+## Contratos canônicos
+
+`RegionCandidate` representa uma proposta antes de validação, merge e normalização. A proposta
+carrega identidade da observação física, run, resultado, pass e proposta nativa. Sua geometria pode
+ser uma bounding box, uma máscara inline ou uma referência imutável para uma máscara persistida.
+
+`Region2D` representa geometria aceita e congelada. Sua identidade é composta por
+`perception_run_id`, `perception_result_id` e `region_id`; portanto, dois resultados podem usar o
+mesmo `region_id` sem sugerir que representam o mesmo objeto físico. A identidade não pode ser
+usada como entity ID do mapa.
+
+`RejectedRegionCandidate` registra uma rejeição com motivo legível por máquina, detalhe e pass de
+origem. Rejeições e propostas incorporadas por merge permanecem disponíveis para auditoria.
+
+## Espaço de coordenadas
+
+A convenção inicial é `pixel_xy_top_left`:
+
+- origem no canto superior esquerdo;
+- `x` cresce para a direita e `y` cresce para baixo;
+- bounding boxes são intervalos semiabertos `[x_min, x_max)` e `[y_min, y_max)`;
+- largura e altura descrevem o espaço da imagem preparada;
+- máscaras inline usam ordem row-major e exatamente `width * height` valores.
+
+Geometria fora dos limites da imagem é inválida. Remapeamentos de crop, resize ou tile devem
+ocorrer antes da criação da região canônica e permanecer registrados em provenance.
+
+## Scores
+
+`BackendScore` exige nome, valor e semântica. Um `predicted_iou` do SAM não é tratado como
+probabilidade nem comparado diretamente com scores de Florence-2. Ausência de score permanece
+`None`; ela não é convertida em zero ou um.
+
+## Normalização de backends
+
+Adapters convertem apenas dados serializáveis para `RegionCandidate`:
+
+```text
+SAM2/SAM3 mask + box + native scores -> RegionCandidate
+Florence-2 box ou mask + parser data  -> RegionCandidate
+fake deterministic proposal          -> RegionCandidate
+```
+
+Tensors, objetos de SDK e handles de modelo ficam dentro do adapter. Prompt ou texto usado para
+descobrir uma região pode aparecer na provenance, mas não cria automaticamente um
+`SemanticClaim`.
+
+## Geometry freeze
+
+Depois da normalização, `Region2D` é um value object imutável. Feature extraction, semantic
+interpretation, scoring e audit podem referenciar a região, mas não podem alterar seu ID, máscara
+ou bounding box. Uma geometria diferente exige outro resultado de percepção ou outra evidência
+derivada com identidade própria.
