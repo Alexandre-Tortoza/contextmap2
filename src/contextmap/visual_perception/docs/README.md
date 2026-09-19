@@ -33,6 +33,11 @@ Region Discovery possui implementação concreta de preparação opcional, full-
 
 Feature Extraction possui o core implementado para identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação e enhancement opcional. Os adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados na `dev`; detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
 
+Semantic Interpretation possui contratos canônicos para claims/contexto e para
+a seleção auditável de views, features e contexto entregue a um backend. A
+validação cruza cada request com a declaração de capacidades antes da execução;
+detalhes estão em [`semantic-interpretation.md`](semantic-interpretation.md).
+
 ## O que este módulo explicitamente não possui
 
 - identidade persistente de entidade 3D (pertence a Entity Resolution/Semantic Mapping);
@@ -44,6 +49,7 @@ Feature Extraction possui o core implementado para identidade e compatibilidade 
 
 - `PerceptionRun`/`PerceptionResult` — execução configurada e seu resultado para uma `SourceObservation`.
 - `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext` — evidência visual canônica.
+- `SemanticInterpretationRequest`, `SemanticVisualView`, `SemanticFeatureReference` e `SemanticInterpreterCapabilities` — entrada auditável e validação de capacidade para inferência semântica.
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 
@@ -66,7 +72,7 @@ Feature Extraction possui o core implementado para identidade e compatibilidade 
 
 - `PerceptionEvidenceSet` — view de leitura sobre múltiplos runs selecionados explicitamente; `ObservationEvidence`, `EvidenceSetError`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`dense_region_association.md`](dense_region_association.md) para a transformação espacial e o pooling mask-aware, [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) para o estágio opcional native→enhanced, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, [`feature_diagnostics.md`](feature_diagnostics.md) para métricas/debug auditáveis, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`semantic-interpretation.md`](semantic-interpretation.md) para requests/evidências semânticas, [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`dense_region_association.md`](dense_region_association.md) para a transformação espacial e o pooling mask-aware, [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) para o estágio opcional native→enhanced, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, [`feature_diagnostics.md`](feature_diagnostics.md) para métricas/debug auditáveis, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
 
 ## Testes de contrato ponta a ponta
 
@@ -85,6 +91,7 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 - [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
 - [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
 - [`feature-extraction.md`](feature-extraction.md) — visão integrada do core de Feature Extraction, contratos, payloads, sampling, pooling, diagnostics, enhancement opcional, avaliação e estado dos backends concretos.
+- [`semantic-interpretation.md`](semantic-interpretation.md) — requests canônicos, seleção explícita de evidência e validação de capacidades.
 - [`embedding_space.md`](embedding_space.md) — identidade e compatibilidade de espaços de embedding.
 - [`feature_store.md`](feature_store.md) — persistência, indexação e carregamento lazy de payloads.
 - [`dense_region_association.md`](dense_region_association.md) — geometria de sampling e pooling dense para região.
