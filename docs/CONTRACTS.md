@@ -15,43 +15,47 @@ Consequências:
 - SAM, DINO, Gemini, Qwen, FAST-LIO, PTv3 e similares ficam atrás de adapters;
 - downstream consome tipos canônicos, não outputs nativos de backend.
 
+## Estado dos contratos
+
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos de State Estimation em diante permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+
+```mermaid
+flowchart LR
+    SO["SourceObservation<br/>implementado"] --> PI["PreparedImage<br/>implementado"]
+    RUN["PerceptionRun<br/>implementado"] --> PR["PerceptionResult<br/>implementado"]
+    PI --> PR
+    PR --> R["Region2D"]
+    PR --> VF["VisualFeature"]
+    PR --> SC["SemanticClaim"]
+    PR --> CTX["SceneContext"]
+    SS["SemanticSupport"] --> SC
+    PR -. future association .-> SP["SpatialObservation<br/>planejado"]
+    SP --> FE["FusedEvidence<br/>planejado"]
+    FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
+```
+
 ## Cadeia principal de contratos
 
 ```mermaid
 flowchart LR
-    SO[SourceObservation]
-    PR[PerceptionResult]
-    R[Region2D]
-    VF[VisualFeature]
-    SC[SemanticClaim]
+    SO["SourceObservation"] --> PI["PreparedImage"]
+    RUN["PerceptionRun"] --> PR["PerceptionResult"]
+    PI --> PR
+    PR --> R["Region2D"]
+    PR --> VF["VisualFeature"]
+    PR --> SC["SemanticClaim"]
+    PR --> CTX["SceneContext"]
+    SUP["SemanticSupport"] --> SC
 
-    PE[PoseEstimate]
-    GM[GeometryReference]
-
-    SP[SpatialObservation]
-    FE[FusedEvidence]
-    E[Entity]
-    RE[ResolvedEntity]
-    REL[Relation]
-    CM[ContextMap]
-
-    SO --> PR
-    PR --> R
-    PR --> VF
-    PR --> SC
-
-    SO --> PE
-    PE --> GM
-
-    R --> SP
-    VF --> SP
-    SC --> SP
-    GM --> SP
-
-    SP --> FE --> E --> RE --> REL
-    GM --> CM
-    RE --> CM
-    REL --> CM
+    SO -. futuro .-> PE["PoseEstimate"]
+    PE -. futuro .-> GM["GeometryReference"]
+    PR -. futuro .-> SP["SpatialObservation"]
+    GM -. futuro .-> SP
+    SP -. futuro .-> FE["FusedEvidence"]
+    FE -. futuro .-> E["Entity"]
+    E -. futuro .-> RE["ResolvedEntity"]
+    RE -. futuro .-> REL["Relation"]
+    REL -. futuro .-> CM["ContextMap"]
 ```
 
 ## 1. `SourceObservation`
@@ -81,210 +85,122 @@ continua a mesma observação mesmo quando processada por diferentes perception 
 
 Reprocessar `SourceObservation` não modifica o objeto original.
 
-## 2. `PerceptionRun`
+## 2. `PreparedImage`
 
-Representa uma execução configurada de Visual Perception sobre uma selection.
+Contrato canônico de imagem pronta para os backends de percepção consumirem.
 
-Precisa identificar pelo menos:
+Campos implementados:
 
 ```text
-run identity
-sequence artifact
-selection
-pipeline preset/version
-resolved stage graph
-backend identities
-model/checkpoint identities
-prompt/config fingerprints
-code/environment provenance
+source_observation_id
+payload_reference
+width
+height
+transformations[]
 ```
 
-Um run é contexto de execução, não observação física.
+`transformations` registra, em ordem legível, os passos aplicados. O contrato não define ainda uma implementação concreta de resize/rectification/crop.
 
-## 3. `PerceptionResult`
+## 3. `PerceptionRun`
+
+Representa uma execução configurada de Visual Perception sobre uma seleção.
+
+Campos implementados:
+
+```text
+run_id
+run_index
+sequence_artifact_id
+selection_id
+enabled_capabilities
+backend_provenance
+code_version?
+```
+
+O `pipeline_preset` efetivamente resolvido e seu `configuration_digest` são persistidos no `RunArtifactManifest`; eles não são campos duplicados dentro de `PerceptionRun`.
+
+## 4. `PerceptionResult`
 
 Representa o resultado de um `PerceptionRun` para uma `SourceObservation` específica.
 
-```text
-frame-0124
-├── run-0001 -> result-A
-├── run-0002 -> result-B
-└── run-0003 -> result-C
+```mermaid
+flowchart LR
+    O["SourceObservation frame-0124"] --> A["run-0001 → PerceptionResult A"]
+    O --> B["run-0002 → PerceptionResult B"]
+    O --> C["run-0003 → PerceptionResult C"]
 ```
 
-Os três resultados são inferências distintas sobre **uma única evidência física**.
-
-### Deve preservar
-
-- source observation reference;
-- run reference;
-- timestamp;
-- `Region2D[]`;
-- `VisualFeature[]`;
-- `SemanticClaim[]`;
-- optional `SceneContext`;
-- provenance.
-
-## 4. `Region2D`
-
-Representa geometria 2D congelada dentro de um `PerceptionResult`.
-
-Pode preservar:
+Campos implementados:
 
 ```text
-region_id
-mask reference
-bounding geometry
-image coordinate space
-area/statistics
-proposal contributors
-backend provenance
+result_id
+source_observation_id
+run_id
+sequence_artifact_id
+created_at
+regions[]
+features[]
+claims[]
+scene_context?
 ```
 
-### Escopo de identidade
+O construtor valida unicidade de `region_id`, `feature_id` e `claim_id`, além de exigir que features/claims region-scoped referenciem uma região presente no próprio resultado.
 
-`region-0007` é local ao resultado/run.
+## 5. `Region2D`
 
-```text
-run-0001 / frame-0124 / region-0007
-```
+Região 2D local a um `PerceptionResult`. Hoje ela registra `bounding_box`, `mask_reference?`, `region_kind?`, `is_accepted`, `rejection_reason?` e `BackendProvenance`.
 
-e
+`RegionId` não é identidade persistente de objeto, não implica same-object identity entre runs e não possui suporte 3D por si só.
 
-```text
-run-0002 / frame-0124 / region-0007
-```
+## 6. `VisualFeature`
 
-não são automaticamente a mesma região.
-
-### Não representa
-
-- persistent entity;
-- same-object identity;
-- 3D support por si só.
-
-## 5. `VisualFeature`
-
-Representa evidência visual numérica sem exigir label.
-
-Escopos planejados:
-
-```text
-dense
-    feature map espacial
-
-global
-    representação da imagem completa
-
-region
-    representação suportada por Region2D
-```
-
-Metadata deve descrever:
+Representa evidência visual numérica. O contrato atual possui:
 
 ```text
 feature_id
-scope/support
-EmbeddingSpace
+scope = DENSE | GLOBAL | REGION
+embedding_space_id
 shape
 dtype
-normalization
 payload_reference
 provenance
+region_id?
+normalization?
 ```
 
-## 6. `EmbeddingSpace`
-
-Identifica o espaço vetorial de uma feature.
-
-Mesma dimensão não implica compatibilidade.
-
-```text
-DINOv2 != DINOv3
-DINO != CLIP
-CLIP checkpoint A != automaticamente checkpoint B
-CLIP != automaticamente AlphaCLIP
-```
-
-Qualquer operação de similarity, averaging ou indexing deve validar compatibilidade explicitamente.
+`embedding_space_id` é atualmente uma referência opaca. Um contrato completo de `EmbeddingSpace` continua sendo responsabilidade futura da capability de Feature Extraction; portanto compatibilidade entre espaços nunca deve ser inferida apenas por dimensão.
 
 ## 7. `SemanticClaim`
 
-Representa uma hipótese semântica produzida por uma inferência.
-
-Conceitualmente:
+Hipótese semântica imutável produzida por inferência.
 
 ```text
-SemanticClaim
-├── claim_id
-├── source_observation_id
-├── perception_result_id
-├── region_id?
-├── hypothesis
-├── role
-├── category?
-├── region_kind?
-├── attributes[]
-├── confidence?
-├── evidence_refs[]
-└── provenance
+claim_id
+text
+role = PRIMARY | ALTERNATIVE
+provenance
+category?
+confidence?
+region_id?
 ```
 
-### Regras
-
-- claim é evidência, não truth persistente;
-- `PRIMARY` não significa probabilidade calibrada;
-- `ALTERNATIVE` não deve ser descartada apenas por existir uma primary;
-- `confidence=None` é válido;
-- ausência de confidence nunca deve virar `0.0` ou `1.0` por conveniência.
+`confidence=None` significa explicitamente não pontuado. `PRIMARY` não significa probabilidade calibrada nem truth persistente.
 
 ## 8. `SceneContext`
 
-Representa contexto semântico de cena de uma inferência.
+Evidência semântica de nível de cena. O contrato implementado contém `claims[]` com `region_id=None` e `BackendProvenance`. Campos estruturados como `scene_type`, `layout` ou `navigability` continuam possíveis extensões futuras, não campos atuais.
 
-Campos podem incluir:
+## 9. `SemanticSupport`
 
-```text
-scene_type
-environment
-layout
-lighting
-visibility
-navigability
-```
-
-Scene context pode auxiliar interpretação de regiões, mas não deve sobrescrever silenciosamente evidência local.
-
-## 9. `SemanticScore`
-
-Representa suporte produzido por um scorer, por exemplo CLIP ou AlphaCLIP.
+Julgamento separado produzido por `SemanticScorer` sobre uma `SemanticClaim`:
 
 ```text
-SemanticScore
-├── semantic_claim_ref
-├── visual_evidence_ref
-├── scorer identity
-├── score_type
-├── value
-├── calibrated_probability?
-├── embedding_space
-└── provenance
+claim_id
+support_score ∈ [0, 1]
+provenance
 ```
 
-### Distinção obrigatória
-
-```text
-SemanticClaim.confidence
-    valor fornecido pelo semantic interpreter, quando significativo
-
-SemanticScore.value
-    similarity/support do scorer
-
-fusion support/value
-    resultado de uma policy de Semantic Fusion
-```
-
-Esses campos não devem ser colapsados em um `confidence` genérico.
+`SemanticSupport` não muta a claim, não substitui `SemanticClaim.confidence` e não é suporte acumulado de Semantic Fusion. Embora o port `SemanticScorer` esteja implementado, ele ainda não integra `CANONICAL_PRESET_V1`.
 
 ## 10. `PoseEstimate`
 
@@ -690,10 +606,11 @@ A tabela resume onde uma identidade é válida por padrão.
 | --- | --- |
 | `SourceObservation` | canonical sequence |
 | `PerceptionRun` | capability + sequence/run registry |
-| `PerceptionResult` | perception run |
-| `Region2D` | perception result/run |
-| `VisualFeature` | perception run/artifact |
-| `SemanticClaim` | perception run/artifact |
+| `PerceptionResult` | par `PerceptionRun` + `SourceObservation` |
+| `Region2D` | perception result |
+| `VisualFeature` | perception result |
+| `SemanticClaim` | perception result |
+| `SemanticSupport` | julgamento do scorer referenciando uma claim |
 | `PoseEstimate` | state-estimation artifact |
 | `GeometryReference` | geometric-map artifact |
 | `SpatialObservation` | association artifact |
