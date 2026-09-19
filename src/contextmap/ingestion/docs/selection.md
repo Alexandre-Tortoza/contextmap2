@@ -6,6 +6,30 @@ Este documento descreve `src/contextmap/ingestion/sequence_selection.py`: como u
 
 `resolve_selection(reader, selection)` é o único caminho de leitura para qualquer tipo de seleção. Isso garante a propriedade central desta issue: ler a sequência inteira e ler a porção correspondente de um `FrameRangeSelection` produzem exatamente as mesmas observações para os frames em comum — não há dois caminhos de leitura que possam divergir.
 
+
+
+## Fluxo de replay
+
+```mermaid
+flowchart TD
+    ART[SequenceArtifact imutável] --> R[SequenceArtifactReader]
+    R --> FULL[FullSequenceSelection]
+    R --> FRAME[FrameRangeSelection]
+    R --> TIME[TimestampRangeSelection]
+    R --> IDS[ExplicitIdsSelection]
+
+    FULL --> RES[resolve_selection]
+    FRAME --> RES
+    TIME --> RES
+    IDS --> RES
+
+    RES --> ORDER[Observações na ordem canônica]
+    ORDER --> DOWN[Run downstream]
+    ART -. não é copiado nem modificado .-> DOWN
+```
+
+Todos os tipos convergem para o mesmo caminho de resolução. A seleção descreve o subconjunto consumido; ela não cria um novo artefato nem uma nova identidade física de observação.
+
 ## Tipos de seleção (v0)
 
 - `FullSequenceSelection` — sequência inteira.
