@@ -8,6 +8,10 @@ Este documento descreve `src/contextmap/visual_perception/backends/dinov3.py`, o
 
 O mapa preserva resolução nativa. Nenhum upsampling/downsampling de features acontece no backend; aumento de resolução é um estágio separado (#194).
 
+O composition root fornece `feature_stage_id`. Seu SHA-256 participa de cada
+`FeatureId` e referência de payload, evitando colisão com outros extractors
+executados no mesmo `PerceptionResult`.
+
 ## CLS, registers e patch tokens
 
 A saída `last_hidden_state` DINOv3 contém, nesta ordem:
