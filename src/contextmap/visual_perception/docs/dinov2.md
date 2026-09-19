@@ -13,6 +13,10 @@ Este documento descreve `src/contextmap/visual_perception/backends/dinov2.py`, o
 
 O payload é enviado a um `FeaturePayloadSink` estruturalmente compatível com `PerceptionRunWriter.add_feature_payload()`. Assim, `extract()` satisfaz o port existente, retorna somente metadata canônica e ainda enfileira o array para a finalização atômica do artefato. `extract_dense()` expõe o mesmo resultado, sem executar inferência uma segunda vez, para composition roots que também precisam encaminhar imediatamente o `DenseFeatureMap` e o array a pooling ou outro estágio compatível.
 
+O composition root também fornece `feature_stage_id`. Seu SHA-256 entra no
+`FeatureId` e na referência de payload, garantindo namespace distinto entre
+todos os feature stages reunidos no mesmo `PerceptionResult`.
+
 ## Configuração e identidade
 
 `DinoV2Config` torna explícitos checkpoint, revisão, device, precisão, dimensões de entrada, política de download, normalização L2 opcional, prefixo de payload e versão do adapter. A proveniência usa um fingerprint determinístico da configuração efetiva.
@@ -23,7 +27,7 @@ O `EmbeddingSpace` usa:
 family        = dinov2
 model         = <checkpoint>
 checkpoint    = <checkpoint>@<revision>
-layer         = last_hidden_state.patch_tokens
+layer         = last_hidden_state.patch_tokens_after_cls_and_<N>_registers
 dimension     = canais do output real
 normalization = none | l2
 ```
@@ -32,7 +36,7 @@ Mesmo dimensionamento não torna este espaço compatível com DINOv3, CLIP ou ou
 
 ## Preprocessamento e transformação espacial
 
-O runtime Hugging Face faz resize direto e determinístico para `input_width × input_height`, sem center crop. O processor continua responsável pela conversão RGB, rescale e normalização esperados pelo checkpoint. O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`.
+O runtime Hugging Face faz resize direto e determinístico para `input_width × input_height`, sem center crop. O processor continua responsável pela conversão RGB, rescale e normalização esperados pelo checkpoint. O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`. O runtime remove CLS e a quantidade de register tokens declarada em `model.config.num_register_tokens` (zero quando o campo não existe). Essa contagem entra no `EmbeddingSpace.layer` e na identidade da transformação.
 
 Cada patch é mapeado de volta à imagem preparada por escala independente nos eixos X/Y. Origem, stride e suporte são persistidos em pixels da imagem preparada. A identidade da transformação inclui dimensões e transformações da `PreparedImage`, dimensões da entrada do modelo, política de resize, patch size e fingerprint da configuração.
 
