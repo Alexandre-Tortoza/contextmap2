@@ -8,6 +8,40 @@ Este é o contrato **em memória**. O formato persistido em disco (artefato de s
 
 Cada modalidade física (imagem, LiDAR, IMU, pose externa) é um tipo próprio, não um único registro com um campo por modalidade possível. Uma modalidade ausente é representada pela ausência de uma instância daquele tipo, nunca por um campo zerado. Um subcampo opcional dentro de uma modalidade (ex.: orientação de IMU) é `None` quando a fonte não o fornece — nunca um valor sentinela como quaternion identidade ou zero.
 
+
+## Estrutura dos contratos
+
+```mermaid
+classDiagram
+    class SourceObservationBase {
+        observation_id
+        sensor_id
+        frame_id
+        timestamp
+        provenance
+        calibration_id
+    }
+    class ImageObservation
+    class LidarObservation
+    class ImuObservation
+    class ExternalPoseMeasurement
+    class SourceTimestamp
+    class SourceProvenance
+    class CalibrationEntry
+
+    SourceObservationBase <|-- ImageObservation
+    SourceObservationBase <|-- LidarObservation
+    SourceObservationBase <|-- ImuObservation
+    SourceObservationBase <|-- ExternalPoseMeasurement
+
+    SourceObservationBase --> SourceTimestamp : timestamp
+    SourceObservationBase --> SourceProvenance : provenance
+    SourceObservationBase --> CalibrationEntry : calibration_id
+```
+
+A hierarquia acima representa a estrutura em memória. `ExternalPoseMeasurement` continua sendo evidência de entrada; a pose canônica produzida por State Estimation é outro contrato e outra identidade.
+
+
 ## Campos comuns (`_SourceObservationBase`)
 
 | Campo | Tipo | Unidade/convenção |

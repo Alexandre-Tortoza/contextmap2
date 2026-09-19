@@ -2,6 +2,31 @@
 
 Este documento descreve `src/contextmap/ingestion/source_adapter.py`: o contrato (`Protocol`) que qualquer adapter de fonte (ROS 1, ROS 2, dataset) implementa, e onde implementações concretas devem viver.
 
+
+## Boundary da fonte
+
+```mermaid
+flowchart LR
+    R1[ROS 1 bag] --> A1[Ros1BagSourceAdapter]
+    R2[ROS 2 bag] --> A2[Ros2BagSourceAdapter]
+    DS[Dataset gravado] --> AX[Adapter específico]
+
+    A1 --> P[SourceAdapter Protocol]
+    A2 --> P
+    AX --> P
+
+    P --> O[SourceObservation]
+    P --> C[CalibrationSet]
+    P --> W[SourceAdapterWarning]
+
+    O --> I[Pipeline canônica de Ingestion]
+    C --> I
+    W --> D[Diagnostics]
+```
+
+O ponto de integração é o contrato canônico, não a API nativa da fonte. Por isso ROS e datasets permanecem detalhes de borda e não vazam para capabilities downstream.
+
+
 ## Decisão central: adapters produzem `SourceObservation`s, não eventos brutos
 
 `SourceAdapter.read_observations()` produz diretamente `SourceObservation`s canônicas (issue #38) — uma por mensagem física da fonte, **sem agrupamento**. O agrupamento/sincronização (`synchronize()`, issue #40) é um estágio separado, aplicado sobre a saída do adapter. Isso evita duplicar a lógica de sincronização dentro de cada adapter e mantém os adapters simples: decodificar e normalizar, nada além disso.
