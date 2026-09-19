@@ -10,13 +10,12 @@ O sistema recebe observações sincronizadas, como RGB, LiDAR ou profundidade, p
 
 ```mermaid
 flowchart LR
-    A[Dados dos sensores] --> B[Adaptador de entrada]
-    B --> C[Observações normalizadas]
-    C --> D[Percepção]
-    D --> E[Associação 2D para 3D]
-    E --> F[Fusão multi-view]
-    F --> G[Mapa contextual]
-    G --> H[Artefato portátil]
+    A["Dados registrados"] --> B["Ingestion<br/>implementado"]
+    B --> C["SequenceArtifact<br/>implementado"]
+    C --> D["Visual Perception Core<br/>implementado"]
+    D --> E["PerceptionRunArtifact<br/>implementado"]
+    E -. próximo boundary .-> F["State Estimation + Geometric Mapping +<br/>Sensor Association + Fusion<br/>planejados"]
+    F --> G["ContextMapArtifact<br/>alvo"]
 ```
 
 O artefato gerado é a fronteira deste repositório. Visualização, busca em linguagem natural, navegação, planejamento, agentes e outros consumidores devem existir em projetos separados e consumir o mapa exportado.
@@ -38,6 +37,15 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 ## Estado do repositório
 
 **Pre-alpha.** Interfaces e schemas de artefato podem mudar enquanto a Solution 1 estiver sendo validada. Releases permanecem na série `v0.x.y` até que a primeira representação esteja estável o suficiente para consumidores externos.
+
+## Estado implementado
+
+A branch `dev` já contém dois módulos de domínio completos no nível de core:
+
+- [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
+- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, identidade/provenance, `PerceptionRunArtifact` e `PerceptionEvidenceSet`.
+
+Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 
 ## Desenvolvimento
 
@@ -101,6 +109,8 @@ src/contextmap/<module>/docs/
 ```
 
 A documentação é fragmentada por responsabilidade, mas integrada por links a partir do índice global.
+
+Para detalhes implementacionais, use os READMEs de [`ingestion`](src/contextmap/ingestion/docs/README.md) e [`visual_perception`](src/contextmap/visual_perception/docs/README.md). Os documentos em `docs/` integram esses módulos ao pipeline global e distinguem explicitamente o que já existe do que ainda é alvo arquitetural.
 
 ## Versionamento
 
