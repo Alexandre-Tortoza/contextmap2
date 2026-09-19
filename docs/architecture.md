@@ -1,10 +1,10 @@
-# Arquitetura da Solution 1
+# Arquitetura do Canonical Pipeline
 
 Este documento descreve a arquitetura estática alvo do ContextMap2: boundaries, ownership, dependências entre capabilities e regras que devem permanecer verdadeiras independentemente do backend escolhido.
 
 O fluxo operacional detalhado está em [PIPELINE.md](PIPELINE.md). A semântica dos contratos está em [CONTRACTS.md](CONTRACTS.md). Persistência e lineage estão em [ARTIFACTS.md](ARTIFACTS.md).
 
-> Esta é a arquitetura alvo da Solution 1. Uma capability documentada aqui pode ainda estar planejada ou em implementação.
+> Esta é a arquitetura alvo do canonical pipeline. Uma capability documentada aqui pode ainda estar planejada ou em implementação.
 
 ## Objetivo arquitetural
 
@@ -334,7 +334,7 @@ Esses services trabalham com ports e contratos públicos. Instanciação de back
 
 ## Artefatos como fronteiras
 
-A Solution 1 usa artifacts imutáveis como fronteiras explícitas entre execuções.
+O canonical pipeline usa artifacts imutáveis como fronteiras explícitas entre execuções.
 
 ```mermaid
 flowchart LR
@@ -458,7 +458,7 @@ Mudar backend não deve necessariamente mudar schema. Mudar semântica de um con
 
 ## Required vs optional
 
-O caminho end-to-end da Solution 1 requer as capabilities necessárias para produzir geometria, entidades resolvidas, relações e `ContextMapArtifact`.
+O caminho end-to-end do canonical pipeline requer as capabilities necessárias para produzir geometria, entidades resolvidas, relações e `ContextMapArtifact`.
 
 Alguns canais permanecem opcionais quando o downstream selecionado não depende deles, por exemplo:
 
