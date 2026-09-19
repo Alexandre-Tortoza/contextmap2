@@ -13,6 +13,8 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureExtractor,
     FeatureScope,
+    PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -61,7 +63,7 @@ def _image() -> PreparedImage:
         payload_reference="prepared/frame-0001.png",
         width=100,
         height=80,
-        transformations=("rectify:v1",),
+        transformations=(),
     )
 
 
@@ -88,6 +90,7 @@ def _backend(
     scope: FeatureScope,
     array: np.ndarray[Any, Any],
     context_padding_fraction: float = 0.0,
+    feature_stage_id: str = "global_feature_extraction",
 ) -> tuple[ClipVisualFeatureBackend, FakeClipRuntime, RecordingPayloadSink]:
     runtime = FakeClipRuntime(array)
     sink = RecordingPayloadSink()
@@ -106,6 +109,7 @@ def _backend(
             context_padding_fraction=context_padding_fraction,
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id=feature_stage_id,
         payload_sink=sink,
         runtime=runtime,
     )
@@ -213,6 +217,36 @@ def test_global_and_region_modes_share_model_space_but_preserve_distinct_view_pr
         global_result.features[0].provenance.configuration_fingerprint
         != region_result.features[0].provenance.configuration_fingerprint
     )
+
+
+def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
+    global_backend, _, _ = _backend(
+        scope=FeatureScope.GLOBAL,
+        array=np.ones((1, 2), dtype=np.float32),
+        feature_stage_id="global_feature_extraction",
+    )
+    region_backend, _, _ = _backend(
+        scope=FeatureScope.REGION,
+        array=np.ones((1, 2), dtype=np.float32),
+        feature_stage_id="region_feature_extraction",
+    )
+
+    global_feature = global_backend.extract_visual(_image()).features[0]
+    region = _region("region-a", x=0, y=0, width=10, height=10)
+    region_feature = region_backend.extract_visual(_image(), (region,)).features[0]
+
+    result = PerceptionResult(
+        result_id=PerceptionResultId("run-0001--frame-0001"),
+        source_observation_id=_image().source_observation_id,
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-0001",
+        created_at="2026-09-19T00:00:00+00:00",
+        regions=(region,),
+        features=(global_feature, region_feature),
+    )
+
+    assert len({feature.feature_id for feature in result.features}) == 2
+    assert len({feature.payload_reference for feature in result.features}) == 2
 
 
 def test_region_mode_requires_accepted_regions_and_matching_output_count() -> None:
