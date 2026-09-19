@@ -8,6 +8,21 @@ A regra principal é:
 
 As regras gerais de ownership e imports permanecem em [architecture.md](architecture.md) e [module-api.md](module-api.md).
 
+## Estado atual de `contextmap.shared`
+
+Na `dev`, `shared` continua deliberadamente mínimo. A primitive transversal já materializada é `SourceTimestamp`; os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
+
+```mermaid
+flowchart LR
+    SH["contextmap.shared<br/>SourceTimestamp"] --> ING["contextmap.ingestion"]
+    ING --> SO["SourceObservation"]
+    SO --> VP["contextmap.visual_perception"]
+    VP --> E["Region2D / VisualFeature /<br/>SemanticClaim / SemanticSupport"]
+    E -. não mover para shared .-> DOWN["capabilities downstream"]
+```
+
+`FrameId`, `RigidTransform`, calibração e IDs de observação continuam hoje sob ownership de Ingestion. O fato de futuros módulos também precisarem de frames ou transforms não autoriza mover esses tipos para `shared` antes de existir um contrato transversal real.
+
 ## Critérios para entrar em `shared`
 
 Um tipo só pode ser movido para `shared` quando todos os critérios abaixo forem verdadeiros:
@@ -114,7 +129,7 @@ Region2D
 VisualFeature
 EmbeddingSpace
 SemanticClaim
-SemanticScore
+SemanticSupport
 SceneContext
 GeometryPoint
 GeometryReference
@@ -240,7 +255,7 @@ Mover `GeometryReference` para `shared` porque Sensor Association também o cons
 
 ### Incorreto
 
-Criar `shared.SemanticEvidence` para unificar `SemanticClaim`, `SemanticScore`, `FusedEvidence` e relation evidence. Esses conceitos possuem semânticas e owners diferentes.
+Criar `shared.SemanticEvidence` para unificar `SemanticClaim`, `SemanticSupport`, `FusedEvidence` e relation evidence. Esses conceitos possuem semânticas e owners diferentes.
 
 ## Critério de revisão
 
