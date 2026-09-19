@@ -12,6 +12,8 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureExtractor,
     FeatureScope,
+    PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -58,7 +60,7 @@ def _image() -> PreparedImage:
         payload_reference="prepared/frame-0001.png",
         width=12,
         height=8,
-        transformations=("rectify:v1",),
+        transformations=(),
     )
 
 
@@ -74,7 +76,10 @@ def _native_output() -> DinoV3NativeOutput:
 
 
 def _backend(
-    *, output: DinoV3NativeOutput | None = None, l2_normalize: bool = False
+    *,
+    output: DinoV3NativeOutput | None = None,
+    l2_normalize: bool = False,
+    feature_stage_id: str = "dense_feature_extraction",
 ) -> tuple[DinoV3DenseFeatureBackend, FakeDinoV3Runtime, RecordingPayloadSink]:
     runtime = FakeDinoV3Runtime(output or _native_output())
     sink = RecordingPayloadSink()
@@ -90,6 +95,7 @@ def _backend(
             l2_normalize=l2_normalize,
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id=feature_stage_id,
         source_artifact_id="perception-run-0001",
         payload_sink=sink,
         runtime=runtime,
@@ -158,6 +164,26 @@ def test_same_input_and_config_are_deterministic_and_l2_is_explicit() -> None:
         np.linalg.norm(first.array, axis=-1), np.ones((2, 3)), rtol=1e-6, atol=1e-6
     )
     assert first.dense_map.feature.normalization == "l2"
+
+
+def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
+    dense_backend, _, _ = _backend(feature_stage_id="dense_feature_extraction")
+    sibling_backend, _, _ = _backend(feature_stage_id="region_feature_extraction")
+
+    dense_feature = dense_backend.extract_dense(_image()).dense_map.feature
+    sibling_feature = sibling_backend.extract_dense(_image()).dense_map.feature
+
+    result = PerceptionResult(
+        result_id=PerceptionResultId("run-0001--frame-0001"),
+        source_observation_id=_image().source_observation_id,
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-0001",
+        created_at="2026-09-19T00:00:00+00:00",
+        features=(dense_feature, sibling_feature),
+    )
+
+    assert len({feature.feature_id for feature in result.features}) == 2
+    assert len({feature.payload_reference for feature in result.features}) == 2
 
 
 def test_native_map_uses_common_region_pooling_without_backend_branch() -> None:
@@ -230,6 +256,7 @@ def test_runtime_failure_has_no_fallback() -> None:
             input_height=4,
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id="dense_feature_extraction",
         source_artifact_id="perception-run-0001",
         payload_sink=RecordingPayloadSink(),
         runtime=FailingRuntime(),
