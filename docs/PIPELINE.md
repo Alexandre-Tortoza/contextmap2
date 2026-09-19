@@ -248,6 +248,27 @@ flowchart LR
 
 Region Discovery agora possui adapters concretos para SAM2, SAM3 e Florence-2, além de image preparation auditável, tiling/scale com validação da imagem materializada, remapeamento global, filtros/constraints, merge e diagnostics. O output do estágio continua sendo o `Region2D` canônico; candidatos e decisões intermediárias permanecem evidence/audit da execução. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/region-discovery.md).
 
+### Feature Extraction core implementado
+
+```mermaid
+flowchart LR
+    PI["PreparedImage"] --> FE["FeatureExtractor"]
+    REG["Region2D[]"] --> FE
+    FE --> VF["VisualFeature[]"]
+    VF --> ES["EmbeddingSpace<br/>compatibilidade exata"]
+    VF --> STORE["FeatureStore<br/>payload lazy"]
+    VF --> DFM["DenseFeatureMap<br/>sampling explícito"]
+    DFM --> POOL["pool_region_feature()"]
+    REG --> POOL
+    DFM -. preset alternativo .-> ENH["FeatureResolutionEnhancement"]
+```
+
+Feature Extraction já possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` já fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`.
+
+Isso não equivale a declarar modelos concretos como suportados. DINOv2, DINOv3, CLIP e AlphaCLIP ainda não possuem adapters integrados na `dev`; o core e a CI usam fakes determinísticos para validar os contratos. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
+
+Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [espaço de embedding](../src/contextmap/visual_perception/docs/embedding_space.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/feature_extraction.md).
+
 ### Persistência e leitura multi-run
 
 ```mermaid
@@ -261,18 +282,20 @@ flowchart LR
 
 `PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
 
-### Ainda não materializado no preset canônico
+### Ainda não materializado na integração canônica
 
-Os seguintes elementos aparecem na arquitetura alvo, mas não fazem parte de `CANONICAL_PRESET_V1` hoje:
+Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- backends reais de Feature Extraction e Semantic Interpretation além de Region Discovery;
+- adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP para `FeatureExtractor`;
+- backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
+- backends reais de Semantic Interpretation;
 - integração de `SemanticScorer` como estágio do DAG;
 - semantic refinement;
 - integração end-to-end com State Estimation, geometria e Sensor Association.
 
 Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 
-Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
+Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
 
 ## 3. Branch de State Estimation
 

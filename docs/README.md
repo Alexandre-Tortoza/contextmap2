@@ -43,7 +43,7 @@ flowchart LR
     PR -. próximo boundary .-> SA["State Estimation / Geometric Mapping /<br/>Sensor Association e downstream<br/>planejados"]
 ```
 
-Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception Core possui contratos de evidência, ports substituíveis, grafo de estágios versionado, execução com isolamento de falhas, identidades determinísticas, `PerceptionRunArtifact` e leitura multi-run sem fusão.
+Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e o core de Feature Extraction, incluindo compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Backends concretos de Feature Extraction ainda não estão integrados.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
@@ -89,6 +89,8 @@ flowchart TD
     M --> VP[src/contextmap/visual_perception/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
+    VP --> RD[Region Discovery]
+    VP --> FE[Feature Extraction]
 ```
 
 ## Responsabilidade de cada documento
@@ -143,7 +145,7 @@ Arquivos complementares só devem existir quando houver conteúdo real. O objeti
 Módulos com documentação própria:
 
 - [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração, seleção/replay, provenance e adapters de fonte.
-- [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual por run, ports, preset canônico, execução do DAG, artifacts e leitura multi-run; [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) documenta SAM2/SAM3/Florence-2, passes, normalização e avaliação geométrica.
+- [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual por run, ports, preset canônico, execução do DAG, artifacts e leitura multi-run; [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) documenta SAM2/SAM3/Florence-2, passes, normalização e avaliação geométrica; [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) documenta embeddings, payloads, sampling, pooling, diagnostics, enhancement opcional e o estado dos backends concretos.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 
 ## Integração da documentação
