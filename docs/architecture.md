@@ -109,6 +109,27 @@ flowchart TD
 
 As setas principais representam fluxo/dependência conceitual de dados. Dependências adicionais de artifacts, como calibração normalizada ou pose usada em Sensor Association, devem continuar explícitas no runtime e lineage mesmo quando não aparecem como uma aresta simplificada no diagrama.
 
+## Estado implementado e fronteira atual
+
+Na `dev`, `ingestion` e o núcleo de `visual_perception` já materializam os dois primeiros boundaries da arquitetura. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+
+```mermaid
+flowchart LR
+    SRC["Fonte registrada"] --> ING["contextmap.ingestion<br/>implementado"]
+    ING --> SA["SequenceArtifact"]
+    SA --> VP["contextmap.visual_perception<br/>core implementado"]
+    VP --> PRA["PerceptionRunArtifact"]
+    PRA -. contrato downstream futuro .-> NEXT["state_estimation / geometric_mapping /<br/>sensor_association / fusion / map"]
+```
+
+A integração entre os dois módulos é feita exclusivamente pelas APIs públicas. `visual_perception` referencia identidades de observação e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
+
+Documentação implementacional:
+
+- [Ingestion](../src/contextmap/ingestion/docs/README.md);
+- [Visual Perception](../src/contextmap/visual_perception/docs/README.md).
+
+
 ## Ownership
 
 Uma capability possui o conceito que ela introduz semanticamente. O consumidor depende da API pública desse módulo, não de uma estrutura global de contratos.
@@ -258,6 +279,8 @@ PointEncoder
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
+
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico implementado usa os três primeiros; `SemanticScorer` ainda não está ligado ao DAG canônico. Os backends reais de visão listados acima continuam candidatos planejados, não implementação já disponível. Ingestion, por outro lado, já possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`.
 
 ## Composition root
 
