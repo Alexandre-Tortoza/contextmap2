@@ -7,16 +7,30 @@ from rosbags.rosbag1 import Writer
 from rosbags.typesys import Stores, get_typestore
 
 from contextmap.ingestion import (
+    CalibrationEntry,
+    CalibrationError,
+    CalibrationProvenance,
+    CalibrationReferenceId,
+    CalibrationSet,
     ExternalPoseMeasurement,
+    FrameId,
     ImageObservation,
     ImuObservation,
     LidarObservation,
     MissingRequiredTopicError,
+    RigidTransform,
+    SensorId,
     SourceAdapterConfig,
     SourceTopicMapping,
+    SynchronizationConfig,
+    synchronize,
 )
 from contextmap.ingestion.adapters.ros1_bag import Ros1BagSourceAdapter
-from contextmap.ingestion.calibration import FisheyeCameraModel, PinholeCameraModel
+from contextmap.ingestion.calibration import (
+    FisheyeCameraModel,
+    PinholeCameraModel,
+    compute_content_hash,
+)
 
 _TOPICS = SourceTopicMapping(
     rgb="/camera/image_raw",
@@ -48,6 +62,7 @@ def _build_bag(
     distortion_model: str = "plumb_bob",
     imu_orientation_available: bool = True,
     include_bad_image: bool = False,
+    include_changed_camera_info: bool = False,
 ) -> None:
     types = _TS.types
     with Writer(path) as writer:
@@ -95,7 +110,7 @@ def _build_bag(
             if distortion_model == "equidistant"
             else np.array([0.1, -0.05, 0.0, 0.0, 0.0], dtype=np.float64)
         )
-        camera_info_msg = types["sensor_msgs/msg/CameraInfo"](
+        camera_info_msg: Any = types["sensor_msgs/msg/CameraInfo"](
             header=_header(1, "front_camera_optical"),
             height=720,
             width=1280,
@@ -111,6 +126,10 @@ def _build_bag(
             ),
         )
         _write(cam_info_conn, writer, camera_info_msg, 1_000_000_000)
+        if include_changed_camera_info:
+            camera_info_msg.K[0] = 601.0
+            camera_info_msg.header = _header(2, "front_camera_optical")
+            _write(cam_info_conn, writer, camera_info_msg, 2_000_000_000)
 
         point_field = types["sensor_msgs/msg/PointField"]
         pointcloud_msg = types["sensor_msgs/msg/PointCloud2"](
@@ -211,10 +230,11 @@ def test_image_observation_is_decoded_without_ros_types_leaking(bag_path: Path) 
     assert image.height == 1
     assert image.data == b"\x01\x02\x03\x04\x05\x06"
     assert image.frame_id == "front_camera_optical"
-    assert image.timestamp.clock_id == "ros1_bag:/camera/image_raw"
+    assert image.timestamp.clock_id == config.resolved_timestamp_clock_id()
     assert image.timestamp.seconds == 1
     assert image.provenance.source_topic == "/camera/image_raw"
     assert image.provenance.source_message_index == 0
+    assert image.provenance.raw_metadata["bag_timestamp_nanoseconds"] == 1_000_000_000
     # No rosbags/ROS-native object anywhere in the canonical observation.
     for value in (image.data, image.width, image.height, image.encoding):
         assert not type(value).__module__.startswith("rosbags")
@@ -283,6 +303,19 @@ def test_read_calibration_decodes_fisheye_model_without_lossy_conversion(tmp_pat
     assert entry.camera_model.distortion_coefficients == (0.01, 0.002, 0.0003, 0.00004)
 
 
+def test_read_calibration_rejects_intrinsics_that_change_during_sequence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "changing-calibration.bag"
+    _build_bag(path, include_changed_camera_info=True)
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    with pytest.raises(CalibrationError, match="conflicting calibration"):
+        adapter.read_calibration()
+
+
 def test_missing_required_topic_raises_before_any_observation(bag_path: Path) -> None:
     config = SourceAdapterConfig(
         source_type="ros1_bag",
@@ -329,3 +362,73 @@ def test_same_adapter_processes_a_different_bag_via_configuration_only(tmp_path:
     second_calibration = second.read_calibration()
     assert first_calibration is not None
     assert second_calibration is not None
+
+
+def test_adapter_output_synchronizes_modalities_on_shared_header_clock(bag_path: Path) -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag",
+        path=str(bag_path),
+        topics=_TOPICS,
+        timestamp_clock_id="robot-header-clock",
+    )
+    observations = list(Ros1BagSourceAdapter(config).read_observations())
+
+    groups, diagnostics = synchronize(
+        observations,
+        config=SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=0),
+    )
+
+    assert len(groups) == 1
+    assert all(
+        association.observation is not None for association in groups[0].associations.values()
+    )
+    assert diagnostics.dropped_events == ()
+
+
+def test_provided_calibration_supplies_extrinsics_and_observation_reference(
+    bag_path: Path,
+) -> None:
+    lidar_sensor_id = SensorId("velodyne_points")
+    lidar_frame_id = FrameId("velodyne")
+    lidar_calibration_id = CalibrationReferenceId("lidar-calibration")
+    lidar_entry = CalibrationEntry(
+        calibration_id=lidar_calibration_id,
+        sensor_id=lidar_sensor_id,
+        frame_id=lidar_frame_id,
+        camera_model=None,
+        provenance=CalibrationProvenance(
+            source_type="file", source_path="fixtures/extrinsics.yaml"
+        ),
+        content_hash=compute_content_hash(
+            sensor_id=lidar_sensor_id,
+            frame_id=lidar_frame_id,
+            camera_model=None,
+        ),
+    )
+    transform = RigidTransform(
+        parent_frame=FrameId("front_camera_optical"),
+        child_frame=lidar_frame_id,
+        translation=(0.1, 0.0, 0.0),
+        rotation=(0.0, 0.0, 0.0, 1.0),
+    )
+    config = SourceAdapterConfig(
+        source_type="ros1_bag",
+        path=str(bag_path),
+        topics=_TOPICS,
+        calibration=CalibrationSet(
+            entries={lidar_calibration_id: lidar_entry},
+            static_transforms=(transform,),
+        ),
+    )
+    adapter = Ros1BagSourceAdapter(config)
+
+    calibration = adapter.read_calibration()
+    observations = list(adapter.read_observations())
+    image = next(item for item in observations if isinstance(item, ImageObservation))
+    lidar = next(item for item in observations if isinstance(item, LidarObservation))
+
+    assert calibration is not None
+    assert len(calibration.entries) == 2
+    assert calibration.static_transforms == (transform,)
+    assert image.calibration_id is not None
+    assert lidar.calibration_id == lidar_calibration_id

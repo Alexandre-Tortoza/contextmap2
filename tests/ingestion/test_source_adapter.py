@@ -3,6 +3,7 @@ from collections.abc import Iterator, Sequence
 import pytest
 
 from contextmap.ingestion import (
+    CalibrationSet,
     FrameId,
     ImageEncoding,
     ImageObservation,
@@ -72,6 +73,9 @@ class FakeSourceAdapter:
     def warnings(self) -> Sequence[SourceAdapterWarning]:
         return tuple(self._warnings)
 
+    def read_calibration(self) -> CalibrationSet | None:
+        return self._config.calibration
+
 
 def _image_observation() -> ImageObservation:
     return ImageObservation(
@@ -104,7 +108,10 @@ def _consume_generically(adapter: SourceAdapter) -> list[SourceObservationId]:
 
 def test_fake_adapter_satisfies_the_source_adapter_protocol() -> None:
     config = SourceAdapterConfig(
-        source_type="fake", path="fixtures/fake", topics=SourceTopicMapping(rgb="/camera")
+        source_type="fake",
+        path="fixtures/fake",
+        topics=SourceTopicMapping(rgb="/camera"),
+        timestamp_clock_id="fake-clock",
     )
     adapter = FakeSourceAdapter(
         config=config, observations=[_image_observation()], available_topics=frozenset({"rgb"})
@@ -115,7 +122,10 @@ def test_fake_adapter_satisfies_the_source_adapter_protocol() -> None:
 
 def test_downstream_code_consumes_any_adapter_without_branching() -> None:
     config = SourceAdapterConfig(
-        source_type="fake", path="fixtures/fake", topics=SourceTopicMapping(rgb="/camera")
+        source_type="fake",
+        path="fixtures/fake",
+        topics=SourceTopicMapping(rgb="/camera"),
+        timestamp_clock_id="fake-clock",
     )
     adapter = FakeSourceAdapter(
         config=config, observations=[_image_observation()], available_topics=frozenset({"rgb"})
@@ -129,6 +139,7 @@ def test_capabilities_reflect_available_topics() -> None:
         source_type="fake",
         path="fixtures/fake",
         topics=SourceTopicMapping(rgb="/camera", lidar="/velodyne"),
+        timestamp_clock_id="fake-clock",
     )
     adapter = FakeSourceAdapter(config=config, observations=[], available_topics=frozenset({"rgb"}))
 
@@ -144,6 +155,7 @@ def test_missing_required_topic_raises_before_yielding_anything() -> None:
         source_type="fake",
         path="fixtures/fake",
         topics=SourceTopicMapping(rgb="/camera", lidar="/velodyne"),
+        timestamp_clock_id="fake-clock",
         required_topics=frozenset({"lidar"}),
     )
     adapter = FakeSourceAdapter(
@@ -159,6 +171,7 @@ def test_unsupported_modality_is_reported_as_a_warning_not_silently_dropped() ->
         source_type="fake",
         path="fixtures/fake",
         topics=SourceTopicMapping(rgb="/camera", imu="/imu/data"),
+        timestamp_clock_id="fake-clock",
     )
     adapter = FakeSourceAdapter(
         config=config,
@@ -179,5 +192,23 @@ def test_config_rejects_unknown_required_topic_name() -> None:
             source_type="fake",
             path="fixtures/fake",
             topics=SourceTopicMapping(),
+            timestamp_clock_id="fake-clock",
             required_topics=frozenset({"radar"}),
         )
+
+
+def test_generic_adapter_exposes_configured_calibration() -> None:
+    calibration = CalibrationSet(entries={}, static_transforms=())
+    adapter = FakeSourceAdapter(
+        config=SourceAdapterConfig(
+            source_type="fake",
+            path="fixtures/fake",
+            topics=SourceTopicMapping(),
+            timestamp_clock_id="fake-clock",
+            calibration=calibration,
+        ),
+        observations=[],
+        available_topics=frozenset(),
+    )
+
+    assert adapter.read_calibration() is calibration

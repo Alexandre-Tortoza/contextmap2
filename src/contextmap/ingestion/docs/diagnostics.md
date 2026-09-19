@@ -8,15 +8,21 @@ Diagnósticos são evidência de depuração, nunca dependência contratual (`do
 
 ## `summarize_observations()`
 
-Calcula um sumário legível por humano de um conjunto de observações: contagem por modalidade, intervalo de tempo normalizado (`first_timestamp_seconds`/`last_timestamp_seconds`, apenas comparável quando `clock_ids` tem uma única entrada — múltiplos `clock_id` na mesma modalidade sinalizam que o intervalo mistura domínios de clock e não deve ser lido como um único range), resoluções de imagem distintas vistas, e layouts distintos de campos de point cloud vistos. Não requer artefato persistido — funciona sobre qualquer `Sequence[SourceObservation]`, incluindo diretamente a saída de um `SourceAdapter` (#43) antes mesmo de persistir.
+Calcula um sumário legível por humano de um conjunto de observações: contagem por modalidade, intervalo de tempo, clocks, fontes, contagem por tópico, resoluções de imagem, layouts de point cloud, inventário de calibração/frames e, quando fornecido, contagens e offsets das decisões de sincronização. Não requer artefato persistido — funciona sobre qualquer `Sequence[SourceObservation]`, incluindo diretamente a saída de um `SourceAdapter` antes mesmo de persistir.
 
-## Persistência: `diagnostics/summary.json` + `diagnostics/warnings.jsonl`
+## Persistência estruturada
 
-`writer.set_diagnostics(warnings=[...])` antes de `finalize()` ativa a escrita de diagnósticos: o sumário é computado automaticamente a partir das observações já adicionadas ao writer; o chamador só fornece a lista de warnings (texto legível). `reader.read_diagnostics()` retorna `SequenceDiagnostics(summary=..., warnings=...)` ou `None`.
+`writer.set_diagnostics(warnings=[...], synchronization=...)` antes de `finalize()` ativa a escrita de diagnósticos. O sumário é computado automaticamente a partir das observações, da calibração e das decisões fornecidas. `reader.read_diagnostics()` reconstrói `SequenceDiagnostics` ou retorna `None` quando diagnósticos não foram persistidos.
 
-### Por que só dois arquivos, não a estrutura completa sugerida pela issue
+Arquivos escritos:
 
-A issue cita `summary.json`, `warnings.jsonl`, `synchronization.jsonl`, `dropped-events.jsonl`, `frame-graph.json` como candidatos, mas também deixa explícito: "Exact names/formats may differ". O v0 entrega `summary.json` + `warnings.jsonl`; diagnósticos de sincronização (`SynchronizationDiagnostics.dropped_events` da issue #40) podem ser formatados como texto pelo chamador e passados na mesma lista `warnings` — um arquivo dedicado por tipo de diagnóstico fica adiado até que exista um consumidor real que precise parsear esses dados estruturadamente, em vez de apenas lê-los como texto. `frame-graph.json` (grafo de frames de calibração) também não é gerado no v0 — `validate_frame_references()` (`docs/validation.md`) já cobre a checagem que motivaria esse arquivo.
+- `summary.json`: agregados legíveis e versão do schema;
+- `warnings.jsonl`: warnings textuais em ordem;
+- `synchronization.jsonl`: uma decisão estruturada por anchor e modalidade;
+- `dropped-events.jsonl`: eventos não selecionados, ligados por `observation_id`;
+- `frame-graph.json`: inventário de calibrações, frames e transforms estáticos.
+
+Esses arquivos são evidência de debug. Não substituem as observações, o `CalibrationSet` nem qualquer output contratual usado por capacidades downstream.
 
 ## Integração com `validation.py`
 

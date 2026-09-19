@@ -14,6 +14,8 @@ from contextmap.ingestion import (
     MissingRequiredTopicError,
     SourceAdapterConfig,
     SourceTopicMapping,
+    SynchronizationConfig,
+    synchronize,
 )
 from contextmap.ingestion.adapters.ros2_bag import Ros2BagSourceAdapter
 from contextmap.ingestion.calibration import FisheyeCameraModel, PinholeCameraModel
@@ -213,7 +215,8 @@ def test_image_observation_matches_ros1_adapter_contract_shape(bag_path: Path) -
     assert image.height == 1
     assert image.data == b"\x01\x02\x03\x04\x05\x06"
     assert image.frame_id == "front_camera_optical"
-    assert image.timestamp.clock_id == "ros2_bag:/camera/color/image"
+    assert image.timestamp.clock_id == config.resolved_timestamp_clock_id()
+    assert image.provenance.raw_metadata["bag_timestamp_nanoseconds"] == 1_000_000_000
     assert image.provenance.source_topic == "/camera/color/image"
 
 
@@ -382,3 +385,24 @@ def test_ros1_and_ros2_adapters_produce_the_same_canonical_shape(tmp_path: Path)
         return image.width, image.height, image.data
 
     assert consume(ros1_adapter) == consume(ros2_adapter)
+
+
+def test_adapter_output_synchronizes_modalities_on_shared_header_clock(bag_path: Path) -> None:
+    config = SourceAdapterConfig(
+        source_type="ros2_bag",
+        path=str(bag_path),
+        topics=_TOPICS,
+        timestamp_clock_id="robot-header-clock",
+    )
+    observations = list(Ros2BagSourceAdapter(config).read_observations())
+
+    groups, diagnostics = synchronize(
+        observations,
+        config=SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=0),
+    )
+
+    assert len(groups) == 1
+    assert all(
+        association.observation is not None for association in groups[0].associations.values()
+    )
+    assert diagnostics.dropped_events == ()

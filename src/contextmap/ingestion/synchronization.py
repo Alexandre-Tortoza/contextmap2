@@ -33,25 +33,27 @@ class SynchronizationConfig:
         reference_modality: Modality whose events anchor each processing
             observation. Must be one of
             :data:`~contextmap.ingestion.models.MODALITY_NAMES`.
-        tolerance_seconds: Maximum accepted absolute offset, in seconds,
+        tolerance_nanoseconds: Maximum accepted absolute offset, in nanoseconds,
             between a candidate event's normalized timestamp and the
             anchor's normalized timestamp.
     """
 
     reference_modality: str
-    tolerance_seconds: float
+    tolerance_nanoseconds: int
 
     def __post_init__(self) -> None:
         """Validate the configuration.
 
         Raises:
             ValueError: If ``reference_modality`` is not a known modality,
-                or ``tolerance_seconds`` is negative.
+                or ``tolerance_nanoseconds`` is negative.
         """
         if self.reference_modality not in MODALITY_NAMES:
             raise ValueError(f"unknown reference_modality: {self.reference_modality!r}")
-        if self.tolerance_seconds < 0:
-            raise ValueError(f"tolerance_seconds must be >= 0, got {self.tolerance_seconds}")
+        if self.tolerance_nanoseconds < 0:
+            raise ValueError(
+                f"tolerance_nanoseconds must be >= 0, got {self.tolerance_nanoseconds}"
+            )
 
 
 @dataclass(frozen=True)
@@ -63,14 +65,14 @@ class ModalityAssociation:
             ``None`` when no candidate satisfied the tolerance window. A
             ``None`` here is an explicit "no match", never a silently
             dropped association.
-        offset_seconds: Signed offset, in seconds, of ``observation``'s
+        offset_nanoseconds: Signed exact offset, in nanoseconds, of ``observation``'s
             normalized timestamp relative to the anchor
             (``observation - anchor``). ``None`` when ``observation`` is
             ``None``.
     """
 
     observation: SourceObservation | None
-    offset_seconds: float | None
+    offset_nanoseconds: int | None
 
 
 @dataclass(frozen=True)
@@ -108,7 +110,7 @@ class DroppedEvent:
         reason: ``"clock_id_mismatch"`` when the event never shared a clock
             domain with any anchor event, or ``"no_anchor_within_tolerance"``
             when it shared a clock domain with at least one anchor but was
-            never the closest candidate within ``tolerance_seconds``.
+            never the closest candidate within ``tolerance_nanoseconds``.
     """
 
     observation: SourceObservation
@@ -116,15 +118,30 @@ class DroppedEvent:
 
 
 @dataclass(frozen=True)
+class SynchronizationDecision:
+    """One auditable association decision for an anchor and modality."""
+
+    frame_index: int
+    anchor_observation_id: str
+    modality: str
+    selected_observation_id: str | None
+    offset_nanoseconds: int | None
+    status: str
+
+
+@dataclass(frozen=True)
 class SynchronizationDiagnostics:
-    """Auditable record of synchronization decisions that were not a match.
+    """Auditable record of synchronization decisions and dropped events.
 
     Attributes:
         dropped_events: Every non-reference-modality event that did not
             join any processing observation, with why.
+        decisions: One decision per anchor and non-reference modality,
+            including successful and unsuccessful associations.
     """
 
     dropped_events: Sequence[DroppedEvent]
+    decisions: Sequence[SynchronizationDecision]
 
 
 def synchronize(
@@ -138,7 +155,7 @@ def synchronize(
     ascending normalized-timestamp order; ties are broken by
     ``observation_id`` for determinism. For every other modality, the
     closest event sharing the anchor's clock domain is selected, when one
-    exists within ``config.tolerance_seconds``. A candidate may be selected
+    exists within ``config.tolerance_nanoseconds``. A candidate may be selected
     by more than one anchor (selection does not consume events); an event is
     only reported as dropped when no anchor ever selects it.
 
@@ -161,33 +178,53 @@ def synchronize(
     anchors = sorted(
         by_modality[config.reference_modality],
         key=lambda observation: (
-            observation.timestamp.to_float_seconds(),
+            observation.timestamp.total_nanoseconds(),
             str(observation.observation_id),
         ),
     )
 
     other_modalities = sorted(MODALITY_NAMES - {config.reference_modality})
     selected_ids: dict[str, set[str]] = {name: set() for name in other_modalities}
-    seen_clock_ids: dict[str, set[str]] = {name: set() for name in other_modalities}
-
     processing_observations: list[ProcessingObservation] = []
+    decisions: list[SynchronizationDecision] = []
     for frame_index, anchor in enumerate(anchors):
         associations: dict[str, ModalityAssociation] = {
-            config.reference_modality: ModalityAssociation(observation=anchor, offset_seconds=0.0)
+            config.reference_modality: ModalityAssociation(observation=anchor, offset_nanoseconds=0)
         }
         for modality in other_modalities:
             best = _closest_within_tolerance(
-                anchor, by_modality[modality], config.tolerance_seconds
+                anchor, by_modality[modality], config.tolerance_nanoseconds
             )
             if best is not None:
-                candidate, offset_seconds = best
+                candidate, offset_nanoseconds = best
                 selected_ids[modality].add(str(candidate.observation_id))
-                seen_clock_ids[modality].add(candidate.timestamp.clock_id)
                 associations[modality] = ModalityAssociation(
-                    observation=candidate, offset_seconds=offset_seconds
+                    observation=candidate, offset_nanoseconds=offset_nanoseconds
+                )
+                decisions.append(
+                    SynchronizationDecision(
+                        frame_index=frame_index,
+                        anchor_observation_id=str(anchor.observation_id),
+                        modality=modality,
+                        selected_observation_id=str(candidate.observation_id),
+                        offset_nanoseconds=offset_nanoseconds,
+                        status="matched",
+                    )
                 )
             else:
-                associations[modality] = ModalityAssociation(observation=None, offset_seconds=None)
+                associations[modality] = ModalityAssociation(
+                    observation=None, offset_nanoseconds=None
+                )
+                decisions.append(
+                    SynchronizationDecision(
+                        frame_index=frame_index,
+                        anchor_observation_id=str(anchor.observation_id),
+                        modality=modality,
+                        selected_observation_id=None,
+                        offset_nanoseconds=None,
+                        status=_missing_status(anchor, by_modality[modality]),
+                    )
+                )
 
         processing_observations.append(
             ProcessingObservation(
@@ -212,32 +249,51 @@ def synchronize(
             )
             dropped_events.append(DroppedEvent(observation=observation, reason=reason))
 
-    return processing_observations, SynchronizationDiagnostics(dropped_events=tuple(dropped_events))
+    return processing_observations, SynchronizationDiagnostics(
+        dropped_events=tuple(dropped_events),
+        decisions=tuple(decisions),
+    )
 
 
 def _closest_within_tolerance(
     anchor: SourceObservation,
     candidates: Sequence[SourceObservation],
-    tolerance_seconds: float,
-) -> tuple[SourceObservation, float] | None:
+    tolerance_nanoseconds: int,
+) -> tuple[SourceObservation, int] | None:
     anchor_clock_id = anchor.timestamp.clock_id
-    anchor_seconds = anchor.timestamp.to_float_seconds()
+    anchor_nanoseconds = anchor.timestamp.total_nanoseconds()
 
-    best: tuple[SourceObservation, float] | None = None
-    best_abs_offset = float("inf")
+    best: tuple[SourceObservation, int] | None = None
+    best_abs_offset: int | None = None
     for candidate in candidates:
         if candidate.timestamp.clock_id != anchor_clock_id:
             continue
-        offset_seconds = candidate.timestamp.to_float_seconds() - anchor_seconds
-        abs_offset = abs(offset_seconds)
-        if abs_offset > tolerance_seconds:
+        offset_nanoseconds = candidate.timestamp.total_nanoseconds() - anchor_nanoseconds
+        abs_offset = abs(offset_nanoseconds)
+        if abs_offset > tolerance_nanoseconds:
             continue
-        if abs_offset < best_abs_offset or (
-            abs_offset == best_abs_offset
-            and best is not None
-            and str(candidate.observation_id) < str(best[0].observation_id)
+        if (
+            best_abs_offset is None
+            or abs_offset < best_abs_offset
+            or (
+                abs_offset == best_abs_offset
+                and best is not None
+                and str(candidate.observation_id) < str(best[0].observation_id)
+            )
         ):
-            best = (candidate, offset_seconds)
+            best = (candidate, offset_nanoseconds)
             best_abs_offset = abs_offset
 
     return best
+
+
+def _missing_status(
+    anchor: SourceObservation,
+    candidates: Sequence[SourceObservation],
+) -> str:
+    """Classify why one anchor/modality association has no selected candidate."""
+    if not candidates:
+        return "no_candidate"
+    if not any(item.timestamp.clock_id == anchor.timestamp.clock_id for item in candidates):
+        return "clock_id_mismatch"
+    return "outside_tolerance"

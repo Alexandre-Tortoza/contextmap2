@@ -16,6 +16,8 @@ Este documento descreve `src/contextmap/ingestion/calibration.py`: o contrato ca
 
 `CalibrationSet.static_transforms` contém **apenas** transforms que não mudam durante a sequência — tipicamente extrínsecos físicos entre sensores rigidamente montados no mesmo corpo (ex.: câmera → base_link). Um frame cuja pose muda ao longo do tempo (ex.: robô no mundo) **não é calibração** — é reportado por timestamp como `ExternalPoseMeasurement` no stream temporal de observações (issue #38). Esta é uma decisão explícita desta issue: calibração é responsável por relações fixas, não por trajetória.
 
+Adapters que não decodificam TF recebem esses extrínsecos como `SourceAdapterConfig.calibration`. A calibração fornecida é mesclada com intrínsecos descobertos na fonte; conflitos por sensor falham explicitamente. Cada observação cujo `sensor_id` tem uma entrada correspondente carrega o respectivo `calibration_id`, preservando a ligação sem estado implícito.
+
 ## `CalibrationEntry` e `SourceObservation.calibration_id`
 
 Cada `CalibrationEntry` tem um `calibration_id` (`CalibrationReferenceId`, já definido pela issue #38) que uma `SourceObservation.calibration_id` referencia. Uma entrada pode não ter `camera_model` (ex.: um LiDAR tem identidade de frame e provenance de calibração, mas nenhum modelo de câmera).

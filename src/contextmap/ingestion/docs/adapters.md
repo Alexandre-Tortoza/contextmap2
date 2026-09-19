@@ -14,9 +14,7 @@ Toda assinatura de `SourceAdapter` retorna apenas contratos canônicos (`SourceO
 
 Implementações concretas (`Ros1BagSourceAdapter`, issue #44; `Ros2BagSourceAdapter`, issue #45) devem viver em `src/contextmap/ingestion/adapters/<nome>.py`. Isso não é apenas convenção — é **imposto** por `tests/architecture/test_boundaries.py`: `HEAVY_SDK_ROOTS` (`rclpy`, `rosbag`, `rosbag2_py`, `torch`, `transformers`, `segment_anything`) só pode ser importado dentro de `backends/`, `infrastructure/` ou `adapters/` de uma capability. Este módulo (`source_adapter.py`) fica na raiz de `ingestion` porque o `Protocol` em si não depende de nenhuma dessas bibliotecas — só as implementações concretas dependem.
 
-Consequência prática: quem só lê um `SequenceArtifact` já persistido (issue #39) nunca precisa instalar ROS 1, ROS 2 ou qualquer SDK de fonte — essas dependências ficam isoladas em `adapters/`, e o próprio `pyproject.toml` pode declará-las como extras opcionais quando os adapters concretos forem implementados.
-
-O diretório `adapters/` não é criado por esta issue — só passa a existir quando a primeira implementação concreta (#44) precisar dele, para não antecipar estrutura vazia (`docs/development.md`, YAGNI).
+Consequência prática: quem só lê um `SequenceArtifact` já persistido nunca precisa instalar ROS 1, ROS 2 ou qualquer SDK de fonte — essas dependências ficam isoladas em `adapters/`, e `pyproject.toml` as declara como extra opcional.
 
 ## Configuração: `SourceAdapterConfig`
 
@@ -26,6 +24,7 @@ Forma comum a todos os adapters, alinhada ao YAML mostrado nas issues #44/#45:
 source:
   type: ros1_bag       # SourceAdapterConfig.source_type
   path: data/example.bag  # SourceAdapterConfig.path
+  timestamp_clock_id: robot-clock  # opcional; compartilhado entre os headers
   topics:                    # SourceAdapterConfig.topics (SourceTopicMapping)
     rgb: /camera/image_raw
     camera_info: /camera/camera_info
@@ -35,6 +34,8 @@ source:
 ```
 
 `required_topics` (ex.: `{"rgb", "lidar"}`) declara quais campos de `topics` são obrigatórios — se ausentes na fonte real, o adapter levanta `MissingRequiredTopicError` em vez de simplesmente pular a modalidade em silêncio.
+
+`timestamp_clock_id` identifica o domínio de clock de `header.stamp` compartilhado pelos tópicos configurados. Quando omitido, o adapter deriva uma identidade determinística da família e do path da fonte. O timestamp de gravação do bag permanece separado na provenance. `calibration` recebe um `CalibrationSet` canônico opcional, inclusive extrínsecos estáticos que não estejam representados por `CameraInfo`.
 
 Configuração específica de um adapter que não cabe na forma comum (ex.: identidade de storage/serialização do ROS 2) vai em `SourceAdapterConfig.extra`, em vez de a fronteira crescer um campo por família de adapter — mantém o contrato pequeno o suficiente para não precisar de um sistema de plugins genérico.
 
@@ -49,4 +50,4 @@ Configuração específica de um adapter que não cabe na forma comum (ex.: iden
 
 ## Mesmo boundary para ROS 1 e ROS 2
 
-Qualquer classe que implemente `capabilities()`, `read_observations()` e `warnings()` satisfaz `SourceAdapter` (`Protocol` com `@runtime_checkable`) — código downstream nunca precisa de `if isinstance(adapter, Ros1BagSourceAdapter)` ou qualquer branch por versão de ROS.
+Qualquer classe que implemente `capabilities()`, `read_observations()`, `read_calibration()` e `warnings()` satisfaz `SourceAdapter` (`Protocol` com `@runtime_checkable`) — código downstream nunca precisa de `if isinstance(adapter, Ros1BagSourceAdapter)` ou qualquer branch por versão de ROS.

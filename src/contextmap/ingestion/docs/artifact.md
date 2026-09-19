@@ -21,7 +21,10 @@ workspace/
             │   └── provenance.json        # opcional, ver provenance.md
             └── diagnostics/
                 ├── summary.json            # opcional, ver diagnostics.md
-                └── warnings.jsonl          # opcional, ver diagnostics.md
+                ├── warnings.jsonl          # opcional, ver diagnostics.md
+                ├── synchronization.jsonl   # opcional, decisões por associação
+                ├── dropped-events.jsonl    # opcional, eventos não selecionados
+                └── frame-graph.json        # opcional, inventário de frames
 ```
 
 O path não é o contrato semântico — `manifest.json` é o ponto autoritativo, conforme `docs/ARTIFACTS.md`.
@@ -29,7 +32,7 @@ O path não é o contrato semântico — `manifest.json` é o ponto autoritativo
 ## Decisões desta issue (v0)
 
 - **Índice em JSON Lines, não Parquet.** O documento da issue cita `index.parquet` como candidato, mas `pyproject.toml` ainda não tem nenhuma dependência de runtime (`dependencies = []`). Adicionar `pyarrow`/`pandas` só para o índice não se justifica no v0 (YAGNI); `index.jsonl` é inspecionável com ferramentas de texto padrão e não introduz dependência nova. Revisitar se o volume de observações tornar leitura linha-a-linha um gargalo real.
-- **IMU e pose externa ficam inline no índice.** Esses registros são pequenos (poucos floats); não há payload binário grande a separar, então não existem diretórios `imu/`/`external_pose/` no v0.
+- **IMU e pose externa ficam inline no índice.** Esses registros são pequenos; vetores, covariâncias 3×3/6×6 e twist não justificam payload binário separado, então não existem diretórios `imu/`/`external_pose`.
 - **`calibration/`, `provenance/` e `diagnostics/` são opcionais, populados apenas quando `set_calibration()`/`set_provenance()`/`set_diagnostics()` são chamados** (issues #41, #46 e #47, respectivamente).
 - **Identidade de conteúdo** é responsabilidade de `contextmap.ingestion.sequence_provenance` (#46), não deste módulo — o manifest só registra hash/tamanho por arquivo (suficiente para detectar corrupção); regras de "mesma fonte + mesma configuração" vivem em `provenance.json`, ver [`provenance.md`](provenance.md).
 
@@ -39,7 +42,7 @@ O path não é o contrato semântico — `manifest.json` é o ponto autoritativo
 {
   "artifact_id": "…",
   "sequence_name": "…",
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "created_at": "2026-01-01T00:00:00+00:00",
   "observation_counts": {"image": 2, "lidar": 1, "imu": 1, "external_pose": 1},
   "file_inventory": [

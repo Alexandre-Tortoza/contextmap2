@@ -21,6 +21,7 @@ from contextmap.ingestion.calibration import (
     validate_calibration_set,
 )
 from contextmap.ingestion.diagnostics import (
+    FrameGraphDiagnostics,
     ModalitySummary,
     SequenceDiagnostics,
     SequenceSummary,
@@ -29,6 +30,8 @@ from contextmap.ingestion.diagnostics import (
 from contextmap.ingestion.models import (
     MODALITY_NAMES,
     CalibrationReferenceId,
+    Covariance3x3,
+    Covariance6x6,
     ExternalPoseMeasurement,
     FrameId,
     ImageEncoding,
@@ -87,6 +90,7 @@ from contextmap.ingestion.synchronization import (
     ModalityAssociation,
     ProcessingObservation,
     SynchronizationConfig,
+    SynchronizationDecision,
     SynchronizationDiagnostics,
     synchronize,
 )
@@ -106,11 +110,14 @@ __all__ = [
     "CalibrationReferenceId",
     "CalibrationSet",
     "CameraModel",
+    "Covariance3x3",
+    "Covariance6x6",
     "DistortionModel",
     "DroppedEvent",
     "ExplicitIdsSelection",
     "ExternalPoseMeasurement",
     "FisheyeCameraModel",
+    "FrameGraphDiagnostics",
     "FrameId",
     "FrameRangeSelection",
     "FullSequenceSelection",
@@ -150,6 +157,7 @@ __all__ = [
     "SourceProvenance",
     "SourceTopicMapping",
     "SynchronizationConfig",
+    "SynchronizationDecision",
     "SynchronizationDiagnostics",
     "TimestampRangeSelection",
     "UnsupportedSourceMessageError",
