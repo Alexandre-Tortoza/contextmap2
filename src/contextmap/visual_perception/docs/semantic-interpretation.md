@@ -59,3 +59,24 @@ sem persistir objetos nativos de Qwen, Gemini ou Florence-2.
 
 O template e o parser versionados são definidos separadamente; este contrato
 apenas torna explícita a entrada que eles recebem.
+
+## Prompt e parsing versionados
+
+`SemanticPromptTemplate` identifica de forma inseparável o texto de instrução,
+o modo (`SCENE`/`REGION`) e o schema de saída. Os defaults `scene/v1` e
+`region/v1` produzem um `RenderedSemanticPrompt` determinístico, incluindo um
+fingerprint SHA-256 do texto efetivo. Template, modo e schema devem coincidir
+com o request antes da renderização.
+
+`parse_semantic_response()` aceita somente o objeto JSON do schema
+`semantic-response/1`. Ele preserva `PRIMARY`/`ALTERNATIVE`, ausência real de
+confidence, atributos escalares e campos estruturados de cena. Uma resposta de
+região precisa conter exatamente uma hipótese primária; abstention é explícita
+e não pode carregar claims escondidas.
+
+Campos inesperados, tipos inválidos, JSON malformado, confidence não finita ou
+fora de `[0, 1]` e conteúdo obrigatório ausente causam
+`SemanticResponseParseError`. A única reparação v1 é remover uma code fence JSON
+externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
+nunca completa labels, confidence ou atributos ausentes e registra o hash da
+resposta bruta separadamente dos outputs canônicos.
