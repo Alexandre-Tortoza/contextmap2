@@ -24,6 +24,11 @@ Máscara sempre usa nearest-neighbor para não fabricar valores intermediários 
 
 RGB e alpha percorrem a mesma view e chegam às mesmas dimensões de entrada. A `Region2D` original nunca é mutada.
 
+Depois do resize geométrico explícito, RGB recebe somente conversão
+HWC→CHW e normalização fotométrica CLIP; o preprocess retornado pelo SDK não
+executa uma segunda transformação geométrica. O runtime valida batch e
+dimensões espaciais de RGB/alpha antes da inferência.
+
 ## Espaço de embedding
 
 O contrato usa `family="alphaclip"` e `layer="alpha_conditioned_image_projection"`, com fingerprint combinado dos checkpoints base+alpha, dimensão real e normalização. Essa identidade é deliberadamente diferente de CLIP comum e DINO, mesmo quando a dimensão coincide.
@@ -44,6 +49,10 @@ Antes de carregar, o runtime calcula SHA-256 combinado e compara com `checkpoint
 ## Persistência e diagnósticos
 
 Cada vetor é enfileirado pelo sink compatível com `PerceptionRunWriter.add_feature_payload()` e reabre pelo `FeatureStoreReader` normal. `AlphaClipDiagnostics` preserva tempo, pico de memória quando disponível e warnings. A persistência consolidada de diagnóstico é escopo da issue #72.
+
+O composition root fornece `feature_stage_id`; seu SHA-256 participa do
+`FeatureId` e da referência de payload para impedir colisões com CLIP, DINO
+ou outro feature stage no mesmo `PerceptionResult`.
 
 ## Validação desta implementação
 
