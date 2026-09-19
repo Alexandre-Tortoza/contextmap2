@@ -22,11 +22,13 @@ from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
 )
-from contextmap.visual_perception.identity import feature_id_for, perception_result_id_for
+from contextmap.visual_perception.identity import perception_result_id_for
 from contextmap.visual_perception.models import (
     BackendProvenance,
     BoundingBox2D,
+    FeatureId,
     FeatureScope,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -230,6 +232,7 @@ class ClipVisualFeatureBackend:
         *,
         config: ClipConfig,
         run_id: PerceptionRunId,
+        feature_stage_id: str,
         payload_sink: FeaturePayloadSink,
         runtime: ClipRuntime | None = None,
         prepared_image_root: Path | None = None,
@@ -237,10 +240,13 @@ class ClipVisualFeatureBackend:
         """Create a configured CLIP visual adapter."""
         if not str(run_id):
             raise ValueError("run_id must not be empty")
+        if not feature_stage_id:
+            raise ValueError("feature_stage_id must not be empty")
         if runtime is None and prepared_image_root is None:
             raise ValueError("prepared_image_root is required for the default runtime")
         self._config = config
         self._run_id = run_id
+        self._feature_stage_id = feature_stage_id
         self._payload_sink = payload_sink
         self._runtime = runtime or HuggingFaceClipRuntime(
             config=config,
@@ -307,7 +313,11 @@ class ClipVisualFeatureBackend:
         )
         features: list[VisualFeature] = []
         for index, view in enumerate(views):
-            feature_id = feature_id_for(result_id=result_id, index=index)
+            feature_id = _feature_id_for_stage(
+                result_id=result_id,
+                feature_stage_id=self._feature_stage_id,
+                index=index,
+            )
             feature = VisualFeature(
                 feature_id=feature_id,
                 scope=self._config.scope,
@@ -555,6 +565,14 @@ def _configuration_fingerprint(config: ClipConfig) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _feature_id_for_stage(
+    *, result_id: PerceptionResultId, feature_stage_id: str, index: int
+) -> FeatureId:
+    """Namespace a feature identity by the composing pipeline stage."""
+    stage_digest = hashlib.sha256(feature_stage_id.encode("utf-8")).hexdigest()
+    return FeatureId(f"{result_id}--feature-stage-{stage_digest}-{index:04d}")
 
 
 def _view_provenance(config: ClipConfig, view: ClipView) -> BackendProvenance:
