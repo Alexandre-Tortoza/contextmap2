@@ -32,7 +32,7 @@ from contextmap.visual_perception.models import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-POOLING_POLICY = "mask_weighted_mean_v1"
+POOLING_POLICY = "mask_weighted_mean_preserve_l2_v2"
 """Versioned policy used by :func:`pool_region_feature`."""
 
 
@@ -306,7 +306,8 @@ class RegionPoolingResult:
         vector: Pooled one-dimensional vector, with the dense payload dtype.
         embedding_space_id: Exact space inherited from the source feature.
         dtype: Exact dtype inherited from the source feature and output vector.
-        normalization: Normalization inherited unchanged from the source feature.
+        normalization: Normalization preserved from the source feature. An L2
+            declaration causes the pooled vector to be renormalized.
         diagnostics: Spatial support statistics for this operation.
         provenance: Source feature, region, policy, and transform lineage.
     """
@@ -461,7 +462,15 @@ def pool_region_feature(
             f"{feature.feature_id!r}"
         )
 
-    vector = (weighted_sum / total_weight).astype(array.dtype, copy=False)
+    pooled_vector = weighted_sum / total_weight
+    if feature.normalization == "l2":
+        vector_norm = float(np.linalg.norm(pooled_vector))
+        if not math.isfinite(vector_norm) or vector_norm == 0.0:
+            raise RegionAssociationError(
+                "cannot preserve l2 normalization for a zero or non-finite pooled vector"
+            )
+        pooled_vector = pooled_vector / vector_norm
+    vector = pooled_vector.astype(array.dtype, copy=False)
     covered_count = int(np.count_nonzero(covered_mask))
     diagnostics = RegionPoolingDiagnostics(
         cell_row_range=(row_start, row_end),
@@ -576,7 +585,7 @@ def _pooling_provenance(
         capability="feature_extractor",
         provider="contextmap",
         model=POOLING_POLICY,
-        version="1",
+        version="2",
         configuration_fingerprint=fingerprint,
     )
     return RegionPoolingProvenance(

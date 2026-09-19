@@ -19,6 +19,8 @@ from contextmap.visual_perception import (
     FeatureExtractionDiagnostic,
     FeatureId,
     FeatureScope,
+    PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     PerceptionRunReader,
     PerceptionRunWriter,
@@ -168,6 +170,16 @@ def test_debug_none_keeps_contractual_payload_and_required_metrics(tmp_path: Pat
         SourceObservationId("frame-0001"),
         np.ones((2, 2), dtype=np.float32),
     )
+    writer.add_result(
+        PerceptionResult(
+            result_id=PerceptionResultId("run-0001--frame-0001"),
+            source_observation_id=SourceObservationId("frame-0001"),
+            run_id=PerceptionRunId("run-0001"),
+            sequence_artifact_id="corridor-artifact",
+            created_at="2026-01-01T00:00:00+00:00",
+            features=(feature,),
+        )
+    )
     writer.add_feature_diagnostic(_dense_diagnostic())
     writer.finalize()
 
@@ -179,7 +191,10 @@ def test_debug_none_keeps_contractual_payload_and_required_metrics(tmp_path: Pat
     assert record["duration_seconds"] == 0.2
     assert record["peak_memory_bytes"] == 2048
     reader = PerceptionRunReader(run_dir)
-    np.testing.assert_array_equal(reader.feature_store().load(feature.feature_id), np.ones((2, 2)))
+    np.testing.assert_array_equal(
+        reader.feature_store().load(SourceObservationId("frame-0001"), feature.feature_id),
+        np.ones((2, 2)),
+    )
     assert reader.verify_integrity() == []
 
 

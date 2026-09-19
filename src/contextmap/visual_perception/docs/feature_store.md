@@ -8,14 +8,14 @@ Cada payload é um arquivo `.npy` (formato nativo do NumPy) — preserva shape/d
 
 ## NumPy nunca na fronteira pública, mas livre internamente
 
-`docs/shared-primitives.md` estabelece que primitivas públicas compartilhadas não devem exigir `numpy.ndarray` como identidade do contrato — e `VisualFeature` já obedece isso (`shape`/`dtype` são primitivos). Este módulo é a exceção esperada: cálculos/implementação internos de uma capability podem usar NumPy livremente. Para minimizar o alcance dessa dependência, `import numpy as np` só acontece **dentro** de `FeatureStoreWriter.write()` e `FeatureStoreReader.load()` — abrir um run, listar `feature_ids()`, ou ler um `FeaturePayloadEntry` nunca importa NumPy.
+`docs/shared-primitives.md` estabelece que primitivas públicas compartilhadas não devem exigir `numpy.ndarray` como identidade do contrato — e `VisualFeature` já obedece isso (`shape`/`dtype` são primitivos). Este módulo é a exceção esperada: cálculos/implementação internos de uma capability podem usar NumPy livremente. Para minimizar o alcance dessa dependência, `import numpy as np` só acontece **dentro** de `FeatureStoreWriter.write()` e `FeatureStoreReader.load()` — abrir um run, listar `feature_keys()`, ou ler um `FeaturePayloadEntry` nunca importa NumPy.
 
 ## Layout no artefato de run
 
 ```text
 outputs/
 └── features/
-    ├── feature-index.jsonl              # um FeaturePayloadEntry por linha
+    ├── feature-index.jsonl              # header de schema + um FeaturePayloadEntry por linha
     └── frame-000120/
         ├── dense-<feature-id>.npy
         └── region-0001-<feature-id>.npy
@@ -25,7 +25,9 @@ O caminho exato de cada payload é `feature.payload_reference` — o mesmo valor
 
 ## Metadados sem carregar o array
 
-`FeatureStoreReader.open(root)` lê apenas `feature-index.jsonl`. `entry(feature_id)` devolve um `FeaturePayloadEntry` (shape, dtype, embedding_space_id, hash, proveniência) sem tocar o arquivo `.npy`. Só `load(feature_id)` lê e decodifica o payload — e persistir um payload é opt-in por feature: um `VisualFeature` sem `add_feature_payload()` correspondente ainda aparece normalmente em `outputs/results.jsonl`, só não tem array carregável nesse run.
+`FeatureStoreReader.open(root)` lê apenas `feature-index.jsonl`. A primeira linha identifica explicitamente `record_type="feature_index"` e `schema_version`; versões desconhecidas são rejeitadas antes de decodificar entradas. `entry(source_observation_id, feature_id)` devolve um `FeaturePayloadEntry` (shape, dtype, embedding_space_id, hash, proveniência) sem tocar o arquivo `.npy`. Só `load(source_observation_id, feature_id)` lê e decodifica o payload — e persistir um payload é opt-in por feature: um `VisualFeature` sem `add_feature_payload()` correspondente ainda aparece normalmente em `outputs/results.jsonl`, só não tem array carregável nesse run.
+
+A chave do store é `(source_observation_id, feature_id)`, porque `FeatureId` é local a um `PerceptionResult` e pode se repetir em frames diferentes do mesmo run. Writer e reader rejeitam chaves duplicadas e colisões de `payload_reference`; nenhuma entrada pode sobrescrever outra silenciosamente.
 
 ## Integridade
 
@@ -39,7 +41,7 @@ Toda referência de caminho é resolvida e validada como estritamente dentro do 
 
 ## Integração com `PerceptionRunArtifact`
 
-`PerceptionRunWriter.add_feature_payload(feature, source_observation_id, array)` enfileira o payload (mesmo padrão de `add_result`/`add_stage_outcomes`: nada toca o disco antes de `finalize()`, preservando a escrita atômica já estabelecida em `run_artifact.md`). `finalize()` grava cada payload e `feature-index.jsonl`, e adiciona cada arquivo ao `file_inventory` do manifest — `verify_integrity()` já cobre os payloads de feature pelo mesmo mecanismo genérico usado para `outputs/results.jsonl`, sem precisar de uma checagem separada.
+`PerceptionRunWriter.add_feature_payload(feature, source_observation_id, array)` enfileira o payload (mesmo padrão de `add_result`/`add_stage_outcomes`: nada toca o disco antes de `finalize()`, preservando a escrita atômica já estabelecida em `run_artifact.md`). Antes de escrever, `finalize()` exige que cada payload resolva para exatamente um `VisualFeature` de `outputs/results.jsonl` na mesma observação e compara scope, embedding space, shape, dtype, normalização e referência. Depois grava cada payload e `feature-index.jsonl`, e adiciona cada arquivo ao `file_inventory` do manifest.
 
 `PerceptionRunReader.feature_store()` abre o `FeatureStoreReader` de um run; quando nenhum payload foi persistido, devolve um reader vazio (não é erro).
 

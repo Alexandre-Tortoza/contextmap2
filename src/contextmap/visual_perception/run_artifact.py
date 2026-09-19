@@ -42,7 +42,12 @@ from contextmap.visual_perception.feature_store import (
     FeatureStoreWriter,
     write_feature_index,
 )
-from contextmap.visual_perception.models import PerceptionResult, PerceptionRunId, VisualFeature
+from contextmap.visual_perception.models import (
+    FeatureId,
+    PerceptionResult,
+    PerceptionRunId,
+    VisualFeature,
+)
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
 from contextmap.visual_perception.serialization import (
     decode_perception_result,
@@ -308,6 +313,7 @@ class PerceptionRunWriter:
             raise RunArtifactError("writer already finalized")
         if self._final_dir.exists():
             raise RunArtifactError(f"perception run artifact already exists: {self._final_dir}")
+        self._validate_feature_payload_references()
 
         self._tmp_dir.mkdir(parents=True, exist_ok=False)
         try:
@@ -325,6 +331,43 @@ class PerceptionRunWriter:
 
         self._finalized = True
         return manifest
+
+    def _validate_feature_payload_references(self) -> None:
+        """Require each queued payload to match one feature in its owning result."""
+        features_by_key: dict[tuple[SourceObservationId, FeatureId], list[VisualFeature]] = {}
+        for result in self._results:
+            for feature in result.features:
+                key = (result.source_observation_id, feature.feature_id)
+                features_by_key.setdefault(key, []).append(feature)
+
+        metadata_fields = (
+            "scope",
+            "embedding_space_id",
+            "shape",
+            "dtype",
+            "normalization",
+            "payload_reference",
+        )
+        for feature, source_observation_id, _array in self._feature_payloads:
+            key = (source_observation_id, feature.feature_id)
+            matches = features_by_key.get(key, [])
+            if len(matches) != 1:
+                raise RunArtifactError(
+                    "queued feature payload does not resolve to exactly one result feature: "
+                    f"source_observation_id={source_observation_id!r}, "
+                    f"feature_id={feature.feature_id!r}, matches={len(matches)}"
+                )
+            result_feature = matches[0]
+            for field_name in metadata_fields:
+                queued_value = getattr(feature, field_name)
+                result_value = getattr(result_feature, field_name)
+                if queued_value != result_value:
+                    raise RunArtifactError(
+                        "queued feature payload metadata disagrees with result feature: "
+                        f"{field_name} {queued_value!r} != {result_value!r} for "
+                        f"source_observation_id={source_observation_id!r}, "
+                        f"feature_id={feature.feature_id!r}"
+                    )
 
     def _write_contents(self) -> RunArtifactManifest:
         file_entries: list[RunArtifactFileEntry] = []
@@ -435,7 +478,7 @@ class PerceptionRunReader:
 
         Returns:
             A reader over ``outputs/features/`` — empty (no
-            ``feature_ids()``) when this run never persisted a feature
+            ``feature_keys()``) when this run never persisted a feature
             payload, since persisting is opt-in per feature (see
             :meth:`PerceptionRunWriter.add_feature_payload`).
         """

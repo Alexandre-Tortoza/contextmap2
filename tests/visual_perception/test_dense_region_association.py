@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -187,7 +189,45 @@ def test_box_only_pooling_uses_the_same_weighted_mean_policy() -> None:
     np.testing.assert_array_equal(result.vector, np.array([7.5], dtype=np.float32))
     assert result.diagnostics.contributing_cell_count == 4
     assert result.diagnostics.total_weight == 16
-    assert result.provenance.pooling_policy == "mask_weighted_mean_v1"
+    assert result.provenance.pooling_policy == "mask_weighted_mean_preserve_l2_v2"
+
+
+def test_pooling_renormalizes_l2_vectors_to_preserve_embedding_space() -> None:
+    dense_map = _dense_map()
+    l2_feature = replace(
+        dense_map.feature,
+        shape=(4, 4, 2),
+        normalization="l2",
+    )
+    l2_map = replace(dense_map, feature=l2_feature)
+    array = np.zeros((4, 4, 2), dtype=np.float32)
+    array[:, :2, 0] = 1.0
+    array[:, 2:, 1] = 1.0
+
+    result = pool_region_feature(array, dense_map=l2_map, region=_region())
+
+    np.testing.assert_allclose(
+        result.vector,
+        np.array([2**-0.5, 2**-0.5], dtype=np.float32),
+        rtol=1e-6,
+    )
+    assert np.linalg.norm(result.vector) == pytest.approx(1.0)
+    assert result.normalization == "l2"
+    assert result.provenance.pooling_policy == "mask_weighted_mean_preserve_l2_v2"
+
+
+def test_pooling_rejects_zero_vector_when_l2_normalization_must_be_preserved() -> None:
+    dense_map = _dense_map()
+    l2_map = replace(
+        dense_map,
+        feature=replace(dense_map.feature, shape=(4, 4, 2), normalization="l2"),
+    )
+    array = np.zeros((4, 4, 2), dtype=np.float32)
+    array[:, :2, 0] = 1.0
+    array[:, 2:, 0] = -1.0
+
+    with pytest.raises(RegionAssociationError, match="cannot preserve l2 normalization"):
+        pool_region_feature(array, dense_map=l2_map, region=_region())
 
 
 def test_tiny_boundary_mask_is_clipped_to_source_image() -> None:

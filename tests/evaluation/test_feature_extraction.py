@@ -260,6 +260,22 @@ def test_evaluation_rejects_numerical_and_compatibility_regressions(
         )
 
 
+def test_evaluation_rejects_normalization_metadata_contradiction() -> None:
+    dense_map = _dense_map()
+    contradictory_feature = replace(dense_map.feature, normalization="none")
+
+    with pytest.raises(FeatureEvaluationError, match="normalization metadata"):
+        evaluate_feature_payload(
+            _unit_payload(),
+            feature=contradictory_feature,
+            embedding_space=_SPACE,
+            context=_context(),
+            dense_map=replace(dense_map, feature=contradictory_feature),
+            duration_seconds=0.1,
+            peak_memory_bytes=128,
+        )
+
+
 def test_repeatability_compares_output_metadata_and_payload_but_not_cost() -> None:
     first_map = _dense_map(feature_id="dense-run-a")
     second_map = replace(
@@ -392,8 +408,10 @@ def test_persisted_payload_can_be_loaded_lazily_and_evaluated(tmp_path: Path) ->
     write_feature_index(tmp_path, writer.entries())
 
     reader = FeatureStoreReader.open(tmp_path)
-    assert reader.entry(dense_map.feature.feature_id).shape == dense_map.feature.shape
-    loaded = reader.load(dense_map.feature.feature_id)
+    observation_id = SourceObservationId("frame-0001")
+    entry = reader.entry(observation_id, dense_map.feature.feature_id)
+    assert entry.shape == dense_map.feature.shape
+    loaded = reader.load(observation_id, dense_map.feature.feature_id)
     report = _evaluate(dense_map, loaded)
 
     assert report.payload_hash.startswith("sha256:")

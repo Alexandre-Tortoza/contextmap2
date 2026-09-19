@@ -16,12 +16,13 @@ Stride e suporte são campos distintos. Assim, o mesmo contrato representa grids
 
 ## Política determinística de pooling
 
-`pool_region_feature()` usa a política versionada `mask_weighted_mean_v1`:
+`pool_region_feature()` usa a política versionada `mask_weighted_mean_preserve_l2_v2`:
 
 1. calcula as células cujo suporte espacial intersecta o bounding box;
 2. recorta cada suporte contra o box e os limites da imagem preparada;
 3. conta os pixels verdadeiros da máscara local cobertos por cada célula;
-4. usa essa contagem como peso na média dos vetores das células.
+4. usa essa contagem como peso na média dos vetores das células;
+5. quando o espaço declara `normalization="l2"`, renormaliza a média para norma unitária e rejeita um resultado zero ou não finito.
 
 Quando não há máscara, uma máscara implícita totalmente verdadeira com o tamanho do box é usada. Portanto regiões com máscara, regiões somente com box, mapas nativos e mapas enhanced percorrem exatamente a mesma implementação.
 
@@ -41,7 +42,7 @@ Não se produz vetor zero nem NaN silencioso para suporte vazio.
 
 `RegionPoolingDiagnostics` preserva intervalos de células candidatas, número de células contribuintes, peso total e fração dos pixels solicitados cobertos por ao menos uma célula válida. Em geometrias com suportes sobrepostos, `total_weight` pode ser maior que o número de pixels únicos; `coverage_fraction` usa a união dos pixels cobertos e permanece entre zero e um.
 
-`RegionPoolingProvenance` registra explicitamente o artefato, `feature_id` e `payload_reference` de origem, `region_id`, referência e hash de conteúdo da máscara decodificada (quando usada), política de pooling, identidade da transformação e fingerprint determinístico da configuração completa. O `RegionPoolingResult` herda sem alteração `embedding_space_id`, dtype e normalização do mapa denso; esta operação não compara nem combina espaços de embedding distintos.
+`RegionPoolingProvenance` registra explicitamente o artefato, `feature_id` e `payload_reference` de origem, `region_id`, referência e hash de conteúdo da máscara decodificada (quando usada), política de pooling, identidade da transformação e fingerprint determinístico da configuração completa. O `RegionPoolingResult` preserva `embedding_space_id`, dtype e a semântica de normalização do mapa denso; para `l2`, isso exige a renormalização explícita da média. Esta operação não compara nem combina espaços de embedding distintos.
 
 ## Trade-off explícito na rasterização
 

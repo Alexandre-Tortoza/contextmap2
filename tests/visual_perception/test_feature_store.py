@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +7,7 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    FEATURE_INDEX_SCHEMA_VERSION,
     BackendProvenance,
     FeatureId,
     FeaturePayloadIntegrityError,
@@ -55,11 +58,18 @@ def test_written_payload_round_trips_exactly(tmp_path: Path) -> None:
     entry = writer.write(feature, SourceObservationId("frame-0124"), array)
     write_feature_index(tmp_path, writer.entries())
 
-    reader = FeatureStoreReader.open(tmp_path)
-    assert reader.feature_ids() == (feature.feature_id,)
-    assert reader.entry(feature.feature_id) == entry
+    header = json.loads((tmp_path / "feature-index.jsonl").read_text().splitlines()[0])
+    assert header == {
+        "record_type": "feature_index",
+        "schema_version": FEATURE_INDEX_SCHEMA_VERSION,
+    }
 
-    loaded = reader.load(feature.feature_id)
+    reader = FeatureStoreReader.open(tmp_path)
+    observation_id = SourceObservationId("frame-0124")
+    assert reader.feature_keys() == ((observation_id, feature.feature_id),)
+    assert reader.entry(observation_id, feature.feature_id) == entry
+
+    loaded = reader.load(observation_id, feature.feature_id)
     np.testing.assert_array_equal(loaded, array)
     assert loaded.dtype == array.dtype
 
@@ -76,15 +86,89 @@ def test_multiple_dtypes_and_shapes_round_trip(tmp_path: Path) -> None:
     write_feature_index(tmp_path, writer.entries())
 
     reader = FeatureStoreReader.open(tmp_path)
-    np.testing.assert_array_equal(reader.load(dense.feature_id), dense_array)
-    np.testing.assert_array_equal(reader.load(region.feature_id), region_array)
+    observation_id = SourceObservationId("frame-0124")
+    np.testing.assert_array_equal(reader.load(observation_id, dense.feature_id), dense_array)
+    np.testing.assert_array_equal(reader.load(observation_id, region.feature_id), region_array)
 
 
 def test_opening_a_root_without_an_index_is_empty_not_an_error(tmp_path: Path) -> None:
     reader = FeatureStoreReader.open(tmp_path)
-    assert reader.feature_ids() == ()
+    assert reader.feature_keys() == ()
     with pytest.raises(FeatureStoreError, match="no persisted payload"):
-        reader.entry(FeatureId("does-not-exist"))
+        reader.entry(SourceObservationId("frame-0124"), FeatureId("does-not-exist"))
+
+
+def test_same_feature_id_in_different_observations_is_unambiguous(tmp_path: Path) -> None:
+    feature_id = FeatureId("feature-dense-0000")
+    first = _dense_feature(str(feature_id))
+    second = replace(first, payload_reference="frame-0125/feature-dense-0000.npy")
+    first_observation = SourceObservationId("frame-0124")
+    second_observation = SourceObservationId("frame-0125")
+    first_array = np.zeros((4, 4, 8), dtype="float32")
+    second_array = np.ones((4, 4, 8), dtype="float32")
+
+    writer = FeatureStoreWriter(tmp_path)
+    writer.write(first, first_observation, first_array)
+    writer.write(second, second_observation, second_array)
+    write_feature_index(tmp_path, writer.entries())
+
+    reader = FeatureStoreReader.open(tmp_path)
+    assert reader.feature_keys() == (
+        (first_observation, feature_id),
+        (second_observation, feature_id),
+    )
+    np.testing.assert_array_equal(reader.load(first_observation, feature_id), first_array)
+    np.testing.assert_array_equal(reader.load(second_observation, feature_id), second_array)
+
+
+def test_writer_rejects_duplicate_feature_key_and_payload_reference(tmp_path: Path) -> None:
+    feature = _dense_feature()
+    array = np.zeros((4, 4, 8), dtype="float32")
+    writer = FeatureStoreWriter(tmp_path)
+    writer.write(feature, SourceObservationId("frame-0124"), array)
+
+    with pytest.raises(FeatureStoreError, match="duplicate feature payload key"):
+        writer.write(
+            replace(feature, payload_reference="frame-0124/duplicate.npy"),
+            SourceObservationId("frame-0124"),
+            array,
+        )
+
+    with pytest.raises(FeatureStoreError, match="duplicate payload_reference"):
+        writer.write(feature, SourceObservationId("frame-0125"), array)
+
+
+def test_open_rejects_unsupported_feature_index_schema(tmp_path: Path) -> None:
+    index_path = tmp_path / "feature-index.jsonl"
+    index_path.write_text(
+        json.dumps({"record_type": "feature_index", "schema_version": "999.0.0"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FeatureStoreError, match="unsupported feature index schema_version"):
+        FeatureStoreReader.open(tmp_path)
+
+
+def test_open_distinguishes_a_corrupt_entry_from_an_unsupported_schema(tmp_path: Path) -> None:
+    index_path = tmp_path / "feature-index.jsonl"
+    index_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "record_type": "feature_index",
+                        "schema_version": FEATURE_INDEX_SCHEMA_VERSION,
+                    }
+                ),
+                json.dumps({"feature_id": "missing-required-fields"}),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FeatureStoreError, match="invalid feature index entry at line 2"):
+        FeatureStoreReader.open(tmp_path)
 
 
 def test_write_rejects_shape_mismatch(tmp_path: Path) -> None:
@@ -131,7 +215,7 @@ def test_load_detects_missing_payload_file(tmp_path: Path) -> None:
 
     reader = FeatureStoreReader.open(tmp_path)
     with pytest.raises(FeatureStoreError, match="missing payload"):
-        reader.load(feature.feature_id)
+        reader.load(SourceObservationId("frame-0124"), feature.feature_id)
 
 
 def test_load_detects_content_hash_mismatch(tmp_path: Path) -> None:
@@ -146,7 +230,7 @@ def test_load_detects_content_hash_mismatch(tmp_path: Path) -> None:
 
     reader = FeatureStoreReader.open(tmp_path)
     with pytest.raises(FeaturePayloadIntegrityError, match="content hash mismatch"):
-        reader.load(feature.feature_id)
+        reader.load(SourceObservationId("frame-0124"), feature.feature_id)
 
 
 def test_load_detects_corrupt_payload(tmp_path: Path) -> None:
@@ -179,4 +263,4 @@ def test_load_detects_corrupt_payload(tmp_path: Path) -> None:
 
     reader = FeatureStoreReader(tmp_path, (corrupted_entry,))
     with pytest.raises(FeaturePayloadIntegrityError, match="unsupported or corrupt"):
-        reader.load(feature.feature_id)
+        reader.load(SourceObservationId("frame-0124"), feature.feature_id)

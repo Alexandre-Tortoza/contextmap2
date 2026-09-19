@@ -255,6 +255,11 @@ def evaluate_feature_payload(
             "feature embedding space does not match the supplied EmbeddingSpace: "
             f"{feature.embedding_space_id!r} != {expected_space_id!r}"
         )
+    if feature.normalization != embedding_space.normalization:
+        raise FeatureEvaluationError(
+            "feature normalization metadata does not match the supplied EmbeddingSpace: "
+            f"{feature.normalization!r} != {embedding_space.normalization!r}"
+        )
     if tuple(array.shape) != feature.shape:
         raise FeatureEvaluationError(
             f"payload shape {tuple(array.shape)} does not match feature shape {feature.shape}"

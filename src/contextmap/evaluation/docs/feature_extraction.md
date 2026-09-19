@@ -6,7 +6,7 @@ Este documento descreve `src/contextmap/evaluation/feature_extraction.py` e o pr
 
 `evaluate_feature_payload()` recebe um `VisualFeature`, o `EmbeddingSpace` completo, o payload numérico e, para scope denso, seu `DenseFeatureMap`. Antes de emitir `FeatureEvaluationReport`, valida:
 
-- fingerprint do espaço de embedding;
+- fingerprint do espaço de embedding e igualdade da metadata de normalização entre feature e espaço;
 - shape, dtype e dimensão vetorial;
 - finitude de todos os valores;
 - norma unitária quando o produtor declara `normalization="l2"`;

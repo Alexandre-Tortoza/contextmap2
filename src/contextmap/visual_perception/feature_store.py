@@ -47,6 +47,11 @@ if TYPE_CHECKING:
 FEATURE_INDEX_FILENAME = "feature-index.jsonl"
 """Name of the feature store's index file, relative to its root."""
 
+FEATURE_INDEX_SCHEMA_VERSION = "0.1.0"
+"""Feature index schema version written and understood by this module."""
+
+_FEATURE_INDEX_RECORD_TYPE = "feature_index"
+
 
 class FeatureStoreError(Exception):
     """Base class for feature payload storage failures."""
@@ -110,6 +115,8 @@ class FeatureStoreWriter:
         """
         self._root = root
         self._entries: list[FeaturePayloadEntry] = []
+        self._keys: set[tuple[SourceObservationId, FeatureId]] = set()
+        self._payload_paths: set[Path] = set()
 
     def write(
         self,
@@ -147,7 +154,17 @@ class FeatureStoreWriter:
                 f"feature.dtype {feature.dtype!r} for feature_id={feature.feature_id!r}"
             )
 
+        key = (source_observation_id, feature.feature_id)
+        if key in self._keys:
+            raise FeatureStoreError(
+                "duplicate feature payload key: "
+                f"source_observation_id={source_observation_id!r}, "
+                f"feature_id={feature.feature_id!r}"
+            )
+
         full_path = _resolve_within_root(self._root, feature.payload_reference)
+        if full_path in self._payload_paths:
+            raise FeatureStoreError(f"duplicate payload_reference: {feature.payload_reference!r}")
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
         buffer = io.BytesIO()
@@ -169,6 +186,8 @@ class FeatureStoreWriter:
             provenance=feature.provenance,
         )
         self._entries.append(entry)
+        self._keys.add(key)
+        self._payload_paths.add(full_path)
         return entry
 
     def entries(self) -> Sequence[FeaturePayloadEntry]:
@@ -185,7 +204,23 @@ class FeatureStoreReader:
         Prefer :meth:`open` to read a persisted index from disk.
         """
         self._root = root
-        self._by_id = {entry.feature_id: entry for entry in entries}
+        self._by_key: dict[tuple[SourceObservationId, FeatureId], FeaturePayloadEntry] = {}
+        payload_paths: set[Path] = set()
+        for entry in entries:
+            key = (entry.source_observation_id, entry.feature_id)
+            if key in self._by_key:
+                raise FeatureStoreError(
+                    "duplicate feature payload key in index: "
+                    f"source_observation_id={entry.source_observation_id!r}, "
+                    f"feature_id={entry.feature_id!r}"
+                )
+            payload_path = _resolve_within_root(root, entry.payload_reference)
+            if payload_path in payload_paths:
+                raise FeatureStoreError(
+                    f"duplicate payload_reference in index: {entry.payload_reference!r}"
+                )
+            self._by_key[key] = entry
+            payload_paths.add(payload_path)
 
     @classmethod
     def open(cls, root: Path) -> FeatureStoreReader:
@@ -205,33 +240,71 @@ class FeatureStoreReader:
             return cls(root, ())
 
         entries: list[FeaturePayloadEntry] = []
+        header_found = False
         with index_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if stripped:
-                    entries.append(decode_feature_payload_entry(json.loads(stripped)))
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError as error:
+                        raise FeatureStoreError(
+                            f"invalid feature index JSON at line {line_number}: {error}"
+                        ) from error
+                    if not isinstance(record, dict):
+                        raise FeatureStoreError(
+                            f"feature index record at line {line_number} must be an object"
+                        )
+                    if not header_found:
+                        if record.get("record_type") != _FEATURE_INDEX_RECORD_TYPE:
+                            raise FeatureStoreError("feature index is missing its schema header")
+                        schema_version = record.get("schema_version")
+                        if schema_version != FEATURE_INDEX_SCHEMA_VERSION:
+                            raise FeatureStoreError(
+                                f"unsupported feature index schema_version: {schema_version!r}"
+                            )
+                        header_found = True
+                    else:
+                        try:
+                            entries.append(decode_feature_payload_entry(record))
+                        except (KeyError, TypeError, ValueError) as error:
+                            raise FeatureStoreError(
+                                f"invalid feature index entry at line {line_number}: {error}"
+                            ) from error
+
+        if not header_found:
+            raise FeatureStoreError("feature index is missing its schema header")
         return cls(root, entries)
 
-    def feature_ids(self) -> Sequence[FeatureId]:
-        """Every feature id with a persisted payload, in index order."""
-        return tuple(self._by_id)
+    def feature_keys(self) -> Sequence[tuple[SourceObservationId, FeatureId]]:
+        """Every observation-local feature key in index order."""
+        return tuple(self._by_key)
 
-    def entry(self, feature_id: FeatureId) -> FeaturePayloadEntry:
+    def entry(
+        self, source_observation_id: SourceObservationId, feature_id: FeatureId
+    ) -> FeaturePayloadEntry:
         """Return one feature's indexed metadata without loading its payload.
 
         Raises:
-            FeatureStoreError: If no entry exists for ``feature_id``.
+            FeatureStoreError: If no entry exists for the observation-local
+                ``feature_id``.
         """
         try:
-            return self._by_id[feature_id]
+            return self._by_key[(source_observation_id, feature_id)]
         except KeyError:
-            raise FeatureStoreError(f"no persisted payload for feature_id={feature_id!r}") from None
+            raise FeatureStoreError(
+                "no persisted payload for "
+                f"source_observation_id={source_observation_id!r}, feature_id={feature_id!r}"
+            ) from None
 
-    def load(self, feature_id: FeatureId) -> NDArray[Any]:
+    def load(
+        self, source_observation_id: SourceObservationId, feature_id: FeatureId
+    ) -> NDArray[Any]:
         """Load and verify one feature's numerical array.
 
         Args:
-            feature_id: The feature to load.
+            source_observation_id: The physical observation owning the feature.
+            feature_id: The observation-local feature to load.
 
         Returns:
             The array, exactly as written.
@@ -245,7 +318,7 @@ class FeatureStoreReader:
         """
         import numpy as np
 
-        entry = self.entry(feature_id)
+        entry = self.entry(source_observation_id, feature_id)
         full_path = _resolve_within_root(self._root, entry.payload_reference)
         if not full_path.is_file():
             raise FeatureStoreError(f"missing payload file: {entry.payload_reference}")
@@ -288,7 +361,11 @@ def write_feature_index(root: Path, entries: Sequence[FeaturePayloadEntry]) -> N
     """
     index_path = root / FEATURE_INDEX_FILENAME
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    content = "".join(
+    header = {
+        "record_type": _FEATURE_INDEX_RECORD_TYPE,
+        "schema_version": FEATURE_INDEX_SCHEMA_VERSION,
+    }
+    content = f"{json.dumps(header, sort_keys=True)}\n" + "".join(
         f"{json.dumps(encode_feature_payload_entry(entry), sort_keys=True)}\n" for entry in entries
     )
     index_path.write_text(content, encoding="utf-8")

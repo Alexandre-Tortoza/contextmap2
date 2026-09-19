@@ -53,6 +53,7 @@ from contextmap.visual_perception.feature_resolution_enhancement import (
 )
 from contextmap.visual_perception.feature_store import (
     FEATURE_INDEX_FILENAME,
+    FEATURE_INDEX_SCHEMA_VERSION,
     FeaturePayloadEntry,
     FeaturePayloadIntegrityError,
     FeatureStoreError,
@@ -135,6 +136,7 @@ __all__ = [
     "CANONICAL_PRESET_V1",
     "FEATURE_DEBUG_ROOT",
     "FEATURE_INDEX_FILENAME",
+    "FEATURE_INDEX_SCHEMA_VERSION",
     "FEATURE_METRICS_PATH",
     "KNOWN_CAPABILITIES",
     "POOLING_POLICY",
