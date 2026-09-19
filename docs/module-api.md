@@ -29,21 +29,40 @@ __all__ = ["SemanticClaim", "SemanticInterpreter"]
 
 `__all__` não é usado para reexportar tudo que existe no módulo. Ele torna a superfície intencional e revisável.
 
+## Integração pública implementada
+
+Hoje existe uma dependência cross-module real: Visual Perception consome identidades de Ingestion pela raiz pública `contextmap.ingestion`.
+
+```mermaid
+flowchart LR
+    INGROOT["contextmap.ingestion<br/>API pública"] --> VP["contextmap.visual_perception"]
+    INGROOT --> OBS["SourceObservationId / SequenceArtifactId / selection"]
+    OBS --> VP
+    VP --> PUB["Region2D / VisualFeature / SemanticClaim /<br/>PerceptionResult / PipelinePreset / artifacts"]
+    PUB -. downstream futuro .-> NEXT["sensor_association / semantic_fusion / runtime"]
+```
+
+O código de `visual_perception` não importa `contextmap.ingestion.models`, adapters ROS ou internals de artifact. Essa é a forma concreta da regra deste documento.
+
 ## Estrutura interna
 
 A organização interna cresce apenas quando existe conteúdo real. Uma capability pode evoluir, por exemplo, para:
 
 ```text
 visual_perception/
-├── __init__.py
-├── models.py
-├── ports.py
-├── service.py
-├── backends/
-│   ├── sam3.py
-│   └── qwen.py
-└── _helpers.py
+├── __init__.py          # superfície pública
+├── models.py            # contratos de evidência
+├── ports.py             # variation points
+├── pipeline.py          # presets e resolução do DAG interno
+├── service.py           # execução e assembly
+├── identity.py          # identidades determinísticas
+├── serialization.py
+├── run_artifact.py      # persistência de runs
+├── evidence_set.py      # view multi-run
+└── docs/
 ```
+
+Não existe ainda `visual_perception/backends/` com modelos reais na `dev`; os backends usados pelos testes são fakes determinísticos. Um diretório de backends só deve surgir quando houver implementação concreta.
 
 Não é obrigatório criar `models.py`, `ports.py`, `service.py`, `backends/` ou `_internal/` antecipadamente. KISS e YAGNI continuam válidos.
 
@@ -150,7 +169,7 @@ A política de releases está em [versioning.md](versioning.md).
 
 ## Exemplo completo
 
-Considere a capability planejada `visual_perception`:
+Considere a capability implementada `visual_perception`:
 
 ```text
 visual_perception/
