@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from hashlib import sha256
@@ -17,6 +18,7 @@ from contextmap.evaluation import (
     write_region_discovery_reference_set,
     write_region_discovery_report,
 )
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BackendDiagnostics,
@@ -48,8 +50,9 @@ def _frame(frame_id: str, condition: str, *, annotated: bool) -> ReferenceFrame:
     width, height = 6, 4
     box = BoundingBox(1, 1, 4, 3)
     prepared = PreparedImage(
-        source_observation_id=frame_id,
-        image=ArtifactReference(
+        source_observation_id=SourceObservationId(frame_id),
+        payload_reference=f"reference/{frame_id}.png",
+        payload_artifact=ArtifactReference(
             uri=f"reference/{frame_id}.png",
             sha256=sha256(frame_id.encode()).hexdigest(),
             media_type="image/png",
@@ -132,6 +135,22 @@ def _descriptor(
         variables=(("tiling", tiling), ("query_strategy", "automatic")),
         execution_kind="ci_contract",
     )
+
+
+def _change_checkpoint(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
+    return replace(descriptor, checkpoint="sam3-other-checkpoint")
+
+
+def _change_strategy(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
+    return replace(descriptor, strategy="text_prompt")
+
+
+def _change_threshold(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
+    return replace(descriptor, thresholds=(("score", 0.9),))
+
+
+def _change_pipeline_graph(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
+    return replace(descriptor, pipeline_graph_digest="sha256:pipeline-v2")
 
 
 def test_same_reference_selection_uses_one_report_schema_for_all_backends() -> None:
@@ -236,6 +255,38 @@ def test_ablation_rejects_uncontrolled_variable_changes() -> None:
     )
 
     with pytest.raises(ValueError, match="exactly the declared variable"):
+        compare_region_discovery_reports(baseline, changed, changed_variable="tiling")
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        _change_checkpoint,
+        _change_strategy,
+        _change_threshold,
+        _change_pipeline_graph,
+    ],
+)
+def test_ablation_rejects_unreported_run_descriptor_changes(
+    mutate: Callable[[EvaluationRunDescriptor], EvaluationRunDescriptor],
+) -> None:
+    reference_set = RegionDiscoveryReferenceSet(
+        version="reference-v1", frames=(_frame("frame-1", "synthetic", annotated=True),)
+    )
+    evaluator = RegionDiscoveryEvaluator()
+    baseline = evaluator.evaluate(
+        reference_set,
+        _descriptor("sam3", tiling=False, duration_tag="baseline"),
+        lambda frame: _evaluated(frame, "sam3", 8.0),
+    )
+    changed_descriptor = mutate(_descriptor("sam3", tiling=True, duration_tag="changed"))
+    changed = evaluator.evaluate(
+        reference_set,
+        changed_descriptor,
+        lambda frame: _evaluated(frame, "sam3", 8.0),
+    )
+
+    with pytest.raises(ValueError, match="uncontrolled run fields"):
         compare_region_discovery_reports(baseline, changed, changed_variable="tiling")
 
 

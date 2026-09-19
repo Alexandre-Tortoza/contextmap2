@@ -8,12 +8,15 @@ suporte 3D.
 
 `RegionCandidate` representa uma proposta antes de validação, merge e normalização. A proposta
 carrega identidade da observação física, run, resultado, pass e proposta nativa. Sua geometria pode
-ser uma bounding box, uma máscara inline ou uma referência imutável para uma máscara persistida.
+ser uma bounding box ou uma máscara `InlineMask` materializada. Uma `mask_reference` só é aceita
+junto da máscara materializada que a normalização realmente inspeciona; uma referência opaca não é
+publicada como geometria consumível.
 
-`Region2D` representa geometria aceita e congelada. Sua identidade é composta por
-`perception_run_id`, `perception_result_id` e `region_id`; portanto, dois resultados podem usar o
-mesmo `region_id` sem sugerir que representam o mesmo objeto físico. A identidade não pode ser
-usada como entity ID do mapa.
+`Region2D` é o contrato único definido pelo Visual Perception Core e representa geometria aceita e
+congelada. O `region_id` é local ao `PerceptionResult`, que fornece os escopos de run e observação;
+portanto, dois resultados podem usar o mesmo `region_id` sem sugerir que representam o mesmo objeto
+físico. Contributor IDs e provenance de geometry freeze estendem esse contrato canônico. A
+identidade não pode ser usada como entity ID do mapa.
 
 `RejectedRegionCandidate` registra uma rejeição com motivo legível por máquina, detalhe e pass de
 origem. Rejeições e propostas incorporadas por merge permanecem disponíveis para auditoria.
@@ -76,11 +79,18 @@ grids de tiles com tamanho, overlap, escala e budget por pass explícitos. As ja
 ordem row-major e o último tile de cada eixo é alinhado ao limite da imagem para garantir cobertura
 sem produzir coordenadas fora do espaço preparado.
 
-O port `RegionDiscovery` recebe `DiscoveryInput` e devolve `RegionCandidate` mais diagnostics. A
-orquestração não contém branches para SAM2, SAM3 ou Florence-2. Propostas locais de tiles são
-remapeadas para a imagem preparada, recebem ID prefixado pelo pass e preservam o ID nativo em
-provenance. Máscaras inline são expandidas no espaço global; uma máscara externa de tile sem
-geometria decodificada é rejeitada porque não pode ser remapeada de forma verificável.
+O port público `RegionDiscovery` recebe `PreparedImage` e devolve `Sequence[Region2D]`, exatamente
+como o Visual Perception Core exige. A execução por pass é um detalhe interno exposto somente a
+adapters pelo `RegionCandidateDiscovery`: ele recebe `DiscoveryInput` e devolve `RegionCandidate`
+mais diagnostics. A orquestração do Core não contém branches para SAM2, SAM3 ou Florence-2.
+Propostas locais de tiles são remapeadas para a imagem preparada, recebem ID prefixado pelo pass e
+preservam o ID nativo em provenance. Máscaras inline são redimensionadas e expandidas no espaço
+global antes da normalização.
+
+`TilingConfig.scale` define as dimensões efetivamente apresentadas ao backend: cada
+`DiscoveryPass` registra `input_dimensions` e o transform inverso para o espaço preparado. Boxes e
+máscaras retornadas nesse espaço escalado são remapeadas para a janela global. Assim, alterar a
+escala altera o input do modelo sem alterar a coordenada canônica da mesma geometria.
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
@@ -154,9 +164,10 @@ tanto `MergeDecision` quanto uma rejeição `merged_duplicate`, portanto não de
 diagnostics.
 
 Os thresholds e budgets vivem em `NormalizationConfig`; seu digest acompanha o resultado. Máscaras
-inline são avaliadas pixel a pixel. Uma máscara persistida sem box inspecionável é rejeitada em vez
-de receber área ou overlap inventados. Constraints só são aplicadas quando a `PreparedImage` as
-declara explicitamente.
+inline são avaliadas pixel a pixel. `RegionCandidate` não aceita uma máscara persistida opaca como
+substituta da geometria materializada, mesmo quando existe bounding box, evitando ignorar
+silenciosamente a máscara. Constraints só são aplicadas quando a `PreparedImage` as declara
+explicitamente.
 
 ## Evidência persistida e diagnostics
 

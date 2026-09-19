@@ -3,6 +3,7 @@ from hashlib import sha256
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import ArtifactReference, BoundingBox, InlineMask
 from contextmap.visual_perception.image_preparation import (
     CropOperation,
@@ -39,8 +40,9 @@ def test_zero_configuration_is_an_auditable_no_op() -> None:
     prepared = prepare_image(source)
 
     assert prepared == PreparedImage(
-        source_observation_id="frame-1",
-        image=_reference("source"),
+        source_observation_id=SourceObservationId("frame-1"),
+        payload_reference=_reference("source").uri,
+        payload_artifact=_reference("source"),
         width=8,
         height=6,
         transformations=(),
@@ -72,7 +74,7 @@ def test_resize_and_crop_preserve_ordered_transform_provenance() -> None:
     )
 
     assert (prepared.width, prepared.height) == (10, 8)
-    assert prepared.image == _reference("cropped")
+    assert prepared.payload_artifact == _reference("cropped")
     assert [record.operation for record in prepared.transformations] == ["resize", "crop"]
     assert prepared.transformations[0].input_dimensions == (8, 6)
     assert prepared.transformations[0].output_dimensions == (16, 12)

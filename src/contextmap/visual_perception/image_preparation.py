@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from .region_models import ArtifactReference, BoundingBox, InlineMask, JsonScalar
+from contextmap.ingestion import SourceObservationId
+
+from .models import ExclusionRegion, PreparedImage, TransformationRecord, ValidRegion
+from .region_models import ArtifactReference, BoundingBox, JsonScalar
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,108 +25,6 @@ class SourceImage:
         if not self.source_observation_id:
             raise ValueError("source_observation_id must not be empty")
         _validate_dimensions(self.width, self.height)
-
-
-@dataclass(frozen=True, slots=True)
-class ValidRegion:
-    """Explicitly identify pixels eligible for region discovery."""
-
-    mask: InlineMask
-    reason: str
-    source: str
-
-    def __post_init__(self) -> None:
-        """Require auditable constraint motivation and source."""
-        if not self.reason or not self.source:
-            raise ValueError("valid region reason and source must not be empty")
-
-
-@dataclass(frozen=True, slots=True)
-class ExclusionRegion:
-    """Explicitly identify pixels excluded from region discovery."""
-
-    name: str
-    mask: InlineMask
-    reason: str
-    source: str
-
-    def __post_init__(self) -> None:
-        """Require a stable diagnostic name, motivation, and source."""
-        if not self.name or not self.reason or not self.source:
-            raise ValueError("exclusion name, reason, and source must not be empty")
-
-
-@dataclass(frozen=True, slots=True)
-class TransformationRecord:
-    """Describe one applied image transformation in execution order."""
-
-    operation: str
-    provenance_source: str
-    parameters: tuple[tuple[str, JsonScalar], ...]
-    input_dimensions: tuple[int, int]
-    output_dimensions: tuple[int, int]
-    output_image: ArtifactReference
-    warnings: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate the structured transformation record."""
-        if not self.operation:
-            raise ValueError("transformation operation must not be empty")
-        if not self.provenance_source:
-            raise ValueError("transformation provenance source must not be empty")
-        _validate_dimensions(*self.input_dimensions)
-        _validate_dimensions(*self.output_dimensions)
-
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible audit record."""
-        return {
-            "operation": self.operation,
-            "provenance_source": self.provenance_source,
-            "parameters": [{"name": name, "value": value} for name, value in self.parameters],
-            "input_dimensions": list(self.input_dimensions),
-            "output_dimensions": list(self.output_dimensions),
-            "output_image": self.output_image.to_dict(),
-            "warnings": list(self.warnings),
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedImage:
-    """Canonical image-space input presented to discovery backends."""
-
-    source_observation_id: str
-    image: ArtifactReference
-    width: int
-    height: int
-    transformations: tuple[TransformationRecord, ...]
-    valid_region: ValidRegion | None = None
-    exclusion_regions: tuple[ExclusionRegion, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate final image space and optional constraints."""
-        if not self.source_observation_id:
-            raise ValueError("source_observation_id must not be empty")
-        _validate_dimensions(self.width, self.height)
-        _validate_constraints(
-            width=self.width,
-            height=self.height,
-            valid_region=self.valid_region,
-            exclusion_regions=self.exclusion_regions,
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        """Return an inspectable representation for manifests and diagnostics."""
-        return {
-            "source_observation_id": self.source_observation_id,
-            "image": self.image.to_dict(),
-            "width": self.width,
-            "height": self.height,
-            "transformations": [record.to_dict() for record in self.transformations],
-            "valid_region": _valid_region_to_dict(self.valid_region),
-            "exclusion_regions": [
-                _exclusion_region_to_dict(region) for region in self.exclusion_regions
-            ],
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,8 +161,9 @@ def prepare_image(
         )
 
     return PreparedImage(
-        source_observation_id=source.source_observation_id,
-        image=image,
+        source_observation_id=SourceObservationId(source.source_observation_id),
+        payload_reference=image.uri,
+        payload_artifact=image,
         width=width,
         height=height,
         transformations=tuple(records),
@@ -284,35 +186,3 @@ def _validate_dimensions(width: int, height: int) -> None:
 def _validate_operation_source(value: str) -> None:
     if not value:
         raise ValueError("transformation provenance source must not be empty")
-
-
-def _validate_constraints(
-    *,
-    width: int,
-    height: int,
-    valid_region: ValidRegion | None,
-    exclusion_regions: tuple[ExclusionRegion, ...],
-) -> None:
-    constraints = (() if valid_region is None else (valid_region.mask,)) + tuple(
-        region.mask for region in exclusion_regions
-    )
-    if any(mask.width != width or mask.height != height for mask in constraints):
-        raise ValueError("spatial constraints must match final prepared image dimensions")
-    names = [region.name for region in exclusion_regions]
-    if len(set(names)) != len(names):
-        raise ValueError("exclusion regions must have unique names")
-
-
-def _valid_region_to_dict(region: ValidRegion | None) -> dict[str, object] | None:
-    if region is None:
-        return None
-    return {"mask": region.mask.to_dict(), "reason": region.reason, "source": region.source}
-
-
-def _exclusion_region_to_dict(region: ExclusionRegion) -> dict[str, object]:
-    return {
-        "name": region.name,
-        "mask": region.mask.to_dict(),
-        "reason": region.reason,
-        "source": region.source,
-    }

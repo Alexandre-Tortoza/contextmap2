@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from math import isfinite
 from typing import Protocol, runtime_checkable
 
-from .image_preparation import PreparedImage
+from .models import BackendProvenance, PreparedImage, Region2D
+from .normalization import NormalizationConfig, normalize_regions
 from .region_models import (
-    ArtifactReference,
     BoundingBox,
     InlineMask,
     JsonScalar,
@@ -71,8 +72,8 @@ class DiscoveryPass:
         """Validate stable identity and scale."""
         if not self.pass_id:
             raise ValueError("discovery pass id must not be empty")
-        if self.scale <= 0:
-            raise ValueError("discovery pass scale must be positive")
+        if not isfinite(self.scale) or self.scale <= 0:
+            raise ValueError("discovery pass scale must be positive and finite")
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible pass definition."""
@@ -81,7 +82,22 @@ class DiscoveryPass:
             "kind": self.kind.value,
             "window": self.window.to_dict(),
             "scale": self.scale,
+            "input_dimensions": [self.input_width, self.input_height],
+            "input_to_prepared_scale": [
+                self.window.width / self.input_width,
+                self.window.height / self.input_height,
+            ],
         }
+
+    @property
+    def input_width(self) -> int:
+        """Return the scaled model-input width for this pass."""
+        return max(1, round(self.window.width * self.scale))
+
+    @property
+    def input_height(self) -> int:
+        """Return the scaled model-input height for this pass."""
+        return max(1, round(self.window.height * self.scale))
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +119,8 @@ class TilingConfig:
             raise ValueError("tile overlaps must be non-negative")
         if self.overlap_x >= self.tile_width or self.overlap_y >= self.tile_height:
             raise ValueError("tile overlap must be smaller than its tile dimension")
-        if self.scale <= 0:
-            raise ValueError("tile scale must be positive")
+        if not isfinite(self.scale) or self.scale <= 0:
+            raise ValueError("tile scale must be positive and finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,10 +169,14 @@ class DiscoveryOutput:
 
 
 @runtime_checkable
-class RegionDiscovery(Protocol):
-    """Replaceable capability that proposes regions for one discovery pass."""
+class RegionCandidateDiscovery(Protocol):
+    """Internal adapter boundary that proposes candidates for one pass."""
 
-    def discover(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
+    def backend_provenance(self) -> BackendProvenance:
+        """Report the backend and effective configuration identity."""
+        ...
+
+    def discover_candidates(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
         """Produce backend-neutral candidates for one prepared image pass."""
         ...
 
@@ -169,6 +189,36 @@ class DiscoveryRunResult:
     rejected: tuple[RejectedRegionCandidate, ...]
     passes: tuple[DiscoveryPass, ...]
     diagnostics: tuple[BackendDiagnostics, ...]
+
+
+def discover_canonical_regions(
+    prepared_image: PreparedImage,
+    backend: RegionCandidateDiscovery,
+    *,
+    pass_config: DiscoveryPassConfig | None = None,
+    normalization_config: NormalizationConfig | None = None,
+) -> tuple[Region2D, ...]:
+    """Execute pass-level discovery and return the one canonical Region2D contract.
+
+    The core port scopes returned region identities through the eventual
+    ``PerceptionResult``. The internal candidate scope used here is deterministic
+    and exists only to validate that a single discovery execution is not mixed.
+    """
+    provenance = backend.backend_provenance()
+    fingerprint = provenance.configuration_fingerprint or provenance.version
+    scope = f"{provenance.backend_id}:{fingerprint}"
+    discovery = run_discovery_passes(
+        prepared_image=prepared_image,
+        backend=backend,
+        perception_run_id=scope,
+        perception_result_id=f"{scope}:{prepared_image.source_observation_id}",
+        config=pass_config,
+    )
+    return normalize_regions(
+        discovery.candidates,
+        prepared_image,
+        normalization_config,
+    ).regions
 
 
 def build_discovery_passes(
@@ -223,7 +273,7 @@ def build_discovery_passes(
 def run_discovery_passes(
     *,
     prepared_image: PreparedImage,
-    backend: RegionDiscovery,
+    backend: RegionCandidateDiscovery,
     perception_run_id: str,
     perception_result_id: str,
     config: DiscoveryPassConfig | None = None,
@@ -244,7 +294,7 @@ def run_discovery_passes(
             perception_run_id=perception_run_id,
             perception_result_id=perception_result_id,
         )
-        output = backend.discover(discovery_input)
+        output = backend.discover_candidates(discovery_input)
         diagnostics.append(output.diagnostics)
         pass_candidates = output.candidates
         if config.max_candidates_per_pass is not None:
@@ -329,7 +379,7 @@ def _validate_backend_candidate(
     candidate: RegionCandidate, discovery_input: DiscoveryInput
 ) -> None:
     discovery_pass = discovery_input.discovery_pass
-    expected_dimensions = (int(discovery_pass.window.width), int(discovery_pass.window.height))
+    expected_dimensions = (discovery_pass.input_width, discovery_pass.input_height)
     if (candidate.image_width, candidate.image_height) != expected_dimensions:
         raise ValueError("backend candidate dimensions must match discovery pass dimensions")
     if candidate.source_observation_id != discovery_input.prepared_image.source_observation_id:
@@ -354,8 +404,10 @@ def _reject_for_internal_border(
     window = discovery_pass.window
     touches_left = box.x_min <= 0 and window.x_min > 0
     touches_top = box.y_min <= 0 and window.y_min > 0
-    touches_right = box.x_max >= window.width and window.x_max < prepared_image.width
-    touches_bottom = box.y_max >= window.height and window.y_max < prepared_image.height
+    touches_right = box.x_max >= discovery_pass.input_width and window.x_max < prepared_image.width
+    touches_bottom = (
+        box.y_max >= discovery_pass.input_height and window.y_max < prepared_image.height
+    )
     return touches_left or touches_top or touches_right or touches_bottom
 
 
@@ -366,20 +418,25 @@ def _remap_candidate(
 ) -> RegionCandidate:
     x_offset = int(discovery_pass.window.x_min)
     y_offset = int(discovery_pass.window.y_min)
+    x_scale = discovery_pass.window.width / discovery_pass.input_width
+    y_scale = discovery_pass.window.height / discovery_pass.input_height
     box = candidate.bounding_box
     remapped_box = None
     if box is not None:
         remapped_box = BoundingBox(
-            x_min=box.x_min + x_offset,
-            y_min=box.y_min + y_offset,
-            x_max=box.x_max + x_offset,
-            y_max=box.y_max + y_offset,
+            x_min=box.x_min * x_scale + x_offset,
+            y_min=box.y_min * y_scale + y_offset,
+            x_max=box.x_max * x_scale + x_offset,
+            y_max=box.y_max * y_scale + y_offset,
         )
     mask = candidate.mask
     if isinstance(mask, InlineMask):
+        mask = _resize_mask(
+            mask,
+            int(discovery_pass.window.width),
+            int(discovery_pass.window.height),
+        )
         mask = _expand_mask(mask, prepared_image.width, prepared_image.height, x_offset, y_offset)
-    elif isinstance(mask, ArtifactReference) and discovery_pass.kind is PassKind.TILE:
-        raise ValueError("tile mask artifact cannot be remapped without decoded geometry")
     return replace(
         candidate,
         candidate_id=f"{discovery_pass.pass_id}/{candidate.candidate_id}",
@@ -388,6 +445,20 @@ def _remap_candidate(
         bounding_box=remapped_box,
         mask=mask,
     )
+
+
+def _resize_mask(mask: InlineMask, output_width: int, output_height: int) -> InlineMask:
+    if (mask.width, mask.height) == (output_width, output_height):
+        return mask
+    data = tuple(
+        mask.value_at(
+            min(mask.width - 1, int(x * mask.width / output_width)),
+            min(mask.height - 1, int(y * mask.height / output_height)),
+        )
+        for y in range(output_height)
+        for x in range(output_width)
+    )
+    return InlineMask(width=output_width, height=output_height, data=data)
 
 
 def _expand_mask(

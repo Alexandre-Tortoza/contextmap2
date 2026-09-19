@@ -2,15 +2,18 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    BackendProvenance,
     BackendScore,
     BoundingBox,
+    BoundingBox2D,
     CoordinateConvention,
     InlineMask,
     Region2D,
     RegionCandidate,
-    RegionIdentity,
+    RegionId,
     RegionProvenance,
     RejectedRegionCandidate,
     RejectionReason,
@@ -32,7 +35,7 @@ def _provenance(*, proposal_id: str = "proposal-1") -> RegionProvenance:
 def test_region_candidate_round_trips_backend_neutral_geometry() -> None:
     candidate = RegionCandidate(
         candidate_id="candidate-1",
-        source_observation_id="frame-12",
+        source_observation_id=SourceObservationId("frame-12"),
         perception_run_id="run-4",
         perception_result_id="result-7",
         image_width=4,
@@ -63,7 +66,7 @@ def test_region_candidate_round_trips_backend_neutral_geometry() -> None:
 def test_region_candidate_allows_box_only_geometry_and_no_score() -> None:
     candidate = RegionCandidate(
         candidate_id="florence-box-1",
-        source_observation_id="frame-12",
+        source_observation_id=SourceObservationId("frame-12"),
         perception_run_id="run-4",
         perception_result_id="result-7",
         image_width=20,
@@ -104,30 +107,48 @@ def test_region_candidate_rejects_missing_or_out_of_bounds_geometry() -> None:
 
 def test_region_geometry_is_frozen_and_identity_is_result_local() -> None:
     first = Region2D(
-        identity=RegionIdentity(
-            perception_run_id="run-a", perception_result_id="result-a", region_id="region-1"
+        region_id=RegionId("region-1"),
+        bounding_box=BoundingBox2D(x=1.0, y=0.0, width=2.0, height=2.0),
+        provenance=BackendProvenance(
+            backend_id="sam-test",
+            capability="region_discovery",
+            provider="test",
+            model="checkpoint-a",
+            version="1.0",
+            configuration_fingerprint="sha256:config",
         ),
-        source_observation_id="frame-12",
+        source_observation_id=SourceObservationId("frame-12"),
         image_width=4,
         image_height=3,
-        bounding_box=BoundingBox(x_min=1.0, y_min=0.0, x_max=3.0, y_max=2.0),
-        mask=ArtifactReference(
-            uri="outputs/masks/region-1.pbm",
-            sha256="a" * 64,
-            media_type="image/x-portable-bitmap",
-        ),
+        mask_reference="outputs/masks/region-1.pbm",
         area_pixels=4,
         contributor_candidate_ids=("candidate-1",),
-        provenance=(_provenance(),),
-    )
-    same_local_id_in_another_result = RegionIdentity(
-        perception_run_id="run-b", perception_result_id="result-b", region_id="region-1"
+        discovery_provenance=(_provenance(),),
     )
 
-    assert first.identity != same_local_id_in_another_result
-    assert Region2D.from_dict(first.to_dict()) == first
+    assert ("result-a", first.region_id) != ("result-b", first.region_id)
+    assert first.to_dict()["region_id"] == "region-1"
     with pytest.raises(FrozenInstanceError):
         first.area_pixels = 8  # type: ignore[misc]
+
+
+def test_candidate_requires_materialized_mask_when_a_mask_reference_is_present() -> None:
+    with pytest.raises(ValueError, match="requires a materialized mask"):
+        RegionCandidate(
+            candidate_id="candidate-1",
+            source_observation_id="frame-12",
+            perception_run_id="run-4",
+            perception_result_id="result-7",
+            image_width=4,
+            image_height=3,
+            bounding_box=BoundingBox(x_min=1.0, y_min=0.0, x_max=3.0, y_max=2.0),
+            mask_reference=ArtifactReference(
+                uri="outputs/masks/candidate-1.pbm",
+                sha256="a" * 64,
+                media_type="image/x-portable-bitmap",
+            ),
+            provenance=_provenance(),
+        )
 
 
 def test_rejected_candidate_preserves_machine_readable_reason() -> None:

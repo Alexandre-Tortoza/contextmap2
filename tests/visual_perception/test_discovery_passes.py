@@ -3,8 +3,10 @@ from hashlib import sha256
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    BackendProvenance,
     BoundingBox,
     InlineMask,
     PreparedImage,
@@ -18,7 +20,7 @@ from contextmap.visual_perception.discovery import (
     DiscoveryOutput,
     DiscoveryPassConfig,
     PassKind,
-    RegionDiscovery,
+    RegionCandidateDiscovery,
     TilingConfig,
     build_discovery_passes,
     run_discovery_passes,
@@ -27,8 +29,9 @@ from contextmap.visual_perception.discovery import (
 
 def _image(width: int = 6, height: int = 4) -> PreparedImage:
     return PreparedImage(
-        source_observation_id="frame-1",
-        image=ArtifactReference(
+        source_observation_id=SourceObservationId("frame-1"),
+        payload_reference="outputs/frame.png",
+        payload_artifact=ArtifactReference(
             uri="outputs/frame.png",
             sha256=sha256(b"frame").hexdigest(),
             media_type="image/png",
@@ -40,16 +43,37 @@ def _image(width: int = 6, height: int = 4) -> PreparedImage:
 
 
 class FakeDiscovery:
-    def __init__(self, *, touch_right_border: bool = False) -> None:
+    def __init__(
+        self, *, touch_right_border: bool = False, relative_geometry: bool = False
+    ) -> None:
         self.inputs: list[DiscoveryInput] = []
         self.touch_right_border = touch_right_border
+        self.relative_geometry = relative_geometry
 
-    def discover(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
+    def backend_provenance(self) -> BackendProvenance:
+        return BackendProvenance(
+            backend_id="fake",
+            capability="region_discovery",
+            provider="test",
+            model="none",
+            version="1",
+            configuration_fingerprint="sha256:fake",
+        )
+
+    def discover_candidates(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
         self.inputs.append(discovery_input)
-        width = int(discovery_input.discovery_pass.window.width)
-        height = int(discovery_input.discovery_pass.window.height)
-        x_max = float(width) if self.touch_right_border else min(2.0, float(width))
-        box = BoundingBox(x_min=1.0, y_min=1.0, x_max=x_max, y_max=min(2.0, height))
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
+        if self.relative_geometry:
+            box = BoundingBox(
+                x_min=width * 0.25,
+                y_min=height * 0.25,
+                x_max=width * 0.5,
+                y_max=height * 0.5,
+            )
+        else:
+            x_max = float(width) if self.touch_right_border else min(2.0, float(width))
+            box = BoundingBox(x_min=1.0, y_min=1.0, x_max=x_max, y_max=min(2.0, height))
         mask_data = tuple(
             box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
             for y in range(height)
@@ -93,7 +117,7 @@ def test_full_frame_is_the_default_backend_neutral_pass() -> None:
         perception_result_id="result-1",
     )
 
-    assert isinstance(backend, RegionDiscovery)
+    assert isinstance(backend, RegionCandidateDiscovery)
     assert len(backend.inputs) == 1
     assert backend.inputs[0].discovery_pass.kind is PassKind.FULL_FRAME
     assert result.candidates[0].image_width == 6
@@ -155,6 +179,39 @@ def test_internal_tile_border_rejection_is_explicit_and_auditable() -> None:
     assert [item.candidate_id for item in result.rejected] == ["tile-0000/proposal-1"]
     assert result.rejected[0].reason.value == "tile_border_truncation"
     assert [item.candidate_id for item in result.candidates] == ["tile-0001/proposal-1"]
+
+
+def test_tile_scale_changes_model_input_and_preserves_global_coordinates() -> None:
+    baseline_backend = FakeDiscovery(relative_geometry=True)
+    scaled_backend = FakeDiscovery(relative_geometry=True)
+    baseline_config = DiscoveryPassConfig(
+        include_full_frame=False,
+        tiling=TilingConfig(tile_width=4, tile_height=4, scale=1.0),
+    )
+    scaled_config = DiscoveryPassConfig(
+        include_full_frame=False,
+        tiling=TilingConfig(tile_width=4, tile_height=4, scale=2.0),
+    )
+
+    baseline = run_discovery_passes(
+        prepared_image=_image(width=4, height=4),
+        backend=baseline_backend,
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=baseline_config,
+    )
+    scaled = run_discovery_passes(
+        prepared_image=_image(width=4, height=4),
+        backend=scaled_backend,
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=scaled_config,
+    )
+
+    assert baseline_backend.inputs[0].discovery_pass.input_width == 4
+    assert scaled_backend.inputs[0].discovery_pass.input_width == 8
+    assert baseline.candidates[0].bounding_box == scaled.candidates[0].bounding_box
+    assert baseline.candidates[0].mask == scaled.candidates[0].mask
 
 
 @pytest.mark.parametrize(

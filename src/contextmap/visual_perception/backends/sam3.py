@@ -11,7 +11,15 @@ from math import isfinite
 from time import perf_counter
 from typing import Protocol, cast
 
-from ..discovery import BackendDiagnostics, DiscoveryInput, DiscoveryOutput
+from ..discovery import (
+    BackendDiagnostics,
+    DiscoveryInput,
+    DiscoveryOutput,
+    DiscoveryPassConfig,
+    discover_canonical_regions,
+)
+from ..models import BackendProvenance, PreparedImage, Region2D
+from ..normalization import NormalizationConfig
 from ..region_models import (
     BackendScore,
     BoundingBox,
@@ -157,8 +165,8 @@ class Sam3ImageProcessorRuntime:
         if state is None:
             raise ValueError("SAM3 processor returned no inference state")
         output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
-        width = int(discovery_input.discovery_pass.window.width)
-        height = int(discovery_input.discovery_pass.window.height)
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
         proposals = _parse_image_processor_output(
             output,
             width=width,
@@ -174,17 +182,46 @@ class Sam3ImageProcessorRuntime:
 class Sam3RegionDiscovery:
     """Adapt configured SAM3 output to canonical RegionCandidate values."""
 
-    def __init__(self, *, config: Sam3Config, runtime: Sam3Runtime) -> None:
+    def __init__(
+        self,
+        *,
+        config: Sam3Config,
+        runtime: Sam3Runtime,
+        pass_config: DiscoveryPassConfig | None = None,
+        normalization_config: NormalizationConfig | None = None,
+    ) -> None:
         """Build the adapter with explicit configuration and no fallback runtime."""
         self._config = config
         self._runtime = runtime
+        self._pass_config = pass_config
+        self._normalization_config = normalization_config
 
-    def discover(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
+    def backend_provenance(self) -> BackendProvenance:
+        """Return SAM3 identity in the Visual Perception Core contract."""
+        return BackendProvenance(
+            backend_id="sam3",
+            capability="region_discovery",
+            provider="facebook",
+            model=self._config.checkpoint,
+            version=self._config.model_version,
+            configuration_fingerprint=self._config.digest,
+        )
+
+    def discover(self, image: PreparedImage) -> tuple[Region2D, ...]:
+        """Discover and normalize canonical regions through the public port."""
+        return discover_canonical_regions(
+            image,
+            self,
+            pass_config=self._pass_config,
+            normalization_config=self._normalization_config,
+        )
+
+    def discover_candidates(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
         """Run exactly the selected SAM3 strategy for one discovery pass."""
         started = perf_counter()
         native_output = self._runtime.predict(discovery_input, self._config)
-        width = int(discovery_input.discovery_pass.window.width)
-        height = int(discovery_input.discovery_pass.window.height)
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
         candidates = tuple(
             self._normalize(proposal, discovery_input, width, height)
             for proposal in native_output.proposals

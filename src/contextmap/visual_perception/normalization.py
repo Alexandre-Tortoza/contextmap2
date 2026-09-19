@@ -8,13 +8,13 @@ from enum import StrEnum
 from hashlib import sha256
 from math import ceil, floor, isfinite
 
-from .image_preparation import PreparedImage
+from contextmap.ingestion import SourceObservationId
+
+from .models import BackendProvenance, BoundingBox2D, PreparedImage, Region2D, RegionId
 from .region_models import (
     BoundingBox,
     InlineMask,
-    Region2D,
     RegionCandidate,
-    RegionIdentity,
     RegionProvenance,
     RejectedRegionCandidate,
     RejectionReason,
@@ -371,21 +371,34 @@ def _freeze_group(group: _RegionGroup, region_index: int) -> Region2D:
     representative = group.representative
     candidate = representative.candidate
     contributors = tuple(item.candidate_id for item in group.contributors)
-    provenance: tuple[RegionProvenance, ...] = tuple(item.provenance for item in group.contributors)
+    discovery_provenance: tuple[RegionProvenance, ...] = tuple(
+        item.provenance for item in group.contributors
+    )
+    representative_provenance = candidate.provenance
     return Region2D(
-        identity=RegionIdentity(
-            perception_run_id=candidate.perception_run_id,
-            perception_result_id=candidate.perception_result_id,
-            region_id=f"region-{region_index:04d}",
+        region_id=RegionId(f"region-{region_index:04d}"),
+        bounding_box=BoundingBox2D(
+            x=representative.bounding_box.x_min,
+            y=representative.bounding_box.y_min,
+            width=representative.bounding_box.width,
+            height=representative.bounding_box.height,
         ),
-        source_observation_id=candidate.source_observation_id,
+        provenance=BackendProvenance(
+            backend_id=representative_provenance.backend_id,
+            capability="region_discovery",
+            provider=representative_provenance.backend_id,
+            model=representative_provenance.checkpoint,
+            version=representative_provenance.backend_version,
+            configuration_fingerprint=representative_provenance.config_digest,
+        ),
+        source_observation_id=SourceObservationId(candidate.source_observation_id),
         image_width=candidate.image_width,
         image_height=candidate.image_height,
-        bounding_box=representative.bounding_box,
         mask=candidate.mask,
+        mask_reference=(None if candidate.mask_reference is None else candidate.mask_reference.uri),
         area_pixels=representative.area_pixels,
         contributor_candidate_ids=contributors,
-        provenance=provenance,
+        discovery_provenance=discovery_provenance,
     )
 
 

@@ -1,12 +1,19 @@
-"""Public contracts for backend-agnostic visual perception evidence."""
+"""Public contract for the Visual Perception capability.
 
-from .diagnostics import (
+Visual Perception turns one physical observation into backend-agnostic visual
+evidence for one configured perception run. Region Discovery extends this
+surface with canonical candidate, normalization, and diagnostic contracts
+without replacing the core ``PreparedImage``, ``Region2D``, or
+``RegionDiscovery`` contracts.
+"""
+
+from contextmap.visual_perception.diagnostics import (
     DebugLevel,
     DiscoveryAuditRecord,
     RegionDiscoveryEvidenceWriter,
     WrittenDiscoveryEvidence,
 )
-from .discovery import (
+from contextmap.visual_perception.discovery import (
     BackendDiagnostics,
     BorderPolicy,
     DiscoveryInput,
@@ -15,50 +22,123 @@ from .discovery import (
     DiscoveryPassConfig,
     DiscoveryRunResult,
     PassKind,
-    RegionDiscovery,
     TilingConfig,
     build_discovery_passes,
     run_discovery_passes,
 )
-from .image_preparation import (
+from contextmap.visual_perception.evidence_set import (
+    EvidenceSetError,
+    ObservationEvidence,
+    PerceptionEvidenceSet,
+)
+from contextmap.visual_perception.identity import (
+    claim_id_for,
+    feature_id_for,
+    perception_result_id_for,
+    region_id_for,
+)
+from contextmap.visual_perception.image_preparation import (
     CropOperation,
-    ExclusionRegion,
     NormalizeOperation,
-    PreparedImage,
     RectifyOperation,
     ResizeOperation,
     SourceImage,
-    TransformationRecord,
-    ValidRegion,
     prepare_image,
 )
-from .normalization import (
+from contextmap.visual_perception.models import (
+    BackendProvenance,
+    BoundingBox2D,
+    ClaimId,
+    ExclusionRegion,
+    FeatureId,
+    FeatureScope,
+    HypothesisRole,
+    PerceptionResult,
+    PerceptionResultId,
+    PerceptionRun,
+    PerceptionRunId,
+    PreparedImage,
+    Region2D,
+    RegionId,
+    SceneContext,
+    SemanticClaim,
+    SemanticSupport,
+    TransformationRecord,
+    ValidRegion,
+    VisualFeature,
+)
+from contextmap.visual_perception.normalization import (
     MergeDecision,
     MergeKind,
     NormalizationConfig,
     NormalizationResult,
     normalize_regions,
 )
-from .region_models import (
+from contextmap.visual_perception.pipeline import (
+    CANONICAL_PRESET_V1,
+    KNOWN_CAPABILITIES,
+    PipelineConfigError,
+    PipelinePreset,
+    ResolvedPipeline,
+    StageBackendFactory,
+    StageSpec,
+    decode_pipeline_preset,
+    encode_pipeline_preset,
+    resolve_pipeline,
+    validate_pipeline_preset,
+)
+from contextmap.visual_perception.ports import (
+    FeatureExtractor,
+    RegionDiscovery,
+    SemanticInterpreter,
+    SemanticScorer,
+)
+from contextmap.visual_perception.region_models import (
     ArtifactReference,
     BackendScore,
     BoundingBox,
     CoordinateConvention,
     InlineMask,
-    Region2D,
     RegionCandidate,
-    RegionIdentity,
     RegionProvenance,
     RejectedRegionCandidate,
     RejectionReason,
 )
+from contextmap.visual_perception.run_artifact import (
+    IncompleteRunArtifactError,
+    PerceptionRunReader,
+    PerceptionRunWriter,
+    RunArtifactError,
+    RunArtifactFileEntry,
+    RunArtifactManifest,
+    allocate_run_index,
+    rebuild_run_registry,
+)
+from contextmap.visual_perception.serialization import (
+    decode_perception_result,
+    encode_perception_result,
+)
+from contextmap.visual_perception.service import (
+    StageDefinition,
+    StageGraphError,
+    StageOutcome,
+    StageRunner,
+    StageStatus,
+    assemble_perception_result,
+    execute_stage_graph,
+)
 
 __all__ = [
+    "CANONICAL_PRESET_V1",
+    "KNOWN_CAPABILITIES",
     "ArtifactReference",
     "BackendDiagnostics",
+    "BackendProvenance",
     "BackendScore",
     "BorderPolicy",
     "BoundingBox",
+    "BoundingBox2D",
+    "ClaimId",
     "CoordinateConvention",
     "CropOperation",
     "DebugLevel",
@@ -68,32 +148,79 @@ __all__ = [
     "DiscoveryPass",
     "DiscoveryPassConfig",
     "DiscoveryRunResult",
+    "EvidenceSetError",
     "ExclusionRegion",
+    "FeatureExtractor",
+    "FeatureId",
+    "FeatureScope",
+    "HypothesisRole",
+    "IncompleteRunArtifactError",
     "InlineMask",
     "MergeDecision",
     "MergeKind",
     "NormalizationConfig",
     "NormalizationResult",
     "NormalizeOperation",
+    "ObservationEvidence",
     "PassKind",
+    "PerceptionEvidenceSet",
+    "PerceptionResult",
+    "PerceptionResultId",
+    "PerceptionRun",
+    "PerceptionRunId",
+    "PerceptionRunReader",
+    "PerceptionRunWriter",
+    "PipelineConfigError",
+    "PipelinePreset",
     "PreparedImage",
     "RectifyOperation",
     "Region2D",
     "RegionCandidate",
     "RegionDiscovery",
     "RegionDiscoveryEvidenceWriter",
-    "RegionIdentity",
+    "RegionId",
     "RegionProvenance",
     "RejectedRegionCandidate",
     "RejectionReason",
     "ResizeOperation",
+    "ResolvedPipeline",
+    "RunArtifactError",
+    "RunArtifactFileEntry",
+    "RunArtifactManifest",
+    "SceneContext",
+    "SemanticClaim",
+    "SemanticInterpreter",
+    "SemanticScorer",
+    "SemanticSupport",
     "SourceImage",
+    "StageBackendFactory",
+    "StageDefinition",
+    "StageGraphError",
+    "StageOutcome",
+    "StageRunner",
+    "StageSpec",
+    "StageStatus",
     "TilingConfig",
     "TransformationRecord",
     "ValidRegion",
+    "VisualFeature",
     "WrittenDiscoveryEvidence",
+    "allocate_run_index",
+    "assemble_perception_result",
     "build_discovery_passes",
+    "claim_id_for",
+    "decode_perception_result",
+    "decode_pipeline_preset",
+    "encode_perception_result",
+    "encode_pipeline_preset",
+    "execute_stage_graph",
+    "feature_id_for",
     "normalize_regions",
+    "perception_result_id_for",
     "prepare_image",
+    "rebuild_run_registry",
+    "region_id_for",
+    "resolve_pipeline",
     "run_discovery_passes",
+    "validate_pipeline_preset",
 ]

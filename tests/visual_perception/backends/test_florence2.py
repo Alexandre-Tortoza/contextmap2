@@ -5,7 +5,14 @@ from hashlib import sha256
 
 import pytest
 
-from contextmap.visual_perception import ArtifactReference, BoundingBox, PreparedImage
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    ArtifactReference,
+    BoundingBox,
+    PreparedImage,
+    Region2D,
+    RegionDiscovery,
+)
 from contextmap.visual_perception.backends.florence2 import (
     Florence2Config,
     Florence2NativeOutput,
@@ -19,8 +26,9 @@ from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass
 def _input() -> DiscoveryInput:
     return DiscoveryInput(
         prepared_image=PreparedImage(
-            source_observation_id="frame-florence",
-            image=ArtifactReference(
+            source_observation_id=SourceObservationId("frame-florence"),
+            payload_reference="outputs/florence.png",
+            payload_artifact=ArtifactReference(
                 uri="outputs/florence.png",
                 sha256=sha256(b"florence").hexdigest(),
                 media_type="image/png",
@@ -77,7 +85,7 @@ def test_florence2_normalizes_boxes_and_masks_without_semantic_promotion() -> No
     )
     backend = Florence2RegionDiscovery(config=config, runtime=FakeFlorence2Runtime())
 
-    output = backend.discover(_input())
+    output = backend.discover_candidates(_input())
 
     assert len(output.candidates) == 2
     box_candidate, mask_candidate = output.candidates
@@ -94,6 +102,8 @@ def test_florence2_normalizes_boxes_and_masks_without_semantic_promotion() -> No
     assert dict(output.diagnostics.metadata)["unparsed_token_count"] == 0
     assert "hypothesis" not in box_candidate.to_dict()
     json.dumps(box_candidate.to_dict())
+    assert isinstance(backend, RegionDiscovery)
+    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
 
 
 def test_florence2_configuration_requires_explicit_region_task() -> None:
@@ -127,7 +137,7 @@ def test_florence2_invalid_native_mask_fails_with_parsing_context() -> None:
     )
 
     with pytest.raises(ValueError, match=r"bad-mask.*mask length"):
-        backend.discover(_input())
+        backend.discover_candidates(_input())
 
 
 class ModelInputs(dict[str, object]):

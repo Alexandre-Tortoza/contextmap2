@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
@@ -28,8 +29,9 @@ from contextmap.visual_perception.normalization import normalize_regions
 
 def _record() -> DiscoveryAuditRecord:
     prepared = PreparedImage(
-        source_observation_id="frame-audit",
-        image=ArtifactReference(
+        source_observation_id=SourceObservationId("frame-audit"),
+        payload_reference="sequence/frames/frame-audit.png",
+        payload_artifact=ArtifactReference(
             uri="sequence/frames/frame-audit.png",
             sha256=sha256(b"audit").hexdigest(),
             media_type="image/png",
@@ -108,7 +110,7 @@ def test_none_level_writes_only_contractual_outputs_and_metrics(tmp_path: Path) 
     assert (stage / "manifest.json").is_file()
     assert not (stage / "debug").exists()
     region_data = json.loads((stage / "outputs" / "regions.jsonl").read_text().strip())
-    assert region_data["identity"]["region_id"] == "region-0001"
+    assert region_data["region_id"] == "region-0001"
     metrics = json.loads((stage / "outputs" / "metrics.json").read_text())
     assert metrics["raw_candidate_count"] == 1
     assert metrics["accepted_region_count"] == 1

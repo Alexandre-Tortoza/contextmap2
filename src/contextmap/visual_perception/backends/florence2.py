@@ -10,7 +10,15 @@ from math import isfinite
 from time import perf_counter
 from typing import Protocol, cast
 
-from ..discovery import BackendDiagnostics, DiscoveryInput, DiscoveryOutput
+from ..discovery import (
+    BackendDiagnostics,
+    DiscoveryInput,
+    DiscoveryOutput,
+    DiscoveryPassConfig,
+    discover_canonical_regions,
+)
+from ..models import BackendProvenance, PreparedImage, Region2D
+from ..normalization import NormalizationConfig
 from ..region_models import (
     BackendScore,
     BoundingBox,
@@ -170,8 +178,8 @@ class TransformersFlorence2Runtime:
         self, discovery_input: DiscoveryInput, config: Florence2Config
     ) -> Florence2NativeOutput:
         """Generate and parse one configured Florence-2 region task."""
-        width = int(discovery_input.discovery_pass.window.width)
-        height = int(discovery_input.discovery_pass.window.height)
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
         task_prompt = f"{config.task}{config.prompt or ''}"
         image = self._image_loader(discovery_input)
         inputs = self._processor(
@@ -202,17 +210,46 @@ class TransformersFlorence2Runtime:
 class Florence2RegionDiscovery:
     """Adapt Florence-2 region tasks without producing semantic claims."""
 
-    def __init__(self, *, config: Florence2Config, runtime: Florence2Runtime) -> None:
+    def __init__(
+        self,
+        *,
+        config: Florence2Config,
+        runtime: Florence2Runtime,
+        pass_config: DiscoveryPassConfig | None = None,
+        normalization_config: NormalizationConfig | None = None,
+    ) -> None:
         """Build the region-only adapter with explicit model runtime."""
         self._config = config
         self._runtime = runtime
+        self._pass_config = pass_config
+        self._normalization_config = normalization_config
 
-    def discover(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
+    def backend_provenance(self) -> BackendProvenance:
+        """Return Florence-2 identity in the Visual Perception Core contract."""
+        return BackendProvenance(
+            backend_id="florence2_region_discovery",
+            capability="region_discovery",
+            provider="microsoft",
+            model=self._config.checkpoint,
+            version=self._config.model_version,
+            configuration_fingerprint=self._config.digest,
+        )
+
+    def discover(self, image: PreparedImage) -> tuple[Region2D, ...]:
+        """Discover and normalize canonical regions through the public port."""
+        return discover_canonical_regions(
+            image,
+            self,
+            pass_config=self._pass_config,
+            normalization_config=self._normalization_config,
+        )
+
+    def discover_candidates(self, discovery_input: DiscoveryInput) -> DiscoveryOutput:
         """Run one Florence-2 region task and normalize parsed geometry."""
         started = perf_counter()
         native_output = self._runtime.predict(discovery_input, self._config)
-        width = int(discovery_input.discovery_pass.window.width)
-        height = int(discovery_input.discovery_pass.window.height)
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
         accepted = tuple(
             region
             for region in native_output.regions

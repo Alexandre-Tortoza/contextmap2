@@ -4,7 +4,14 @@ from hashlib import sha256
 
 import pytest
 
-from contextmap.visual_perception import ArtifactReference, BoundingBox, PreparedImage
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    ArtifactReference,
+    BoundingBox,
+    PreparedImage,
+    Region2D,
+    RegionDiscovery,
+)
 from contextmap.visual_perception.backends.sam3 import (
     Sam3Config,
     Sam3ImageProcessorRuntime,
@@ -19,8 +26,9 @@ from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass
 def _input() -> DiscoveryInput:
     return DiscoveryInput(
         prepared_image=PreparedImage(
-            source_observation_id="frame-8",
-            image=ArtifactReference(
+            source_observation_id=SourceObservationId("frame-8"),
+            payload_reference="outputs/frame-8.png",
+            payload_artifact=ArtifactReference(
                 uri="outputs/frame-8.png",
                 sha256=sha256(b"frame-8").hexdigest(),
                 media_type="image/png",
@@ -74,7 +82,7 @@ def test_sam3_preserves_strategy_query_and_native_score_semantics() -> None:
     )
     backend = Sam3RegionDiscovery(config=config, runtime=FakeSam3Runtime())
 
-    output = backend.discover(_input())
+    output = backend.discover_candidates(_input())
 
     candidate = output.candidates[0]
     assert candidate.score is not None
@@ -88,6 +96,8 @@ def test_sam3_preserves_strategy_query_and_native_score_semantics() -> None:
     assert dict(output.diagnostics.metadata)["strategy"] == "text_prompt"
     assert dict(output.diagnostics.metadata)["peak_memory_mb"] == 512.0
     json.dumps(candidate.to_dict())
+    assert isinstance(backend, RegionDiscovery)
+    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
 
 
 def test_sam3_strategy_configuration_is_explicit() -> None:
@@ -114,7 +124,7 @@ def test_sam3_does_not_fall_back_when_configured_runtime_fails() -> None:
     )
 
     with pytest.raises(RuntimeError, match="configured strategy is unavailable"):
-        backend.discover(_input())
+        backend.discover_candidates(_input())
 
 
 def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> None:

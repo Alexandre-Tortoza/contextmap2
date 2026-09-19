@@ -3,7 +3,14 @@ from hashlib import sha256
 
 import pytest
 
-from contextmap.visual_perception import ArtifactReference, BoundingBox, PreparedImage
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    ArtifactReference,
+    BoundingBox,
+    PreparedImage,
+    Region2D,
+    RegionDiscovery,
+)
 from contextmap.visual_perception.backends.sam2 import (
     Sam2AutomaticMaskRuntime,
     Sam2Config,
@@ -14,15 +21,15 @@ from contextmap.visual_perception.discovery import (
     DiscoveryInput,
     DiscoveryPass,
     PassKind,
-    RegionDiscovery,
 )
 
 
 def _input() -> DiscoveryInput:
     return DiscoveryInput(
         prepared_image=PreparedImage(
-            source_observation_id="frame-2",
-            image=ArtifactReference(
+            source_observation_id=SourceObservationId("frame-2"),
+            payload_reference="outputs/frame-2.png",
+            payload_artifact=ArtifactReference(
                 uri="outputs/frame-2.png",
                 sha256=sha256(b"frame-2").hexdigest(),
                 media_type="image/png",
@@ -49,18 +56,20 @@ class FakeSam2Runtime:
         self, discovery_input: DiscoveryInput, config: Sam2Config
     ) -> tuple[Sam2NativeProposal, ...]:
         self.received.append(discovery_input)
+        width = discovery_input.discovery_pass.input_width
+        height = discovery_input.discovery_pass.input_height
         return (
             Sam2NativeProposal(
                 proposal_id="sam2-1",
                 box=(0.0, 0.0, 2.0, 2.0),
-                mask=(True, True, False, False) + (False,) * 12,
+                mask=tuple(x < 2 and y < 2 for y in range(height) for x in range(width)),
                 predicted_iou=0.91,
                 stability_score=0.87,
             ),
             Sam2NativeProposal(
                 proposal_id="sam2-low",
                 box=(2.0, 2.0, 4.0, 4.0),
-                mask=(False,) * 10 + (True, True, False, False, True, True),
+                mask=tuple(x >= 2 and y >= 2 for y in range(height) for x in range(width)),
                 predicted_iou=0.2,
                 stability_score=0.4,
             ),
@@ -80,7 +89,7 @@ def test_sam2_normalizes_native_proposals_with_complete_provenance() -> None:
     )
     backend = Sam2RegionDiscovery(config=config, runtime=runtime)
 
-    output = backend.discover(_input())
+    output = backend.discover_candidates(_input())
 
     assert isinstance(backend, RegionDiscovery)
     assert len(runtime.received) == 1
@@ -98,6 +107,7 @@ def test_sam2_normalizes_native_proposals_with_complete_provenance() -> None:
     assert dict(candidate.native_metadata)["stability_score"] == 0.87
     assert dict(output.diagnostics.metadata)["raw_proposal_count"] == 2
     json.dumps(candidate.to_dict())
+    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
 
 
 def test_sam2_configuration_rejects_invalid_thresholds_and_unknown_values() -> None:
@@ -128,7 +138,7 @@ def test_sam2_native_shape_errors_fail_explicitly() -> None:
     backend = Sam2RegionDiscovery(config=Sam2Config(checkpoint="sam2"), runtime=InvalidRuntime())
 
     with pytest.raises(ValueError, match="mask length"):
-        backend.discover(_input())
+        backend.discover_candidates(_input())
 
 
 def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:

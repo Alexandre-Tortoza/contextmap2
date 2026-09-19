@@ -3,6 +3,7 @@ from hashlib import sha256
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
@@ -40,8 +41,9 @@ def _prepared(
     *, valid: InlineMask | None = None, exclusion: InlineMask | None = None
 ) -> PreparedImage:
     return PreparedImage(
-        source_observation_id="frame-1",
-        image=ArtifactReference(
+        source_observation_id=SourceObservationId("frame-1"),
+        payload_reference="outputs/frame.png",
+        payload_artifact=ArtifactReference(
             uri="outputs/frame.png",
             sha256=sha256(b"frame").hexdigest(),
             media_type="image/png",
@@ -104,9 +106,9 @@ def test_duplicate_full_frame_and_tile_proposals_merge_with_lineage() -> None:
 
     assert len(result.regions) == 1
     region = result.regions[0]
-    assert region.identity.region_id == "region-0001"
+    assert region.region_id == "region-0001"
     assert region.contributor_candidate_ids == ("candidate-a", "candidate-b")
-    assert [item.discovery_pass_id for item in region.provenance] == [
+    assert [item.discovery_pass_id for item in region.discovery_provenance] == [
         "full-frame",
         "tile-0001",
     ]
@@ -114,7 +116,7 @@ def test_duplicate_full_frame_and_tile_proposals_merge_with_lineage() -> None:
     assert result.merge_decisions[0].iou == 1.0
     assert result.rejected[0].reason is RejectionReason.MERGED_DUPLICATE
     with pytest.raises(FrozenInstanceError):
-        region.bounding_box = BoundingBox(0, 0, 1, 1)  # type: ignore[misc]
+        region.bounding_box = BoundingBox(0, 0, 1, 1)  # type: ignore[misc, assignment]
 
 
 def test_contained_fragment_merges_without_comparing_backend_scores() -> None:

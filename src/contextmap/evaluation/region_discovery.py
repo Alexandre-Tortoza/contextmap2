@@ -356,6 +356,37 @@ def compare_region_discovery_reports(
     }
     if differing != {changed_variable}:
         raise ValueError("ablation must change exactly the declared variable")
+    uncontrolled: list[str] = []
+    for field_name in ("backend_id", "backend_version", "checkpoint"):
+        if (
+            getattr(baseline.run, field_name) != getattr(changed.run, field_name)
+            and changed_variable != "backend"
+        ):
+            uncontrolled.append(field_name)
+    if baseline.run.strategy != changed.run.strategy and changed_variable not in {
+        "strategy",
+        "query_strategy",
+        "backend",
+    }:
+        uncontrolled.append("strategy")
+    if baseline.run.pipeline_graph_digest != changed.run.pipeline_graph_digest and (
+        changed_variable != "pipeline_graph"
+    ):
+        uncontrolled.append("pipeline_graph_digest")
+    if baseline.run.execution_kind != changed.run.execution_kind:
+        uncontrolled.append("execution_kind")
+    baseline_thresholds = dict(baseline.run.thresholds)
+    changed_thresholds = dict(changed.run.thresholds)
+    changed_threshold_names = {
+        key
+        for key in baseline_thresholds.keys() | changed_thresholds.keys()
+        if baseline_thresholds.get(key) != changed_thresholds.get(key)
+    }
+    if changed_threshold_names and changed_threshold_names != {changed_variable}:
+        uncontrolled.append("thresholds")
+    if uncontrolled:
+        names = ", ".join(sorted(uncontrolled))
+        raise ValueError(f"ablation changed uncontrolled run fields: {names}")
     baseline_summary = _report_summary(baseline)
     changed_summary = _report_summary(changed)
     return RegionDiscoveryComparison(
@@ -408,7 +439,11 @@ def _diagnostic_metrics(evaluated: EvaluatedDiscoveryFrame) -> DiscoveryDiagnost
         duplicate_merge_ratio=(
             len(evaluated.normalization.merge_decisions) / raw_count if raw_count else 0.0
         ),
-        area_pixels=tuple(region.area_pixels for region in evaluated.normalization.regions),
+        area_pixels=tuple(
+            region.area_pixels
+            for region in evaluated.normalization.regions
+            if region.area_pixels is not None
+        ),
         invalid_geometry_count=sum(
             rejection.reason.value == "invalid_geometry" for rejection in rejections
         ),
@@ -498,6 +533,8 @@ def _accuracy_metrics(
 def _region_pixels(region: Region2D) -> set[tuple[int, int]]:
     if isinstance(region.mask, InlineMask):
         return _mask_pixels(region.mask)
+    if region.image_width is None or region.image_height is None:
+        raise ValueError("evaluated regions must declare image dimensions")
     return {
         (x, y)
         for y in range(region.image_height)

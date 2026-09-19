@@ -14,9 +14,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from .discovery import BackendDiagnostics, DiscoveryRunResult
-from .image_preparation import PreparedImage
+from .models import BoundingBox2D, PreparedImage, Region2D
 from .normalization import NormalizationResult
-from .region_models import BoundingBox, InlineMask, JsonScalar, Region2D, RegionCandidate
+from .region_models import BoundingBox, InlineMask, JsonScalar, RegionCandidate
 
 
 class DebugLevel(StrEnum):
@@ -190,7 +190,7 @@ class RegionDiscoveryEvidenceWriter:
 
         if debug_level is DebugLevel.FULL:
             for region in record.normalization.regions:
-                region_directory = debug / "regions" / region.identity.region_id
+                region_directory = debug / "regions" / str(region.region_id)
                 region_directory.mkdir(parents=True)
                 _write_json(region_directory / "region.json", region.to_dict())
                 if isinstance(region.mask, InlineMask):
@@ -204,7 +204,11 @@ def _metrics(record: DiscoveryAuditRecord) -> dict[str, object]:
         _raw_proposal_count(diagnostics) for diagnostics in record.discovery.diagnostics
     )
     rejections = (*record.discovery.rejected, *record.normalization.rejected)
-    areas = [region.area_pixels for region in record.normalization.regions]
+    areas = [
+        region.area_pixels
+        for region in record.normalization.regions
+        if region.area_pixels is not None
+    ]
     durations = [diagnostics.duration_ms for diagnostics in record.discovery.diagnostics]
     warnings = [
         warning for diagnostics in record.discovery.diagnostics for warning in diagnostics.warnings
@@ -300,7 +304,7 @@ def _region_overlay(
 ) -> str:
     lines = _svg_start(image, title)
     for region in regions:
-        lines.extend(_svg_box(region.bounding_box, region.identity.region_id, color))
+        lines.extend(_svg_box(region.bounding_box, str(region.region_id), color))
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
 
@@ -325,7 +329,7 @@ def _rejection_overlay(record: DiscoveryAuditRecord, title: str, color: str) -> 
     return "\n".join(lines) + "\n"
 
 
-def _svg_box(box: BoundingBox, label: str, color: str) -> list[str]:
+def _svg_box(box: BoundingBox | BoundingBox2D, label: str, color: str) -> list[str]:
     return [
         (
             f'<rect x="{box.x_min}" y="{box.y_min}" width="{box.width}" '

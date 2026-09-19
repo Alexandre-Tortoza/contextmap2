@@ -171,7 +171,7 @@ class InlineMask:
         )
 
 
-MaskGeometry: TypeAlias = InlineMask | ArtifactReference
+MaskGeometry: TypeAlias = InlineMask
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,38 +260,6 @@ class RegionProvenance:
 
 
 @dataclass(frozen=True, slots=True)
-class RegionIdentity:
-    """Identify a region only within one perception result and run."""
-
-    perception_run_id: str
-    perception_result_id: str
-    region_id: str
-
-    def __post_init__(self) -> None:
-        """Reject ambiguous empty identity components."""
-        if not self.perception_run_id or not self.perception_result_id or not self.region_id:
-            raise ValueError("region identity components must not be empty")
-
-    def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible representation."""
-        return {
-            "perception_run_id": self.perception_run_id,
-            "perception_result_id": self.perception_result_id,
-            "region_id": self.region_id,
-        }
-
-    @classmethod
-    def from_dict(cls, value: object) -> RegionIdentity:
-        """Restore a scoped region identity from serialized data."""
-        data = _mapping(value, "region identity")
-        return cls(
-            perception_run_id=_string(data, "perception_run_id"),
-            perception_result_id=_string(data, "perception_result_id"),
-            region_id=_string(data, "region_id"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class RegionCandidate:
     """A backend proposal before canonical filtering, merge, and geometry freeze."""
 
@@ -304,6 +272,7 @@ class RegionCandidate:
     provenance: RegionProvenance
     bounding_box: BoundingBox | None = None
     mask: MaskGeometry | None = None
+    mask_reference: ArtifactReference | None = None
     score: BackendScore | None = None
     native_metadata: tuple[tuple[str, JsonScalar], ...] = ()
     coordinate_convention: CoordinateConvention = CoordinateConvention.PIXEL_XY_TOP_LEFT
@@ -322,6 +291,10 @@ class RegionCandidate:
             raise ValueError("candidate image dimensions must be positive")
         if self.bounding_box is None and self.mask is None:
             raise ValueError("candidate must contain at least one geometry representation")
+        if self.mask is not None and not isinstance(self.mask, InlineMask):
+            raise TypeError("candidate mask must be materialized as InlineMask")
+        if self.mask_reference is not None and self.mask is None:
+            raise ValueError("candidate mask_reference requires a materialized mask")
         _validate_geometry_bounds(
             bounding_box=self.bounding_box,
             mask=self.mask,
@@ -346,6 +319,9 @@ class RegionCandidate:
             "coordinate_convention": self.coordinate_convention.value,
             "bounding_box": self.bounding_box.to_dict() if self.bounding_box else None,
             "mask": _mask_to_dict(self.mask),
+            "mask_reference": (
+                None if self.mask_reference is None else self.mask_reference.to_dict()
+            ),
             "score": self.score.to_dict() if self.score else None,
             "provenance": self.provenance.to_dict(),
             "native_metadata": [
@@ -369,6 +345,7 @@ class RegionCandidate:
             metadata.append((_string(entry, "name"), cast(JsonScalar, scalar)))
         raw_box = data.get("bounding_box")
         raw_score = data.get("score")
+        raw_mask_reference = data.get("mask_reference")
         return cls(
             candidate_id=_string(data, "candidate_id"),
             source_observation_id=_string(data, "source_observation_id"),
@@ -379,88 +356,14 @@ class RegionCandidate:
             coordinate_convention=CoordinateConvention(_string(data, "coordinate_convention")),
             bounding_box=BoundingBox.from_dict(raw_box) if raw_box is not None else None,
             mask=_mask_from_dict(data.get("mask")),
+            mask_reference=(
+                ArtifactReference.from_dict(raw_mask_reference)
+                if raw_mask_reference is not None
+                else None
+            ),
             score=BackendScore.from_dict(raw_score) if raw_score is not None else None,
             provenance=RegionProvenance.from_dict(data.get("provenance")),
             native_metadata=tuple(metadata),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class Region2D:
-    """Accepted immutable geometry local to one perception result."""
-
-    identity: RegionIdentity
-    source_observation_id: str
-    image_width: int
-    image_height: int
-    bounding_box: BoundingBox
-    area_pixels: float
-    contributor_candidate_ids: tuple[str, ...]
-    provenance: tuple[RegionProvenance, ...]
-    mask: MaskGeometry | None = None
-    coordinate_convention: CoordinateConvention = CoordinateConvention.PIXEL_XY_TOP_LEFT
-
-    def __post_init__(self) -> None:
-        """Enforce complete frozen geometry and proposal lineage."""
-        if not self.source_observation_id:
-            raise ValueError("source_observation_id must not be empty")
-        if self.image_width <= 0 or self.image_height <= 0:
-            raise ValueError("region image dimensions must be positive")
-        if not isfinite(self.area_pixels) or self.area_pixels <= 0:
-            raise ValueError("region area_pixels must be positive and finite")
-        if not self.contributor_candidate_ids or any(
-            not candidate_id for candidate_id in self.contributor_candidate_ids
-        ):
-            raise ValueError("region must preserve at least one contributor candidate")
-        if len(set(self.contributor_candidate_ids)) != len(self.contributor_candidate_ids):
-            raise ValueError("region contributor candidate ids must be unique")
-        if not self.provenance:
-            raise ValueError("region must preserve proposal provenance")
-        _validate_geometry_bounds(
-            bounding_box=self.bounding_box,
-            mask=self.mask,
-            image_width=self.image_width,
-            image_height=self.image_height,
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible frozen region representation."""
-        return {
-            "identity": self.identity.to_dict(),
-            "source_observation_id": self.source_observation_id,
-            "image_width": self.image_width,
-            "image_height": self.image_height,
-            "coordinate_convention": self.coordinate_convention.value,
-            "bounding_box": self.bounding_box.to_dict(),
-            "mask": _mask_to_dict(self.mask),
-            "area_pixels": self.area_pixels,
-            "contributor_candidate_ids": list(self.contributor_candidate_ids),
-            "provenance": [item.to_dict() for item in self.provenance],
-        }
-
-    @classmethod
-    def from_dict(cls, value: object) -> Region2D:
-        """Restore a frozen region from serialized data."""
-        data = _mapping(value, "region")
-        contributors = data.get("contributor_candidate_ids")
-        provenance = data.get("provenance")
-        if not isinstance(contributors, list) or any(
-            not isinstance(item, str) for item in contributors
-        ):
-            raise TypeError("contributor_candidate_ids must be a list of strings")
-        if not isinstance(provenance, list):
-            raise TypeError("provenance must be a list")
-        return cls(
-            identity=RegionIdentity.from_dict(data.get("identity")),
-            source_observation_id=_string(data, "source_observation_id"),
-            image_width=_integer(data, "image_width"),
-            image_height=_integer(data, "image_height"),
-            coordinate_convention=CoordinateConvention(_string(data, "coordinate_convention")),
-            bounding_box=BoundingBox.from_dict(data.get("bounding_box")),
-            mask=_mask_from_dict(data.get("mask")),
-            area_pixels=_number(data, "area_pixels"),
-            contributor_candidate_ids=tuple(cast(list[str], contributors)),
-            provenance=tuple(RegionProvenance.from_dict(item) for item in provenance),
         )
 
 
@@ -517,11 +420,7 @@ def _validate_geometry_bounds(
 def _mask_to_dict(mask: MaskGeometry | None) -> dict[str, object] | None:
     if mask is None:
         return None
-    if isinstance(mask, InlineMask):
-        return mask.to_dict()
-    data = mask.to_dict()
-    data["storage"] = "artifact_reference"
-    return data
+    return mask.to_dict()
 
 
 def _mask_from_dict(value: object) -> MaskGeometry | None:
@@ -531,8 +430,6 @@ def _mask_from_dict(value: object) -> MaskGeometry | None:
     storage = _string(data, "storage")
     if storage == "inline":
         return InlineMask.from_dict(data)
-    if storage == "artifact_reference":
-        return ArtifactReference.from_dict(data)
     raise ValueError(f"unsupported mask storage: {storage}")
 
 

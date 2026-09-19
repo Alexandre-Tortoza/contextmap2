@@ -124,6 +124,10 @@ src/contextmap/<module>/docs/
 
 Arquivos complementares só devem existir quando houver conteúdo real. O objetivo é fragmentar por responsabilidade, não multiplicar arquivos vazios.
 
+Módulos com documentação própria:
+
+- [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração e adapters de fonte.
+
 ## Integração da documentação
 
 A documentação é fragmentada fisicamente, mas forma um único grafo de conhecimento.
