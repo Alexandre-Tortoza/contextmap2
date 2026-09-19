@@ -112,7 +112,7 @@ Esse padrão não autoriza outras capabilities a importar `visual_perception.bac
 
 ## Factories pequenas, não service locator
 
-A Solution 1 não precisa de container de dependency injection, registry global mutável ou descoberta dinâmica de plugins.
+O canonical pipeline não precisa de container de dependency injection, registry global mutável ou descoberta dinâmica de plugins.
 
 Quando existe um variation point real, a composition root pode usar factories pequenas e explícitas:
 
