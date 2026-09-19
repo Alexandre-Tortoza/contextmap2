@@ -2,7 +2,7 @@
 
 Este documento descreve `src/contextmap/visual_perception/ports.py`: os quatro `Protocol`s que qualquer backend concreto de percepção visual implementa.
 
-## Mapeamento planejado capability/backend
+## Mapeamento capability/backend
 
 ```mermaid
 flowchart LR
@@ -13,9 +13,9 @@ flowchart LR
         SS["SemanticScorer"]
     end
 
-    SAM2["SAM2"] -. adapter planejado .-> RD
-    SAM3["SAM3"] -. adapter planejado .-> RD
-    F2["Florence-2"] -. adapter planejado .-> RD
+    SAM2["SAM2"] -->|implementado| RD
+    SAM3["SAM3"] -->|implementado| RD
+    F2["Florence-2"] -->|implementado| RD
     F2 -. adapter planejado .-> SI
     D2["DINOv2"] -. adapter planejado .-> FE
     D3["DINOv3"] -. adapter planejado .-> FE
@@ -47,6 +47,8 @@ Contrato canônico de "imagem pronta para os backends consumirem" (`contextmap.v
 ## `RegionDiscovery`
 
 O port público permanece `discover(PreparedImage) -> Sequence[Region2D]`. SAM2, SAM3 e Florence-2 implementam essa assinatura e devolvem o mesmo `Region2D` canônico consumido por Feature Extraction e pelo `PerceptionResult`. A execução por pass usa o boundary interno `RegionCandidateDiscovery.discover_candidates(DiscoveryInput)`; passes, diagnostics e `RegionCandidate` não vazam para o orchestrator do Core.
+
+Os tipos adapter-facing são exportados para configuração, diagnóstico e avaliação, mas não alteram a fronteira consumida pelas capabilities downstream. O fluxo completo está em [`region-discovery.md`](region-discovery.md).
 
 ## `FeatureExtractor.required_scope()`
 

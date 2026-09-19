@@ -233,6 +233,21 @@ flowchart LR
 
 `RegionId`, `FeatureId` e `ClaimId` são locais ao `PerceptionResult`. Reprocessar a mesma `SourceObservation` em outro run cria outro `PerceptionResult`; não cria uma nova observação física e não funde resultados anteriores.
 
+### Region Discovery implementado
+
+```mermaid
+flowchart LR
+    PI["PreparedImage"] --> PASSES["full-frame / tiles / scales"]
+    PASSES --> RD["SAM2 | SAM3 | Florence-2"]
+    RD --> RC["RegionCandidate[]"]
+    RC --> N["normalize / merge"]
+    N --> GF["Geometry Freeze"]
+    GF --> R2D["Region2D[]"]
+    R2D --> RESULT["PerceptionResult"]
+```
+
+Region Discovery agora possui adapters concretos para SAM2, SAM3 e Florence-2, além de image preparation auditável, tiling/scale com validação da imagem materializada, remapeamento global, filtros/constraints, merge e diagnostics. O output do estágio continua sendo o `Region2D` canônico; candidatos e decisões intermediárias permanecem evidence/audit da execução. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/region-discovery.md).
+
 ### Persistência e leitura multi-run
 
 ```mermaid
@@ -250,16 +265,14 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo, mas não fazem parte de `CANONICAL_PRESET_V1` hoje:
 
-- backends reais de SAM/DINO/CLIP/VLM;
+- backends reais de Feature Extraction e Semantic Interpretation além de Region Discovery;
 - integração de `SemanticScorer` como estágio do DAG;
-- region normalization/merge e Geometry Freeze como estágios explícitos;
 - semantic refinement;
-- implementação concreta de image preparation;
 - integração end-to-end com State Estimation, geometria e Sensor Association.
 
 Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 
-Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
+Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
 
 ## 3. Branch de State Estimation
 

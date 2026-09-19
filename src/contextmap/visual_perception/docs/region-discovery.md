@@ -4,6 +4,25 @@ Region Discovery propõe geometria 2D para uma execução de Visual Perception. 
 preserva evidência geométrica e provenance, sem decidir identidade persistente, label final ou
 suporte 3D.
 
+## Visão geral
+
+```mermaid
+flowchart LR
+    OBS["SourceObservation / imagem"] --> PREP["PreparedImage"]
+    PREP --> PASS["Discovery passes<br/>full-frame / tiles / scales"]
+    PASS --> ADAPTER["RegionDiscovery backend<br/>SAM2 / SAM3 / Florence-2"]
+    ADAPTER --> CAND["RegionCandidate[]"]
+    CAND --> REMAP["Remapeamento para<br/>coordenadas globais da imagem"]
+    REMAP --> NORM["Normalização geométrica<br/>filtros + merge + budget"]
+    NORM --> FREEZE["Geometry Freeze"]
+    FREEZE --> REG["Region2D[]"]
+    REG --> VP["PerceptionResult"]
+    CAND --> AUD["Diagnostics / audit"]
+    NORM --> AUD
+```
+
+O port consumido pelo Visual Perception Core é `RegionDiscovery.discover(PreparedImage) -> Sequence[Region2D]`. Passes, candidatos, rejeições, diagnostics e avaliação existem para tornar a produção dessas regiões verificável sem transformar uma proposta de frame em verdade persistente do mapa.
+
 ## Contratos canônicos
 
 `RegionCandidate` representa uma proposta antes de validação, merge e normalização. A proposta
@@ -20,6 +39,30 @@ identidade não pode ser usada como entity ID do mapa.
 
 `RejectedRegionCandidate` registra uma rejeição com motivo legível por máquina, detalhe e pass de
 origem. Rejeições e propostas incorporadas por merge permanecem disponíveis para auditoria.
+
+## Fronteiras de contrato
+
+```mermaid
+flowchart TB
+    subgraph CORE["Contrato canônico de Visual Perception"]
+        PI["PreparedImage"] --> PORT["RegionDiscovery"] --> R2D["Region2D[]"]
+    end
+
+    subgraph DISC["Superfície de Region Discovery"]
+        DPI["DiscoveryInput"] --> RCD["RegionCandidateDiscovery"]
+        RCD --> DPO["DiscoveryOutput"]
+        DPO --> RC["RegionCandidate[]"]
+        RC --> NR["normalize_regions()"]
+        NR --> R2D
+    end
+
+    BP["BackendProvenance"] --> PORT
+    BP --> NR
+```
+
+`PreparedImage`, `Region2D` e `RegionDiscovery` possuem uma única definição canônica em Visual Perception Core. `DiscoveryInput`, `DiscoveryOutput`, `RegionCandidate`, `RejectedRegionCandidate` e os tipos de passes são contratos adapter-facing e de auditoria exportados pelo módulo, mas não substituem `Region2D` como evidência consumida pelas capabilities downstream.
+
+Uma `RegionCandidate` é evidência de proposta antes da consolidação. Ela preserva run/result, observação física, dimensões da imagem, provenance do proposal, score nativo e geometria materializada. Uma `Region2D` é a geometria canônica após validação, merge e freeze; ainda é evidência local ao `PerceptionResult`, nunca uma entidade 3D persistente.
 
 ## Espaço de coordenadas
 
@@ -54,6 +97,25 @@ Tensors, objetos de SDK e handles de modelo ficam dentro do adapter. Prompt ou t
 descobrir uma região pode aparecer na provenance, mas não cria automaticamente um
 `SemanticClaim`.
 
+## Organização da implementação
+
+```text
+visual_perception/
+├── models.py                 # PreparedImage, Region2D, BackendProvenance
+├── ports.py                  # RegionDiscovery
+├── image_preparation.py      # plano auditável de preparação
+├── region_models.py          # RegionCandidate e geometria de proposal
+├── discovery.py              # passes, tiling, remapeamento e adapter boundary
+├── normalization.py          # filtros, merge e geometry freeze
+├── diagnostics.py            # outputs e debug do estágio
+└── backends/
+    ├── sam2.py
+    ├── sam3.py
+    └── florence2.py
+```
+
+A separação evita que SDKs de modelos definam os contratos do domínio. `models.py` e `ports.py` contêm a fronteira canônica; os adapters concretos isolam APIs de modelos; `discovery.py` e `normalization.py` permanecem backend-neutral.
+
 ## Preparação de imagem e constraints
 
 `prepare_image` recebe uma `SourceImage` imutável e uma sequência explícita de operações. Sem
@@ -71,6 +133,19 @@ necessidade desse tipo deve ser declarada pelo preset/source config que criou a 
 O contrato não pinta pixels excluídos de preto nem altera a observação física. Backends recebem a
 imagem preparada e as constraints separadamente, evitando que uma alteração visual silenciosa seja
 confundida com evidência do sensor.
+
+## Transformações de coordenadas
+
+```mermaid
+flowchart LR
+    G["PreparedImage<br/>espaço global"] --> W["Window do pass<br/>crop lógico"]
+    W --> S["Input escalado<br/>input_width x input_height"]
+    S --> M["Modelo produz<br/>box/mask local"]
+    M --> INV["Transform inverso<br/>scale + offset"]
+    INV --> G2["Candidate no espaço global<br/>PreparedImage"]
+```
+
+A geometria produzida por backend pertence ao espaço efetivamente materializado para o pass. O remapeamento para `PreparedImage` ocorre antes da normalização, e a provenance mantém `discovery_pass_id`, configuração e identidade nativa da proposta.
 
 ## Passes e tiling
 
@@ -100,6 +175,24 @@ metadados do pass sem produzir o crop/resize correspondente falha explicitamente
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.
 
+## Validação da imagem materializada
+
+Os runtimes oficiais não confiam apenas nos metadados do pass. Depois que o `image_loader` materializa o crop/resize, `validate_materialized_discovery_image()` verifica as dimensões reais antes da inferência:
+
+```mermaid
+flowchart TD
+    L["image_loader(DiscoveryInput)"] --> D{"dimensões inspecionáveis?"}
+    D -->|PIL size| P["size = width,height"]
+    D -->|array HWC| A["shape = height,width,..."]
+    D -->|não| E1["TypeError"]
+    P --> C{"iguais ao pass?"}
+    A --> C
+    C -->|sim| RUN["executa backend"]
+    C -->|não| E2["ValueError"]
+```
+
+Isso torna `TilingConfig.scale` uma transformação verificável: alterar a escala muda o tamanho efetivamente apresentado ao modelo, e o remapeamento inverso retorna a geometria ao mesmo sistema de coordenadas global.
+
 ## Backend SAM2
 
 `Sam2RegionDiscovery` implementa o mesmo port usado pelos demais backends. O adapter recebe
@@ -120,7 +213,7 @@ participam do digest, sem tornar SAM2 dependência obrigatória do pacote princi
 
 ## Backend SAM3
 
-`Sam3RegionDiscovery` é o adapter planejado para o baseline da Solution 1 e continua substituível
+`Sam3RegionDiscovery` é o adapter concreto de SAM3 para Region Discovery e continua substituível
 pelo mesmo port. `Sam3Config` torna checkpoint, versão, device, precision, thresholds e estratégia
 parte do digest da execução. Estratégias `automatic`, `text_prompt`, `point_grid`, `tracker` e `pcs`
 são distintas; `text_prompt` exige prompt, enquanto `automatic` rejeita prompt oculto.
@@ -154,12 +247,47 @@ chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam pr
 Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser
 permanecem metadata de descoberta.
 
+## Relação entre backends
+
+```mermaid
+flowchart LR
+    SAM2["Sam2RegionDiscovery"] --> PORT["RegionDiscovery"]
+    SAM3["Sam3RegionDiscovery"] --> PORT
+    F2["Florence2RegionDiscovery"] --> PORT
+    PORT --> REG["Region2D[]"]
+
+    SAM2 --> RC["RegionCandidate[]"]
+    SAM3 --> RC
+    F2 --> RC
+    RC --> COMMON["normalização comum"] --> REG
+```
+
+Os três adapters compartilham a mesma política geométrica depois da conversão para `RegionCandidate`. Scores permanecem backend-native e não são comparados como uma confiança universal. Texto de prompt ou labels do parser podem permanecer como metadata/provenance de descoberta, mas não são promovidos automaticamente a `SemanticClaim`.
+
 ## Normalização, merge e geometry freeze
 
 `normalize_regions` aplica a mesma política a propostas de SAM2, SAM3, Florence-2 e fakes. A ordem
 é: validar geometria, aplicar limites de área, verificar valid/exclusion masks declaradas, detectar
 duplicatas por IoU ou containment, aplicar budget e criar `Region2D` imutável. Nenhuma regra usa
 label semântico ou compara scores de backends diferentes.
+
+```mermaid
+flowchart TD
+    C["RegionCandidate[]"] --> V["validar identidade, dimensões<br/>e BackendProvenance"]
+    V --> G["materializar geometria inspecionável"]
+    G --> AREA["filtros de área"]
+    AREA --> CONS["valid/exclusion constraints"]
+    CONS --> DUP["IoU / containment"]
+    DUP --> MERGE["merge + contributor lineage"]
+    MERGE --> BUDGET["maximum_regions"]
+    BUDGET --> FREEZE["Region2D imutável"]
+    G -. inválido .-> REJ["RejectedRegionCandidate"]
+    AREA -. rejeitado .-> REJ
+    CONS -. rejeitado .-> REJ
+    DUP -. duplicata incorporada .-> REJ
+```
+
+Rejeições permanecem evidência auditável. Um merge não apaga a proposta incorporada: a região final mantém contributor IDs e `discovery_provenance`, enquanto a decisão de merge e a rejeição correspondente explicam o que ocorreu.
 
 A chamada recebe o `BackendProvenance` exato reportado pelo adapter e valida sua consistência com
 as propostas. O mesmo value object acompanha cada `Region2D`; provider, model, versão e fingerprint
@@ -179,8 +307,8 @@ explicitamente.
 
 ## Evidência persistida e diagnostics
 
-`RegionDiscoveryEvidenceWriter` finaliza atomicamente `20-region-discovery/` e recusa sobrescrever
-um estágio existente. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
+`RegionDiscoveryEvidenceWriter` finaliza atomicamente o diretório de estágio fornecido pelo chamador e recusa sobrescrever
+um resultado já finalizado. O nome físico do diretório pertence à composição do run, não ao contrato do writer. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
 contratuais. O manifest registra schema, backend, digest da política, nível de debug e hash de cada
 payload. Consumidores downstream não leem `debug/`.
 
@@ -195,6 +323,96 @@ Os overlays usam IDs canônicos e coordenadas da imagem preparada. O formato vet
 inspeção disponível sem introduzir uma biblioteca de imagem no domínio. Métricas preservam counts,
 motivos de rejeição, distribuição de área, merge ratio, duração por pass, warnings e memória quando
 o runtime a reporta.
+
+### Fluxo de persistência
+
+```mermaid
+flowchart LR
+    RUN["DiscoveryRunResult"] --> REC["DiscoveryAuditRecord"]
+    NORM["NormalizationResult"] --> REC
+    PI["PreparedImage"] --> REC
+    REC --> WR["RegionDiscoveryEvidenceWriter"]
+    WR --> OUT["outputs/<br/>regions.jsonl + metrics.json"]
+    WR --> MAN["manifest.json<br/>hashes + config digest"]
+    WR -. debug standard/full .-> DBG["debug/<br/>passes, candidates, overlays, masks"]
+    OUT --> DOWN["consumo contratual / avaliação"]
+    DBG -. não contratual .-> HUMAN["inspeção humana"]
+```
+
+O writer finaliza atomicamente o diretório solicitado e recusa sobrescrita. `outputs/` e `manifest.json` são contratuais para esse artifact de estágio; `debug/` é auxiliar e nunca deve ser requisito de uma capability downstream. A documentação global de artifacts explica como esse output se relaciona ao `PerceptionRunArtifact`.
+
+## Avaliação objetiva
+
+A avaliação específica de Region Discovery está em [`contextmap/evaluation/docs/region-discovery.md`](../../evaluation/docs/region-discovery.md). O mesmo reference set e schema medem SAM2, SAM3, Florence-2 ou fakes sem usar labels semânticos downstream.
+
+```mermaid
+flowchart LR
+    REF["ReferenceSet versionado"] --> EVAL["RegionDiscoveryEvaluator"]
+    RUN["Run descriptor<br/>backend/config/strategy"] --> EVAL
+    PRED["Discovery + normalization"] --> EVAL
+    EVAL --> Q["Qualidade<br/>IoU, Dice, recall, coverage"]
+    EVAL --> D["Diagnostics<br/>counts, merge, invalid geometry"]
+    EVAL --> PERF["Performance<br/>runtime, peak memory"]
+    Q --> REP["EvaluationReport"]
+    D --> REP
+    PERF --> REP
+    REP --> ABL["controlled ablation"]
+```
+
+Comparações de ablação exigem o mesmo reference set e exatamente uma variável declarada diferente. Backend, checkpoint, versão, strategy, thresholds, pipeline graph, `config_digest` e `execution_kind` são verificados para impedir atribuição de delta a uma variável errada. O baseline versionado atual é `ci_contract`, não evidência de qualidade do modelo SAM3 real.
+
+## Falhas explícitas e invariantes
+
+Region Discovery falha cedo quando um contrato que afeta a interpretação geométrica é violado. Entre os invariantes cobertos pelo código e testes estão:
+
+- dimensões da imagem preparada e dos candidates positivas e consistentes;
+- IDs de candidate únicos antes da normalização;
+- candidate e `BackendProvenance` pertencem ao mesmo backend/configuração;
+- `mask_reference` não substitui uma máscara materializada quando a geometria precisa ser inspecionada;
+- materialização do pass possui as dimensões realmente declaradas;
+- geometria não sai dos bounds da imagem;
+- estratégias de runtime não implementadas falham sem fallback silencioso;
+- escrita de evidence artifact é atômica e não sobrescreve resultado finalizado;
+- Geometry Freeze produz `Region2D` imutável.
+
+## Como adicionar outro backend de Region Discovery
+
+Um novo backend deve resolver um variation point real sem alterar o contrato downstream:
+
+1. definir configuração efetiva e fingerprint reproduzível;
+2. isolar o SDK/runtime dentro de `backends/`;
+3. implementar `backend_provenance()` e `discover(PreparedImage)` do port canônico;
+4. converter output nativo para `RegionCandidate` no boundary adapter-facing;
+5. preservar scores com nome e semântica próprios;
+6. reutilizar passes, remapeamento e `normalize_regions()` em vez de criar política geométrica paralela;
+7. adicionar testes determinísticos sem download/GPU e testes do runtime oficial quando aplicável;
+8. avaliar no mesmo reference set e schema antes de qualquer decisão de baseline.
+
+Adicionar um backend não o torna automaticamente parte de um `PipelinePreset`; seleção e composição continuam sendo responsabilidade explícita do pipeline/runtime.
+
+## Testes que sustentam o contrato
+
+A cobertura principal está em:
+
+- `tests/visual_perception/test_region_contracts.py`;
+- `tests/visual_perception/test_image_preparation.py`;
+- `tests/visual_perception/test_discovery_passes.py`;
+- `tests/visual_perception/test_region_normalization.py`;
+- `tests/visual_perception/test_discovery_diagnostics.py`;
+- `tests/visual_perception/backends/test_sam2.py`;
+- `tests/visual_perception/backends/test_sam3.py`;
+- `tests/visual_perception/backends/test_florence2.py`;
+- `tests/evaluation/test_region_discovery_evaluation.py`.
+
+Esses testes verificam contratos, coordenadas, scale, materialização, adapters, provenance, normalização, persistência e comparação objetiva. O gate do repositório continua sendo `make check`, `make build` e os checks automatizados da PR.
+
+## Integração com a documentação global
+
+- [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) posiciona Region Discovery dentro do branch de Visual Perception;
+- [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) define o significado global de `Region2D`;
+- [`docs/architecture.md`](../../../../docs/architecture.md) define ownership, ports/adapters e direção de dependências;
+- [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) define a relação entre outputs de estágio, debug e artifacts imutáveis;
+- [`Visual Perception README`](README.md) é o índice do módulo.
 
 ## Geometry freeze
 
