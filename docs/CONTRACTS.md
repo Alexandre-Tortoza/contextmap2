@@ -176,7 +176,9 @@ region_id?
 normalization?
 ```
 
-`embedding_space_id` é atualmente uma referência opaca. Um contrato completo de `EmbeddingSpace` continua sendo responsabilidade futura da capability de Feature Extraction; portanto compatibilidade entre espaços nunca deve ser inferida apenas por dimensão.
+`embedding_space_id` continua opaco dentro do `VisualFeature`, mas o contrato que ele identifica já existe como `EmbeddingSpace`. O fingerprint inclui família, modelo, versão, checkpoint, layer, dimensão e normalização. Duas features só são comparáveis quando seus fingerprints são exatamente iguais; dimensão igual nunca é suficiente.
+
+Para features densas, `DenseFeatureMap` associa o `VisualFeature` a uma `DenseFeatureSampling` explícita e ao artifact de origem. Isso impede consumers de inferir patch size, stride ou transformação a partir do backend. Payloads numéricos podem ser persistidos separadamente pelo feature store e resolvidos pela chave `(source_observation_id, feature_id)`.
 
 ## 7. `SemanticClaim`
 
@@ -673,4 +675,4 @@ Mas não podem exigir o tipo nativo do backend para serem lidos.
 
 Todo contrato que atravessa uma boundary persistida deve possuir representação serializável/inspectável ou metadata suficiente para resolver seu payload.
 
-Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente.
+Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente. No `PerceptionRunArtifact` atual, `FeatureStoreReader` valida hash, shape e dtype antes do carregamento lazy.
