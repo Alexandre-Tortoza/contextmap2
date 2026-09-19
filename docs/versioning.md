@@ -8,7 +8,7 @@ vMAJOR.MINOR.PATCH
 
 ## Fase de validação
 
-Enquanto a Solution 1 estiver em validação, releases permanecem na versão major zero:
+Enquanto o canonical pipeline estiver em validação, releases permanecem na versão major zero:
 
 ```text
 v0.1.0
@@ -59,4 +59,4 @@ Ao publicar uma tag que corresponda a `v*.*.*`, o workflow de release valida o f
 
 Releases da série `v0.x.y` são marcadas como pre-release automaticamente.
 
-O repositório não publica no PyPI durante a fase de validação da Solution 1.
+O repositório não publica no PyPI durante a fase de validação do canonical pipeline.
