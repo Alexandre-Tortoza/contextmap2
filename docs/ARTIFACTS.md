@@ -70,7 +70,7 @@ Remote storage, S3, MinIO, database ou distributed registry não são requisitos
 
 ```mermaid
 flowchart TD
-    S[CanonicalSequenceArtifact]
+    S[SequenceArtifact]
     P[PerceptionRunArtifact]
     T[StateEstimationRunArtifact]
     G[GeometricMapArtifact]
@@ -97,6 +97,60 @@ flowchart TD
     ER --> C
     SR --> C
 ```
+
+## Artefatos materializados hoje
+
+Na `dev`, dois formatos já existem e são integrados:
+
+```mermaid
+flowchart LR
+    RAW["Fonte registrada"] --> SW["SequenceArtifactWriter"]
+    SW --> SEQ["SequenceArtifact"]
+    SEQ --> SEL["Selection / replay"]
+    SEL --> VP["Visual Perception"]
+    VP --> PW["PerceptionRunWriter"]
+    PW --> PRA["PerceptionRunArtifact"]
+    PRA --> PRR["PerceptionRunReader"]
+    PRR --> ES["PerceptionEvidenceSet"]
+```
+
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. State Estimation e os artifacts downstream do diagrama anterior permanecem planejados.
+
+### `SequenceArtifact` atual
+
+```text
+workspace/sequences/<sequence-name>/<artifact-id>/
+├── manifest.json
+├── index.jsonl
+├── rgb/
+├── pointcloud/
+├── calibration/       # opcional
+├── provenance/        # opcional
+└── diagnostics/       # opcional
+```
+
+O índice contém uma observação canônica por linha; payloads grandes de imagem/LiDAR ficam fora do JSONL e são referenciados por path. O manifest inventaria arquivos com tamanho e SHA-256.
+
+### `PerceptionRunArtifact` atual
+
+```text
+workspace/runs/visual-perception/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<profile>/
+    ├── README.md
+    ├── manifest.json
+    ├── outputs/
+    │   └── results.jsonl
+    └── metrics/
+        └── stage-timings.jsonl
+```
+
+No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
+
+Detalhes específicos permanecem nos owners:
+
+- [Ingestion artifact](../src/contextmap/ingestion/docs/artifact.md);
+- [Visual Perception run artifact](../src/contextmap/visual_perception/docs/run_artifact.md).
 
 ## Immutability
 
@@ -150,6 +204,8 @@ run-000N__<selection>__<profile>/
 ```
 
 Nem todo artifact precisa de todos os arquivos físicos acima, mas os conceitos devem estar representados quando relevantes.
+
+Essa árvore é uma **estrutura conceitual**, não uma obrigação física. Os artifacts implementados hoje são deliberadamente menores: Ingestion concentra metadata em `manifest.json` e arquivos opcionais próprios; Visual Perception v0 não escreve `config.yaml`, `lineage.json`, `environment.json` ou `events.jsonl` separados porque ainda não existem produtores reais para esses arquivos. Criá-los vazios violaria YAGNI.
 
 ## `manifest.json`
 
@@ -217,7 +273,7 @@ Exemplo conceitual:
 
 ```text
 AssociationRunArtifact
-├── CanonicalSequenceArtifact
+├── SequenceArtifact
 ├── PerceptionRunArtifact
 ├── StateEstimationRunArtifact
 ├── GeometricMapArtifact
@@ -261,14 +317,12 @@ Contém o resultado contratual consumido downstream.
 Exemplos:
 
 ```text
-PerceptionRunArtifact
+PerceptionRunArtifact (schema atual)
 outputs/
-├── results.*
-├── regions.*
-├── semantic-claims.*
-├── feature-index.*
-└── features/
+└── results.jsonl
 ```
+
+Cada linha contém um `PerceptionResult` completo com `regions`, `features`, `claims` e `scene_context`. Índices separados podem ser adicionados apenas quando houver um caso de uso medido que justifique a duplicação.
 
 ```text
 AssociationRunArtifact
@@ -502,7 +556,7 @@ code/policy identity
 Se somente o prompt da percepção muda:
 
 ```text
-CanonicalSequenceArtifact      reusable
+SequenceArtifact      reusable
 StateEstimationRunArtifact    reusable
 GeometricMapArtifact          reusable
 PerceptionRunArtifact         recompute
