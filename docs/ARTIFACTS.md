@@ -147,6 +147,23 @@ workspace/runs/visual-perception/<sequence-name>/
 
 No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
 
+### Evidência auditável de Region Discovery
+
+Region Discovery possui um writer de evidência de estágio próprio para experimentação, inspeção e avaliação. Ele não cria uma nova identidade de percepção paralela ao `PerceptionRunArtifact`; registra os intermediários e métricas necessários para explicar como `Region2D[]` foi produzido.
+
+```mermaid
+flowchart LR
+    PI["PreparedImage"] --> RD["Region Discovery"]
+    RD --> REG["Region2D[]"]
+    REG --> PRA["PerceptionResult / PerceptionRunArtifact"]
+    RD --> W["RegionDiscoveryEvidenceWriter"]
+    W --> O["outputs/<br/>regions.jsonl + metrics.json"]
+    W --> M["manifest.json + hashes"]
+    W -. standard/full .-> D["debug/<br/>candidates, passes, overlays, masks"]
+```
+
+O diretório de estágio é finalizado atomicamente. `outputs/` e `manifest.json` são contratuais para esse evidence artifact; `debug/` continua não contratual e pode ser descartado sem alterar a semântica de `Region2D`. O layout e os níveis `none|standard|full` estão documentados em [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
+
 Detalhes específicos permanecem nos owners:
 
 - [Ingestion artifact](../src/contextmap/ingestion/docs/artifact.md);

@@ -148,9 +148,17 @@ O construtor valida unicidade de `region_id`, `feature_id` e `claim_id`, além d
 
 ## 5. `Region2D`
 
-Região 2D local a um `PerceptionResult`. Hoje ela registra `bounding_box`, `mask_reference?`, `region_kind?`, `is_accepted`, `rejection_reason?` e `BackendProvenance`.
+Região 2D congelada e local a um `PerceptionResult`. O contrato canônico atual preserva `bounding_box`, máscara inline opcional e/ou `mask_reference`, dimensões da imagem, área, contributor candidate IDs, `discovery_provenance`, convenção de coordenadas, estado de aceitação/rejeição e o `BackendProvenance` exato do adapter.
 
-`RegionId` não é identidade persistente de objeto, não implica same-object identity entre runs e não possui suporte 3D por si só.
+```mermaid
+flowchart LR
+    RC["RegionCandidate<br/>proposal de frame"] --> N["validate / filter / merge"]
+    N --> R["Region2D<br/>geometry freeze"]
+    R --> PR["PerceptionResult"]
+    R -. associação posterior .-> SP["SpatialObservation<br/>2D ↔ 3D"]
+```
+
+`RegionCandidate` representa evidência pré-normalização e não é identidade persistente. `RegionId` não é identidade persistente de objeto, não implica same-object identity entre runs e não possui suporte 3D por si só. O significado completo de passes, proposal lineage, normalização e Geometry Freeze está em [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
 
 ## 6. `VisualFeature`
 
