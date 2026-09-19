@@ -158,6 +158,47 @@ def test_perception_result_rejects_duplicate_region_id() -> None:
         )
 
 
+def test_perception_result_rejects_duplicate_feature_id() -> None:
+    feature = VisualFeature(
+        feature_id=FeatureId("feat-0001"),
+        scope=FeatureScope.DENSE,
+        embedding_space_id="dinov3-vitl",
+        shape=(64, 64, 384),
+        dtype="float32",
+        payload_reference="features/feat-0001.bin",
+        provenance=_provenance("feature_extractor"),
+    )
+
+    with pytest.raises(ValueError, match="duplicate feature_id"):
+        PerceptionResult(
+            result_id=PerceptionResultId("result-0001"),
+            source_observation_id=SourceObservationId("frame-0124"),
+            run_id=PerceptionRunId("run-0001"),
+            sequence_artifact_id="corridor-02-a1b2c3",
+            created_at="2026-01-01T00:00:00+00:00",
+            features=(feature, feature),
+        )
+
+
+def test_perception_result_rejects_duplicate_claim_id() -> None:
+    claim = SemanticClaim(
+        claim_id=ClaimId("claim-0001"),
+        text="a doorway",
+        role=HypothesisRole.PRIMARY,
+        provenance=_provenance("semantic_interpreter"),
+    )
+
+    with pytest.raises(ValueError, match="duplicate claim_id"):
+        PerceptionResult(
+            result_id=PerceptionResultId("result-0001"),
+            source_observation_id=SourceObservationId("frame-0124"),
+            run_id=PerceptionRunId("run-0001"),
+            sequence_artifact_id="corridor-02-a1b2c3",
+            created_at="2026-01-01T00:00:00+00:00",
+            claims=(claim, claim),
+        )
+
+
 def test_perception_result_rejects_feature_referencing_unknown_region() -> None:
     dangling_feature = VisualFeature(
         feature_id=FeatureId("feat-0001"),

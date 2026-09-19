@@ -21,9 +21,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 from typing import NewType
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.region_models import (
+    ArtifactReference,
+    CoordinateConvention,
+    InlineMask,
+    JsonScalar,
+    RegionProvenance,
+)
 
 PerceptionRunId = NewType("PerceptionRunId", str)
 """Identity of one configured Visual Perception execution."""
@@ -92,10 +100,10 @@ class BoundingBox2D:
         height: Box height, in pixels.
     """
 
-    x: int
-    y: int
-    width: int
-    height: int
+    x: float
+    y: float
+    width: float
+    height: float
 
     def __post_init__(self) -> None:
         """Validate the box has positive extent.
@@ -103,8 +111,33 @@ class BoundingBox2D:
         Raises:
             ValueError: If ``width`` or ``height`` is not positive.
         """
+        values = (self.x, self.y, self.width, self.height)
+        if not all(isfinite(value) for value in values):
+            raise ValueError("bounding box coordinates and dimensions must be finite")
+        if self.x < 0 or self.y < 0:
+            raise ValueError("x and y must be non-negative")
         if self.width <= 0 or self.height <= 0:
             raise ValueError("width and height must be positive")
+
+    @property
+    def x_min(self) -> float:
+        """Return the left edge in pixels."""
+        return self.x
+
+    @property
+    def y_min(self) -> float:
+        """Return the top edge in pixels."""
+        return self.y
+
+    @property
+    def x_max(self) -> float:
+        """Return the exclusive right edge in pixels."""
+        return self.x + self.width
+
+    @property
+    def y_max(self) -> float:
+        """Return the exclusive bottom edge in pixels."""
+        return self.y + self.height
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -134,6 +167,14 @@ class Region2D:
     region_kind: str | None = None
     is_accepted: bool = True
     rejection_reason: str | None = None
+    source_observation_id: SourceObservationId | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    area_pixels: float | None = None
+    contributor_candidate_ids: tuple[str, ...] = ()
+    discovery_provenance: tuple[RegionProvenance, ...] = ()
+    mask: InlineMask | None = None
+    coordinate_convention: CoordinateConvention = CoordinateConvention.PIXEL_XY_TOP_LEFT
 
     def __post_init__(self) -> None:
         """Validate rejection metadata is consistent with ``is_accepted``.
@@ -144,6 +185,63 @@ class Region2D:
         """
         if self.is_accepted and self.rejection_reason is not None:
             raise ValueError("rejection_reason must be None when is_accepted is True")
+        if (self.image_width is None) != (self.image_height is None):
+            raise ValueError("image_width and image_height must be provided together")
+        if (
+            self.image_width is not None
+            and self.image_height is not None
+            and (self.image_width <= 0 or self.image_height <= 0)
+        ):
+            raise ValueError("region image dimensions must be positive")
+        if self.area_pixels is not None and (
+            not isfinite(self.area_pixels) or self.area_pixels <= 0
+        ):
+            raise ValueError("area_pixels must be positive and finite")
+        if any(not candidate_id for candidate_id in self.contributor_candidate_ids):
+            raise ValueError("contributor candidate ids must not be empty")
+        if len(set(self.contributor_candidate_ids)) != len(self.contributor_candidate_ids):
+            raise ValueError("contributor candidate ids must be unique")
+        if (
+            self.mask is not None
+            and self.image_width is not None
+            and (self.mask.width != self.image_width or self.mask.height != self.image_height)
+        ):
+            raise ValueError("inline mask dimensions must match the region image dimensions")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible canonical region representation."""
+        mask = None if self.mask is None else self.mask.to_dict()
+        return {
+            "region_id": str(self.region_id),
+            "bounding_box": {
+                "x": self.bounding_box.x,
+                "y": self.bounding_box.y,
+                "width": self.bounding_box.width,
+                "height": self.bounding_box.height,
+            },
+            "provenance": {
+                "backend_id": self.provenance.backend_id,
+                "capability": self.provenance.capability,
+                "provider": self.provenance.provider,
+                "model": self.provenance.model,
+                "version": self.provenance.version,
+                "configuration_fingerprint": self.provenance.configuration_fingerprint,
+            },
+            "mask_reference": self.mask_reference,
+            "region_kind": self.region_kind,
+            "is_accepted": self.is_accepted,
+            "rejection_reason": self.rejection_reason,
+            "source_observation_id": (
+                None if self.source_observation_id is None else str(self.source_observation_id)
+            ),
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+            "area_pixels": self.area_pixels,
+            "contributor_candidate_ids": list(self.contributor_candidate_ids),
+            "discovery_provenance": [item.to_dict() for item in self.discovery_provenance],
+            "mask": mask,
+            "coordinate_convention": self.coordinate_convention.value,
+        }
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -340,22 +438,92 @@ class PerceptionResult:
     scene_context: SceneContext | None = None
 
     def __post_init__(self) -> None:
-        """Validate region identities are unique and every reference resolves.
+        """Validate local identities are unique and every reference resolves.
 
         Raises:
-            ValueError: If ``regions`` has a duplicate ``region_id``, or a
-                feature/claim references a ``region_id`` absent from
-                ``regions``.
+            ValueError: If regions, features, or claims contain a
+                duplicate local identity, or a feature/claim references
+                a ``region_id`` absent from ``regions``.
         """
         region_ids = {region.region_id for region in self.regions}
         if len(region_ids) != len(self.regions):
             raise ValueError("duplicate region_id in PerceptionResult")
+        feature_ids = {feature.feature_id for feature in self.features}
+        if len(feature_ids) != len(self.features):
+            raise ValueError("duplicate feature_id in PerceptionResult")
+        claim_ids = {claim.claim_id for claim in self.claims}
+        if len(claim_ids) != len(self.claims):
+            raise ValueError("duplicate claim_id in PerceptionResult")
         for feature in self.features:
             if feature.region_id is not None and feature.region_id not in region_ids:
                 raise ValueError(f"feature references unknown region_id: {feature.region_id!r}")
         for claim in self.claims:
             if claim.region_id is not None and claim.region_id not in region_ids:
                 raise ValueError(f"claim references unknown region_id: {claim.region_id!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidRegion:
+    """Explicitly identify pixels eligible for visual processing."""
+
+    mask: InlineMask
+    reason: str
+    source: str
+
+    def __post_init__(self) -> None:
+        """Require auditable constraint motivation and source."""
+        if not self.reason or not self.source:
+            raise ValueError("valid region reason and source must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ExclusionRegion:
+    """Explicitly identify pixels excluded from visual processing."""
+
+    name: str
+    mask: InlineMask
+    reason: str
+    source: str
+
+    def __post_init__(self) -> None:
+        """Require a stable diagnostic name, motivation, and source."""
+        if not self.name or not self.reason or not self.source:
+            raise ValueError("exclusion name, reason, and source must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class TransformationRecord:
+    """Describe one applied image transformation in execution order."""
+
+    operation: str
+    provenance_source: str
+    parameters: tuple[tuple[str, JsonScalar], ...]
+    input_dimensions: tuple[int, int]
+    output_dimensions: tuple[int, int]
+    output_image: ArtifactReference
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate the structured transformation record."""
+        if not self.operation:
+            raise ValueError("transformation operation must not be empty")
+        if not self.provenance_source:
+            raise ValueError("transformation provenance source must not be empty")
+        for width, height in (self.input_dimensions, self.output_dimensions):
+            if width <= 0 or height <= 0:
+                raise ValueError("transformation dimensions must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible audit record."""
+        return {
+            "operation": self.operation,
+            "provenance_source": self.provenance_source,
+            "parameters": [{"name": name, "value": value} for name, value in self.parameters],
+            "input_dimensions": list(self.input_dimensions),
+            "output_dimensions": list(self.output_dimensions),
+            "output_image": self.output_image.to_dict(),
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -377,16 +545,20 @@ class PreparedImage:
             inline.
         width: Prepared image width in pixels.
         height: Prepared image height in pixels.
-        transformations: Human-readable, ordered record of the
-            preparation steps applied, e.g. ``("resize", "rectify")``.
-            Empty when the source observation was used unmodified.
+        transformations: Structured, ordered record of preparation steps.
+        payload_artifact: Optional content-addressed metadata for the payload.
+        valid_region: Optional explicit eligibility mask.
+        exclusion_regions: Optional named exclusion masks.
     """
 
     source_observation_id: SourceObservationId
     payload_reference: str
     width: int
     height: int
-    transformations: Sequence[str] = ()
+    transformations: Sequence[TransformationRecord] = ()
+    payload_artifact: ArtifactReference | None = None
+    valid_region: ValidRegion | None = None
+    exclusion_regions: Sequence[ExclusionRegion] = ()
 
     def __post_init__(self) -> None:
         """Validate the prepared image has positive extent.
@@ -396,6 +568,52 @@ class PreparedImage:
         """
         if self.width <= 0 or self.height <= 0:
             raise ValueError("width and height must be positive")
+        if not self.payload_reference:
+            raise ValueError("payload_reference must not be empty")
+        if (
+            self.payload_artifact is not None
+            and self.payload_artifact.uri != self.payload_reference
+        ):
+            raise ValueError("payload artifact uri must match payload_reference")
+        constraints = (() if self.valid_region is None else (self.valid_region.mask,)) + tuple(
+            region.mask for region in self.exclusion_regions
+        )
+        if any(mask.width != self.width or mask.height != self.height for mask in constraints):
+            raise ValueError("spatial constraints must match final prepared image dimensions")
+        names = [region.name for region in self.exclusion_regions]
+        if len(set(names)) != len(names):
+            raise ValueError("exclusion regions must have unique names")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return an inspectable representation for manifests and diagnostics."""
+        return {
+            "source_observation_id": str(self.source_observation_id),
+            "payload_reference": self.payload_reference,
+            "payload_artifact": (
+                None if self.payload_artifact is None else self.payload_artifact.to_dict()
+            ),
+            "width": self.width,
+            "height": self.height,
+            "transformations": [record.to_dict() for record in self.transformations],
+            "valid_region": (
+                None
+                if self.valid_region is None
+                else {
+                    "mask": self.valid_region.mask.to_dict(),
+                    "reason": self.valid_region.reason,
+                    "source": self.valid_region.source,
+                }
+            ),
+            "exclusion_regions": [
+                {
+                    "name": region.name,
+                    "mask": region.mask.to_dict(),
+                    "reason": region.reason,
+                    "source": region.source,
+                }
+                for region in self.exclusion_regions
+            ],
+        }
 
 
 @dataclass(frozen=True, kw_only=True)

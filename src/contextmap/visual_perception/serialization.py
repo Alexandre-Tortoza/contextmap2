@@ -29,6 +29,11 @@ from contextmap.visual_perception.models import (
     SemanticClaim,
     VisualFeature,
 )
+from contextmap.visual_perception.region_models import (
+    CoordinateConvention,
+    InlineMask,
+    RegionProvenance,
+)
 
 
 def encode_provenance(provenance: BackendProvenance) -> dict[str, Any]:
@@ -48,7 +53,7 @@ def decode_provenance(record: dict[str, Any]) -> BackendProvenance:
     return BackendProvenance(**record)
 
 
-def encode_bounding_box(box: BoundingBox2D) -> dict[str, int]:
+def encode_bounding_box(box: BoundingBox2D) -> dict[str, float]:
     """Encode a :class:`BoundingBox2D` into a JSON-serializable dict."""
     return {"x": box.x, "y": box.y, "width": box.width, "height": box.height}
 
@@ -68,11 +73,23 @@ def encode_region(region: Region2D) -> dict[str, Any]:
         "region_kind": region.region_kind,
         "is_accepted": region.is_accepted,
         "rejection_reason": region.rejection_reason,
+        "source_observation_id": (
+            None if region.source_observation_id is None else str(region.source_observation_id)
+        ),
+        "image_width": region.image_width,
+        "image_height": region.image_height,
+        "area_pixels": region.area_pixels,
+        "contributor_candidate_ids": list(region.contributor_candidate_ids),
+        "discovery_provenance": [item.to_dict() for item in region.discovery_provenance],
+        "mask": None if region.mask is None else region.mask.to_dict(),
+        "coordinate_convention": region.coordinate_convention.value,
     }
 
 
 def decode_region(record: dict[str, Any]) -> Region2D:
     """Decode a :class:`Region2D` from :func:`encode_region`'s output."""
+    source_observation_id = record.get("source_observation_id")
+    raw_mask = record.get("mask")
     return Region2D(
         region_id=RegionId(record["region_id"]),
         bounding_box=decode_bounding_box(record["bounding_box"]),
@@ -81,6 +98,20 @@ def decode_region(record: dict[str, Any]) -> Region2D:
         region_kind=record["region_kind"],
         is_accepted=record["is_accepted"],
         rejection_reason=record["rejection_reason"],
+        source_observation_id=(
+            None if source_observation_id is None else SourceObservationId(source_observation_id)
+        ),
+        image_width=record.get("image_width"),
+        image_height=record.get("image_height"),
+        area_pixels=record.get("area_pixels"),
+        contributor_candidate_ids=tuple(record.get("contributor_candidate_ids", ())),
+        discovery_provenance=tuple(
+            RegionProvenance.from_dict(item) for item in record.get("discovery_provenance", ())
+        ),
+        mask=None if raw_mask is None else InlineMask.from_dict(raw_mask),
+        coordinate_convention=CoordinateConvention(
+            record.get("coordinate_convention", CoordinateConvention.PIXEL_XY_TOP_LEFT.value)
+        ),
     )
 
 

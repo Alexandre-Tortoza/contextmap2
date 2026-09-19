@@ -6,14 +6,56 @@ Este documento descreve os tipos definidos em `src/contextmap/visual_perception/
 
 `SourceObservation` (Ingestion) é a observação física — Visual Perception nunca a possui, apenas a referencia via `source_observation_id`. `PerceptionResult` é o resultado de **uma** execução de inferência sobre essa observação. A mesma `SourceObservation` pode ser processada por múltiplos `PerceptionRun`s, cada um produzindo um `PerceptionResult` distinto:
 
-```text
-SourceObservation frame-0124
-├── run-0001 → PerceptionResult A
-├── run-0002 → PerceptionResult B
-└── run-0003 → PerceptionResult C
+```mermaid
+flowchart LR
+    OBS["SourceObservation<br/>frame-0124"]
+    R1["PerceptionRun<br/>run-0001"] --> A["PerceptionResult A"]
+    R2["PerceptionRun<br/>run-0002"] --> B["PerceptionResult B"]
+    R3["PerceptionRun<br/>run-0003"] --> C["PerceptionResult C"]
+    OBS --> A
+    OBS --> B
+    OBS --> C
 ```
 
 Reprocessar não modifica `A`/`B`/`C` anteriores nem a `SourceObservation` original — sempre cria um novo `PerceptionResult`.
+
+## Estrutura dos contratos
+
+```mermaid
+classDiagram
+    class SourceObservation {
+        SourceObservationId observation_id
+    }
+    class PerceptionRun {
+        PerceptionRunId run_id
+        int run_index
+        str sequence_artifact_id
+        str selection_id
+    }
+    class PerceptionResult {
+        PerceptionResultId result_id
+        SourceObservationId source_observation_id
+        PerceptionRunId run_id
+    }
+    class Region2D
+    class VisualFeature
+    class SemanticClaim
+    class SceneContext
+    class BackendProvenance
+
+    PerceptionRun --> PerceptionResult : produz
+    PerceptionResult --> SourceObservation : referencia
+    PerceptionResult --> Region2D : regions
+    PerceptionResult --> VisualFeature : features
+    PerceptionResult --> SemanticClaim : claims
+    PerceptionResult --> SceneContext : scene_context
+    Region2D --> BackendProvenance : provenance
+    VisualFeature --> BackendProvenance : provenance
+    SemanticClaim --> BackendProvenance : provenance
+    SceneContext --> BackendProvenance : provenance
+```
+
+A estrutura preserva três separações: a observação física continua pertencendo a Ingestion; o run descreve uma execução configurada; e o resultado contém apenas a evidência produzida para uma observação naquele run. `SemanticSupport`, quando produzido por um `SemanticScorer`, é um julgamento separado referenciando uma claim e não é incorporado por mutação à `SemanticClaim`.
 
 ## Identidade local, não persistente
 
@@ -28,11 +70,13 @@ Contexto de execução: qual sequência (`sequence_artifact_id`), qual seleção
 Amarra um `PerceptionRun` a uma `SourceObservation`, carregando as evidências produzidas (`regions`, `features`, `claims`, `scene_context`). Valida na construção:
 
 - nenhum `region_id` duplicado entre as `regions`;
+- nenhum `feature_id` duplicado entre as `features`;
+- nenhum `claim_id` duplicado entre as `claims`;
 - toda `feature`/`claim` que referencia um `region_id` deve referenciar uma região presente em `regions`.
 
 ## `Region2D`
 
-Candidato de região aceito ou rejeitado (`is_accepted`). `mask_reference`/`bounding_box` descrevem geometria; `mask_reference` é sempre uma referência a payload (path), nunca a máscara bruta inline — mesma convenção de "referência, não payload duplicado" usada em Ingestion. Um `Region2D` rejeitado permanece auditável via `rejection_reason`.
+Contrato único de geometria 2D consumido por todo Visual Perception. `region_id` é local ao `PerceptionResult`; o próprio resultado fornece os escopos de run e observação. `bounding_box`, máscara inline opcional ou `mask_reference`, dimensões, área, proposal contributors e `discovery_provenance` preservam a geometry freeze e a auditoria sem criar outra classe `Region2D`. O `BackendProvenance` é preservado diretamente do adapter durante a normalização, sem inferir provider a partir do `backend_id`. Payloads grandes devem usar `mask_reference`; a máscara inline permanece disponível quando a normalização/evaluation precisa inspecionar pixels. Um `Region2D` rejeitado permanece auditável via `rejection_reason`.
 
 ## `VisualFeature`
 

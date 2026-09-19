@@ -60,13 +60,12 @@ if TYPE_CHECKING:
 
     from contextmap.visual_perception.pipeline import PipelinePreset
 
-SCHEMA_VERSION = "0.2.0"
+SCHEMA_VERSION = "0.3.0"
 """Perception run artifact schema version written and understood by this module.
 
-Bumped from ``0.1.0`` to ``0.2.0`` when ``pipeline_preset``/
-``configuration_digest`` became required manifest fields (#55) — a
-pre-1.0 schema, so this is a breaking change rather than an additive
-one; no reader for ``0.1.0`` manifests is kept.
+Bumped to ``0.3.0`` when the embedded pipeline preset began recording
+the selected feature scope. This is a pre-1.0 schema, so no compatibility
+reader for historical manifests is kept.
 """
 
 _MANIFEST_FILENAME = "manifest.json"
@@ -213,6 +212,7 @@ class PerceptionRunWriter:
         self._final_dir = sequence_dir / run_dir_name
         self._tmp_dir = sequence_dir / f".tmp-{run_dir_name}-{uuid4().hex[:8]}"
         self._results: list[PerceptionResult] = []
+        self._source_observation_ids: set[SourceObservationId] = set()
         self._stage_outcomes: list[StageOutcome] = []
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
@@ -226,11 +226,30 @@ class PerceptionRunWriter:
             result: A result produced by this run.
 
         Raises:
-            RunArtifactError: If called after :meth:`finalize`.
+            RunArtifactError: If called after :meth:`finalize`, if the
+                result belongs to another run or sequence artifact, or
+                if this writer already contains a result for the same
+                source observation.
         """
         if self._finalized:
             raise RunArtifactError("cannot add results after finalize()")
+        if result.run_id != self._run_id:
+            raise RunArtifactError(
+                f"result run_id {result.run_id!r} does not match writer run_id {self._run_id!r}"
+            )
+        if result.sequence_artifact_id != self._sequence_artifact_id:
+            raise RunArtifactError(
+                "result sequence_artifact_id "
+                f"{result.sequence_artifact_id!r} does not match writer "
+                f"sequence_artifact_id {self._sequence_artifact_id!r}"
+            )
+        if result.source_observation_id in self._source_observation_ids:
+            raise RunArtifactError(
+                "duplicate source_observation_id in perception run: "
+                f"{result.source_observation_id!r}"
+            )
         self._results.append(result)
+        self._source_observation_ids.add(result.source_observation_id)
 
     def add_stage_outcomes(self, outcomes: Sequence[StageOutcome]) -> None:
         """Record stage outcomes (timings/status) to be written by :meth:`finalize`.
@@ -530,10 +549,10 @@ class PerceptionRunReader:
 def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
     """Compute the next monotonic run index for a sequence's visual-perception runs.
 
-    Scans existing, validly-finalized run directories directly — never
-    ``runs.json`` — so an interrupted/incomplete run directory (which
-    fails to load a manifest) is never counted, and allocation works
-    correctly even when the registry is absent or stale.
+    Scans existing, integral run directories directly — never
+    ``runs.json`` — so an interrupted, incomplete, or corrupted run
+    directory is never counted, and allocation works correctly even
+    when the registry is absent or stale.
 
     Args:
         workspace_root: Root of the local workspace.
@@ -551,9 +570,12 @@ def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
         if not entry.is_dir() or entry.name.startswith(".tmp-"):
             continue
         try:
-            manifest = _load_manifest(entry)
+            reader = PerceptionRunReader(entry)
         except RunArtifactError:
             continue
+        if reader.verify_integrity():
+            continue
+        manifest = reader.manifest
         max_index = max(max_index, manifest.run_index)
     return max_index + 1
 
@@ -579,9 +601,12 @@ def rebuild_run_registry(workspace_root: Path, sequence_name: str) -> None:
         if not entry.is_dir() or entry.name.startswith(".tmp-"):
             continue
         try:
-            manifest = _load_manifest(entry)
+            reader = PerceptionRunReader(entry)
         except RunArtifactError:
             continue
+        if reader.verify_integrity():
+            continue
+        manifest = reader.manifest
         entries.append(
             {
                 "run_index": manifest.run_index,

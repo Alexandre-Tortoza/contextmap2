@@ -52,6 +52,25 @@ runtime
 - spatial-relation predicates;
 - regras de schema do mapa final.
 
+## Estado atual
+
+`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. O que já existe é um **DAG interno de Visual Perception**, implementado dentro da própria capability, que materializa parte das regras descritas aqui sem se tornar o runtime global.
+
+```mermaid
+flowchart LR
+    PRESET["PipelinePreset<br/>visual_perception"] --> VALID["validate_pipeline_preset()"]
+    VALID --> RES["resolve_pipeline()"]
+    RES --> RP["ResolvedPipeline"]
+    IMG["PreparedImage"] --> BUILD["build_stage_graph()"]
+    RP --> BUILD
+    BUILD --> EXEC["execute_stage_graph()"]
+    EXEC --> RESULT["PerceptionResult"]
+    RESULT --> ART["PerceptionRunArtifact"]
+    ART -. futuro .-> RUNTIME["contextmap.runtime<br/>DAG end-to-end"]
+```
+
+Essa separação é importante: `visual_perception.pipeline` possui apenas a topologia interna da capability e seus backends. O runtime futuro deverá selecionar artifacts upstream, compor capabilities diferentes, decidir reuse/recompute e coordenar lifecycle end-to-end sem absorver a lógica interna do preset de percepção.
+
 ## Composition root
 
 Existe um único boundary arquitetural responsável por transformar configuração em objetos concretos.
@@ -93,7 +112,7 @@ Esse padrão não autoriza outras capabilities a importar `visual_perception.bac
 
 ## Factories pequenas, não service locator
 
-A Solution 1 não precisa de container de dependency injection, registry global mutável ou descoberta dinâmica de plugins.
+O canonical pipeline não precisa de container de dependency injection, registry global mutável ou descoberta dinâmica de plugins.
 
 Quando existe um variation point real, a composition root pode usar factories pequenas e explícitas:
 
@@ -160,6 +179,8 @@ PipelineConfig
 ```
 
 A configuração default validada é a pipeline canônica. Ela não é um engine diferente.
+
+Dentro de Visual Perception, esse conceito já aparece concretamente como `PipelinePreset`/`StageSpec` e `CANONICAL_PRESET_V1`. Esses tipos são locais ao domínio da perception pipeline; não devem ser promovidos automaticamente a um schema global de runtime.
 
 Uma configuração alternativa pode inserir/remover um stage compatível sem modificar consumers downstream.
 
@@ -384,12 +405,11 @@ O importante não é esse construtor específico; são os invariantes:
 
 ## Relação com as milestones de implementação
 
-Esta decisão arquitetural não implementa o runner completo.
+A divisão arquitetural já está parcialmente materializada:
 
-As responsabilidades serão materializadas principalmente por:
+- **Ingestion**, implementado, produz e reabre `SequenceArtifact`;
+- **Visual Perception Core**, implementado, possui contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`;
+- **Runtime & Configuration**, ainda planejado, deverá compor o DAG end-to-end, configuração, reuse, CLI e lifecycle entre capabilities;
+- artifacts downstream serão adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
 
-- Visual Perception Core, para DAG interno/presets de percepção;
-- Runtime & Configuration, para DAG end-to-end, configuração, reuse, CLI e lifecycle;
-- Artifact milestones, para persistência das identities/configurações resolvidas.
-
-Esse particionamento mantém esta milestone focada em boundaries em vez de antecipar implementação ainda sem consumer.
+O runtime global deve reutilizar as APIs públicas desses módulos, não reimplementar seus pipelines internos.

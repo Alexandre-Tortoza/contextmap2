@@ -374,7 +374,8 @@ def pool_region_feature(
         dense_map: Backend-independent feature and sampling metadata.
         region: Frozen region whose geometry supplies pooling support.
         mask: Optional boolean array shaped exactly as
-            ``(region.bounding_box.height, region.bounding_box.width)``.
+            ``(ceil(region.bounding_box.height),
+            ceil(region.bounding_box.width))``.
 
     Returns:
         Pooled vector, diagnostics, compatibility metadata, and exact lineage.
@@ -398,7 +399,7 @@ def pool_region_feature(
         )
 
     box = region.bounding_box
-    expected_mask_shape = (box.height, box.width)
+    expected_mask_shape = _box_mask_shape(box)
     if mask is None:
         support_mask = np.ones(expected_mask_shape, dtype=np.bool_)
         mask_content_hash = None
@@ -529,13 +530,19 @@ def _local_mask_bounds(
     if intersection_left >= intersection_right or intersection_top >= intersection_bottom:
         return None
 
+    mask_height, mask_width = _box_mask_shape(box)
     column_start = max(0, math.floor(intersection_left - box.x))
-    column_end = min(box.width, math.ceil(intersection_right - box.x))
+    column_end = min(mask_width, math.ceil(intersection_right - box.x))
     row_start = max(0, math.floor(intersection_top - box.y))
-    row_end = min(box.height, math.ceil(intersection_bottom - box.y))
+    row_end = min(mask_height, math.ceil(intersection_bottom - box.y))
     if column_start >= column_end or row_start >= row_end:
         return None
     return row_start, row_end, column_start, column_end
+
+
+def _box_mask_shape(box: BoundingBox2D) -> tuple[int, int]:
+    """Return the integer raster envelope for a possibly fractional box."""
+    return math.ceil(box.height), math.ceil(box.width)
 
 
 def _pooling_provenance(

@@ -24,7 +24,23 @@ workspace/
                 └── ...
 ```
 
-Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestamp — o maior índice é o run mais recente nesse escopo sequência+capability. `allocate_run_index()` calcula o próximo índice escaneando os diretórios de run **reais** (nunca `runs.json`), então um diretório interrompido/incompleto (sem `manifest.json` válido) nunca é contado.
+## Fluxo de persistência e leitura
+
+```mermaid
+flowchart LR
+    INPUT["PerceptionResult[] + StageOutcome[]"] --> WRITER["PerceptionRunWriter"]
+    WRITER --> TMP["diretório temporário irmão"]
+    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
+    FILES --> CHECK["checagem interna de consistência<br/>tamanho + hash + ownership"]
+    CHECK -->|válido| FINAL["run-XXXX__selection__profile/"]
+    FINAL --> READER["PerceptionRunReader"]
+    FINAL -. reconstrução .-> REG["runs.json<br/>registro de conveniência"]
+    READER --> RESULT["result() / list_results()"]
+```
+
+`manifest.json` e os arquivos inventariados no próprio run formam a fonte de verdade. `runs.json` serve apenas para descoberta e pode ser reconstruído; ele não participa da leitura de um run isolado.
+
+Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestamp — o maior índice é o run mais recente nesse escopo sequência+capability. `allocate_run_index()` calcula o próximo índice escaneando os diretórios de run **íntegros** (nunca `runs.json`): além de carregar o manifest, confere presença, tamanho e hash dos arquivos inventariados. Um diretório interrompido ou adulterado não participa da alocação nem de `rebuild_run_registry()`.
 
 ## Decisões desta issue (v0)
 
@@ -37,6 +53,8 @@ Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestam
 
 Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.finalize()` escreve em um diretório temporário irmão, roda uma checagem de consistência interna, e só então renomeia para o path final — um run interrompido nunca aparenta ser válido. Depois de renomear, `runs.json` é reconstruído a partir de todos os diretórios de run válidos (incluindo o recém-criado).
 
+`add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
+
 ## Leitura isolada, sem `runs.json`
 
 `PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório** — `manifest.json` + `outputs/results.jsonl` bastam. `runs.json` nunca é necessário para abrir ou entender um run individual; `rebuild_run_registry()` pode reconstruí-lo do zero a qualquer momento a partir dos manifests.
@@ -45,8 +63,8 @@ Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
 
-## Reprodutibilidade do pipeline resolvido (issue #55, `schema_version` 0.2.0)
+## Reprodutibilidade do pipeline resolvido (issue #55, `schema_version` 0.3.0)
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
 
-Esta é uma quebra de schema pré-1.0 (`0.1.0` → `0.2.0`, ambos os campos são obrigatórios): nenhum leitor para manifests `0.1.0` é mantido, seguindo a mesma postura de todo o resto deste milestone (schema versionado, mas sem compromisso de compatibilidade retroativa antes de 1.0).
+O schema `0.3.0` registra também o `feature_scope` de cada estágio de extração no preset embutido. Esta é uma quebra pré-1.0; nenhum leitor para manifests históricos é mantido, seguindo a postura do milestone de não preservar compatibilidade sem consumidor real.

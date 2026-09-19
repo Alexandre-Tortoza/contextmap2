@@ -4,11 +4,11 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 
 ## Três conceitos, não um motor de workflow genérico
 
-- **`StageSpec`** — um estágio declarativo: `capability`, como seus `inputs` nomeados se ligam a `stage_id`s upstream, qual `backend_id` o preenche (ou `None` para um estágio "fonte", cuja saída é fornecida externamente — ex.: a imagem preparada), e seus `parameters` resolvidos.
+- **`StageSpec`** — um estágio declarativo: `capability`, como seus `inputs` nomeados se ligam a `stage_id`s upstream, qual `backend_id` o preenche (ou `None` para um estágio "fonte", cuja saída é fornecida externamente — ex.: a imagem preparada), seus `parameters` resolvidos e, para `feature_extractor`, o `feature_scope` produzido.
 - **Uma instância de backend concreta** — construída por uma `StageBackendFactory` fornecida pelo chamador. Este módulo nunca constrói uma sozinho e nunca importa um SDK de modelo.
 - **`PipelinePreset`** — uma seleção nomeada e versionada de estágios/dependências/backends/parâmetros (ex.: `"canonical/1"`).
 
-Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities que um `StageSpec` pode declarar é a tabela pequena e fixa `_CAPABILITY_ADAPTERS`, espelhando os ports executáveis em `ports.py` (`region_discovery`, `feature_extractor`, `feature_resolution_enhancement`, `scene_interpretation`, `region_interpretation`). Adicionar um novo port executável significa adicionar uma função a essa tabela — nunca um mecanismo de despacho genérico.
+Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`, `feature_resolution_enhancement`, `scene_interpretation`, `region_interpretation`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
 
 ## Preset canônico versionado
 
@@ -16,9 +16,49 @@ Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto 
 
 Duas presets com topologias diferentes nunca compartilham `preset_id` — uma versão nunca é reaproveitada para uma topologia diferente.
 
+### Topologia de `canonical/1`
+
+```mermaid
+flowchart LR
+    IMG["image_preparation<br/>PreparedImage"]
+    REG["region_discovery<br/>Region2D[]"]
+    DENSE["dense_feature_extraction<br/>VisualFeature[] DENSE"]
+    RFEAT["region_feature_extraction<br/>VisualFeature[] REGION"]
+    SCENE["scene_interpretation<br/>SceneContext | None"]
+    RINT["region_interpretation<br/>SemanticClaim[]"]
+
+    IMG --> REG
+    IMG --> DENSE
+    IMG --> RFEAT
+    REG --> RFEAT
+    IMG --> SCENE
+    IMG --> RINT
+    REG --> RINT
+```
+
+`image_preparation` é um estágio fonte (`backend_id=None`): sua saída é injetada por `ResolvedPipeline.build_stage_graph()`. Os demais estágios resolvem backends uma única vez por pipeline resolvido. `region_feature_extraction` e `region_interpretation` dependem explicitamente das regiões; `dense_feature_extraction` e `scene_interpretation` permanecem branches independentes.
+
+O estágio `region_discovery` pode ser satisfeito pelos adapters SAM2, SAM3 ou Florence-2 implementados na capability. Passes full-frame/tiles, scale, remapeamento, normalização e Geometry Freeze ficam encapsulados atrás do port `RegionDiscovery`; a topologia do pipeline continua vendo apenas `PreparedImage -> Region2D[]`. Ver [`region-discovery.md`](region-discovery.md).
+
 ## Validar antes de carregar modelos pesados
 
-`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido para um estágio de backend, e ciclos. `resolve_pipeline()` chama esta validação **antes** de chamar qualquer `StageBackendFactory` — é isso que garante que um preset/config invalido nunca dispara o carregamento de um modelo pesado.
+`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido, ciclos, nomes obrigatórios/permitidos de inputs e compatibilidade da capability produtora. `image` deve vir de `image_preparation`; `regions`, de `region_discovery`; `dense_map`, de `dense_feature_map_source` ou de outro `feature_resolution_enhancement`. Um `feature_extractor` declara `feature_scope`: `REGION` exige `image` e `regions`, enquanto `DENSE`/`GLOBAL` aceitam somente `image`. `resolve_pipeline()` chama essa validação **antes** de qualquer `StageBackendFactory`, portanto uma configuração inválida não carrega modelos pesados.
+
+### Ciclo de resolução e execução
+
+```mermaid
+flowchart LR
+    PRESET["PipelinePreset"] --> VALID["validate_pipeline_preset()"]
+    VALID --> FACT["StageBackendFactory<br/>carrega backends uma vez"]
+    FACT --> RES["ResolvedPipeline"]
+    OBS["PreparedImage por observação"] --> BUILD["build_stage_graph()"]
+    RES --> BUILD
+    BUILD --> EXEC["execute_stage_graph()"]
+    EXEC --> OUT["StageOutcome[]"]
+    OUT --> RESULT["assemble_perception_result()<br/>PerceptionResult"]
+```
+
+A validação estrutural ocorre antes da construção de qualquer backend pesado. Depois da resolução, apenas o grafo por observação é reconstruído; as instâncias de backend são reutilizadas.
 
 ## Resolver uma vez, construir o grafo por observação
 
@@ -45,14 +85,14 @@ A mesma lógica é implementada para o estágio opcional de aumento de resoluç�
 
 ## Reprodutibilidade e proveniência
 
-- `encode_pipeline_preset()`/`decode_pipeline_preset()` — round-trip JSON simétrico de um `PipelinePreset` inteiro (schema próprio, `PIPELINE_SCHEMA_VERSION`).
+- `encode_pipeline_preset()`/`decode_pipeline_preset()` — round-trip JSON simétrico de um `PipelinePreset` inteiro (schema próprio, `PIPELINE_SCHEMA_VERSION`; versão `0.2.0` inclui `feature_scope`).
 - `ResolvedPipeline.backend_provenance()` — um `BackendProvenance` por estágio de backend resolvido.
 - `ResolvedPipeline.configuration_digest()` — hash determinístico sobre o preset codificado e a proveniência de cada backend resolvido; duas resoluções produzem o mesmo digest se e somente se compartilham o mesmo conteúdo de preset **e** a mesma identidade de backend resolvida (mesmo checkpoint/versão) para cada estágio.
 
-Ambos — o preset resolvido e o `configuration_digest` — são persistidos no `manifest.json` de todo `PerceptionRunArtifact` (`run_artifact.py`, `schema_version` 0.2.0), então o grafo de estágios e as identidades de backend efetivamente usados por um run são inspecionáveis sem precisar reconstruir o pipeline.
+Ambos — o preset resolvido e o `configuration_digest` — são persistidos no `manifest.json` de todo `PerceptionRunArtifact` (`run_artifact.py`, `schema_version` 0.3.0), então o grafo de estágios, o escopo de feature e as identidades de backend efetivamente usados por um run são inspecionáveis sem precisar reconstruir o pipeline.
 
 ## O que este módulo explicitamente não faz
 
 - Não decide qual preset é o "certo" para uma execução — isso é uma decisão de composição root/configuração de runtime, fora do escopo deste módulo.
 - Não interpreta `parameters` — apenas os repassa, primitivos e serializáveis, para a `StageBackendFactory` do estágio.
-- Não introduz um registro de maturidade de backend nem um sistema de plugin genérico — a lista de capabilities conhecidas é pequena, fixa, e cresce um item por vez junto com `ports.py`.
+- Não introduz um registro de maturidade de backend nem um sistema de plugin genérico — a lista de capabilities executáveis é pequena e cresce apenas quando uma nova capability recebe adapter, contrato de inputs e inclusão explícita em um preset.

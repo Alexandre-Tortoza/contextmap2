@@ -4,6 +4,28 @@
 
 Normalizar fontes registradas (ROS 1 bags, ROS 2 bags, datasets gravados) em observações de sensor canônicas, agnósticas de backend, que o restante do ContextMap2 pode consumir sem depender de mensagens ROS, APIs de bag ou estruturas específicas de dataset.
 
+
+## Visão do fluxo de Ingestion
+
+```mermaid
+flowchart LR
+    SRC[ROS 1 / ROS 2 / dataset] --> AD[SourceAdapter]
+    AD --> OBS[SourceObservation]
+    AD --> CAL[CalibrationSet]
+    OBS --> VAL[Validação estrutural]
+    OBS --> SYNC[Sincronização]
+    CAL --> VAL
+    OBS --> ART[SequenceArtifact]
+    CAL --> ART
+    SYNC --> DIAG[Diagnostics]
+    DIAG --> ART
+    ART --> SEL[Seleção / replay]
+    SEL --> DOWN[Capabilities downstream]
+```
+
+O adapter apenas decodifica e normaliza a fonte. Validação, sincronização, persistência e replay permanecem etapas explícitas e auditáveis. A presença de uma observação no mesmo grupo temporal não altera sua identidade física nem a transforma em verdade persistente.
+
+
 ## O que este módulo explicitamente não possui
 
 - pose canônica do mapa (`PoseEstimate`/trajetória pertencem a State Estimation);

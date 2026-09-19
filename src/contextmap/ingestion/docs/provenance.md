@@ -6,6 +6,25 @@ Este documento descreve `src/contextmap/ingestion/sequence_provenance.py` e as e
 
 A issue #39 já registra hash + tamanho por arquivo no `manifest.json` — suficiente para detectar corrupção/arquivo ausente. O que faltava, e esta issue define, é: **de onde os dados vieram**, **como foram normalizados** e **quando dois resultados de ingestão contam como "a mesma coisa"**. `artifact.md` já reservava `provenance/` como diretório não criado pelo writer v0, adiado explicitamente para esta issue.
 
+
+
+## Componentes da identidade
+
+```mermaid
+flowchart LR
+    SRC[Bytes da fonte] --> SH[source_content_hash]
+    CFG[Configuração efetiva] --> CH[configuration_hash]
+    ST[source_type] --> ID[content_identity]
+    SH --> ID
+    CH --> ID
+
+    PATH[source_path] --> PROV[SequenceProvenance]
+    ID --> PROV
+    PATH -. não participa .-> ID
+```
+
+A identidade responde ao conteúdo e à configuração, não ao local onde o arquivo foi montado. O path continua preservado como provenance para auditoria.
+
 ## Identidade de conteúdo
 
 `compute_content_identity(provenance)` é determinística sobre exatamente três campos: `source_type`, `source_content_hash`, `configuration_hash`. **`source_path` é deliberadamente excluído.**

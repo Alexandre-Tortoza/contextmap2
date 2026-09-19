@@ -52,3 +52,12 @@ class SourceTimestamp:
             The timestamp as seconds since the clock's epoch.
         """
         return self.seconds + self.nanoseconds / 1_000_000_000
+
+    def total_nanoseconds(self) -> int:
+        """Return this timestamp as an exact integer number of nanoseconds.
+
+        Returns:
+            Nanoseconds since the clock domain's epoch, without floating-point
+            precision loss.
+        """
+        return self.seconds * 1_000_000_000 + self.nanoseconds

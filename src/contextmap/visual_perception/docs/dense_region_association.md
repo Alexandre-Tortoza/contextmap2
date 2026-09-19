@@ -24,9 +24,9 @@ Stride e suporte são campos distintos. Assim, o mesmo contrato representa grids
 4. usa essa contagem como peso na média dos vetores das células;
 5. quando o espaço declara `normalization="l2"`, renormaliza a média para norma unitária e rejeita um resultado zero ou não finito.
 
-Quando não há máscara, uma máscara implícita totalmente verdadeira com o tamanho do box é usada. Portanto regiões com máscara, regiões somente com box, mapas nativos e mapas enhanced percorrem exatamente a mesma implementação.
+Quando não há máscara, uma máscara implícita totalmente verdadeira com o envelope rasterizado do box é usada. Para boxes com dimensões fracionárias, esse envelope possui shape `(ceil(height), ceil(width))`. Portanto regiões com máscara, regiões somente com box, mapas nativos e mapas enhanced percorrem exatamente a mesma implementação.
 
-A máscara recebida é um array booleano já decodificado, em coordenadas locais do bounding box e com shape `(box.height, box.width)`. Este módulo não interpreta `Region2D.mask_reference`: resolver e decodificar o payload pertence ao chamador que selecionou o artefato.
+A máscara recebida é um array booleano já decodificado, em coordenadas locais do bounding box e com shape `(ceil(box.height), ceil(box.width))`. Este módulo não interpreta `Region2D.mask_reference`: resolver e decodificar o payload pertence ao chamador que selecionou o artefato.
 
 ## Casos vazios, pequenos e de borda
 

@@ -2,7 +2,7 @@
 
 ## Versões suportadas
 
-O ContextMap2 está atualmente em pre-alpha. Enquanto a Solution 1 estiver em validação, somente o estado mais recente das branches ativamente mantidas recebe suporte.
+O ContextMap2 está atualmente em pre-alpha. Enquanto o canonical pipeline estiver em validação, somente o estado mais recente das branches ativamente mantidas recebe suporte.
 
 ## Reportando uma vulnerabilidade
 

@@ -35,10 +35,10 @@ from contextmap.shared import SourceTimestamp
 
 
 def _clock_id(topic: str) -> str:
-    # One clock_id per topic, matching how Ros1BagSourceAdapter/Ros2BagSourceAdapter
-    # actually assign clock_id (f"{source_type}:{topic}") — different topics are
-    # independent timelines and are never expected to interleave monotonically.
-    return f"fixture:{topic}"
+    # Todas as modalidades desta fixture compartilham o clock de aquisição;
+    # o tópico continua na provenance, não na identidade do domínio temporal.
+    del topic
+    return "fixture:header"
 
 
 def _timestamp(seconds: float, topic: str) -> SourceTimestamp:
@@ -66,17 +66,6 @@ def build_valid_sequence() -> list[SourceObservation]:
             height=1,
             encoding=ImageEncoding.RGB8,
             data=b"\x01\x02\x03\x04\x05\x06",
-        ),
-        ImageObservation(
-            observation_id=SourceObservationId("frame-0002"),
-            sensor_id=SensorId("front_camera"),
-            frame_id=FrameId("front_camera_optical"),
-            timestamp=_timestamp(2.0, "/camera/image_raw"),
-            provenance=_provenance("/camera/image_raw"),
-            width=2,
-            height=1,
-            encoding=ImageEncoding.RGB8,
-            data=b"\x07\x08\x09\x0a\x0b\x0c",
         ),
         LidarObservation(
             observation_id=SourceObservationId("scan-0001"),
@@ -118,6 +107,17 @@ def build_valid_sequence() -> list[SourceObservation]:
             parent_frame=FrameId("odom"),
             translation=(1.0, 2.0, 0.0),
             orientation=(0.0, 0.0, 0.0, 1.0),
+        ),
+        ImageObservation(
+            observation_id=SourceObservationId("frame-0002"),
+            sensor_id=SensorId("front_camera"),
+            frame_id=FrameId("front_camera_optical"),
+            timestamp=_timestamp(2.0, "/camera/image_raw"),
+            provenance=_provenance("/camera/image_raw"),
+            width=2,
+            height=1,
+            encoding=ImageEncoding.RGB8,
+            data=b"\x07\x08\x09\x0a\x0b\x0c",
         ),
     ]
 

@@ -27,6 +27,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from contextmap.ingestion.calibration import CalibrationSet, ensure_valid_calibration_set
 from contextmap.ingestion.models import SourceObservation
 
 _KNOWN_TOPIC_FIELDS = frozenset({"rgb", "camera_info", "lidar", "imu", "pose"})
@@ -76,6 +77,12 @@ class SourceAdapterConfig:
             ``"ros2_bag"``, ``"dataset"``.
         path: Path to the recorded source.
         topics: Topic/channel mapping this adapter reads from.
+        timestamp_clock_id: Shared identity of the header clock used by the
+            configured topics. When omitted, a deterministic identity derived
+            from ``source_type`` and ``path`` is used.
+        calibration: Externally supplied canonical calibration to merge with
+            calibration discovered in the source. This is also the supported
+            path for static extrinsics when a source adapter does not decode TF.
         required_topics: Subset of :class:`SourceTopicMapping` field names
             that must be present in the source. A required topic missing
             from the source raises :class:`MissingRequiredTopicError`; it
@@ -87,6 +94,8 @@ class SourceAdapterConfig:
     source_type: str
     path: str
     topics: SourceTopicMapping
+    timestamp_clock_id: str | None = None
+    calibration: CalibrationSet | None = None
     required_topics: frozenset[str] = frozenset()
     extra: Mapping[str, object] = field(default_factory=dict)
 
@@ -100,6 +109,14 @@ class SourceAdapterConfig:
         unknown = self.required_topics - _KNOWN_TOPIC_FIELDS
         if unknown:
             raise ValueError(f"unknown required_topics entries: {sorted(unknown)}")
+        if self.timestamp_clock_id == "":
+            raise ValueError("timestamp_clock_id must not be empty")
+        if self.calibration is not None:
+            ensure_valid_calibration_set(self.calibration)
+
+    def resolved_timestamp_clock_id(self) -> str:
+        """Return the explicit or deterministic source-wide header clock identity."""
+        return self.timestamp_clock_id or f"{self.source_type}:{self.path}:header"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -142,9 +159,9 @@ class SourceAdapterWarning:
 class SourceAdapter(Protocol):
     """The minimal boundary every source adapter implements.
 
-    Implementations decode one configured source and expose it entirely
-    through canonical ingestion contracts; see module docs for the
-    heavy-SDK isolation this boundary depends on.
+    Implementations decode one configured source and expose its observations
+    and calibration entirely through canonical ingestion contracts; see module
+    docs for the heavy-SDK isolation this boundary depends on.
     """
 
     def capabilities(self) -> SourceAdapterCapabilities:
@@ -169,6 +186,15 @@ class SourceAdapter(Protocol):
             MissingRequiredTopicError: If a topic named in this adapter's
                 ``SourceAdapterConfig.required_topics`` is absent from the
                 source.
+        """
+        ...
+
+    def read_calibration(self) -> CalibrationSet | None:
+        """Return normalized calibration available for the configured source.
+
+        Returns:
+            Canonical calibration, or ``None`` when the source and its
+            configuration provide no calibration.
         """
         ...
 

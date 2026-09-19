@@ -1,0 +1,87 @@
+{
+  "frames": [
+    {
+      "annotations": [
+        {
+          "mask": {
+            "data": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              1,
+              0,
+              0,
+              1,
+              1,
+              0
+            ],
+            "height": 3,
+            "storage": "inline",
+            "width": 4
+          },
+          "region_id": "gt-box"
+        }
+      ],
+      "frame_id": "synthetic-pinhole",
+      "prepared_image": {
+        "exclusion_regions": [],
+        "height": 3,
+        "image": {
+          "media_type": "image/png",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "uri": "reference/region-discovery-v1/synthetic-pinhole.png"
+        },
+        "source_observation_id": "synthetic-pinhole",
+        "transformations": [],
+        "valid_region": null,
+        "width": 4
+      },
+      "source_condition": "synthetic_indoor_pinhole"
+    },
+    {
+      "annotations": [],
+      "frame_id": "synthetic-wide-angle",
+      "prepared_image": {
+        "exclusion_regions": [],
+        "height": 3,
+        "image": {
+          "media_type": "image/png",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "uri": "reference/region-discovery-v1/synthetic-wide-angle.png"
+        },
+        "source_observation_id": "synthetic-wide-angle",
+        "transformations": [],
+        "valid_region": {
+          "mask": {
+            "data": [
+              0,
+              1,
+              1,
+              0,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "height": 3,
+            "storage": "inline",
+            "width": 4
+          },
+          "reason": "synthetic lens-valid area",
+          "source": "reference-set-v1"
+        },
+        "width": 4
+      },
+      "source_condition": "synthetic_outdoor_wide_angle"
+    }
+  ],
+  "schema": "contextmap.region-discovery-reference-set/v1",
+  "version": "region-discovery-reference-v1"
+}

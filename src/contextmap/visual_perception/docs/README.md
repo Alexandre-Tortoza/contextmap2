@@ -4,6 +4,33 @@
 
 Transformar uma `SourceObservation` física (Ingestion) em evidência visual canônica e agnóstica de backend — regiões, features, claims semânticas — para uma execução configurada (`PerceptionRun`), sem decidir identidade persistente de entidade 3D, significado semântico final, ou projeção 2D↔3D.
 
+## Visão do fluxo de Visual Perception
+
+```mermaid
+flowchart LR
+    SRC["SourceObservation<br/>(Ingestion)"] --> PREP["PreparedImage"]
+    RUN["PerceptionRun"] --> RESULT["PerceptionResult"]
+    PREP --> REG["Region Discovery<br/>Region2D[]"]
+    PREP --> DENSE["Dense Feature Extraction<br/>VisualFeature[]"]
+    PREP --> SCENE["Scene Interpretation<br/>SceneContext"]
+    PREP --> RFEAT["Region Feature Extraction<br/>VisualFeature[]"]
+    REG --> RFEAT
+    PREP --> RINT["Region Interpretation<br/>SemanticClaim[]"]
+    REG --> RINT
+    REG --> RESULT
+    DENSE --> RESULT
+    RFEAT --> RESULT
+    SCENE --> RESULT
+    RINT --> RESULT
+    RESULT --> ART["PerceptionRunArtifact"]
+    ART --> SET["PerceptionEvidenceSet"]
+    SET --> DOWN["Sensor Association / Semantic Fusion<br/>capabilities downstream"]
+```
+
+O diagrama representa o fluxo do preset canônico atualmente implementado. Os ports continuam independentes da topologia: a ordem e as dependências são definidas pelo `PipelinePreset`, enquanto `service.py` apenas executa o grafo resolvido. Uma evidência produzida aqui permanece evidência de frame/run; ela não vira entidade 3D persistente nem crença fundida dentro deste módulo.
+
+Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
+
 ## O que este módulo explicitamente não possui
 
 - identidade persistente de entidade 3D (pertence a Entity Resolution/Semantic Mapping);
@@ -53,6 +80,14 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 
 ## Onde estão os documentos detalhados
 
-- [`contracts.md`](contracts.md) — campos, ownership, exemplos.
-- [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e regras de dependência.
+- [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
+- [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
+- [`ports.md`](ports.md) — pontos de substituição de backend e contratos de capability.
+- [`pipeline.md`](pipeline.md) — presets versionados, topologia canônica, validação e resolução de backends.
+- [`service.md`](service.md) — execução do DAG, estados de estágio, isolamento de falhas e montagem do resultado.
+- [`identity.md`](identity.md) — identidades determinísticas e cadeia de rastreabilidade.
+- [`run_artifact.md`](run_artifact.md) — persistência imutável, manifest, outputs, métricas e leitura isolada.
+- [`evidence_set.md`](evidence_set.md) — leitura explícita de múltiplos runs sem fusão implícita.
+- [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e regras de dependência no contexto global.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PerceptionResult` no contexto global de contratos.
+- [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — convenções globais de artifacts, lineage e imutabilidade.

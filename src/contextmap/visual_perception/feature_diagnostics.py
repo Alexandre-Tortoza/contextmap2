@@ -393,7 +393,7 @@ def _encode_dense(item: DenseFeatureDiagnostic) -> dict[str, Any]:
     }
 
 
-def _encode_box(box: BoundingBox2D | None) -> dict[str, int] | None:
+def _encode_box(box: BoundingBox2D | None) -> dict[str, float] | None:
     if box is None:
         return None
     return {"x": box.x, "y": box.y, "width": box.width, "height": box.height}

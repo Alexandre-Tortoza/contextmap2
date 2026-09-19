@@ -49,6 +49,12 @@ Ingestion only carries this reference; the calibration data itself is
 defined by the calibration and coordinate-frame metadata contract.
 """
 
+Covariance3x3 = tuple[float, ...]
+"""Row-major covariance matrix with exactly nine values."""
+
+Covariance6x6 = tuple[float, ...]
+"""Row-major covariance matrix with exactly thirty-six values."""
+
 
 class ImageEncoding(Enum):
     """Pixel encoding of an :class:`ImageObservation`, using ROS-style names."""
@@ -196,11 +202,29 @@ class ImuObservation(_SourceObservationBase):
             orientation, when the source reports absolute orientation.
             ``None`` when unavailable; a missing orientation must not be
             represented as an identity quaternion.
+        linear_acceleration_covariance: Optional row-major 3x3 covariance
+            for ``linear_acceleration``.
+        angular_velocity_covariance: Optional row-major 3x3 covariance for
+            ``angular_velocity``.
+        orientation_covariance: Optional row-major 3x3 covariance for
+            ``orientation``.
     """
 
     linear_acceleration: tuple[float, float, float] | None = None
     angular_velocity: tuple[float, float, float] | None = None
     orientation: tuple[float, float, float, float] | None = None
+    linear_acceleration_covariance: Covariance3x3 | None = None
+    angular_velocity_covariance: Covariance3x3 | None = None
+    orientation_covariance: Covariance3x3 | None = None
+
+    def __post_init__(self) -> None:
+        """Validate covariance matrix dimensions."""
+        for name, covariance in (
+            ("linear_acceleration_covariance", self.linear_acceleration_covariance),
+            ("angular_velocity_covariance", self.angular_velocity_covariance),
+            ("orientation_covariance", self.orientation_covariance),
+        ):
+            _validate_covariance(name, covariance, size=9, shape="3x3")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -218,6 +242,12 @@ class ExternalPoseMeasurement(_SourceObservationBase):
             ``parent_frame``, in meters.
         orientation: Unit quaternion (x, y, z, w) of ``child_frame`` within
             ``parent_frame``.
+        pose_covariance: Optional row-major 6x6 covariance for the pose.
+        linear_velocity: Optional (x, y, z) linear velocity in meters per
+            second, with frame semantics inherited from the source contract.
+        angular_velocity: Optional (x, y, z) angular velocity in radians per
+            second, with frame semantics inherited from the source contract.
+        twist_covariance: Optional row-major 6x6 covariance for the twist.
 
     Note:
         ``frame_id`` (inherited) holds the child frame whose pose is being
@@ -227,6 +257,15 @@ class ExternalPoseMeasurement(_SourceObservationBase):
     parent_frame: FrameId
     translation: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
+    pose_covariance: Covariance6x6 | None = None
+    linear_velocity: tuple[float, float, float] | None = None
+    angular_velocity: tuple[float, float, float] | None = None
+    twist_covariance: Covariance6x6 | None = None
+
+    def __post_init__(self) -> None:
+        """Validate covariance matrix dimensions."""
+        _validate_covariance("pose_covariance", self.pose_covariance, size=36, shape="6x6")
+        _validate_covariance("twist_covariance", self.twist_covariance, size=36, shape="6x6")
 
 
 SourceObservation = ImageObservation | LidarObservation | ImuObservation | ExternalPoseMeasurement
@@ -234,6 +273,18 @@ SourceObservation = ImageObservation | LidarObservation | ImuObservation | Exter
 
 MODALITY_NAMES: frozenset[str] = frozenset({"image", "lidar", "imu", "external_pose"})
 """Canonical modality names, one per :data:`SourceObservation` variant."""
+
+
+def _validate_covariance(
+    name: str,
+    covariance: tuple[float, ...] | None,
+    *,
+    size: int,
+    shape: str,
+) -> None:
+    """Validate one optional row-major covariance matrix."""
+    if covariance is not None and len(covariance) != size:
+        raise ValueError(f"{name} must contain exactly {size} values for a {shape} matrix")
 
 
 def observation_modality(observation: SourceObservation) -> str:

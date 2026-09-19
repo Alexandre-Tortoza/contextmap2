@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -46,12 +47,13 @@ def _write_run(
     run_index: int,
     observation_ids: list[str],
     sequence_artifact_id: str = "corridor-02-a1b2c3",
+    run_id: str | None = None,
 ) -> Path:
-    run_id = f"run-{run_index:04d}"
+    effective_run_id = run_id or f"run-{run_index:04d}"
     writer = PerceptionRunWriter(
         workspace_root=tmp_path,
         sequence_name="corridor-02",
-        run_id=PerceptionRunId(run_id),
+        run_id=PerceptionRunId(effective_run_id),
         run_index=run_index,
         sequence_artifact_id=sequence_artifact_id,
         selection_id="sha256:aaaa",
@@ -62,7 +64,7 @@ def _write_run(
         profile_label="fake",
     )
     for observation_id in observation_ids:
-        writer.add_result(_result(observation_id, run_id, sequence_artifact_id))
+        writer.add_result(_result(observation_id, effective_run_id, sequence_artifact_id))
     writer.finalize()
     return (
         tmp_path
@@ -122,6 +124,25 @@ def test_incompatible_sequence_artifacts_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(EvidenceSetError, match="incompatible"):
         PerceptionEvidenceSet.open([run_a, run_b])
+
+
+def test_duplicate_selected_run_ids_are_rejected(tmp_path: Path) -> None:
+    run_a = _write_run(tmp_path, run_index=1, observation_ids=["frame-0001"], run_id="same-run")
+    run_b = _write_run(tmp_path, run_index=2, observation_ids=["frame-0002"], run_id="same-run")
+
+    with pytest.raises(EvidenceSetError, match="duplicate run_id"):
+        PerceptionEvidenceSet.open([run_a, run_b])
+
+
+def test_result_run_id_must_match_owning_manifest(tmp_path: Path) -> None:
+    run_dir = _write_run(tmp_path, run_index=1, observation_ids=["frame-0001"])
+    results_path = run_dir / "outputs" / "results.jsonl"
+    record = json.loads(results_path.read_text(encoding="utf-8"))
+    record["run_id"] = "another-run"
+    results_path.write_text(f"{json.dumps(record)}\n", encoding="utf-8")
+
+    with pytest.raises(EvidenceSetError, match="result run_id"):
+        PerceptionEvidenceSet.open([run_dir])
 
 
 def test_view_works_without_a_registry(tmp_path: Path) -> None:

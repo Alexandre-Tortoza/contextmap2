@@ -1,0 +1,176 @@
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from contextmap.ingestion import (
+    FrameId,
+    ImageEncoding,
+    SensorId,
+    SourceObservationId,
+    SourceProvenance,
+)
+from contextmap.ingestion.adapters import _ros_common
+from contextmap.shared import SourceTimestamp
+
+_OBSERVATION_ID = SourceObservationId("observation-1")
+_SENSOR_ID = SensorId("sensor-1")
+_TIMESTAMP = SourceTimestamp(seconds=1, nanoseconds=0, clock_id="ros-clock")
+_PROVENANCE = SourceProvenance(source_type="ros1_bag", source_path="fixture.bag")
+
+
+def _header() -> SimpleNamespace:
+    return SimpleNamespace(frame_id="sensor-frame")
+
+
+def test_decode_image_removes_row_padding() -> None:
+    message = SimpleNamespace(
+        header=_header(),
+        encoding="mono8",
+        width=2,
+        height=2,
+        step=3,
+        is_bigendian=0,
+        data=np.array([1, 2, 99, 3, 4, 99], dtype=np.uint8),
+    )
+
+    observation = _ros_common.decode_image(
+        message,
+        observation_id=_OBSERVATION_ID,
+        sensor_id=_SENSOR_ID,
+        timestamp=_TIMESTAMP,
+        provenance=_PROVENANCE,
+    )
+
+    assert observation.encoding is ImageEncoding.MONO8
+    assert observation.data == b"\x01\x02\x03\x04"
+    assert observation.provenance.raw_metadata["source_step_bytes"] == 3
+    assert observation.provenance.raw_metadata["row_padding_removed"] is True
+
+
+def test_decode_image_normalizes_big_endian_mono16_to_little_endian() -> None:
+    message = SimpleNamespace(
+        header=_header(),
+        encoding="mono16",
+        width=2,
+        height=1,
+        step=4,
+        is_bigendian=1,
+        data=np.array([1, 2, 3, 4], dtype=np.uint8),
+    )
+
+    observation = _ros_common.decode_image(
+        message,
+        observation_id=_OBSERVATION_ID,
+        sensor_id=_SENSOR_ID,
+        timestamp=_TIMESTAMP,
+        provenance=_PROVENANCE,
+    )
+
+    assert observation.data == b"\x02\x01\x04\x03"
+    assert observation.provenance.raw_metadata["source_is_bigendian"] is True
+    assert observation.provenance.raw_metadata["byte_order_normalized"] is True
+
+
+def test_decode_image_rejects_stride_smaller_than_row_payload() -> None:
+    message = SimpleNamespace(
+        header=_header(),
+        encoding="rgb8",
+        width=2,
+        height=1,
+        step=5,
+        is_bigendian=0,
+        data=np.zeros(6, dtype=np.uint8),
+    )
+
+    with pytest.raises(ValueError, match="step"):
+        _ros_common.decode_image(
+            message,
+            observation_id=_OBSERVATION_ID,
+            sensor_id=_SENSOR_ID,
+            timestamp=_TIMESTAMP,
+            provenance=_PROVENANCE,
+        )
+
+
+def test_decode_lidar_removes_row_padding_and_normalizes_field_byte_order() -> None:
+    field = SimpleNamespace(name="range", offset=0, datatype=4, count=1)
+    message = SimpleNamespace(
+        header=_header(),
+        width=1,
+        height=2,
+        point_step=4,
+        row_step=6,
+        fields=[field],
+        is_bigendian=True,
+        is_dense=True,
+        data=np.array([1, 2, 0, 0, 99, 99, 3, 4, 0, 0, 99, 99], dtype=np.uint8),
+    )
+
+    observation = _ros_common.decode_lidar(
+        message,
+        observation_id=_OBSERVATION_ID,
+        sensor_id=_SENSOR_ID,
+        timestamp=_TIMESTAMP,
+        provenance=_PROVENANCE,
+    )
+
+    assert observation.data == b"\x02\x01\x00\x00\x04\x03\x00\x00"
+    assert observation.provenance.raw_metadata["source_row_step_bytes"] == 6
+    assert observation.provenance.raw_metadata["byte_order_normalized"] is True
+
+
+def test_decode_imu_preserves_each_available_covariance() -> None:
+    vector = SimpleNamespace(x=1.0, y=2.0, z=3.0)
+    quaternion = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+    message = SimpleNamespace(
+        header=_header(),
+        linear_acceleration=vector,
+        linear_acceleration_covariance=np.arange(9, dtype=np.float64),
+        angular_velocity=vector,
+        angular_velocity_covariance=np.arange(9, dtype=np.float64) + 10,
+        orientation=quaternion,
+        orientation_covariance=np.arange(9, dtype=np.float64) + 20,
+    )
+
+    observation = _ros_common.decode_imu(
+        message,
+        observation_id=_OBSERVATION_ID,
+        sensor_id=_SENSOR_ID,
+        timestamp=_TIMESTAMP,
+        provenance=_PROVENANCE,
+    )
+
+    assert observation.linear_acceleration_covariance == tuple(float(i) for i in range(9))
+    assert observation.angular_velocity_covariance == tuple(float(i) for i in range(10, 19))
+    assert observation.orientation_covariance == tuple(float(i) for i in range(20, 29))
+
+
+def test_decode_pose_preserves_twist_and_covariances() -> None:
+    vector = SimpleNamespace(x=1.0, y=2.0, z=3.0)
+    quaternion = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="odom"),
+        child_frame_id="base_link",
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(position=vector, orientation=quaternion),
+            covariance=np.arange(36, dtype=np.float64),
+        ),
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(linear=vector, angular=vector),
+            covariance=np.arange(36, dtype=np.float64) + 100,
+        ),
+    )
+
+    observation = _ros_common.decode_pose(
+        message,
+        observation_id=_OBSERVATION_ID,
+        sensor_id=_SENSOR_ID,
+        timestamp=_TIMESTAMP,
+        provenance=_PROVENANCE,
+    )
+
+    assert observation.frame_id == FrameId("base_link")
+    assert observation.pose_covariance == tuple(float(i) for i in range(36))
+    assert observation.linear_velocity == (1.0, 2.0, 3.0)
+    assert observation.twist_covariance == tuple(float(i) for i in range(100, 136))

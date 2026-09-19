@@ -1,6 +1,6 @@
 # Contribuindo
 
-O ContextMap2 está validando a Solution 1. Contribuições devem priorizar reprodutibilidade, qualidade mensurável do mapa, rastreabilidade e mudanças pequenas o suficiente para serem avaliadas de forma independente.
+O ContextMap2 está validando o canonical pipeline. Contribuições devem priorizar reprodutibilidade, qualidade mensurável do mapa, rastreabilidade e mudanças pequenas o suficiente para serem avaliadas de forma independente.
 
 As regras completas de desenvolvimento estão em [docs/development.md](docs/development.md).
 

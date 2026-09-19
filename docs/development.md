@@ -397,6 +397,27 @@ Quando um módulo depende conceitualmente de outro, sua documentação pode apon
 
 A integração é feita por links e responsabilidade clara, não por repetição de conteúdo.
 
+Quando uma milestone entra em `dev`, a documentação global e a documentação do módulo devem ser atualizadas **juntas**:
+
+```mermaid
+flowchart LR
+    CODE["Código implementado"] --> MOD["src/contextmap/<module>/docs/<br/>fonte de verdade do módulo"]
+    MOD --> GLOBAL["docs/<br/>integração no sistema"]
+    GLOBAL --> INDEX["docs/README.md<br/>índice canônico"]
+    GLOBAL --> ROOT["README.md<br/>visão pública resumida"]
+```
+
+Checklist de integração documental para uma capability concluída:
+
+- o README do módulo descreve apenas comportamento realmente implementado;
+- `docs/PIPELINE.md` conecta o novo boundary ao fluxo end-to-end;
+- `docs/architecture.md` atualiza ownership/dependências quando necessário;
+- `docs/CONTRACTS.md` distingue contratos implementados de contratos alvo;
+- `docs/ARTIFACTS.md` registra formatos persistidos reais, sem inventar arquivos vazios;
+- `docs/README.md` adiciona o módulo ao mapa de navegação;
+- diagramas Mermaid usam nomes que existem no código ou marcam explicitamente elementos planejados.
+
+
 ### 6.4 Diagramas
 
 Mermaid é preferido para:

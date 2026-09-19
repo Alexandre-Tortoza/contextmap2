@@ -192,6 +192,20 @@ def test_box_only_pooling_uses_the_same_weighted_mean_policy() -> None:
     assert result.provenance.pooling_policy == "mask_weighted_mean_preserve_l2_v2"
 
 
+def test_pooling_rasterizes_fractional_region_box_to_its_integer_envelope() -> None:
+    region = Region2D(
+        region_id=RegionId("region-fractional"),
+        bounding_box=BoundingBox2D(x=1.5, y=1.5, width=3.25, height=2.25),
+        provenance=_REGION_PROVENANCE,
+    )
+    mask = np.ones((3, 4), dtype=np.bool_)
+
+    result = pool_region_feature(_array(), dense_map=_dense_map(), region=region, mask=mask)
+
+    assert result.vector.shape == (1,)
+    assert result.diagnostics.coverage_fraction == 1.0
+
+
 def test_pooling_renormalizes_l2_vectors_to_preserve_embedding_space() -> None:
     dense_map = _dense_map()
     l2_feature = replace(

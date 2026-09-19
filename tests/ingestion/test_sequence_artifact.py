@@ -25,6 +25,8 @@ from contextmap.ingestion import (
     SequenceProvenance,
     SourceObservationId,
     SourceProvenance,
+    SynchronizationConfig,
+    synchronize,
 )
 from contextmap.ingestion.calibration import compute_content_hash
 from contextmap.shared import SourceTimestamp
@@ -101,6 +103,8 @@ def _build_fixture_sequence(writer: SequenceArtifactWriter) -> None:
             linear_acceleration=(0.0, 0.0, 9.81),
             angular_velocity=(0.0, 0.0, 0.0),
             orientation=None,
+            linear_acceleration_covariance=tuple(float(value) for value in range(9)),
+            angular_velocity_covariance=tuple(float(value) for value in range(10, 19)),
         )
     )
     writer.add_observation(
@@ -113,6 +117,10 @@ def _build_fixture_sequence(writer: SequenceArtifactWriter) -> None:
             parent_frame=FrameId("odom"),
             translation=(1.0, 2.0, 0.0),
             orientation=(0.0, 0.0, 0.0, 1.0),
+            pose_covariance=tuple(float(value) for value in range(36)),
+            linear_velocity=(0.1, 0.0, 0.0),
+            angular_velocity=(0.0, 0.0, 0.01),
+            twist_covariance=tuple(float(value) for value in range(100, 136)),
         )
     )
 
@@ -123,6 +131,7 @@ def test_finalized_artifact_can_be_reopened_without_the_original_source(tmp_path
 
     manifest = writer.finalize()
 
+    assert manifest.schema_version == "0.2.0"
     assert manifest.observation_counts == {"image": 2, "lidar": 1, "imu": 1, "external_pose": 1}
 
     artifact_dir = tmp_path / "sequences" / "corridor-02" / manifest.artifact_id
@@ -167,11 +176,17 @@ def test_round_trip_preserves_observation_fields(tmp_path: Path) -> None:
     assert isinstance(imu, ImuObservation)
     assert imu.orientation is None
     assert imu.linear_acceleration == (0.0, 0.0, 9.81)
+    assert imu.linear_acceleration_covariance == tuple(float(value) for value in range(9))
+    assert imu.angular_velocity_covariance == tuple(float(value) for value in range(10, 19))
 
     pose = reader.get_observation(SourceObservationId("odom-0001"))
     assert isinstance(pose, ExternalPoseMeasurement)
     assert pose.parent_frame == "odom"
     assert pose.translation == (1.0, 2.0, 0.0)
+    assert pose.pose_covariance == tuple(float(value) for value in range(36))
+    assert pose.linear_velocity == (0.1, 0.0, 0.0)
+    assert pose.angular_velocity == (0.0, 0.0, 0.01)
+    assert pose.twist_covariance == tuple(float(value) for value in range(100, 136))
 
 
 def test_get_observation_raises_for_unknown_id(tmp_path: Path) -> None:
@@ -394,6 +409,55 @@ def test_diagnostics_round_trip_through_the_artifact(tmp_path: Path) -> None:
     assert reader.verify_integrity() == []
 
 
+def test_structured_synchronization_and_frame_graph_diagnostics_round_trip(
+    tmp_path: Path,
+) -> None:
+    image = ImageObservation(
+        observation_id=SourceObservationId("frame-sync"),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=_timestamp(1),
+        provenance=_provenance(source_topic="/camera/image_raw"),
+        width=1,
+        height=1,
+        encoding=ImageEncoding.MONO8,
+        data=b"\x01",
+    )
+    imu = ImuObservation(
+        observation_id=SourceObservationId("imu-sync"),
+        sensor_id=SensorId("imu0"),
+        frame_id=FrameId("imu_link"),
+        timestamp=_timestamp(1),
+        provenance=_provenance(source_topic="/imu/data"),
+    )
+    _, synchronization = synchronize(
+        [image, imu],
+        config=SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=0),
+    )
+    calibration = _calibration_set()
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="structured")
+    writer.add_observation(image)
+    writer.add_observation(imu)
+    writer.set_calibration(calibration)
+    writer.set_diagnostics(synchronization=synchronization)
+
+    manifest = writer.finalize()
+    artifact_dir = tmp_path / "sequences" / "structured" / manifest.artifact_id
+
+    assert (artifact_dir / "diagnostics" / "synchronization.jsonl").is_file()
+    assert (artifact_dir / "diagnostics" / "dropped-events.jsonl").is_file()
+    assert (artifact_dir / "diagnostics" / "frame-graph.json").is_file()
+
+    diagnostics = SequenceArtifactReader(artifact_dir).read_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics.synchronization == synchronization
+    assert diagnostics.frame_graph is not None
+    assert diagnostics.frame_graph.calibration_ids == ("front_camera-calib",)
+    assert diagnostics.summary.synchronization_status_counts["matched"] == 1
+    assert diagnostics.summary.calibration_ids == ["front_camera-calib"]
+
+
 def test_read_diagnostics_returns_none_when_never_set(tmp_path: Path) -> None:
     writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
     _build_fixture_sequence(writer)
@@ -416,3 +480,20 @@ def test_set_diagnostics_with_no_warnings_still_writes_a_summary(tmp_path: Path)
     assert diagnostics is not None
     assert diagnostics.warnings == ()
     assert diagnostics.summary.warning_count == 0
+
+
+def test_read_summary_diagnostics_does_not_decode_observation_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_diagnostics()
+    manifest = writer.finalize()
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+
+    def fail_if_called() -> None:
+        raise AssertionError("summary-only diagnostics must not decode observation payloads")
+
+    monkeypatch.setattr(reader, "list_observations", fail_if_called)
+
+    assert reader.read_diagnostics() is not None

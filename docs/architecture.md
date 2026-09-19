@@ -1,10 +1,10 @@
-# Arquitetura da Solution 1
+# Arquitetura do Canonical Pipeline
 
 Este documento descreve a arquitetura estática alvo do ContextMap2: boundaries, ownership, dependências entre capabilities e regras que devem permanecer verdadeiras independentemente do backend escolhido.
 
 O fluxo operacional detalhado está em [PIPELINE.md](PIPELINE.md). A semântica dos contratos está em [CONTRACTS.md](CONTRACTS.md). Persistência e lineage estão em [ARTIFACTS.md](ARTIFACTS.md).
 
-> Esta é a arquitetura alvo da Solution 1. Uma capability documentada aqui pode ainda estar planejada ou em implementação.
+> Esta é a arquitetura alvo do canonical pipeline. Uma capability documentada aqui pode ainda estar planejada ou em implementação.
 
 ## Objetivo arquitetural
 
@@ -108,6 +108,28 @@ flowchart TD
 ```
 
 As setas principais representam fluxo/dependência conceitual de dados. Dependências adicionais de artifacts, como calibração normalizada ou pose usada em Sensor Association, devem continuar explícitas no runtime e lineage mesmo quando não aparecem como uma aresta simplificada no diagrama.
+
+## Estado implementado e fronteira atual
+
+Na `dev`, `ingestion` e `visual_perception`, incluindo Region Discovery, já materializam os dois primeiros boundaries da arquitetura. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+
+```mermaid
+flowchart LR
+    SRC["Fonte registrada"] --> ING["contextmap.ingestion<br/>implementado"]
+    ING --> SA["SequenceArtifact"]
+    SA --> VP["contextmap.visual_perception<br/>core + Region Discovery implementados"]
+    VP --> PRA["PerceptionRunArtifact"]
+    PRA -. contrato downstream futuro .-> NEXT["state_estimation / geometric_mapping /<br/>sensor_association / fusion / map"]
+```
+
+A integração entre os dois módulos é feita exclusivamente pelas APIs públicas. `visual_perception` referencia identidades de observação e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
+
+Documentação implementacional:
+
+- [Ingestion](../src/contextmap/ingestion/docs/README.md);
+- [Visual Perception](../src/contextmap/visual_perception/docs/README.md);
+- [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
+
 
 ## Ownership
 
@@ -225,39 +247,39 @@ Isso não significa que ela conheça SAM, DINO, FAST-LIO ou ROS. Ela conhece ape
 
 Uma interface/Protocol deve existir quando há um ponto real de substituição.
 
-Exemplos de variation points planejados:
+Variation points atuais e planejados:
 
-```text
-RegionDiscovery
-├── SAM2
-├── SAM3
-└── Florence-2
+```mermaid
+flowchart LR
+    RD["RegionDiscovery"]
+    FE["FeatureExtractor"]
+    SI["SemanticInterpreter"]
+    SS["SemanticScorer"]
+    SE["StateEstimator"]
+    PE["PointEncoder"]
 
-FeatureExtractor
-├── DINOv2
-├── DINOv3
-├── CLIP
-└── AlphaCLIP
+    SAM2["SAM2"] -->|implementado| RD
+    SAM3["SAM3"] -->|implementado| RD
+    F2["Florence-2"] -->|implementado| RD
 
-SemanticInterpreter
-├── Qwen
-├── Gemini
-└── Florence-2
-
-SemanticScorer
-├── CLIP
-└── AlphaCLIP
-
-StateEstimator
-├── ExternalPose
-└── FAST-LIO
-
-PointEncoder
-├── deterministic descriptor
-└── PTv3, optional
+    D2["DINOv2"] -. planejado/integração separada .-> FE
+    D3["DINOv3"] -. planejado/integração separada .-> FE
+    CLIP["CLIP"] -. planejado/integração separada .-> FE
+    ACLIP["AlphaCLIP"] -. planejado/integração separada .-> FE
+    Q["Qwen"] -. planejado .-> SI
+    G["Gemini"] -. planejado .-> SI
+    F2 -. adapter semântico separado .-> SI
+    CLIP -. scorer separado .-> SS
+    ACLIP -. scorer separado .-> SS
+    EXT["ExternalPose"] -. planejado .-> SE
+    FL["FAST-LIO"] -. planejado .-> SE
+    DET["deterministic descriptor"] -. planejado .-> PE
+    PT["PTv3"] -. opcional .-> PE
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
+
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa os três primeiros; `SemanticScorer` ainda não está ligado ao DAG canônico. Region Discovery já possui adapters concretos SAM2, SAM3 e Florence-2 atrás do mesmo port, com normalização backend-neutral para `Region2D`. Os demais backends do diagrama seguem suas milestones próprias. Ingestion também possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes de Region Discovery: [`visual_perception/docs/region-discovery.md`](../src/contextmap/visual_perception/docs/region-discovery.md).
 
 ## Composition root
 
@@ -311,7 +333,7 @@ Esses services trabalham com ports e contratos públicos. Instanciação de back
 
 ## Artefatos como fronteiras
 
-A Solution 1 usa artifacts imutáveis como fronteiras explícitas entre execuções.
+O canonical pipeline usa artifacts imutáveis como fronteiras explícitas entre execuções.
 
 ```mermaid
 flowchart LR
@@ -435,7 +457,7 @@ Mudar backend não deve necessariamente mudar schema. Mudar semântica de um con
 
 ## Required vs optional
 
-O caminho end-to-end da Solution 1 requer as capabilities necessárias para produzir geometria, entidades resolvidas, relações e `ContextMapArtifact`.
+O caminho end-to-end do canonical pipeline requer as capabilities necessárias para produzir geometria, entidades resolvidas, relações e `ContextMapArtifact`.
 
 Alguns canais permanecem opcionais quando o downstream selecionado não depende deles, por exemplo:
 

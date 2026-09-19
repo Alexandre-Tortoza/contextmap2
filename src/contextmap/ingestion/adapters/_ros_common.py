@@ -15,15 +15,20 @@ cross-capability access and is not part of the public adapter contract.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from contextmap.ingestion.calibration import (
+    CalibrationEntry,
+    CalibrationError,
+    CalibrationSet,
     CameraModel,
     DistortionModel,
     FisheyeCameraModel,
     PinholeCameraModel,
 )
 from contextmap.ingestion.models import (
+    CalibrationReferenceId,
     ExternalPoseMeasurement,
     FrameId,
     ImageEncoding,
@@ -45,6 +50,13 @@ IMAGE_ENCODING_MAP: dict[str, ImageEncoding] = {
     "mono16": ImageEncoding.MONO16,
 }
 
+IMAGE_BYTES_PER_PIXEL: dict[ImageEncoding, int] = {
+    ImageEncoding.RGB8: 3,
+    ImageEncoding.BGR8: 3,
+    ImageEncoding.MONO8: 1,
+    ImageEncoding.MONO16: 2,
+}
+
 POINTFIELD_TYPE_MAP: dict[int, PointFieldDataType] = {
     1: PointFieldDataType.INT8,
     2: PointFieldDataType.UINT8,
@@ -54,6 +66,17 @@ POINTFIELD_TYPE_MAP: dict[int, PointFieldDataType] = {
     6: PointFieldDataType.UINT32,
     7: PointFieldDataType.FLOAT32,
     8: PointFieldDataType.FLOAT64,
+}
+
+POINTFIELD_SIZE_BYTES: dict[PointFieldDataType, int] = {
+    PointFieldDataType.INT8: 1,
+    PointFieldDataType.UINT8: 1,
+    PointFieldDataType.INT16: 2,
+    PointFieldDataType.UINT16: 2,
+    PointFieldDataType.INT32: 4,
+    PointFieldDataType.UINT32: 4,
+    PointFieldDataType.FLOAT32: 4,
+    PointFieldDataType.FLOAT64: 8,
 }
 
 PINHOLE_DISTORTION_MODEL_MAP: dict[str, DistortionModel] = {
@@ -95,6 +118,7 @@ def decode_image(
     sensor_id: SensorId,
     timestamp: SourceTimestamp,
     provenance: SourceProvenance,
+    calibration_id: CalibrationReferenceId | None = None,
 ) -> ImageObservation:
     """Decode a ``sensor_msgs/Image`` into a canonical :class:`ImageObservation`.
 
@@ -104,6 +128,7 @@ def decode_image(
         sensor_id: Sensor identity to assign.
         timestamp: Canonical timestamp to assign.
         provenance: Provenance to assign.
+        calibration_id: Applicable canonical calibration reference, when available.
 
     Returns:
         The canonical image observation.
@@ -114,16 +139,37 @@ def decode_image(
     encoding = IMAGE_ENCODING_MAP.get(message.encoding)
     if encoding is None:
         raise ValueError(f"unsupported image encoding: {message.encoding!r}")
+    row_payload_size = int(message.width) * IMAGE_BYTES_PER_PIXEL[encoding]
+    data = _remove_row_padding(
+        message.data.tobytes(),
+        height=int(message.height),
+        row_step=int(message.step),
+        row_payload_size=row_payload_size,
+        payload_name="image",
+    )
+    source_is_bigendian = bool(message.is_bigendian)
+    byte_order_normalized = source_is_bigendian and encoding is ImageEncoding.MONO16
+    if byte_order_normalized:
+        data = _swap_fixed_width_values(data, value_size=2)
+    normalized_provenance = _with_raw_metadata(
+        provenance,
+        source_step_bytes=int(message.step),
+        source_is_bigendian=source_is_bigendian,
+        row_padding_removed=int(message.step) != row_payload_size,
+        byte_order_normalized=byte_order_normalized,
+        canonical_byte_order="little",
+    )
     return ImageObservation(
         observation_id=observation_id,
         sensor_id=sensor_id,
         frame_id=FrameId(message.header.frame_id),
         timestamp=timestamp,
-        provenance=provenance,
+        provenance=normalized_provenance,
+        calibration_id=calibration_id,
         width=message.width,
         height=message.height,
         encoding=encoding,
-        data=message.data.tobytes(),
+        data=data,
     )
 
 
@@ -134,6 +180,7 @@ def decode_lidar(
     sensor_id: SensorId,
     timestamp: SourceTimestamp,
     provenance: SourceProvenance,
+    calibration_id: CalibrationReferenceId | None = None,
 ) -> LidarObservation:
     """Decode a ``sensor_msgs/PointCloud2`` into a canonical :class:`LidarObservation`.
 
@@ -143,6 +190,7 @@ def decode_lidar(
         sensor_id: Sensor identity to assign.
         timestamp: Canonical timestamp to assign.
         provenance: Provenance to assign.
+        calibration_id: Applicable canonical calibration reference, when available.
 
     Returns:
         The canonical LiDAR observation.
@@ -156,17 +204,41 @@ def decode_lidar(
         )
         for field in message.fields
     )
+    row_payload_size = int(message.width) * int(message.point_step)
+    data = _remove_row_padding(
+        message.data.tobytes(),
+        height=int(message.height),
+        row_step=int(message.row_step),
+        row_payload_size=row_payload_size,
+        payload_name="point cloud",
+    )
+    source_is_bigendian = bool(message.is_bigendian)
+    if source_is_bigendian:
+        data = _normalize_point_field_byte_order(
+            data,
+            point_step=int(message.point_step),
+            fields=fields,
+        )
+    normalized_provenance = _with_raw_metadata(
+        provenance,
+        source_row_step_bytes=int(message.row_step),
+        source_is_bigendian=source_is_bigendian,
+        row_padding_removed=int(message.row_step) != row_payload_size,
+        byte_order_normalized=source_is_bigendian,
+        canonical_byte_order="little",
+    )
     return LidarObservation(
         observation_id=observation_id,
         sensor_id=sensor_id,
         frame_id=FrameId(message.header.frame_id),
         timestamp=timestamp,
-        provenance=provenance,
+        provenance=normalized_provenance,
+        calibration_id=calibration_id,
         point_count=message.width * message.height,
         point_step_bytes=message.point_step,
         fields=fields,
         is_dense=bool(message.is_dense),
-        data=message.data.tobytes(),
+        data=data,
     )
 
 
@@ -177,6 +249,7 @@ def decode_imu(
     sensor_id: SensorId,
     timestamp: SourceTimestamp,
     provenance: SourceProvenance,
+    calibration_id: CalibrationReferenceId | None = None,
 ) -> ImuObservation:
     """Decode a ``sensor_msgs/Imu`` into a canonical :class:`ImuObservation`.
 
@@ -191,6 +264,7 @@ def decode_imu(
         sensor_id: Sensor identity to assign.
         timestamp: Canonical timestamp to assign.
         provenance: Provenance to assign.
+        calibration_id: Applicable canonical calibration reference, when available.
 
     Returns:
         The canonical IMU observation.
@@ -229,9 +303,15 @@ def decode_imu(
         frame_id=FrameId(message.header.frame_id),
         timestamp=timestamp,
         provenance=provenance,
+        calibration_id=calibration_id,
         linear_acceleration=linear_acceleration,
         angular_velocity=angular_velocity,
         orientation=orientation,
+        linear_acceleration_covariance=_available_covariance(
+            message.linear_acceleration_covariance
+        ),
+        angular_velocity_covariance=_available_covariance(message.angular_velocity_covariance),
+        orientation_covariance=_available_covariance(message.orientation_covariance),
     )
 
 
@@ -242,6 +322,7 @@ def decode_pose(
     sensor_id: SensorId,
     timestamp: SourceTimestamp,
     provenance: SourceProvenance,
+    calibration_id: CalibrationReferenceId | None = None,
 ) -> ExternalPoseMeasurement:
     """Decode a ``nav_msgs/Odometry`` into a canonical :class:`ExternalPoseMeasurement`.
 
@@ -256,18 +337,22 @@ def decode_pose(
         sensor_id: Sensor identity to assign.
         timestamp: Canonical timestamp to assign.
         provenance: Provenance to assign.
+        calibration_id: Applicable canonical calibration reference, when available.
 
     Returns:
         The canonical external pose measurement.
     """
     position = message.pose.pose.position
     orientation = message.pose.pose.orientation
+    linear_velocity = message.twist.twist.linear
+    angular_velocity = message.twist.twist.angular
     return ExternalPoseMeasurement(
         observation_id=observation_id,
         sensor_id=sensor_id,
         frame_id=FrameId(message.child_frame_id),
         timestamp=timestamp,
         provenance=provenance,
+        calibration_id=calibration_id,
         parent_frame=FrameId(message.header.frame_id),
         translation=(float(position.x), float(position.y), float(position.z)),
         orientation=(
@@ -276,7 +361,135 @@ def decode_pose(
             float(orientation.z),
             float(orientation.w),
         ),
+        pose_covariance=tuple(float(value) for value in message.pose.covariance),
+        linear_velocity=(
+            float(linear_velocity.x),
+            float(linear_velocity.y),
+            float(linear_velocity.z),
+        ),
+        angular_velocity=(
+            float(angular_velocity.x),
+            float(angular_velocity.y),
+            float(angular_velocity.z),
+        ),
+        twist_covariance=tuple(float(value) for value in message.twist.covariance),
     )
+
+
+def _available_covariance(values: Any) -> tuple[float, ...] | None:
+    """Return a ROS covariance unless its first value marks data unavailable."""
+    if values[0] == -1.0:
+        return None
+    return tuple(float(value) for value in values)
+
+
+def _remove_row_padding(
+    data: bytes,
+    *,
+    height: int,
+    row_step: int,
+    row_payload_size: int,
+    payload_name: str,
+) -> bytes:
+    """Validate a ROS row layout and return a tightly packed payload."""
+    if height <= 0 or row_payload_size <= 0:
+        raise ValueError(f"{payload_name} dimensions must be positive")
+    if row_step < row_payload_size:
+        raise ValueError(
+            f"{payload_name} row step {row_step} is smaller than payload {row_payload_size}"
+        )
+    expected_size = height * row_step
+    if len(data) != expected_size:
+        raise ValueError(
+            f"{payload_name} data size {len(data)} does not match height*row_step={expected_size}"
+        )
+    return b"".join(
+        data[row_index * row_step : row_index * row_step + row_payload_size]
+        for row_index in range(height)
+    )
+
+
+def _swap_fixed_width_values(data: bytes, *, value_size: int) -> bytes:
+    """Reverse every fixed-width scalar in a tightly packed byte buffer."""
+    return b"".join(
+        data[offset : offset + value_size][::-1] for offset in range(0, len(data), value_size)
+    )
+
+
+def _normalize_point_field_byte_order(
+    data: bytes,
+    *,
+    point_step: int,
+    fields: tuple[PointFieldDescriptor, ...],
+) -> bytes:
+    """Convert declared multibyte point fields from big- to little-endian."""
+    normalized = bytearray(data)
+    for field in fields:
+        value_size = POINTFIELD_SIZE_BYTES[field.data_type]
+        field_end = field.offset_bytes + value_size * field.count
+        if field.offset_bytes < 0 or field_end > point_step:
+            raise ValueError(f"point field {field.name!r} exceeds point_step={point_step}")
+        if value_size == 1:
+            continue
+        for point_offset in range(0, len(normalized), point_step):
+            for element_index in range(field.count):
+                start = point_offset + field.offset_bytes + element_index * value_size
+                end = start + value_size
+                normalized[start:end] = normalized[start:end][::-1]
+    return bytes(normalized)
+
+
+def _with_raw_metadata(provenance: SourceProvenance, **metadata: object) -> SourceProvenance:
+    """Return provenance enriched with primitive normalization metadata."""
+    return replace(provenance, raw_metadata={**provenance.raw_metadata, **metadata})
+
+
+def merge_calibration(
+    provided: CalibrationSet | None,
+    discovered_entries: tuple[CalibrationEntry, ...],
+) -> CalibrationSet | None:
+    """Merge configured calibration with source-discovered entries by sensor identity."""
+    entries = dict(provided.entries) if provided is not None else {}
+    by_sensor: dict[SensorId, CalibrationEntry] = {}
+    for entry in entries.values():
+        previous = by_sensor.get(entry.sensor_id)
+        if previous is not None:
+            raise CalibrationError(
+                f"multiple calibration entries for sensor_id={entry.sensor_id!r}"
+            )
+        by_sensor[entry.sensor_id] = entry
+
+    for entry in discovered_entries:
+        previous = by_sensor.get(entry.sensor_id)
+        if previous is not None:
+            if previous.content_hash != entry.content_hash:
+                raise CalibrationError(f"conflicting calibration for sensor_id={entry.sensor_id!r}")
+            continue
+        entries[entry.calibration_id] = entry
+        by_sensor[entry.sensor_id] = entry
+
+    if not entries and provided is None:
+        return None
+    return CalibrationSet(
+        entries=entries,
+        static_transforms=provided.static_transforms if provided is not None else (),
+    )
+
+
+def calibration_ids_by_sensor(
+    calibration: CalibrationSet | None,
+) -> dict[SensorId, CalibrationReferenceId]:
+    """Build an unambiguous sensor-to-calibration lookup."""
+    if calibration is None:
+        return {}
+    result: dict[SensorId, CalibrationReferenceId] = {}
+    for entry in calibration.entries.values():
+        if entry.sensor_id in result:
+            raise CalibrationError(
+                f"multiple calibration entries for sensor_id={entry.sensor_id!r}"
+            )
+        result[entry.sensor_id] = entry.calibration_id
+    return result
 
 
 def build_camera_model(

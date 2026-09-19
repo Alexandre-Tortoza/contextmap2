@@ -17,6 +17,15 @@ from contextmap.visual_perception import (
     SemanticSupport,
 )
 from contextmap.visual_perception.models import ClaimId, HypothesisRole
+from contextmap.visual_perception.models import PreparedImage as ModelPreparedImage
+from contextmap.visual_perception.models import Region2D as ModelRegion2D
+from contextmap.visual_perception.ports import RegionDiscovery as PortRegionDiscovery
+
+
+def test_region_discovery_uses_one_public_contract_family() -> None:
+    assert PreparedImage is ModelPreparedImage
+    assert Region2D is ModelRegion2D
+    assert RegionDiscovery is PortRegionDiscovery
 
 
 def _image() -> PreparedImage:
