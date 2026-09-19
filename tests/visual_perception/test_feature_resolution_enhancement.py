@@ -93,8 +93,6 @@ def _enhancement_lineage(
         source_feature_id=source.feature.feature_id,
         source_artifact_id=source.source_artifact_id,
         source_payload_reference=source.feature.payload_reference,
-        source_payload_content_hash="sha256:source-payload",
-        source_payload_size_bytes=160,
         source_embedding_space_id=source.feature.embedding_space_id,
         source_dtype=source.feature.dtype,
         source_normalization=source.feature.normalization,
@@ -111,8 +109,6 @@ def _enhancement_lineage(
         precision="float32",
         duration_seconds=0.25,
         peak_memory_bytes=4096,
-        output_payload_content_hash="sha256:enhanced-payload",
-        output_payload_size_bytes=256,
     )
 
 
@@ -147,7 +143,7 @@ def _enhanced_map(
             support_height=1.0,
             coordinate_transform_id="prepared-to-enhanced-grid-v1",
         ),
-        source_artifact_id="enhancement-run-0001",
+        source_artifact_id=source.source_artifact_id,
         enhancement=lineage
         or _enhancement_lineage(source, output_embedding_space_id=output_embedding_space_id),
     )
@@ -184,20 +180,43 @@ def test_enhancement_port_produces_a_separate_auditable_dense_map() -> None:
     assert output is not source
     assert output.feature.feature_id != source.feature.feature_id
     assert output.feature.payload_reference != source.feature.payload_reference
-    assert output.source_artifact_id == "enhancement-run-0001"
+    assert output.source_artifact_id == source.source_artifact_id
     assert output.feature.embedding_space_id == source.feature.embedding_space_id
     assert output.sampling.grid_width == 4
     assert output.sampling.grid_height == 4
     assert output.enhancement is not None
     assert output.enhancement.source_artifact_id == "dino-run-0001"
-    assert output.enhancement.source_payload_content_hash == "sha256:source-payload"
-    assert output.enhancement.output_payload_content_hash == "sha256:enhanced-payload"
     assert output.enhancement.backend == _ENHANCEMENT_PROVENANCE
     assert output.enhancement.device == "cpu"
     assert output.enhancement.precision == "float32"
     assert output.enhancement.duration_seconds == 0.25
     assert output.enhancement.peak_memory_bytes == 4096
-    assert output.enhancement.output_payload_size_bytes == 256
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("feature_id", "feature identity"),
+        ("payload_reference", "payload reference"),
+    ],
+)
+def test_same_artifact_still_requires_distinct_feature_and_payload(
+    mutation: str, message: str
+) -> None:
+    source = _source_map()
+    output = _enhanced_map(source)
+    if mutation == "feature_id":
+        feature = replace(output.feature, feature_id=source.feature.feature_id)
+    else:
+        feature = replace(output.feature, payload_reference=source.feature.payload_reference)
+    invalid = replace(output, feature=feature)
+
+    class _InvalidEnhancer(_FakeEnhancer):
+        def enhance(self, source: DenseFeatureMap) -> DenseFeatureMap:
+            return invalid
+
+    with pytest.raises(FeatureResolutionEnhancementError, match=message):
+        enhance_feature_resolution(source, enhancer=_InvalidEnhancer())
 
 
 def test_changed_representation_space_is_allowed_only_when_explicit() -> None:

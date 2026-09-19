@@ -52,8 +52,6 @@ class FeatureResolutionEnhancementProvenance:
         source_feature_id: Exact native dense feature used as input.
         source_artifact_id: Immutable artifact owning the source feature.
         source_payload_reference: Source payload reference within its artifact.
-        source_payload_content_hash: Integrity hash of the source payload.
-        source_payload_size_bytes: Persisted source payload size.
         source_embedding_space_id: Source feature-space fingerprint.
         source_dtype: Source numerical dtype.
         source_normalization: Source normalization declaration.
@@ -70,15 +68,11 @@ class FeatureResolutionEnhancementProvenance:
         duration_seconds: Measured enhancement wall duration.
         peak_memory_bytes: Measured peak memory/VRAM with backend-defined
             measurement semantics.
-        output_payload_content_hash: Integrity hash of the output payload.
-        output_payload_size_bytes: Persisted output payload size.
     """
 
     source_feature_id: FeatureId
     source_artifact_id: str
     source_payload_reference: str
-    source_payload_content_hash: str
-    source_payload_size_bytes: int
     source_embedding_space_id: str
     source_dtype: str
     source_normalization: str | None
@@ -92,22 +86,18 @@ class FeatureResolutionEnhancementProvenance:
     precision: str
     duration_seconds: float
     peak_memory_bytes: int
-    output_payload_content_hash: str
-    output_payload_size_bytes: int
 
     def __post_init__(self) -> None:
-        """Validate required identities, dimensions, integrity, and cost fields."""
+        """Validate required identities, dimensions, and cost fields."""
         required = {
             "source_artifact_id": self.source_artifact_id,
             "source_payload_reference": self.source_payload_reference,
-            "source_payload_content_hash": self.source_payload_content_hash,
             "source_embedding_space_id": self.source_embedding_space_id,
             "source_dtype": self.source_dtype,
             "source_coordinate_transform_id": self.source_coordinate_transform_id,
             "output_embedding_space_id": self.output_embedding_space_id,
             "device": self.device,
             "precision": self.precision,
-            "output_payload_content_hash": self.output_payload_content_hash,
         }
         for name, value in required.items():
             if not value:
@@ -123,8 +113,6 @@ class FeatureResolutionEnhancementProvenance:
         }.items():
             if len(size) != 2 or any(dimension <= 0 for dimension in size):
                 raise ValueError(f"{name} dimensions must be positive")
-        if self.source_payload_size_bytes <= 0 or self.output_payload_size_bytes <= 0:
-            raise ValueError("source and output payload sizes must be positive")
         if not math.isfinite(self.duration_seconds) or self.duration_seconds < 0.0:
             raise ValueError("duration_seconds must be finite and non-negative")
         if self.peak_memory_bytes < 0:
