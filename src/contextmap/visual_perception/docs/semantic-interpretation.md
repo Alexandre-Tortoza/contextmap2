@@ -97,3 +97,13 @@ runtime consegue medi-las. A cobertura CI usa runtime fake determinístico; uma
 execução de referência com pesos reais continua exigindo ambiente compatível e
 deve ser registrada pelo protocolo de avaliação, nunca simulada como evidência
 real.
+
+## Adapter Gemini
+
+`GeminiSemanticInterpreter` usa o mesmo request, template e parser do adapter
+local. `GeminiSemanticConfig` contém somente model, timeout, retries e settings
+de geração/raciocínio; credenciais pertencem ao `GeminiClient` injetado e nunca
+entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
+limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
+erro explícito, sem substituição por outro backend. Usage, latência, warnings e
+identidade do provider permanecem auditáveis.
