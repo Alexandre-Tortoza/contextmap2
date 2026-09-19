@@ -2,7 +2,7 @@
 
 O ContextMap2 é uma implementação de pesquisa para gerar artefatos persistentes de mapas contextuais 3D a partir de dados sincronizados de sensores robóticos.
 
-O repositório está intencionalmente focado na **Solution 1**: construir um caminho mínimo ponta a ponta, medir a qualidade do mapa gerado e validar a representação antes de expandir o sistema.
+O repositório está intencionalmente focado no **canonical pipeline**: construir um caminho mínimo ponta a ponta, medir a qualidade do mapa gerado e validar a representação antes de expandir o sistema.
 
 ## Objetivo
 
@@ -22,7 +22,7 @@ O artefato gerado é a fronteira deste repositório. Visualização, busca em li
 
 ## Escopo atual
 
-A Solution 1 deve estabelecer e validar:
+O canonical pipeline deve estabelecer e validar:
 
 - contratos canônicos de sensores e observações;
 - um caminho de entrada reproduzível;
@@ -36,7 +36,7 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 
 ## Estado do repositório
 
-**Pre-alpha.** Interfaces e schemas de artefato podem mudar enquanto a Solution 1 estiver sendo validada. Releases permanecem na série `v0.x.y` até que a primeira representação esteja estável o suficiente para consumidores externos.
+**Pre-alpha.** Interfaces e schemas de artefato podem mudar enquanto o canonical pipeline estiver sendo validado. Releases permanecem na série `v0.x.y` até que a primeira representação esteja estável o suficiente para consumidores externos.
 
 ## Estado implementado
 
