@@ -282,9 +282,9 @@ flowchart LR
 
 `PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
 
-### Ainda não materializado no preset canônico
+### Ainda não materializado na integração canônica
 
-Os seguintes elementos aparecem na arquitetura alvo, mas não fazem parte de `CANONICAL_PRESET_V1` hoje:
+Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
 - adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP para `FeatureExtractor`;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
