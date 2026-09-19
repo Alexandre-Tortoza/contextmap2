@@ -14,7 +14,10 @@ workspace/
             │   ├── README.md                                          # gerado, legível por humano
             │   ├── manifest.json                                      # ponto autoritativo
             │   ├── outputs/
-            │   │   └── results.jsonl                                   # um PerceptionResult por linha
+            │   │   ├── results.jsonl                                   # um PerceptionResult por linha
+            │   │   └── features/                                       # quando payloads são persistidos
+            │   │       ├── feature-index.jsonl
+            │   │       └── <observation-scope>/*.npy
             │   ├── metrics/
             │   │   ├── stage-timings.jsonl                             # um StageOutcome por linha
             │   │   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
