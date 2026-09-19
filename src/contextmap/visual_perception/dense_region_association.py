@@ -45,6 +45,93 @@ class EmptyRegionSupportError(RegionAssociationError):
 
 
 @dataclass(frozen=True, kw_only=True)
+class FeatureResolutionEnhancementProvenance:
+    """Lineage and cost of one optional dense-resolution enhancement.
+
+    Attributes:
+        source_feature_id: Exact native dense feature used as input.
+        source_artifact_id: Immutable artifact owning the source feature.
+        source_payload_reference: Source payload reference within its artifact.
+        source_payload_content_hash: Integrity hash of the source payload.
+        source_payload_size_bytes: Persisted source payload size.
+        source_embedding_space_id: Source feature-space fingerprint.
+        source_dtype: Source numerical dtype.
+        source_normalization: Source normalization declaration.
+        source_coordinate_transform_id: Source image-to-grid transform.
+        backend: Enhancement backend/model/configuration provenance.
+        input_grid_size: Input feature-grid ``(width, height)``.
+        output_grid_size: Output feature-grid ``(width, height)``.
+        source_image_size: Prepared-image ``(width, height)``.
+        output_embedding_space_id: Output feature-space fingerprint. It may
+            equal the source fingerprint only when representation semantics
+            remain compatible.
+        device: Execution device recorded by the selected backend.
+        precision: Execution precision recorded by the selected backend.
+        duration_seconds: Measured enhancement wall duration.
+        peak_memory_bytes: Measured peak memory/VRAM with backend-defined
+            measurement semantics.
+        output_payload_content_hash: Integrity hash of the output payload.
+        output_payload_size_bytes: Persisted output payload size.
+    """
+
+    source_feature_id: FeatureId
+    source_artifact_id: str
+    source_payload_reference: str
+    source_payload_content_hash: str
+    source_payload_size_bytes: int
+    source_embedding_space_id: str
+    source_dtype: str
+    source_normalization: str | None
+    source_coordinate_transform_id: str
+    backend: BackendProvenance
+    input_grid_size: tuple[int, int]
+    output_grid_size: tuple[int, int]
+    source_image_size: tuple[int, int]
+    output_embedding_space_id: str
+    device: str
+    precision: str
+    duration_seconds: float
+    peak_memory_bytes: int
+    output_payload_content_hash: str
+    output_payload_size_bytes: int
+
+    def __post_init__(self) -> None:
+        """Validate required identities, dimensions, integrity, and cost fields."""
+        required = {
+            "source_artifact_id": self.source_artifact_id,
+            "source_payload_reference": self.source_payload_reference,
+            "source_payload_content_hash": self.source_payload_content_hash,
+            "source_embedding_space_id": self.source_embedding_space_id,
+            "source_dtype": self.source_dtype,
+            "source_coordinate_transform_id": self.source_coordinate_transform_id,
+            "output_embedding_space_id": self.output_embedding_space_id,
+            "device": self.device,
+            "precision": self.precision,
+            "output_payload_content_hash": self.output_payload_content_hash,
+        }
+        for name, value in required.items():
+            if not value:
+                raise ValueError(f"{name} must not be empty")
+        if self.backend.capability != "feature_resolution_enhancement":
+            raise ValueError(
+                "enhancement backend capability must be 'feature_resolution_enhancement'"
+            )
+        for name, size in {
+            "input_grid_size": self.input_grid_size,
+            "output_grid_size": self.output_grid_size,
+            "source_image_size": self.source_image_size,
+        }.items():
+            if len(size) != 2 or any(dimension <= 0 for dimension in size):
+                raise ValueError(f"{name} dimensions must be positive")
+        if self.source_payload_size_bytes <= 0 or self.output_payload_size_bytes <= 0:
+            raise ValueError("source and output payload sizes must be positive")
+        if not math.isfinite(self.duration_seconds) or self.duration_seconds < 0.0:
+            raise ValueError("duration_seconds must be finite and non-negative")
+        if self.peak_memory_bytes < 0:
+            raise ValueError("peak_memory_bytes must be non-negative")
+
+
+@dataclass(frozen=True, kw_only=True)
 class DenseFeatureSampling:
     """Axis-aligned sampling geometry from a prepared image to a feature grid.
 
@@ -125,11 +212,14 @@ class DenseFeatureMap:
         sampling: Explicit mapping between feature cells and the prepared image.
         source_artifact_id: Identity of the run/artifact that owns the feature;
             required because ``FeatureId`` is only local to one result.
+        enhancement: Lineage of the optional resolution-enhancement stage, or
+            ``None`` for a native dense map.
     """
 
     feature: VisualFeature
     sampling: DenseFeatureSampling
     source_artifact_id: str
+    enhancement: FeatureResolutionEnhancementProvenance | None = None
 
     def __post_init__(self) -> None:
         """Validate the feature scope and grid shape.

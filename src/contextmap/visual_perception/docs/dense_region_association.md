@@ -4,7 +4,7 @@ Este documento descreve `src/contextmap/visual_perception/dense_region_associati
 
 ## Contrato `DenseFeatureMap`
 
-`DenseFeatureMap` conecta um `VisualFeature` de escopo `DENSE` à sua `DenseFeatureSampling` e ao `source_artifact_id` do run/artefato que o possui. Esta identidade é obrigatória porque `FeatureId` é local a um `PerceptionResult`. O `VisualFeature` continua sendo a fonte canônica de `embedding_space_id`, shape, dtype, normalização, referência de payload e proveniência do backend. O contrato de sampling torna explícitos:
+`DenseFeatureMap` conecta um `VisualFeature` de escopo `DENSE` à sua `DenseFeatureSampling` e ao `source_artifact_id` do run/artefato que o possui. Esta identidade é obrigatória porque `FeatureId` é local a um `PerceptionResult`. O `VisualFeature` continua sendo a fonte canônica de `embedding_space_id`, shape, dtype, normalização, referência de payload e proveniência do backend. Mapas nativos possuem `enhancement=None`; mapas produzidos pelo estágio opcional carregam `FeatureResolutionEnhancementProvenance` sem mudar o tipo consumido downstream. O contrato de sampling torna explícitos:
 
 - dimensões do grid e da imagem preparada de origem;
 - origem espacial do primeiro suporte;
@@ -56,4 +56,4 @@ Suportes com bordas fracionárias são convertidos para índices inteiros com `f
 - não conhece SDK, checkpoint ou backend concreto;
 - não cria uma nova capability: Feature Extraction permanece sob ownership de `visual_perception`.
 
-Ver [`embedding_space.md`](embedding_space.md) para compatibilidade de espaços, [`feature_store.md`](feature_store.md) para persistência dos payloads e [`contracts.md`](contracts.md) para ownership de `Region2D` e `VisualFeature`.
+Ver [`embedding_space.md`](embedding_space.md) para compatibilidade de espaços, [`feature_store.md`](feature_store.md) para persistência dos payloads, [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) para lineage native→enhanced e [`contracts.md`](contracts.md) para ownership de `Region2D` e `VisualFeature`.
