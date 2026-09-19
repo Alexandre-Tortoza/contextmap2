@@ -124,6 +124,7 @@ class _RegionGroup:
 def normalize_regions(
     candidates: tuple[RegionCandidate, ...],
     prepared_image: PreparedImage,
+    backend_provenance: BackendProvenance,
     config: NormalizationConfig | None = None,
 ) -> NormalizationResult:
     """Validate, filter, merge, and freeze backend-neutral region proposals.
@@ -131,6 +132,7 @@ def normalize_regions(
     Args:
         candidates: Globally remapped proposals from any discovery backend.
         prepared_image: Prepared image and optional declared spatial constraints.
+        backend_provenance: Exact public provenance reported by the adapter.
         config: Version-visible geometric normalization policy.
 
     Returns:
@@ -141,7 +143,7 @@ def normalize_regions(
     """
     if config is None:
         config = NormalizationConfig()
-    _validate_candidate_set(candidates, prepared_image)
+    _validate_candidate_set(candidates, prepared_image, backend_provenance)
     rejected: list[RejectedRegionCandidate] = []
     valid_geometry: list[_Geometry] = []
 
@@ -234,7 +236,9 @@ def normalize_regions(
             )
         groups = groups[: config.maximum_regions]
 
-    regions = tuple(_freeze_group(group, index + 1) for index, group in enumerate(groups))
+    regions = tuple(
+        _freeze_group(group, index + 1, backend_provenance) for index, group in enumerate(groups)
+    )
     return NormalizationResult(
         regions=regions,
         rejected=tuple(rejected),
@@ -244,8 +248,12 @@ def normalize_regions(
 
 
 def _validate_candidate_set(
-    candidates: tuple[RegionCandidate, ...], prepared_image: PreparedImage
+    candidates: tuple[RegionCandidate, ...],
+    prepared_image: PreparedImage,
+    backend_provenance: BackendProvenance,
 ) -> None:
+    if backend_provenance.capability != "region_discovery":
+        raise ValueError("normalization backend provenance must describe region_discovery")
     identifiers = [candidate.candidate_id for candidate in candidates]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("candidate ids must be unique before normalization")
@@ -254,6 +262,20 @@ def _validate_candidate_set(
     expected_run = candidates[0].perception_run_id
     expected_result = candidates[0].perception_result_id
     for candidate in candidates:
+        candidate_provenance = candidate.provenance
+        if (
+            candidate_provenance.backend_id != backend_provenance.backend_id
+            or candidate_provenance.backend_version != backend_provenance.version
+            or candidate_provenance.checkpoint != backend_provenance.model
+            or (
+                backend_provenance.configuration_fingerprint is not None
+                and candidate_provenance.config_digest
+                != backend_provenance.configuration_fingerprint
+            )
+        ):
+            raise ValueError(
+                "candidate provenance does not match the region discovery backend provenance"
+            )
         if candidate.source_observation_id != prepared_image.source_observation_id:
             raise ValueError("candidate source observation does not match prepared image")
         if (candidate.image_width, candidate.image_height) != (
@@ -367,14 +389,17 @@ def _find_duplicate(
     return None
 
 
-def _freeze_group(group: _RegionGroup, region_index: int) -> Region2D:
+def _freeze_group(
+    group: _RegionGroup,
+    region_index: int,
+    backend_provenance: BackendProvenance,
+) -> Region2D:
     representative = group.representative
     candidate = representative.candidate
     contributors = tuple(item.candidate_id for item in group.contributors)
     discovery_provenance: tuple[RegionProvenance, ...] = tuple(
         item.provenance for item in group.contributors
     )
-    representative_provenance = candidate.provenance
     return Region2D(
         region_id=RegionId(f"region-{region_index:04d}"),
         bounding_box=BoundingBox2D(
@@ -383,14 +408,7 @@ def _freeze_group(group: _RegionGroup, region_index: int) -> Region2D:
             width=representative.bounding_box.width,
             height=representative.bounding_box.height,
         ),
-        provenance=BackendProvenance(
-            backend_id=representative_provenance.backend_id,
-            capability="region_discovery",
-            provider=representative_provenance.backend_id,
-            model=representative_provenance.checkpoint,
-            version=representative_provenance.backend_version,
-            configuration_fingerprint=representative_provenance.config_digest,
-        ),
+        provenance=backend_provenance,
         source_observation_id=SourceObservationId(candidate.source_observation_id),
         image_width=candidate.image_width,
         image_height=candidate.image_height,

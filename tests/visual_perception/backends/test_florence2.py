@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from hashlib import sha256
 
 import pytest
@@ -21,6 +22,20 @@ from contextmap.visual_perception.backends.florence2 import (
     TransformersFlorence2Runtime,
 )
 from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass, PassKind
+
+
+@dataclass(frozen=True)
+class MaterializedImage:
+    size: tuple[int, int]
+    token: tuple[str, str]
+
+
+def _materialized_image(discovery_input: DiscoveryInput) -> MaterializedImage:
+    discovery_pass = discovery_input.discovery_pass
+    return MaterializedImage(
+        size=(discovery_pass.input_width, discovery_pass.input_height),
+        token=("image", discovery_pass.pass_id),
+    )
 
 
 def _input() -> DiscoveryInput:
@@ -103,7 +118,9 @@ def test_florence2_normalizes_boxes_and_masks_without_semantic_promotion() -> No
     assert "hypothesis" not in box_candidate.to_dict()
     json.dumps(box_candidate.to_dict())
     assert isinstance(backend, RegionDiscovery)
-    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
+    regions = backend.discover(_input().prepared_image)
+    assert all(isinstance(region, Region2D) for region in regions)
+    assert regions[0].provenance == backend.backend_provenance()
 
 
 def test_florence2_configuration_requires_explicit_region_task() -> None:
@@ -192,7 +209,7 @@ def test_official_florence2_runtime_executes_and_parses_region_boxes() -> None:
     runtime = TransformersFlorence2Runtime(
         model=model,
         processor=processor,
-        image_loader=lambda discovery_input: ("image", discovery_input.discovery_pass.pass_id),
+        image_loader=_materialized_image,
     )
     config = Florence2Config(
         checkpoint="florence-community/Florence-2-base",
@@ -232,7 +249,7 @@ def test_official_florence2_runtime_rasterizes_parsed_polygons() -> None:
     runtime = TransformersFlorence2Runtime(
         model=FlorenceModel(),
         processor=processor,
-        image_loader=lambda discovery_input: object(),
+        image_loader=_materialized_image,
     )
     config = Florence2Config(
         checkpoint="florence-community/Florence-2-base",

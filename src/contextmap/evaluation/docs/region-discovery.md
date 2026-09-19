@@ -56,9 +56,11 @@ Performance permanece em bloco separado: duração por pass, duração total e p
 o runtime reporta. `compare_region_discovery_reports` exige o mesmo reference set e valida que
 exatamente uma variável declarada mudou antes de calcular deltas separados de qualidade e custo.
 Além de `run.variables`, a validação mantém backend, versão, checkpoint, estratégia, thresholds,
-pipeline graph e tipo de execução constantes, exceto quando o próprio campo corresponde à variável
-declarada. IDs de run/artifact e `config_digest` podem mudar porque identificam a nova execução e
-sua configuração derivada.
+pipeline graph, `config_digest` e tipo de execução constantes, exceto quando o próprio campo
+estruturado corresponde à variável declarada. IDs de run/artifact podem mudar porque identificam a
+nova execução. O `config_digest` identifica a configuração controlada comum aos dois lados e não
+pode mudar: a variável de ablação fica explicitamente em `run.variables`. Como um digest é opaco,
+aceitar sua alteração impediria provar que somente a variável declarada mudou.
 
 ## Baselines
 

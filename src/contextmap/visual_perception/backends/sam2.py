@@ -17,6 +17,7 @@ from ..discovery import (
     DiscoveryOutput,
     DiscoveryPassConfig,
     discover_canonical_regions,
+    validate_materialized_discovery_image,
 )
 from ..models import BackendProvenance, PreparedImage, Region2D
 from ..normalization import NormalizationConfig
@@ -166,6 +167,7 @@ class Sam2AutomaticMaskRuntime:
         width = discovery_input.discovery_pass.input_width
         height = discovery_input.discovery_pass.input_height
         image = self._image_loader(discovery_input)
+        validate_materialized_discovery_image(image, discovery_input)
         records = self._mask_generator.generate(image)
         return tuple(
             _parse_automatic_mask_record(record, index=index, width=width, height=height)

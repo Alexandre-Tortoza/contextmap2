@@ -17,6 +17,7 @@ from ..discovery import (
     DiscoveryOutput,
     DiscoveryPassConfig,
     discover_canonical_regions,
+    validate_materialized_discovery_image,
 )
 from ..models import BackendProvenance, PreparedImage, Region2D
 from ..normalization import NormalizationConfig
@@ -160,6 +161,7 @@ class Sam3ImageProcessorRuntime:
             raise ValueError("official SAM3 image runtime requires a text prompt")
 
         image = self._image_loader(discovery_input)
+        validate_materialized_discovery_image(image, discovery_input)
         state = self._processor.set_image(image)
         state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
         if state is None:

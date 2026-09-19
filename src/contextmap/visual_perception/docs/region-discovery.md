@@ -91,6 +91,10 @@ global antes da normalização.
 `DiscoveryPass` registra `input_dimensions` e o transform inverso para o espaço preparado. Boxes e
 máscaras retornadas nesse espaço escalado são remapeadas para a janela global. Assim, alterar a
 escala altera o input do modelo sem alterar a coordenada canônica da mesma geometria.
+Os runtimes oficiais validam o objeto materializado pelo loader antes da inferência: imagens
+compatíveis com PIL devem expor `size = (width, height)` e arrays HWC devem expor
+`shape = (height, width, ...)`, sempre iguais a `input_dimensions`. Um loader que apenas propaga
+metadados do pass sem produzir o crop/resize correspondente falha explicitamente.
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
@@ -156,6 +160,10 @@ permanecem metadata de descoberta.
 é: validar geometria, aplicar limites de área, verificar valid/exclusion masks declaradas, detectar
 duplicatas por IoU ou containment, aplicar budget e criar `Region2D` imutável. Nenhuma regra usa
 label semântico ou compara scores de backends diferentes.
+
+A chamada recebe o `BackendProvenance` exato reportado pelo adapter e valida sua consistência com
+as propostas. O mesmo value object acompanha cada `Region2D`; provider, model, versão e fingerprint
+não são reconstruídos a partir da provenance reduzida da proposta.
 
 A ordem canônica é pelo `candidate_id`, tornando IDs `region-0001`, `region-0002` e decisões de
 budget reproduzíveis. No merge, a primeira geometria canônica permanece como representante e todas

@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from hashlib import sha256
 
 import pytest
@@ -21,6 +22,20 @@ from contextmap.visual_perception.backends.sam3 import (
     Sam3Strategy,
 )
 from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass, PassKind
+
+
+@dataclass(frozen=True)
+class MaterializedImage:
+    size: tuple[int, int]
+    token: tuple[str, str]
+
+
+def _materialized_image(discovery_input: DiscoveryInput) -> MaterializedImage:
+    discovery_pass = discovery_input.discovery_pass
+    return MaterializedImage(
+        size=(discovery_pass.input_width, discovery_pass.input_height),
+        token=("image", discovery_pass.pass_id),
+    )
 
 
 def _input() -> DiscoveryInput:
@@ -97,7 +112,9 @@ def test_sam3_preserves_strategy_query_and_native_score_semantics() -> None:
     assert dict(output.diagnostics.metadata)["peak_memory_mb"] == 512.0
     json.dumps(candidate.to_dict())
     assert isinstance(backend, RegionDiscovery)
-    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
+    regions = backend.discover(_input().prepared_image)
+    assert all(isinstance(region, Region2D) for region in regions)
+    assert regions[0].provenance == backend.backend_provenance()
 
 
 def test_sam3_strategy_configuration_is_explicit() -> None:
@@ -170,7 +187,7 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
     processor = ImageProcessor()
     runtime = Sam3ImageProcessorRuntime(
         processor=processor,
-        image_loader=lambda discovery_input: ("image", discovery_input.discovery_pass.pass_id),
+        image_loader=_materialized_image,
     )
     config = Sam3Config(
         checkpoint="facebook/sam3",
@@ -183,7 +200,7 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
     output = runtime.predict(_input(), config)
 
     assert processor.calls == [
-        ("image", ("image", "full-frame")),
+        ("image", MaterializedImage((5, 4), ("image", "full-frame"))),
         ("threshold", 0.7),
         ("prompt", "movable item"),
     ]

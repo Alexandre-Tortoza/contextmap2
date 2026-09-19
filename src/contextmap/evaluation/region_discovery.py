@@ -363,6 +363,8 @@ def compare_region_discovery_reports(
             and changed_variable != "backend"
         ):
             uncontrolled.append(field_name)
+    if baseline.run.config_digest != changed.run.config_digest:
+        uncontrolled.append("config_digest")
     if baseline.run.strategy != changed.run.strategy and changed_variable not in {
         "strategy",
         "query_strategy",

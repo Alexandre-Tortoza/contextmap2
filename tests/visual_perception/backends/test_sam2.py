@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass, replace
 from hashlib import sha256
 
 import pytest
@@ -22,6 +23,20 @@ from contextmap.visual_perception.discovery import (
     DiscoveryPass,
     PassKind,
 )
+
+
+@dataclass(frozen=True)
+class MaterializedImage:
+    size: tuple[int, int]
+    token: tuple[str, str]
+
+
+def _materialized_image(discovery_input: DiscoveryInput, kind: str) -> MaterializedImage:
+    discovery_pass = discovery_input.discovery_pass
+    return MaterializedImage(
+        size=(discovery_pass.input_width, discovery_pass.input_height),
+        token=(kind, discovery_pass.pass_id),
+    )
 
 
 def _input() -> DiscoveryInput:
@@ -107,7 +122,9 @@ def test_sam2_normalizes_native_proposals_with_complete_provenance() -> None:
     assert dict(candidate.native_metadata)["stability_score"] == 0.87
     assert dict(output.diagnostics.metadata)["raw_proposal_count"] == 2
     json.dumps(candidate.to_dict())
-    assert all(isinstance(region, Region2D) for region in backend.discover(_input().prepared_image))
+    regions = backend.discover(_input().prepared_image)
+    assert all(isinstance(region, Region2D) for region in regions)
+    assert regions[0].provenance == backend.backend_provenance()
 
 
 def test_sam2_configuration_rejects_invalid_thresholds_and_unknown_values() -> None:
@@ -176,13 +193,13 @@ def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
     generator = AutomaticMaskGenerator()
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=generator,
-        image_loader=lambda discovery_input: ("pixels", discovery_input.discovery_pass.pass_id),
+        image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
         config_digest=config.digest,
     )
 
     proposals = runtime.predict(_input(), config)
 
-    assert generator.received == [("pixels", "tile-0002")]
+    assert generator.received == [MaterializedImage((4, 4), ("pixels", "tile-0002"))]
     assert proposals[0].box == (1.0, 2.0, 3.0, 4.0)
     assert proposals[0].mask[:6] == (True, True, False, False, False, True)
     assert proposals[0].predicted_iou == 0.91
@@ -205,7 +222,7 @@ def test_sam2_runtime_rejects_configuration_or_shape_drift() -> None:
     config = Sam2Config(checkpoint="sam2")
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=InvalidGenerator(),
-        image_loader=lambda discovery_input: object(),
+        image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
         config_digest=config.digest,
     )
 
@@ -213,3 +230,58 @@ def test_sam2_runtime_rejects_configuration_or_shape_drift() -> None:
         runtime.predict(_input(), config)
     with pytest.raises(ValueError, match="configuration digest"):
         runtime.predict(_input(), Sam2Config(checkpoint="another-sam2"))
+
+
+def test_sam2_runtime_rejects_materialized_image_dimension_drift() -> None:
+    class EmptyGenerator:
+        def generate(self, image: object) -> list[dict[str, object]]:
+            return []
+
+    config = Sam2Config(checkpoint="sam2")
+    runtime = Sam2AutomaticMaskRuntime(
+        mask_generator=EmptyGenerator(),
+        image_loader=lambda discovery_input: MaterializedImage(
+            (8, 8), ("wrong-size", discovery_input.discovery_pass.pass_id)
+        ),
+        config_digest=config.digest,
+    )
+
+    with pytest.raises(ValueError, match="materialized discovery image dimensions"):
+        runtime.predict(_input(), config)
+
+
+def test_sam2_runtime_materializes_distinct_scaled_model_inputs() -> None:
+    class RecordingGenerator:
+        def __init__(self) -> None:
+            self.received: list[object] = []
+
+        def generate(self, image: object) -> list[dict[str, object]]:
+            self.received.append(image)
+            return []
+
+    loaded: list[MaterializedImage] = []
+
+    def load(discovery_input: DiscoveryInput) -> MaterializedImage:
+        image = _materialized_image(discovery_input, "instrumented-pixels")
+        loaded.append(image)
+        return image
+
+    config = Sam2Config(checkpoint="sam2")
+    generator = RecordingGenerator()
+    runtime = Sam2AutomaticMaskRuntime(
+        mask_generator=generator,
+        image_loader=load,
+        config_digest=config.digest,
+    )
+    baseline = _input()
+    scaled = replace(
+        baseline,
+        discovery_pass=replace(baseline.discovery_pass, scale=2.0),
+    )
+
+    runtime.predict(baseline, config)
+    runtime.predict(scaled, config)
+
+    assert [image.size for image in loaded] == [(4, 4), (8, 8)]
+    assert generator.received == loaded
+    assert generator.received[0] is not generator.received[1]

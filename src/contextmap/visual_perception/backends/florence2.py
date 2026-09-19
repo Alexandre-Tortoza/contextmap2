@@ -16,6 +16,7 @@ from ..discovery import (
     DiscoveryOutput,
     DiscoveryPassConfig,
     discover_canonical_regions,
+    validate_materialized_discovery_image,
 )
 from ..models import BackendProvenance, PreparedImage, Region2D
 from ..normalization import NormalizationConfig
@@ -182,6 +183,7 @@ class TransformersFlorence2Runtime:
         height = discovery_input.discovery_pass.input_height
         task_prompt = f"{config.task}{config.prompt or ''}"
         image = self._image_loader(discovery_input)
+        validate_materialized_discovery_image(image, discovery_input)
         inputs = self._processor(
             text=task_prompt,
             images=image,

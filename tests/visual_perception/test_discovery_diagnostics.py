@@ -7,6 +7,7 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    BackendProvenance,
     BoundingBox,
     InlineMask,
     PreparedImage,
@@ -86,7 +87,18 @@ def _record() -> DiscoveryAuditRecord:
             ),
         ),
     )
-    normalization = normalize_regions(discovery.candidates, prepared)
+    normalization = normalize_regions(
+        discovery.candidates,
+        prepared,
+        BackendProvenance(
+            backend_id="sam3",
+            capability="region_discovery",
+            provider="facebook",
+            model="facebook/sam3",
+            version="3",
+            configuration_fingerprint="sha256:sam3",
+        ),
+    )
     return DiscoveryAuditRecord(
         prepared_image=prepared,
         backend_id="sam3",

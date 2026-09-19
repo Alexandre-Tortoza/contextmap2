@@ -22,6 +22,7 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BackendDiagnostics,
+    BackendProvenance,
     BoundingBox,
     DiscoveryPass,
     DiscoveryRunResult,
@@ -115,7 +116,18 @@ def _evaluated(
     )
     return EvaluatedDiscoveryFrame(
         discovery=discovery,
-        normalization=normalize_regions(discovery.candidates, frame.prepared_image),
+        normalization=normalize_regions(
+            discovery.candidates,
+            frame.prepared_image,
+            BackendProvenance(
+                backend_id=backend_id,
+                capability="region_discovery",
+                provider="test-provider",
+                model=f"{backend_id}-checkpoint",
+                version="1",
+                configuration_fingerprint=f"sha256:{backend_id}",
+            ),
+        ),
     )
 
 
@@ -128,7 +140,7 @@ def _descriptor(
         backend_id=backend_id,
         backend_version="1",
         checkpoint=f"{backend_id}-checkpoint",
-        config_digest=f"sha256:{backend_id}-{duration_tag}",
+        config_digest=f"sha256:{backend_id}-controlled-config",
         pipeline_graph_digest="sha256:pipeline-v1",
         strategy="automatic",
         thresholds=(("score", 0.5),),
@@ -151,6 +163,10 @@ def _change_threshold(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescr
 
 def _change_pipeline_graph(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
     return replace(descriptor, pipeline_graph_digest="sha256:pipeline-v2")
+
+
+def _change_config_digest(descriptor: EvaluationRunDescriptor) -> EvaluationRunDescriptor:
+    return replace(descriptor, config_digest="sha256:hidden-config-change")
 
 
 def test_same_reference_selection_uses_one_report_schema_for_all_backends() -> None:
@@ -265,6 +281,7 @@ def test_ablation_rejects_uncontrolled_variable_changes() -> None:
         _change_strategy,
         _change_threshold,
         _change_pipeline_graph,
+        _change_config_digest,
     ],
 )
 def test_ablation_rejects_unreported_run_descriptor_changes(

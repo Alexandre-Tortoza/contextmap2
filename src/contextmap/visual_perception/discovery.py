@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from math import isfinite
@@ -217,8 +218,64 @@ def discover_canonical_regions(
     return normalize_regions(
         discovery.candidates,
         prepared_image,
+        provenance,
         normalization_config,
     ).regions
+
+
+def validate_materialized_discovery_image(
+    image: object,
+    discovery_input: DiscoveryInput,
+) -> None:
+    """Require a loader to materialize the exact crop/resize for one pass.
+
+    PIL-compatible images expose ``size`` as ``(width, height)`` while
+    array-compatible HWC images expose ``shape`` as ``(height, width, ...)``.
+
+    Args:
+        image: Model-ready image returned by the configured loader.
+        discovery_input: Pass whose scaled dimensions the image must match.
+
+    Raises:
+        TypeError: If the image exposes no inspectable spatial dimensions.
+        ValueError: If its materialized dimensions differ from the pass.
+    """
+    dimensions = _materialized_image_dimensions(image)
+    expected = (
+        discovery_input.discovery_pass.input_width,
+        discovery_input.discovery_pass.input_height,
+    )
+    if dimensions != expected:
+        raise ValueError(
+            "materialized discovery image dimensions must match the discovery pass: "
+            f"expected {expected}, received {dimensions}"
+        )
+
+
+def _materialized_image_dimensions(image: object) -> tuple[int, int]:
+    size = _dimension_pair(getattr(image, "size", None))
+    if size is not None:
+        return size
+
+    shape = _dimension_pair(getattr(image, "shape", None))
+    if shape is not None:
+        return shape[1], shape[0]
+
+    raise TypeError(
+        "materialized discovery image must expose size=(width, height) "
+        "or shape=(height, width, ...)"
+    )
+
+
+def _dimension_pair(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 2:
+        return None
+    first, second = value[0], value[1]
+    if any(
+        not isinstance(item, int) or isinstance(item, bool) or item <= 0 for item in (first, second)
+    ):
+        return None
+    return first, second
 
 
 def build_discovery_passes(

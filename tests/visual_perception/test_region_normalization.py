@@ -6,6 +6,7 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    BackendProvenance,
     BoundingBox,
     ExclusionRegion,
     InlineMask,
@@ -23,6 +24,17 @@ from contextmap.visual_perception.normalization import (
 
 WIDTH = 8
 HEIGHT = 6
+
+
+def _backend_provenance(backend: str = "fake") -> BackendProvenance:
+    return BackendProvenance(
+        backend_id=backend,
+        capability="region_discovery",
+        provider="test-provider",
+        model=f"{backend}-checkpoint",
+        version="1",
+        configuration_fingerprint=f"sha256:{backend}",
+    )
 
 
 def _mask(box: BoundingBox | None) -> InlineMask:
@@ -102,7 +114,8 @@ def test_duplicate_full_frame_and_tile_proposals_merge_with_lineage() -> None:
         discovery_pass="tile-0001",
     )
 
-    result = normalize_regions((duplicate, first), _prepared())
+    provenance = _backend_provenance("sam3")
+    result = normalize_regions((duplicate, first), _prepared(), provenance)
 
     assert len(result.regions) == 1
     region = result.regions[0]
@@ -115,16 +128,19 @@ def test_duplicate_full_frame_and_tile_proposals_merge_with_lineage() -> None:
     assert result.merge_decisions[0].kind is MergeKind.IOU_DUPLICATE
     assert result.merge_decisions[0].iou == 1.0
     assert result.rejected[0].reason is RejectionReason.MERGED_DUPLICATE
+    assert region.provenance is provenance
     with pytest.raises(FrozenInstanceError):
         region.bounding_box = BoundingBox(0, 0, 1, 1)  # type: ignore[misc, assignment]
 
 
 def test_contained_fragment_merges_without_comparing_backend_scores() -> None:
     container = _candidate("a-container", BoundingBox(1, 1, 6, 5), backend="sam2")
-    fragment = _candidate("b-fragment", BoundingBox(2, 2, 4, 4), backend="florence2")
+    fragment = _candidate("b-fragment", BoundingBox(2, 2, 4, 4), backend="sam2")
     config = NormalizationConfig(duplicate_iou_threshold=0.95, containment_threshold=0.9)
 
-    result = normalize_regions((fragment, container), _prepared(), config)
+    result = normalize_regions(
+        (fragment, container), _prepared(), _backend_provenance("sam2"), config
+    )
 
     assert len(result.regions) == 1
     assert result.regions[0].contributor_candidate_ids == ("a-container", "b-fragment")
@@ -147,6 +163,7 @@ def test_invalid_area_and_configured_spatial_constraints_have_explicit_reasons()
     result = normalize_regions(
         (empty, too_small, outside_valid, excluded),
         _prepared(valid=valid_mask, exclusion=exclusion_mask),
+        _backend_provenance(),
         config,
     )
 
@@ -166,7 +183,7 @@ def test_constraints_are_irrelevant_when_the_prepared_image_declares_none() -> N
         maximum_exclusion_fraction=0.0,
     )
 
-    result = normalize_regions((candidate,), _prepared(), config)
+    result = normalize_regions((candidate,), _prepared(), _backend_provenance(), config)
 
     assert [region.contributor_candidate_ids for region in result.regions] == [("outside",)]
     assert result.rejected == ()
@@ -180,7 +197,7 @@ def test_region_budget_is_deterministic_and_configuration_is_provenance_visible(
     )
     config = NormalizationConfig(maximum_regions=2)
 
-    result = normalize_regions(candidates, _prepared(), config)
+    result = normalize_regions(candidates, _prepared(), _backend_provenance(), config)
 
     assert [region.contributor_candidate_ids for region in result.regions] == [("a",), ("b",)]
     assert result.rejected[0].candidate_id == "c"
