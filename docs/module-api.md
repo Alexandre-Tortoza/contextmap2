@@ -31,7 +31,7 @@ __all__ = ["SemanticClaim", "SemanticInterpreter"]
 
 ## Integração pública implementada
 
-Hoje existe uma dependência cross-module real: Visual Perception consome identidades de Ingestion pela raiz pública `contextmap.ingestion`.
+Hoje existem dependências cross-module reais: Visual Perception consome identidades de Ingestion pela raiz pública `contextmap.ingestion`, e Evaluation consome exclusivamente as APIs públicas de Ingestion e Visual Perception para medir evidência sem mutar os módulos avaliados.
 
 ```mermaid
 flowchart LR
@@ -39,6 +39,8 @@ flowchart LR
     INGROOT --> OBS["SourceObservationId / SequenceArtifactId / selection"]
     OBS --> VP
     VP --> PUB["Region2D / VisualFeature / EmbeddingSpace /<br/>DenseFeatureMap / PerceptionResult / artifacts"]
+    PUB --> EV["contextmap.evaluation"]
+    INGROOT --> EV
     PUB -. downstream futuro .-> NEXT["sensor_association / semantic_fusion / runtime"]
 ```
 
