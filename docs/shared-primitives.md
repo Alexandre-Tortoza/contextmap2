@@ -38,7 +38,7 @@ Se houver dúvida sobre ownership, o conceito permanece no módulo que o introdu
 
 ## Superfície inicial permitida
 
-A arquitetura da Solution 1 reconhece as seguintes famílias como candidatas legítimas a `shared` quando a implementação passar a precisar delas.
+A arquitetura do canonical pipeline reconhece as seguintes famílias como candidatas legítimas a `shared` quando a implementação passar a precisar delas.
 
 ### Tempo
 
@@ -151,7 +151,7 @@ O fato de vários módulos consumirem esses tipos não remove o ownership do pro
 
 ## `Confidence` não é uma primitive compartilhada
 
-Não criar um `shared.Confidence` genérico na Solution 1.
+Não criar um `shared.Confidence` genérico no canonical pipeline.
 
 Os valores que parecem “confidence” possuem semânticas distintas:
 
