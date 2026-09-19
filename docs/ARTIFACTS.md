@@ -140,9 +140,15 @@ workspace/runs/visual-perception/<sequence-name>/
     ├── README.md
     ├── manifest.json
     ├── outputs/
-    │   └── results.jsonl
-    └── metrics/
-        └── stage-timings.jsonl
+    │   ├── results.jsonl
+    │   └── features/                  # quando payloads de feature são persistidos
+    │       ├── feature-index.jsonl
+    │       └── <observation-scope>/*.npy
+    ├── metrics/
+    │   ├── stage-timings.jsonl
+    │   └── feature-extraction.jsonl   # quando há diagnostics de feature
+    └── debug/
+        └── 30-feature-extraction/     # somente standard/full
 ```
 
 No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
@@ -163,6 +169,16 @@ flowchart LR
 ```
 
 O diretório de estágio é finalizado atomicamente. `outputs/` e `manifest.json` são contratuais para esse evidence artifact; `debug/` continua não contratual e pode ser descartado sem alterar a semântica de `Region2D`. O layout e os níveis `none|standard|full` estão documentados em [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
+
+### Feature Extraction dentro do `PerceptionRunArtifact`
+
+Feature Extraction não cria um segundo run artifact. Metadata de `VisualFeature` permanece em `outputs/results.jsonl`; payloads numéricos opcionais ficam em `outputs/features/`, indexados por `feature-index.jsonl` e carregados sob demanda.
+
+`PerceptionRunWriter.finalize()` cruza cada payload com a feature da mesma observação, valida scope, embedding space, shape, dtype, normalização e referência, inclui todos os arquivos no `file_inventory` e publica o run somente após a checagem de integridade.
+
+Diagnostics mínimos ficam em `metrics/feature-extraction.jsonl`. Previews e metadata auxiliares de inspeção ficam em `debug/30-feature-extraction/` somente quando o nível selecionado é `standard` ou `full`. Remover debug não pode afetar a leitura dos outputs contratuais.
+
+Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [diagnostics](../src/contextmap/visual_perception/docs/feature_diagnostics.md).
 
 Detalhes específicos permanecem nos owners:
 
@@ -336,7 +352,10 @@ Exemplos:
 ```text
 PerceptionRunArtifact (schema atual)
 outputs/
-└── results.jsonl
+├── results.jsonl
+└── features/                 # opcional por feature
+    ├── feature-index.jsonl
+    └── <observation-scope>/*.npy
 ```
 
 Cada linha contém um `PerceptionResult` completo com `regions`, `features`, `claims` e `scene_context`. Índices separados podem ser adicionados apenas quando houver um caso de uso medido que justifique a duplicação.
@@ -447,10 +466,10 @@ VisualFeature metadata
 ├── feature_id
 ├── shape
 ├── dtype
-├── embedding_space
+├── embedding_space_id
 ├── normalization
 ├── payload path/reference
-└── content hash
+└── content hash no índice do payload
 ```
 
 O payload pode ser lazy-loaded sem carregar todo o artifact.
