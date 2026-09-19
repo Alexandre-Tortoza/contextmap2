@@ -11,6 +11,7 @@ from contextmap.visual_perception import (
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticInferenceProvenance,
     VisualFeature,
     decode_perception_result,
     encode_perception_result,
@@ -19,6 +20,18 @@ from contextmap.visual_perception.models import ClaimId, FeatureId
 
 _PROVENANCE = BackendProvenance(
     backend_id="fake", capability="region_discovery", provider="fake", model="fake", version="0.1"
+)
+_SEMANTIC_PROVENANCE = SemanticInferenceProvenance(
+    backend=BackendProvenance(
+        backend_id="fake-semantic",
+        capability="semantic_interpreter",
+        provider="fake",
+        model="fake",
+        version="0.1",
+    ),
+    task_identity="region-labeling",
+    prompt_template_id="region/v1",
+    output_schema_version="semantic-response/1",
 )
 
 
@@ -43,18 +56,22 @@ def test_perception_result_with_full_evidence_round_trips() -> None:
     )
     claim = SemanticClaim(
         claim_id=ClaimId("claim-0001"),
-        text="a doorway",
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+        hypothesis="a doorway",
         role=HypothesisRole.ALTERNATIVE,
-        provenance=_PROVENANCE,
+        provenance=_SEMANTIC_PROVENANCE,
         category="architecture",
         confidence=0.42,
         region_id=region.region_id,
     )
     scene_claim = SemanticClaim(
         claim_id=ClaimId("claim-scene-0001"),
-        text="an indoor corridor",
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+        hypothesis="an indoor corridor",
         role=HypothesisRole.PRIMARY,
-        provenance=_PROVENANCE,
+        provenance=_SEMANTIC_PROVENANCE,
     )
     result = PerceptionResult(
         result_id=PerceptionResultId("run-0001--frame-0124"),
@@ -65,7 +82,12 @@ def test_perception_result_with_full_evidence_round_trips() -> None:
         regions=(region,),
         features=(feature,),
         claims=(claim,),
-        scene_context=SceneContext(claims=(scene_claim,), provenance=_PROVENANCE),
+        scene_context=SceneContext(
+            source_observation_id=SourceObservationId("frame-0124"),
+            perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+            claims=(scene_claim,),
+            provenance=_SEMANTIC_PROVENANCE,
+        ),
     )
 
     decoded = decode_perception_result(encode_perception_result(result))
