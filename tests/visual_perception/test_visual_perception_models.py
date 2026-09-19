@@ -14,6 +14,7 @@ from contextmap.visual_perception import (
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticInferenceProvenance,
     VisualFeature,
 )
 from contextmap.visual_perception.models import ClaimId, FeatureId
@@ -33,6 +34,28 @@ def _region(region_id: str = "region-0001", **overrides: object) -> Region2D:
     }
     defaults.update(overrides)
     return Region2D(**defaults)  # type: ignore[arg-type]
+
+
+def _semantic_provenance() -> SemanticInferenceProvenance:
+    return SemanticInferenceProvenance(
+        backend=_provenance("semantic_interpreter"),
+        task_identity="region-labeling",
+        prompt_template_id="region/v1",
+        output_schema_version="semantic-response/1",
+    )
+
+
+def _semantic_claim(**overrides: object) -> SemanticClaim:
+    defaults: dict[str, object] = {
+        "claim_id": ClaimId("claim-0001"),
+        "source_observation_id": SourceObservationId("frame-0124"),
+        "perception_result_id": PerceptionResultId("result-0001"),
+        "hypothesis": "a doorway",
+        "role": HypothesisRole.PRIMARY,
+        "provenance": _semantic_provenance(),
+    }
+    defaults.update(overrides)
+    return SemanticClaim(**defaults)  # type: ignore[arg-type]
 
 
 def test_region_bounding_box_rejects_non_positive_extent() -> None:
@@ -85,17 +108,9 @@ def test_visual_feature_requires_region_id_only_when_region_scoped() -> None:
 
 
 def test_semantic_claim_confidence_none_is_distinguishable_from_scored() -> None:
-    unscored = SemanticClaim(
-        claim_id=ClaimId("claim-0001"),
-        text="a doorway",
-        role=HypothesisRole.PRIMARY,
-        provenance=_provenance("semantic_interpreter"),
-    )
-    scored = SemanticClaim(
+    unscored = _semantic_claim()
+    scored = _semantic_claim(
         claim_id=ClaimId("claim-0002"),
-        text="a doorway",
-        role=HypothesisRole.PRIMARY,
-        provenance=_provenance("semantic_interpreter"),
         confidence=1.0,
     )
 
@@ -106,27 +121,15 @@ def test_semantic_claim_confidence_none_is_distinguishable_from_scored() -> None
 
 def test_semantic_claim_rejects_out_of_range_confidence() -> None:
     with pytest.raises(ValueError, match="confidence"):
-        SemanticClaim(
-            claim_id=ClaimId("claim-0001"),
-            text="a doorway",
-            role=HypothesisRole.PRIMARY,
-            provenance=_provenance("semantic_interpreter"),
-            confidence=1.5,
-        )
+        _semantic_claim(confidence=1.5)
 
 
 def test_alternative_and_primary_claims_remain_distinguishable() -> None:
-    primary = SemanticClaim(
-        claim_id=ClaimId("claim-0001"),
-        text="a doorway",
-        role=HypothesisRole.PRIMARY,
-        provenance=_provenance("semantic_interpreter"),
-    )
-    alternative = SemanticClaim(
+    primary = _semantic_claim()
+    alternative = _semantic_claim(
         claim_id=ClaimId("claim-0002"),
-        text="a window",
+        hypothesis="a window",
         role=HypothesisRole.ALTERNATIVE,
-        provenance=_provenance("semantic_interpreter"),
     )
 
     assert primary.role is HypothesisRole.PRIMARY
@@ -134,16 +137,15 @@ def test_alternative_and_primary_claims_remain_distinguishable() -> None:
 
 
 def test_scene_context_rejects_region_scoped_claims() -> None:
-    region_scoped_claim = SemanticClaim(
-        claim_id=ClaimId("claim-0001"),
-        text="a doorway",
-        role=HypothesisRole.PRIMARY,
-        provenance=_provenance("semantic_interpreter"),
-        region_id=RegionId("region-0001"),
-    )
+    region_scoped_claim = _semantic_claim(region_id=RegionId("region-0001"))
 
     with pytest.raises(ValueError, match="region_id"):
-        SceneContext(claims=(region_scoped_claim,), provenance=_provenance("semantic_interpreter"))
+        SceneContext(
+            source_observation_id=SourceObservationId("frame-0124"),
+            perception_result_id=PerceptionResultId("result-0001"),
+            claims=(region_scoped_claim,),
+            provenance=_semantic_provenance(),
+        )
 
 
 def test_perception_result_rejects_duplicate_region_id() -> None:
@@ -181,12 +183,7 @@ def test_perception_result_rejects_duplicate_feature_id() -> None:
 
 
 def test_perception_result_rejects_duplicate_claim_id() -> None:
-    claim = SemanticClaim(
-        claim_id=ClaimId("claim-0001"),
-        text="a doorway",
-        role=HypothesisRole.PRIMARY,
-        provenance=_provenance("semantic_interpreter"),
-    )
+    claim = _semantic_claim()
 
     with pytest.raises(ValueError, match="duplicate claim_id"):
         PerceptionResult(

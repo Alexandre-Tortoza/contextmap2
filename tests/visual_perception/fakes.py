@@ -17,11 +17,14 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureScope,
     HypothesisRole,
+    PerceptionResultId,
     PreparedImage,
     Region2D,
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticEvidenceReference,
+    SemanticInferenceProvenance,
     VisualFeature,
 )
 from contextmap.visual_perception.models import ClaimId, FeatureId
@@ -120,6 +123,9 @@ class FakeRegionFeatureExtractor:
 class FakeSemanticInterpreter:
     """Deterministic SemanticInterpreter producing scene- and region-level claims."""
 
+    def __init__(self, result_id: PerceptionResultId | None = None) -> None:
+        self._result_id = result_id or PerceptionResultId("run-0001--frame-0124")
+
     def backend_provenance(self) -> BackendProvenance:
         return BackendProvenance(
             backend_id="fake_semantic_interpreter",
@@ -130,29 +136,57 @@ class FakeSemanticInterpreter:
         )
 
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity="scene-description",
+            prompt_template_id="scene/v1",
+            output_schema_version="semantic-response/1",
+        )
         return SceneContext(
+            source_observation_id=image.source_observation_id,
+            perception_result_id=self._result_id,
             claims=(
                 SemanticClaim(
                     claim_id=ClaimId("claim-scene-0000"),
-                    text="an indoor corridor",
+                    source_observation_id=image.source_observation_id,
+                    perception_result_id=self._result_id,
+                    hypothesis="an indoor corridor",
                     role=HypothesisRole.PRIMARY,
-                    provenance=self.backend_provenance(),
+                    provenance=provenance,
+                    evidence_references=(
+                        SemanticEvidenceReference(
+                            evidence_type="prepared_image",
+                            evidence_id=image.payload_reference,
+                        ),
+                    ),
                 ),
             ),
-            provenance=self.backend_provenance(),
+            provenance=provenance,
         )
 
     def interpret_regions(
         self, image: PreparedImage, regions: Sequence[Region2D]
     ) -> Sequence[SemanticClaim]:
-        provenance = self.backend_provenance()
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity="region-labeling",
+            prompt_template_id="region/v1",
+            output_schema_version="semantic-response/1",
+        )
         return tuple(
             SemanticClaim(
                 claim_id=ClaimId(f"claim-{region.region_id}"),
-                text="a fake object",
+                source_observation_id=image.source_observation_id,
+                perception_result_id=self._result_id,
+                hypothesis="a fake object",
                 role=HypothesisRole.PRIMARY,
                 provenance=provenance,
                 region_id=region.region_id,
+                evidence_references=(
+                    SemanticEvidenceReference(
+                        evidence_type="region", evidence_id=str(region.region_id)
+                    ),
+                ),
             )
             for region in regions
         )

@@ -20,6 +20,7 @@ from contextmap.visual_perception.models import (
     ClaimId,
     HypothesisRole,
     SemanticClaim,
+    SemanticInferenceProvenance,
     VisualFeature,
 )
 from contextmap.visual_perception.models import FeatureScope as _FeatureScope
@@ -188,9 +189,22 @@ def test_assemble_perception_result_uses_only_succeeded_stages() -> None:
     )
     claim = SemanticClaim(
         claim_id=ClaimId("claim-0001"),
-        text="a doorway",
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("result-0001"),
+        hypothesis="a doorway",
         role=HypothesisRole.PRIMARY,
-        provenance=_PROVENANCE,
+        provenance=SemanticInferenceProvenance(
+            backend=BackendProvenance(
+                backend_id="fake-semantic",
+                capability="semantic_interpreter",
+                provider="fake",
+                model="fake",
+                version="0.1",
+            ),
+            task_identity="region-labeling",
+            prompt_template_id="region/v1",
+            output_schema_version="semantic-response/1",
+        ),
         region_id=region.region_id,
     )
 
@@ -236,4 +250,4 @@ def test_assemble_perception_result_uses_only_succeeded_stages() -> None:
     assert result.regions == (region,)
     assert result.features == (feature,)
     assert result.claims == ()  # semantic_interpretation failed; no claim contributed
-    assert claim.text == "a doorway"  # sanity: claim object itself was never touched
+    assert claim.hypothesis == "a doorway"  # sanity: claim object itself was never touched
