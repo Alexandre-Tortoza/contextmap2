@@ -80,7 +80,7 @@ Contrato único de geometria 2D consumido por todo Visual Perception. `region_id
 
 ## `VisualFeature`
 
-`scope` (`DENSE`/`GLOBAL`/`REGION`) determina se `region_id` é exigido (`REGION`) ou deve ser `None` (`DENSE`/`GLOBAL`) — validado na construção. `embedding_space_id` é uma **referência opaca**: o contrato completo de `EmbeddingSpace` (família, checkpoint, dimensão, regras de compatibilidade) pertence à milestone Feature Extraction — mesmo padrão que `SourceObservation.calibration_id` usou antes do contrato completo de calibração existir.
+`scope` (`DENSE`/`GLOBAL`/`REGION`) determina se `region_id` é exigido (`REGION`) ou deve ser `None` (`DENSE`/`GLOBAL`), validado na construção. `embedding_space_id` permanece uma referência opaca dentro de cada `VisualFeature`, mas seu significado já é materializado por `EmbeddingSpace`: família, modelo, versão, checkpoint, layer, dimensão e normalização entram no fingerprint determinístico. Compatibilidade exige igualdade exata desse fingerprint, nunca apenas dimensão. Payloads persistidos são resolvidos separadamente pelo feature store.
 
 ## `SemanticClaim`
 

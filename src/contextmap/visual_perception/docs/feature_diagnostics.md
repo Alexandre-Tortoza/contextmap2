@@ -65,6 +65,6 @@ A existência de previews é opcional: só devem ser produzidos quando houver m�
 
 `PerceptionRunWriter.add_feature_diagnostic()` e `add_feature_preview()` apenas enfileiram conteúdo. `finalize()` escreve tudo no diretório temporário, inclui cada arquivo no `file_inventory`, verifica hashes e só então publica o run por rename atômico. Após finalização, novos diagnósticos/previews são rejeitados.
 
-Nenhuma mudança em campos obrigatórios de `RunArtifactManifest` foi necessária; o `file_inventory` aberto já representa os novos arquivos, então `SCHEMA_VERSION` permanece `0.2.0`.
+A integração de diagnostics não exige campos dedicados no `RunArtifactManifest`; o `file_inventory` aberto já representa esses arquivos. O schema global do `PerceptionRunArtifact` está atualmente em `0.3.0` por mudanças posteriores no preset de pipeline, não por causa do layout de diagnostics.
 
 Ver [`feature_store.md`](feature_store.md) para payloads contratuais e [`run_artifact.md`](run_artifact.md) para o artefato completo.

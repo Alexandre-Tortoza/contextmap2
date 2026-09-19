@@ -31,14 +31,16 @@ __all__ = ["SemanticClaim", "SemanticInterpreter"]
 
 ## Integração pública implementada
 
-Hoje existe uma dependência cross-module real: Visual Perception consome identidades de Ingestion pela raiz pública `contextmap.ingestion`.
+Hoje existem dependências cross-module reais: Visual Perception consome identidades de Ingestion pela raiz pública `contextmap.ingestion`, e Evaluation consome exclusivamente as APIs públicas de Ingestion e Visual Perception para medir evidência sem mutar os módulos avaliados.
 
 ```mermaid
 flowchart LR
     INGROOT["contextmap.ingestion<br/>API pública"] --> VP["contextmap.visual_perception"]
     INGROOT --> OBS["SourceObservationId / SequenceArtifactId / selection"]
     OBS --> VP
-    VP --> PUB["Region2D / VisualFeature / SemanticClaim /<br/>PerceptionResult / PipelinePreset / artifacts"]
+    VP --> PUB["Region2D / VisualFeature / EmbeddingSpace /<br/>DenseFeatureMap / PerceptionResult / artifacts"]
+    PUB --> EV["contextmap.evaluation"]
+    INGROOT --> EV
     PUB -. downstream futuro .-> NEXT["sensor_association / semantic_fusion / runtime"]
 ```
 
@@ -59,10 +61,16 @@ visual_perception/
 ├── serialization.py
 ├── run_artifact.py      # persistência de runs
 ├── evidence_set.py      # view multi-run
+├── embedding_space.py    # identidade e compatibilidade de features
+├── feature_store.py      # payloads lazy e índice
+├── dense_region_association.py
+├── feature_diagnostics.py
+├── feature_resolution_enhancement.py
+├── backends/             # adapters concretos selecionados pela composition root
 └── docs/
 ```
 
-Não existe ainda `visual_perception/backends/` com modelos reais na `dev`; os backends usados pelos testes são fakes determinísticos. Um diretório de backends só deve surgir quando houver implementação concreta.
+`visual_perception/backends/` já existe para adapters concretos de Region Discovery, atualmente SAM2, SAM3 e Florence-2. O core de Feature Extraction também já está materializado, mas seus backends de modelo ainda são fakes nos testes e não há adapters DINOv2, DINOv3, CLIP ou AlphaCLIP integrados na `dev`. A existência do diretório não torna qualquer modelo automaticamente parte da API pública ou do preset canônico.
 
 Não é obrigatório criar `models.py`, `ports.py`, `service.py`, `backends/` ou `_internal/` antecipadamente. KISS e YAGNI continuam válidos.
 
