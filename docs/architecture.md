@@ -246,41 +246,39 @@ Isso não significa que ela conheça SAM, DINO, FAST-LIO ou ROS. Ela conhece ape
 
 Uma interface/Protocol deve existir quando há um ponto real de substituição.
 
-Exemplos de variation points planejados:
+Variation points atuais e planejados:
 
-```text
-RegionDiscovery
-├── SAM2
-├── SAM3
-└── Florence-2
+```mermaid
+flowchart LR
+    RD["RegionDiscovery"]
+    FE["FeatureExtractor"]
+    SI["SemanticInterpreter"]
+    SS["SemanticScorer"]
+    SE["StateEstimator"]
+    PE["PointEncoder"]
 
-FeatureExtractor
-├── DINOv2
-├── DINOv3
-├── CLIP
-└── AlphaCLIP
+    SAM2["SAM2"] -->|implementado| RD
+    SAM3["SAM3"] -->|implementado| RD
+    F2["Florence-2"] -->|implementado| RD
 
-SemanticInterpreter
-├── Qwen
-├── Gemini
-└── Florence-2
-
-SemanticScorer
-├── CLIP
-└── AlphaCLIP
-
-StateEstimator
-├── ExternalPose
-└── FAST-LIO
-
-PointEncoder
-├── deterministic descriptor
-└── PTv3, optional
+    D2["DINOv2"] -. planejado/integração separada .-> FE
+    D3["DINOv3"] -. planejado/integração separada .-> FE
+    CLIP["CLIP"] -. planejado/integração separada .-> FE
+    ACLIP["AlphaCLIP"] -. planejado/integração separada .-> FE
+    Q["Qwen"] -. planejado .-> SI
+    G["Gemini"] -. planejado .-> SI
+    F2 -. adapter semântico separado .-> SI
+    CLIP -. scorer separado .-> SS
+    ACLIP -. scorer separado .-> SS
+    EXT["ExternalPose"] -. planejado .-> SE
+    FL["FAST-LIO"] -. planejado .-> SE
+    DET["deterministic descriptor"] -. planejado .-> PE
+    PT["PTv3"] -. opcional .-> PE
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
 
-No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico implementado usa os três primeiros; `SemanticScorer` ainda não está ligado ao DAG canônico. Os backends reais de visão listados acima continuam candidatos planejados, não implementação já disponível. Ingestion, por outro lado, já possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`.
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa os três primeiros; `SemanticScorer` ainda não está ligado ao DAG canônico. Region Discovery já possui adapters concretos SAM2, SAM3 e Florence-2 atrás do mesmo port, com normalização backend-neutral para `Region2D`. Os demais backends do diagrama seguem suas milestones próprias. Ingestion também possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes de Region Discovery: [`visual_perception/docs/region-discovery.md`](../src/contextmap/visual_perception/docs/region-discovery.md).
 
 ## Composition root
 

@@ -29,6 +29,8 @@ flowchart LR
 
 O diagrama representa o fluxo do preset canônico atualmente implementado. Os ports continuam independentes da topologia: a ordem e as dependências são definidas pelo `PipelinePreset`, enquanto `service.py` apenas executa o grafo resolvido. Uma evidência produzida aqui permanece evidência de frame/run; ela não vira entidade 3D persistente nem crença fundida dentro deste módulo.
 
+Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
+
 ## O que este módulo explicitamente não possui
 
 - identidade persistente de entidade 3D (pertence a Entity Resolution/Semantic Mapping);
@@ -73,6 +75,7 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
+- [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
 - [`ports.md`](ports.md) — pontos de substituição de backend e contratos de capability.
 - [`pipeline.md`](pipeline.md) — presets versionados, topologia canônica, validação e resolução de backends.
 - [`service.md`](service.md) — execução do DAG, estados de estágio, isolamento de falhas e montagem do resultado.

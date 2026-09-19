@@ -4,6 +4,24 @@ O protocolo mede evidência geométrica 2D e custo de execução sem usar qualid
 resultados downstream. O mesmo `RegionDiscoveryReferenceSet` e o mesmo schema de report recebem
 execuções SAM2, SAM3, Florence-2 ou fakes.
 
+## Fluxo de avaliação
+
+```mermaid
+flowchart LR
+    REF["RegionDiscoveryReferenceSet"] --> EV["RegionDiscoveryEvaluator"]
+    DESC["EvaluationRunDescriptor"] --> EV
+    EXEC["DiscoveryRunResult<br/>+ NormalizationResult"] --> EV
+    EV --> ACC["Accuracy<br/>quando há annotation"]
+    EV --> DIAG["Diagnostics"]
+    EV --> PERF["Performance"]
+    ACC --> REP["RegionDiscoveryEvaluationReport"]
+    DIAG --> REP
+    PERF --> REP
+    REP --> CMP["compare_region_discovery_reports()"]
+```
+
+O protocolo mede a capability de descoberta geométrica, não a interpretação semântica posterior. O contrato e o fluxo de produção das regiões estão documentados em [`visual_perception/docs/region-discovery.md`](../../visual_perception/docs/region-discovery.md).
+
 ## Reprodutibilidade
 
 Cada report registra:
@@ -61,6 +79,22 @@ estruturado corresponde à variável declarada. IDs de run/artifact podem mudar 
 nova execução. O `config_digest` identifica a configuração controlada comum aos dois lados e não
 pode mudar: a variável de ablação fica explicitamente em `run.variables`. Como um digest é opaco,
 aceitar sua alteração impediria provar que somente a variável declarada mudou.
+
+## Ablations controladas
+
+```mermaid
+flowchart TD
+    A["Report baseline"] --> CHECK{"mesmo reference set<br/>e frame selection?"}
+    B["Report alterado"] --> CHECK
+    CHECK --> VAR{"exatamente uma variável<br/>declarada mudou?"}
+    VAR --> INV{"backend/checkpoint/version/<br/>strategy/thresholds/pipeline/<br/>config digest/execution kind invariantes?"}
+    INV -->|sim| DELTA["calcular deltas<br/>quality e performance separados"]
+    CHECK -->|não| ERR["rejeitar comparação"]
+    VAR -->|não| ERR
+    INV -->|não| ERR
+```
+
+IDs de run e artifact podem mudar entre execuções. O `config_digest` não pode mudar silenciosamente, porque é opaco e impediria provar que a diferença observada veio apenas da variável declarada.
 
 ## Baselines
 
