@@ -6,16 +6,41 @@ Este documento descreve `src/contextmap/visual_perception/identity.py` e a cadei
 
 Dado qualquer `SemanticClaim`, `VisualFeature` ou `Region2D`, é possível rastrear até:
 
-```text
-SemanticClaim / VisualFeature / Region2D
-    → PerceptionResult (result_id)
-        → PerceptionRun (run_id)
-            → SequenceArtifact + Selection (sequence_artifact_id, selection_id — Ingestion)
-    → SourceObservation (source_observation_id — Ingestion, physical)
-    → BackendProvenance (backend/model/config que produziu a evidência)
+```mermaid
+flowchart LR
+    E["Region2D / VisualFeature / SemanticClaim"] --> R["PerceptionResult<br/>result_id"]
+    E --> B["BackendProvenance<br/>backend/model/config"]
+    R --> RUN["PerceptionRun<br/>run_id"]
+    R --> OBS["SourceObservation<br/>source_observation_id"]
+    RUN --> SEQ["SequenceArtifact<br/>sequence_artifact_id"]
+    RUN --> SEL["Selection<br/>selection_id"]
+
+    subgraph ING[Ingestion ownership]
+        OBS
+        SEQ
+        SEL
+    end
 ```
 
 Nenhum desses IDs implica identidade de entidade 3D persistente — são todos identidades locais de evidência de inferência (ver `contracts.md`).
+
+### Escopos de identidade
+
+```mermaid
+flowchart TB
+    PHYS["SourceObservationId<br/>identidade da observação física"]
+    RUNID["PerceptionRunId<br/>identidade da execução"]
+    RID["PerceptionResultId<br/>run + observação"]
+    LOCAL["RegionId / FeatureId / ClaimId<br/>locais ao resultado"]
+    PERSIST["Entidade 3D persistente<br/>não definida aqui"]
+
+    PHYS --> RID
+    RUNID --> RID
+    RID --> LOCAL
+    LOCAL -. associação downstream explícita .-> PERSIST
+```
+
+A seta tracejada não representa uma conversão automática. Ela marca apenas a fronteira onde uma capability posterior pode associar evidência local a uma entidade persistente.
 
 ## Por que identidades determinísticas
 
