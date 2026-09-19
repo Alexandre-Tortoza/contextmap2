@@ -16,6 +16,8 @@ from contextmap.visual_perception import (
     FeatureScope,
     FeatureStoreReader,
     FeatureStoreWriter,
+    PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -31,6 +33,8 @@ from contextmap.visual_perception.backends.alphaclip import (
     AlphaClipRegionFeatureBackend,
     AlphaClipRequest,
     OfficialAlphaClipRuntime,
+    _normalized_rgb_array,
+    _validate_batch_geometry,
 )
 
 
@@ -78,7 +82,7 @@ def _image() -> PreparedImage:
         payload_reference="prepared/frame-0001.png",
         width=6,
         height=4,
-        transformations=("rectify:v1",),
+        transformations=(),
     )
 
 
@@ -104,6 +108,7 @@ def _backend(
     masks: dict[RegionId, np.ndarray[Any, Any]],
     array: np.ndarray[Any, Any],
     view_policy: str = "full_image",
+    feature_stage_id: str = "region_feature_extraction",
 ) -> tuple[AlphaClipRegionFeatureBackend, FakeAlphaClipRuntime, RecordingPayloadSink]:
     runtime = FakeAlphaClipRuntime(array)
     sink = RecordingPayloadSink()
@@ -122,6 +127,7 @@ def _backend(
             mask_interpolation="nearest",
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id=feature_stage_id,
         mask_source=DictMaskSource(masks),
         payload_sink=sink,
         runtime=runtime,
@@ -214,6 +220,37 @@ def test_extract_port_returns_same_persisted_features_and_diagnostics() -> None:
     assert extraction.diagnostics.peak_memory_bytes == 1024
 
 
+def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
+    region = _region()
+    masks = {region.region_id: np.ones((2, 2), dtype=np.bool_)}
+    alpha_backend, _, _ = _backend(
+        masks=masks,
+        array=np.ones((1, 2), dtype=np.float32),
+        feature_stage_id="alphaclip_region_features",
+    )
+    sibling_backend, _, _ = _backend(
+        masks=masks,
+        array=np.ones((1, 2), dtype=np.float32),
+        feature_stage_id="clip_region_features",
+    )
+
+    alpha_feature = alpha_backend.extract_masked(_image(), (region,)).features[0]
+    sibling_feature = sibling_backend.extract_masked(_image(), (region,)).features[0]
+
+    result = PerceptionResult(
+        result_id=PerceptionResultId("run-0001--frame-0001"),
+        source_observation_id=_image().source_observation_id,
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-0001",
+        created_at="2026-09-19T00:00:00+00:00",
+        regions=(region,),
+        features=(alpha_feature, sibling_feature),
+    )
+
+    assert len({feature.feature_id for feature in result.features}) == 2
+    assert len({feature.payload_reference for feature in result.features}) == 2
+
+
 def test_output_persists_and_reopens_through_canonical_feature_store(tmp_path: Path) -> None:
     region = _region()
     writer = FeatureStoreWriter(tmp_path)
@@ -239,6 +276,7 @@ def test_output_persists_and_reopens_through_canonical_feature_store(tmp_path: P
             checkpoint_fingerprint="sha256:abc",
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id="region_feature_extraction",
         mask_source=DictMaskSource({region.region_id: np.ones((2, 2), dtype=np.bool_)}),
         payload_sink=StoreSink(),
         runtime=runtime,
@@ -248,7 +286,10 @@ def test_output_persists_and_reopens_through_canonical_feature_store(tmp_path: P
     write_feature_index(tmp_path, writer.entries())
     reopened = FeatureStoreReader.open(tmp_path)
 
-    np.testing.assert_allclose(reopened.load(feature.feature_id), np.array([0.6, 0.8]))
+    np.testing.assert_allclose(
+        reopened.load(_image().source_observation_id, feature.feature_id),
+        np.array([0.6, 0.8]),
+    )
     assert feature.region_id == region.region_id
 
 
@@ -335,3 +376,23 @@ def test_missing_sdk_dependencies_are_explicit(
 
     with pytest.raises(AlphaClipDependencyError, match="torch, alpha_clip, and Pillow"):
         runtime.encode(_image(), ())
+
+
+def test_rgb_normalization_preserves_the_declared_model_input_geometry() -> None:
+    resized_rgb = np.zeros((4, 6, 3), dtype=np.uint8)
+
+    normalized = _normalized_rgb_array(
+        resized_rgb,
+        expected_width=6,
+        expected_height=4,
+    )
+
+    assert normalized.shape == (3, 4, 6)
+
+
+def test_runtime_rejects_misaligned_rgb_and_alpha_batches_before_inference() -> None:
+    image_batch = np.zeros((2, 3, 4, 6), dtype=np.float32)
+    alpha_batch = np.zeros((2, 1, 4, 5), dtype=np.float32)
+
+    with pytest.raises(AlphaClipInferenceError, match="RGB and alpha batch geometry"):
+        _validate_batch_geometry(image_batch, alpha_batch)

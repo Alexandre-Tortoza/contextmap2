@@ -22,11 +22,13 @@ from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
 )
-from contextmap.visual_perception.identity import feature_id_for, perception_result_id_for
+from contextmap.visual_perception.identity import perception_result_id_for
 from contextmap.visual_perception.models import (
     BackendProvenance,
     BoundingBox2D,
+    FeatureId,
     FeatureScope,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -280,6 +282,7 @@ class AlphaClipRegionFeatureBackend:
         *,
         config: AlphaClipConfig,
         run_id: PerceptionRunId,
+        feature_stage_id: str,
         mask_source: RegionMaskSource,
         payload_sink: FeaturePayloadSink,
         runtime: AlphaClipRuntime | None = None,
@@ -289,12 +292,15 @@ class AlphaClipRegionFeatureBackend:
         """Create a configured AlphaCLIP adapter."""
         if not str(run_id):
             raise ValueError("run_id must not be empty")
+        if not feature_stage_id:
+            raise ValueError("feature_stage_id must not be empty")
         if runtime is None and (prepared_image_root is None or checkpoint_root is None):
             raise ValueError(
                 "prepared_image_root and checkpoint_root are required for the default runtime"
             )
         self._config = config
         self._run_id = run_id
+        self._feature_stage_id = feature_stage_id
         self._mask_source = mask_source
         self._payload_sink = payload_sink
         self._runtime = runtime or OfficialAlphaClipRuntime(
@@ -379,7 +385,11 @@ class AlphaClipRegionFeatureBackend:
         )
         features: list[VisualFeature] = []
         for index, request in enumerate(requests):
-            feature_id = feature_id_for(result_id=result_id, index=index)
+            feature_id = _feature_id_for_stage(
+                result_id=result_id,
+                feature_stage_id=self._feature_stage_id,
+                index=index,
+            )
             feature = VisualFeature(
                 feature_id=feature_id,
                 scope=FeatureScope.REGION,
@@ -431,7 +441,6 @@ class OfficialAlphaClipRuntime:
         self._torch: Any = None
         self._image_module: Any = None
         self._model: Any = None
-        self._preprocess: Any = None
 
     def encode(
         self, image: PreparedImage, requests: Sequence[AlphaClipRequest]
@@ -463,7 +472,12 @@ class OfficialAlphaClipRuntime:
                         (self._config.input_width, self._config.input_height),
                         resample=self._image_module.Resampling.BICUBIC,
                     )
-                    image_tensors.append(self._preprocess(resized))
+                    normalized = _normalized_rgb_array(
+                        resized,
+                        expected_width=self._config.input_width,
+                        expected_height=self._config.input_height,
+                    )
+                    image_tensors.append(self._torch.from_numpy(normalized))
             image_batch = self._torch.stack(image_tensors).to(self._config.device)
             mask_arrays = [
                 self._torch.from_numpy(request.mask.astype("float32"))[None, None]
@@ -483,6 +497,8 @@ class OfficialAlphaClipRuntime:
             else:
                 image_batch = image_batch.float()
                 alpha_batch = alpha_batch.float()
+
+            _validate_batch_geometry(image_batch, alpha_batch)
 
             if self._config.device == "cuda":
                 self._torch.cuda.reset_peak_memory_stats()
@@ -540,7 +556,7 @@ class OfficialAlphaClipRuntime:
                 f"{self._config.checkpoint_fingerprint}, found {actual_fingerprint}"
             )
         try:
-            model, preprocess = alpha_clip.load(
+            model, _preprocess = alpha_clip.load(
                 str(base_path),
                 alpha_vision_ckpt_pth=str(alpha_path),
                 device=self._config.device,
@@ -554,7 +570,6 @@ class OfficialAlphaClipRuntime:
         self._torch = torch
         self._image_module = image_module
         self._model = model
-        self._preprocess = preprocess
 
 
 def _request_for(
@@ -696,6 +711,46 @@ def _configuration_fingerprint(config: AlphaClipConfig) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _feature_id_for_stage(
+    *, result_id: PerceptionResultId, feature_stage_id: str, index: int
+) -> FeatureId:
+    """Namespace a feature identity by the composing pipeline stage."""
+    stage_digest = hashlib.sha256(feature_stage_id.encode("utf-8")).hexdigest()
+    return FeatureId(f"{result_id}--feature-stage-{stage_digest}-{index:04d}")
+
+
+def _normalized_rgb_array(image: Any, *, expected_width: int, expected_height: int) -> NDArray[Any]:
+    """Apply only CLIP photometric normalization to an explicitly resized RGB view."""
+    import numpy as np
+
+    array = np.asarray(image, dtype=np.float32)
+    expected_shape = (expected_height, expected_width, 3)
+    if tuple(array.shape) != expected_shape:
+        raise AlphaClipInferenceError(
+            f"resized RGB shape {tuple(array.shape)} does not match {expected_shape}"
+        )
+    mean = np.asarray((0.48145466, 0.4578275, 0.40821073), dtype=np.float32)
+    std = np.asarray((0.26862954, 0.26130258, 0.27577711), dtype=np.float32)
+    normalized = (array / np.float32(255.0) - mean) / std
+    return np.ascontiguousarray(normalized.transpose(2, 0, 1))
+
+
+def _validate_batch_geometry(image_batch: Any, alpha_batch: Any) -> None:
+    """Require RGB and alpha batches to share batch and spatial dimensions."""
+    image_shape = tuple(int(dimension) for dimension in image_batch.shape)
+    alpha_shape = tuple(int(dimension) for dimension in alpha_batch.shape)
+    if (
+        len(image_shape) != 4
+        or len(alpha_shape) != 4
+        or image_shape[0] != alpha_shape[0]
+        or image_shape[2:] != alpha_shape[2:]
+    ):
+        raise AlphaClipInferenceError(
+            "RGB and alpha batch geometry must match before inference: "
+            f"RGB={image_shape}, alpha={alpha_shape}"
+        )
 
 
 def _view_provenance(config: AlphaClipConfig, view: AlphaClipView) -> BackendProvenance:
