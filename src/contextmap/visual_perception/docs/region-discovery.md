@@ -213,7 +213,7 @@ participam do digest, sem tornar SAM2 dependência obrigatória do pacote princi
 
 ## Backend SAM3
 
-`Sam3RegionDiscovery` é o adapter planejado para o baseline da Solution 1 e continua substituível
+`Sam3RegionDiscovery` é o adapter concreto de SAM3 para Region Discovery e continua substituível
 pelo mesmo port. `Sam3Config` torna checkpoint, versão, device, precision, thresholds e estratégia
 parte do digest da execução. Estratégias `automatic`, `text_prompt`, `point_grid`, `tracker` e `pcs`
 são distintas; `text_prompt` exige prompt, enquanto `automatic` rejeita prompt oculto.
@@ -307,8 +307,8 @@ explicitamente.
 
 ## Evidência persistida e diagnostics
 
-`RegionDiscoveryEvidenceWriter` finaliza atomicamente `20-region-discovery/` e recusa sobrescrever
-um estágio existente. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
+`RegionDiscoveryEvidenceWriter` finaliza atomicamente o diretório de estágio fornecido pelo chamador e recusa sobrescrever
+um resultado já finalizado. O nome físico do diretório pertence à composição do run, não ao contrato do writer. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
 contratuais. O manifest registra schema, backend, digest da política, nível de debug e hash de cada
 payload. Consumidores downstream não leem `debug/`.
 
@@ -324,7 +324,7 @@ inspeção disponível sem introduzir uma biblioteca de imagem no domínio. Mét
 motivos de rejeição, distribuição de área, merge ratio, duração por pass, warnings e memória quando
 o runtime a reporta.
 
-## Persistência e diagnostics
+### Fluxo de persistência
 
 ```mermaid
 flowchart LR
