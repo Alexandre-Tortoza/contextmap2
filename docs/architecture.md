@@ -111,13 +111,13 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion` e o núcleo de `visual_perception` já materializam os dois primeiros boundaries da arquitetura. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion` e `visual_perception`, incluindo Region Discovery, já materializam os dois primeiros boundaries da arquitetura. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
     SRC["Fonte registrada"] --> ING["contextmap.ingestion<br/>implementado"]
     ING --> SA["SequenceArtifact"]
-    SA --> VP["contextmap.visual_perception<br/>core implementado"]
+    SA --> VP["contextmap.visual_perception<br/>core + Region Discovery implementados"]
     VP --> PRA["PerceptionRunArtifact"]
     PRA -. contrato downstream futuro .-> NEXT["state_estimation / geometric_mapping /<br/>sensor_association / fusion / map"]
 ```
@@ -127,7 +127,8 @@ A integração entre os dois módulos é feita exclusivamente pelas APIs públic
 Documentação implementacional:
 
 - [Ingestion](../src/contextmap/ingestion/docs/README.md);
-- [Visual Perception](../src/contextmap/visual_perception/docs/README.md).
+- [Visual Perception](../src/contextmap/visual_perception/docs/README.md);
+- [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
 
 
 ## Ownership
