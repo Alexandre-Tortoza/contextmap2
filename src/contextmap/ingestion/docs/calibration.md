@@ -4,6 +4,28 @@ Este documento descreve `src/contextmap/ingestion/calibration.py`: o contrato ca
 
 **Ownership**: Ingestion normaliza e possui a calibração canônica (intrínsecos de câmera, extrínsecos estáticos, identidade de frame). Ingestion **não realiza** projeção 2D↔3D — isso pertence a Sensor Association, que consome este contrato sem conhecimento do formato de origem.
 
+
+## Ownership e fluxo
+
+```mermaid
+flowchart LR
+    CFG[CalibrationSet configurado] --> MERGE[Merge / validação]
+    CI[CameraInfo da fonte] --> MERGE
+    MERGE --> CAL[CalibrationSet canônico]
+
+    CAL --> OBS[SourceObservation.calibration_id]
+    CAL --> SA[Sensor Association]
+    OBS --> SA
+
+    DYN[Pose dinâmica / odometria] --> EPM[ExternalPoseMeasurement]
+    EPM --> SE[State Estimation]
+
+    SA --> PROJ[Aplicação da calibração / projeção 2D-3D]
+```
+
+A separação é intencional: Ingestion preserva intrínsecos, extrínsecos estáticos e frames; Sensor Association aplica esses dados geometricamente. Movimento no tempo não é transform estático de calibração.
+
+
 ## Pinhole e fisheye sem conversão com perda
 
 `CameraModel = PinholeCameraModel | FisheyeCameraModel` — dois tipos distintos, não um único record genérico. `PinholeCameraModel` usa o modelo de distorção radial/tangencial do OpenCV (`none`, `plumb_bob`, `rational_polynomial`); `FisheyeCameraModel` usa o modelo equidistante (Kannala-Brandt) com exatamente 4 coeficientes. Forçar fisheye em uma representação pinhole perderia informação — por isso nunca há conversão implícita entre os dois; um consumidor precisa tratar cada um explicitamente (`camera_model_kind()` retorna `"pinhole"`/`"fisheye"`).

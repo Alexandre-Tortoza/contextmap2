@@ -12,6 +12,30 @@ O v0 **não realiza reconciliação entre domínios de clock diferentes** (ex.: 
 
 Nos adapters ROS, todos os `header.stamp` da mesma fonte usam o `timestamp_clock_id` compartilhado configurado. O timestamp de gravação do bag é outra evidência e fica em `SourceProvenance.raw_metadata`; ele não define automaticamente o clock do sensor. Quando um candidato tem `clock_id` diferente do anchor, ele nunca é selecionado e aparece em diagnostics com status/motivo `clock_id_mismatch` — nunca é comparado silenciosamente. Reconciliação explícita entre múltiplos domínios de clock (offset conhecido, clock skew) não é escopo desta issue; se necessária no futuro, deve ser uma decisão própria, versionada, não um efeito colateral da sincronização.
 
+
+
+## Fluxo da decisão de associação
+
+```mermaid
+flowchart TD
+    A[Anchor da reference_modality] --> C[Candidatos de outra modalidade]
+    C --> K{clock_id compatível?}
+    K -- não --> X[Sem associação: clock_id_mismatch]
+    K -- sim --> N[Escolher menor abs(offset_nanoseconds)]
+    N --> T{offset dentro da tolerance?}
+    T -- sim --> M[matched]
+    T -- não --> O[Sem associação: outside_tolerance]
+
+    X --> D[SynchronizationDiagnostics]
+    M --> D
+    O --> D
+    M --> G[ProcessingObservation]
+    X --> G
+    O --> G
+```
+
+A decisão é reproduzível a partir do anchor, do domínio temporal, da tolerância e dos candidatos. Não há conversão implícita entre clocks nem interpolação escondida.
+
 ## Política v0: nearest-within-tolerance
 
 Única política implementada nesta issue (`policy="nearest_within_tolerance"` em `ProcessingObservation`):
