@@ -5,9 +5,8 @@ source (ROS 1 bag, ROS 2 bag, dataset) once. It is not the final
 ``ContextMapArtifact``; it is the normalized sensor sequence that later
 pipeline stages read instead of reopening the original source. See
 ``src/contextmap/ingestion/docs/artifact.md`` for the on-disk layout,
-schema version history, and the design trade-offs made for v0 (notably:
-a JSON Lines index instead of a columnar format, and which candidate
-subdirectories from the issue are deferred to later ingestion issues).
+schema version history, and the design trade-offs made for v0 (notably a
+JSON Lines index instead of a columnar format).
 
 Writing is atomic: :class:`SequenceArtifactWriter` builds the artifact in a
 temporary sibling directory and only makes it visible under its final path
@@ -35,8 +34,15 @@ from contextmap.ingestion.calibration import (
 )
 from contextmap.ingestion.diagnostics import (
     SequenceDiagnostics,
+    build_frame_graph_diagnostics,
     decode_diagnostics_summary,
+    decode_dropped_event,
+    decode_frame_graph,
+    decode_synchronization_decision,
     encode_diagnostics,
+    encode_dropped_event,
+    encode_frame_graph,
+    encode_synchronization_decision,
     summarize_observations,
 )
 from contextmap.ingestion.models import (
@@ -61,9 +67,10 @@ from contextmap.ingestion.sequence_provenance import (
     decode_provenance,
     encode_provenance,
 )
+from contextmap.ingestion.synchronization import DroppedEvent, SynchronizationDiagnostics
 from contextmap.shared import SourceTimestamp
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.2.0"
 """Sequence artifact schema version written and understood by this module."""
 
 SequenceArtifactId = NewType("SequenceArtifactId", str)
@@ -75,6 +82,9 @@ _CALIBRATION_FILENAME = "calibration/calibration.json"
 _PROVENANCE_FILENAME = "provenance/provenance.json"
 _DIAGNOSTICS_SUMMARY_FILENAME = "diagnostics/summary.json"
 _DIAGNOSTICS_WARNINGS_FILENAME = "diagnostics/warnings.jsonl"
+_DIAGNOSTICS_SYNCHRONIZATION_FILENAME = "diagnostics/synchronization.jsonl"
+_DIAGNOSTICS_DROPPED_EVENTS_FILENAME = "diagnostics/dropped-events.jsonl"
+_DIAGNOSTICS_FRAME_GRAPH_FILENAME = "diagnostics/frame-graph.json"
 _MODALITY_COUNTS_TEMPLATE: Mapping[str, int] = dict.fromkeys(MODALITY_NAMES, 0)
 
 
@@ -167,9 +177,15 @@ class SequenceArtifactWriter:
         self._calibration: CalibrationSet | None = None
         self._provenance: SequenceProvenance | None = None
         self._diagnostic_warnings: tuple[str, ...] | None = None
+        self._synchronization_diagnostics: SynchronizationDiagnostics | None = None
         self._finalized = False
 
-    def set_diagnostics(self, *, warnings: Sequence[str] = ()) -> None:
+    def set_diagnostics(
+        self,
+        *,
+        warnings: Sequence[str] = (),
+        synchronization: SynchronizationDiagnostics | None = None,
+    ) -> None:
         """Enable writing diagnostics for this sequence.
 
         The summary itself (per-modality counts/time-range, image
@@ -180,6 +196,8 @@ class SequenceArtifactWriter:
         Args:
             warnings: Adapter/validation/synchronization warnings to
                 record alongside the summary, as human-readable text.
+            synchronization: Structured synchronization decisions and dropped
+                events to persist alongside the summary.
 
         Raises:
             SequenceArtifactError: If called after :meth:`finalize`.
@@ -187,6 +205,7 @@ class SequenceArtifactWriter:
         if self._finalized:
             raise SequenceArtifactError("cannot set diagnostics after finalize()")
         self._diagnostic_warnings = tuple(warnings)
+        self._synchronization_diagnostics = synchronization
 
     def set_provenance(self, provenance: SequenceProvenance) -> None:
         """Attach the sequence's provenance/content-identity metadata.
@@ -320,7 +339,10 @@ class SequenceArtifactWriter:
 
         if self._diagnostic_warnings is not None:
             summary = summarize_observations(
-                self._observations, warning_count=len(self._diagnostic_warnings)
+                self._observations,
+                warning_count=len(self._diagnostic_warnings),
+                synchronization=self._synchronization_diagnostics,
+                calibration=self._calibration,
             )
             summary_content = json.dumps(
                 encode_diagnostics(SequenceDiagnostics(summary=summary, warnings=())),
@@ -343,6 +365,48 @@ class SequenceArtifactWriter:
             file_entries.append(
                 _file_entry(_DIAGNOSTICS_WARNINGS_FILENAME, warnings_content.encode("utf-8"))
             )
+
+            if self._synchronization_diagnostics is not None:
+                synchronization_content = "".join(
+                    f"{json.dumps(encode_synchronization_decision(decision), sort_keys=True)}\n"
+                    for decision in self._synchronization_diagnostics.decisions
+                )
+                synchronization_path = self._tmp_dir / _DIAGNOSTICS_SYNCHRONIZATION_FILENAME
+                synchronization_path.write_text(synchronization_content, encoding="utf-8")
+                file_entries.append(
+                    _file_entry(
+                        _DIAGNOSTICS_SYNCHRONIZATION_FILENAME,
+                        synchronization_content.encode("utf-8"),
+                    )
+                )
+
+                dropped_content = "".join(
+                    f"{json.dumps(encode_dropped_event(event), sort_keys=True)}\n"
+                    for event in self._synchronization_diagnostics.dropped_events
+                )
+                dropped_path = self._tmp_dir / _DIAGNOSTICS_DROPPED_EVENTS_FILENAME
+                dropped_path.write_text(dropped_content, encoding="utf-8")
+                file_entries.append(
+                    _file_entry(
+                        _DIAGNOSTICS_DROPPED_EVENTS_FILENAME,
+                        dropped_content.encode("utf-8"),
+                    )
+                )
+
+            if self._calibration is not None:
+                frame_graph_content = json.dumps(
+                    encode_frame_graph(build_frame_graph_diagnostics(self._calibration)),
+                    indent=2,
+                    sort_keys=True,
+                )
+                frame_graph_path = self._tmp_dir / _DIAGNOSTICS_FRAME_GRAPH_FILENAME
+                frame_graph_path.write_text(frame_graph_content, encoding="utf-8")
+                file_entries.append(
+                    _file_entry(
+                        _DIAGNOSTICS_FRAME_GRAPH_FILENAME,
+                        frame_graph_content.encode("utf-8"),
+                    )
+                )
 
         manifest = SequenceArtifactManifest(
             artifact_id=self._artifact_id,
@@ -433,7 +497,55 @@ class SequenceArtifactReader:
                 if stripped:
                     warnings.append(json.loads(stripped)["warning"])
 
-        return SequenceDiagnostics(summary=summary, warnings=tuple(warnings))
+        synchronization_path = self._root / _DIAGNOSTICS_SYNCHRONIZATION_FILENAME
+        decisions = (
+            tuple(
+                decode_synchronization_decision(json.loads(line))
+                for line in synchronization_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            if synchronization_path.is_file()
+            else ()
+        )
+
+        dropped_path = self._root / _DIAGNOSTICS_DROPPED_EVENTS_FILENAME
+        dropped_events: tuple[DroppedEvent, ...] = ()
+        if dropped_path.is_file():
+            dropped_records = [
+                json.loads(line)
+                for line in dropped_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if dropped_records:
+                observations_by_id = {
+                    str(observation.observation_id): observation
+                    for observation in self.list_observations()
+                }
+                dropped_events = tuple(
+                    decode_dropped_event(record, observations_by_id) for record in dropped_records
+                )
+        synchronization = (
+            SynchronizationDiagnostics(
+                dropped_events=dropped_events,
+                decisions=decisions,
+            )
+            if synchronization_path.is_file() or dropped_path.is_file()
+            else None
+        )
+
+        frame_graph_path = self._root / _DIAGNOSTICS_FRAME_GRAPH_FILENAME
+        frame_graph = (
+            decode_frame_graph(json.loads(frame_graph_path.read_text(encoding="utf-8")))
+            if frame_graph_path.is_file()
+            else None
+        )
+
+        return SequenceDiagnostics(
+            summary=summary,
+            warnings=tuple(warnings),
+            synchronization=synchronization,
+            frame_graph=frame_graph,
+        )
 
     def read_calibration(self) -> CalibrationSet | None:
         """Read this sequence's calibration set, when one was written.
@@ -546,12 +658,25 @@ def _encode_observation(
         record["orientation"] = (
             list(observation.orientation) if observation.orientation is not None else None
         )
+        record["linear_acceleration_covariance"] = _encode_optional_tuple(
+            observation.linear_acceleration_covariance
+        )
+        record["angular_velocity_covariance"] = _encode_optional_tuple(
+            observation.angular_velocity_covariance
+        )
+        record["orientation_covariance"] = _encode_optional_tuple(
+            observation.orientation_covariance
+        )
         return record, None
 
     if isinstance(observation, ExternalPoseMeasurement):
         record["parent_frame"] = str(observation.parent_frame)
         record["translation"] = list(observation.translation)
         record["orientation"] = list(observation.orientation)
+        record["pose_covariance"] = _encode_optional_tuple(observation.pose_covariance)
+        record["linear_velocity"] = _encode_optional_tuple(observation.linear_velocity)
+        record["angular_velocity"] = _encode_optional_tuple(observation.angular_velocity)
+        record["twist_covariance"] = _encode_optional_tuple(observation.twist_covariance)
         return record, None
 
     raise SequenceArtifactError(f"unsupported observation type: {type(observation)!r}")
@@ -619,6 +744,13 @@ def _decode_observation(record: dict[str, Any], root: Path) -> SourceObservation
             orientation=(
                 tuple(record["orientation"]) if record["orientation"] is not None else None
             ),
+            linear_acceleration_covariance=_decode_optional_tuple(
+                record["linear_acceleration_covariance"]
+            ),
+            angular_velocity_covariance=_decode_optional_tuple(
+                record["angular_velocity_covariance"]
+            ),
+            orientation_covariance=_decode_optional_tuple(record["orientation_covariance"]),
         )
 
     if modality == "external_pose":
@@ -627,9 +759,34 @@ def _decode_observation(record: dict[str, Any], root: Path) -> SourceObservation
             parent_frame=FrameId(record["parent_frame"]),
             translation=tuple(record["translation"]),
             orientation=tuple(record["orientation"]),
+            pose_covariance=_decode_optional_tuple(record["pose_covariance"]),
+            linear_velocity=_decode_optional_vector3(record["linear_velocity"]),
+            angular_velocity=_decode_optional_vector3(record["angular_velocity"]),
+            twist_covariance=_decode_optional_tuple(record["twist_covariance"]),
         )
 
     raise SequenceArtifactError(f"unknown modality in index record: {modality!r}")
+
+
+def _encode_optional_tuple(values: tuple[float, ...] | None) -> list[float] | None:
+    """Encode an optional numeric tuple for JSON persistence."""
+    return list(values) if values is not None else None
+
+
+def _decode_optional_tuple(values: list[float] | None) -> tuple[float, ...] | None:
+    """Decode an optional numeric tuple from JSON persistence."""
+    return tuple(values) if values is not None else None
+
+
+def _decode_optional_vector3(
+    values: list[float] | None,
+) -> tuple[float, float, float] | None:
+    """Decode an optional three-element vector from JSON persistence."""
+    if values is None:
+        return None
+    if len(values) != 3:
+        raise SequenceArtifactError(f"expected a three-element vector, found {len(values)}")
+    return values[0], values[1], values[2]
 
 
 def _file_entry(relative_path: str, data: bytes) -> SequenceArtifactFileEntry:

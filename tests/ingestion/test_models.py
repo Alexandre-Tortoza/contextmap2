@@ -91,6 +91,33 @@ def test_imu_observation_represents_missing_orientation_as_none() -> None:
     assert observation.linear_acceleration == (0.0, 0.0, 9.81)
 
 
+def test_imu_observation_preserves_available_covariance() -> None:
+    covariance = tuple(float(value) for value in range(9))
+    observation = ImuObservation(
+        observation_id=SourceObservationId("imu-0002"),
+        sensor_id=SensorId("imu0"),
+        frame_id=FrameId("imu_link"),
+        timestamp=_timestamp(),
+        provenance=_provenance(source_topic="/imu/data"),
+        linear_acceleration=(0.0, 0.0, 9.81),
+        linear_acceleration_covariance=covariance,
+    )
+
+    assert observation.linear_acceleration_covariance == covariance
+
+
+def test_imu_observation_rejects_invalid_covariance_shape() -> None:
+    with pytest.raises(ValueError, match="3x3"):
+        ImuObservation(
+            observation_id=SourceObservationId("imu-0002"),
+            sensor_id=SensorId("imu0"),
+            frame_id=FrameId("imu_link"),
+            timestamp=_timestamp(),
+            provenance=_provenance(source_topic="/imu/data"),
+            linear_acceleration_covariance=(1.0, 2.0),
+        )
+
+
 def test_external_pose_measurement_is_not_a_state_estimate() -> None:
     measurement = ExternalPoseMeasurement(
         observation_id=SourceObservationId("odom-0001"),
@@ -107,6 +134,29 @@ def test_external_pose_measurement_is_not_a_state_estimate() -> None:
     # never a substitute for a canonical PoseEstimate.
     assert type(measurement).__name__ != "PoseEstimate"
     assert measurement.parent_frame != measurement.frame_id
+
+
+def test_external_pose_preserves_twist_and_covariances() -> None:
+    pose_covariance = tuple(float(value) for value in range(36))
+    twist_covariance = tuple(float(value) for value in reversed(range(36)))
+    measurement = ExternalPoseMeasurement(
+        observation_id=SourceObservationId("odom-0002"),
+        sensor_id=SensorId("wheel_odometry"),
+        frame_id=FrameId("base_link"),
+        timestamp=_timestamp(),
+        provenance=_provenance(source_topic="/odom"),
+        parent_frame=FrameId("odom"),
+        translation=(1.0, 2.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+        pose_covariance=pose_covariance,
+        linear_velocity=(0.1, 0.0, 0.0),
+        angular_velocity=(0.0, 0.0, 0.01),
+        twist_covariance=twist_covariance,
+    )
+
+    assert measurement.pose_covariance == pose_covariance
+    assert measurement.linear_velocity == (0.1, 0.0, 0.0)
+    assert measurement.twist_covariance == twist_covariance
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,30 @@ Este documento descreve `src/contextmap/ingestion/validation.py`: checagens sobr
 
 Toda função aqui segue a mesma convenção já estabelecida por `SequenceArtifactReader.verify_integrity()`: retorna `list[str]` de problemas legíveis, nunca levanta exceção, lista vazia = nenhum problema. Nenhuma checagem aqui requer GPU, modelo, ou artefato persistido — operam diretamente sobre `Sequence[SourceObservation]` em memória, então rodam em qualquer PR sem dependências pesadas.
 
+
+
+## Fluxo de validação
+
+```mermaid
+flowchart LR
+    OBS[SourceObservations] --> IMG[Image checks]
+    OBS --> LIDAR[LiDAR checks]
+    OBS --> TIME[Timestamp ordering]
+    OBS --> FRAME[Frame references]
+    CAL[CalibrationSet opcional] --> FRAME
+
+    IMG --> P[Lista de problemas]
+    LIDAR --> P
+    TIME --> P
+    FRAME --> P
+
+    P --> POLICY{Política do chamador}
+    POLICY -->|aceitar / registrar| DIAG[Diagnostics]
+    POLICY -->|erro grave| ABORT[Abortar ingestão]
+```
+
+As funções de validação detectam problemas; a decisão de transformar um problema em warning ou falha pertence ao chamador/runtime. Isso mantém a validação reutilizável e a policy explícita.
+
 ## Cobertura
 
 | Função | O que detecta |

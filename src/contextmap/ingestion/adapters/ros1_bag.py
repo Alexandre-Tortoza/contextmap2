@@ -13,8 +13,9 @@ v0 scope: RGB (``sensor_msgs/Image``), LiDAR (``sensor_msgs/PointCloud2``),
 IMU (``sensor_msgs/Imu``), external pose (``nav_msgs/Odometry``), and
 camera calibration (``sensor_msgs/CameraInfo``, via
 :meth:`Ros1BagSourceAdapter.read_calibration`). Static/dynamic TF
-(``tf2_msgs/TFMessage``) is not decoded in v0. Message decoding shared
-with the ROS 2 adapter lives in
+(``tf2_msgs/TFMessage``) is not decoded in v0; callers provide static
+extrinsics through ``SourceAdapterConfig.calibration``. Message decoding
+shared with the ROS 2 adapter lives in
 :mod:`contextmap.ingestion.adapters._ros_common`.
 """
 
@@ -79,7 +80,10 @@ class Ros1BagSourceAdapter:
             lidar=mapping.lidar is not None and mapping.lidar in available,
             imu=mapping.imu is not None and mapping.imu in available,
             external_pose=mapping.pose is not None and mapping.pose in available,
-            calibration=mapping.camera_info is not None and mapping.camera_info in available,
+            calibration=(
+                self._config.calibration is not None
+                or (mapping.camera_info is not None and mapping.camera_info in available)
+            ),
         )
 
     def read_observations(self) -> Iterator[SourceObservation]:
@@ -97,6 +101,7 @@ class Ros1BagSourceAdapter:
         self._check_required_topics(available)
 
         topic_kinds = self._configured_topic_kinds()
+        calibration_ids = _ros_common.calibration_ids_by_sensor(self.read_calibration())
         self._warnings = []
         counters: dict[str, int] = {}
 
@@ -104,7 +109,7 @@ class Ros1BagSourceAdapter:
             connections = [
                 connection for connection in reader.connections if connection.topic in topic_kinds
             ]
-            for connection, _bag_timestamp, rawdata in reader.messages(connections=connections):
+            for connection, bag_timestamp, rawdata in reader.messages(connections=connections):
                 topic = connection.topic
                 index = counters.get(topic, 0)
                 counters[topic] = index + 1
@@ -116,6 +121,8 @@ class Ros1BagSourceAdapter:
                         msgtype=connection.msgtype,
                         index=index,
                         message=message,
+                        bag_timestamp_nanoseconds=bag_timestamp,
+                        calibration_ids=calibration_ids,
                     )
                 except (KeyError, ValueError, AttributeError) as error:
                     self._warnings.append(
@@ -133,41 +140,41 @@ class Ros1BagSourceAdapter:
         return tuple(self._warnings)
 
     def read_calibration(self) -> CalibrationSet | None:
-        """Decode camera calibration from the configured ``camera_info`` topic.
+        """Return merged configured and source camera calibration.
 
-        Uses the last message on the topic: intrinsics are treated as
-        static for the whole bag in v0. Static/dynamic TF extrinsics are
-        not decoded in v0, so the result never has ``static_transforms``.
+        Every message on ``camera_info`` must describe the same calibration;
+        a change is rejected because the canonical calibration is static for
+        the sequence. Static extrinsics supplied in
+        ``SourceAdapterConfig.calibration`` are preserved in the result.
 
         Returns:
-            A calibration set with one entry, or ``None`` when no
-            ``camera_info`` topic is configured or it has no messages.
+            The merged calibration, or ``None`` when neither configuration
+            nor the source provides calibration.
         """
         topic = self._config.topics.camera_info
-        if topic is None:
-            return None
+        discovered: list[CalibrationEntry] = []
+        if topic is not None:
+            with Reader(self._config.path) as reader:
+                connections = [
+                    connection for connection in reader.connections if connection.topic == topic
+                ]
+                for connection, _timestamp, rawdata in reader.messages(connections=connections):
+                    message = self._typestore.deserialize_ros1(rawdata, connection.msgtype)
+                    discovered.append(self._camera_calibration_entry(message, topic))
+        return _ros_common.merge_calibration(self._config.calibration, tuple(discovered))
 
-        last_message: Any = None
-        with Reader(self._config.path) as reader:
-            connections = [
-                connection for connection in reader.connections if connection.topic == topic
-            ]
-            for connection, _timestamp, rawdata in reader.messages(connections=connections):
-                last_message = self._typestore.deserialize_ros1(rawdata, connection.msgtype)
-        if last_message is None:
-            return None
-
+    def _camera_calibration_entry(self, message: Any, topic: str) -> CalibrationEntry:
         sensor_id = SensorId(_ros_common.sanitize_topic(self._config.topics.rgb or topic))
-        frame_id = FrameId(last_message.header.frame_id)
+        frame_id = FrameId(message.header.frame_id)
         camera_model = _ros_common.build_camera_model(
-            width=last_message.width,
-            height=last_message.height,
-            k_matrix=last_message.K,
-            distortion_model_name=last_message.distortion_model,
-            distortion_coefficients=last_message.D,
+            width=message.width,
+            height=message.height,
+            k_matrix=message.K,
+            distortion_model_name=message.distortion_model,
+            distortion_coefficients=message.D,
         )
         calibration_id = CalibrationReferenceId(f"{sensor_id}-calib")
-        entry = CalibrationEntry(
+        return CalibrationEntry(
             calibration_id=calibration_id,
             sensor_id=sensor_id,
             frame_id=frame_id,
@@ -176,15 +183,14 @@ class Ros1BagSourceAdapter:
                 source_type=_SOURCE_TYPE,
                 source_path=self._config.path,
                 original_values={
-                    "distortion_model": last_message.distortion_model,
-                    "D": [float(value) for value in last_message.D],
+                    "distortion_model": message.distortion_model,
+                    "D": [float(value) for value in message.D],
                 },
             ),
             content_hash=compute_content_hash(
                 sensor_id=sensor_id, frame_id=frame_id, camera_model=camera_model
             ),
         )
-        return CalibrationSet(entries={calibration_id: entry}, static_transforms=())
 
     def _available_topics(self) -> frozenset[str]:
         with Reader(self._config.path) as reader:
@@ -223,7 +229,15 @@ class Ros1BagSourceAdapter:
             )
 
     def _decode(
-        self, *, kind: str, topic: str, msgtype: str, index: int, message: Any
+        self,
+        *,
+        kind: str,
+        topic: str,
+        msgtype: str,
+        index: int,
+        message: Any,
+        bag_timestamp_nanoseconds: int,
+        calibration_ids: dict[SensorId, CalibrationReferenceId],
     ) -> SourceObservation:
         observation_id = SourceObservationId(f"{_ros_common.sanitize_topic(topic)}-{index:06d}")
         sensor_id = SensorId(_ros_common.sanitize_topic(topic))
@@ -232,11 +246,15 @@ class Ros1BagSourceAdapter:
             source_path=self._config.path,
             source_topic=topic,
             source_message_index=index,
-            raw_metadata={"msgtype": msgtype},
+            raw_metadata={
+                "msgtype": msgtype,
+                "bag_timestamp_nanoseconds": bag_timestamp_nanoseconds,
+            },
         )
         timestamp = _ros_common.stamp_to_timestamp(
-            message.header.stamp, clock_id=f"{_SOURCE_TYPE}:{topic}"
+            message.header.stamp, clock_id=self._config.resolved_timestamp_clock_id()
         )
+        calibration_id = calibration_ids.get(sensor_id)
 
         if kind == "rgb":
             return _ros_common.decode_image(
@@ -245,6 +263,7 @@ class Ros1BagSourceAdapter:
                 sensor_id=sensor_id,
                 timestamp=timestamp,
                 provenance=provenance,
+                calibration_id=calibration_id,
             )
         if kind == "lidar":
             return _ros_common.decode_lidar(
@@ -253,6 +272,7 @@ class Ros1BagSourceAdapter:
                 sensor_id=sensor_id,
                 timestamp=timestamp,
                 provenance=provenance,
+                calibration_id=calibration_id,
             )
         if kind == "imu":
             return _ros_common.decode_imu(
@@ -261,6 +281,7 @@ class Ros1BagSourceAdapter:
                 sensor_id=sensor_id,
                 timestamp=timestamp,
                 provenance=provenance,
+                calibration_id=calibration_id,
             )
         if kind == "pose":
             return _ros_common.decode_pose(
@@ -269,5 +290,6 @@ class Ros1BagSourceAdapter:
                 sensor_id=sensor_id,
                 timestamp=timestamp,
                 provenance=provenance,
+                calibration_id=calibration_id,
             )
         raise ValueError(f"unhandled configured topic kind: {kind!r}")

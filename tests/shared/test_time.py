@@ -11,6 +11,16 @@ def test_to_float_seconds_combines_seconds_and_nanoseconds() -> None:
     assert timestamp.to_float_seconds() == pytest.approx(10.5)
 
 
+def test_total_nanoseconds_preserves_large_epoch_precision() -> None:
+    timestamp = SourceTimestamp(
+        seconds=1_700_000_000,
+        nanoseconds=123_456_789,
+        clock_id="system",
+    )
+
+    assert timestamp.total_nanoseconds() == 1_700_000_000_123_456_789
+
+
 def test_rejects_nanoseconds_out_of_range() -> None:
     with pytest.raises(ValueError, match="nanoseconds"):
         SourceTimestamp(seconds=0, nanoseconds=1_000_000_000, clock_id="system")
