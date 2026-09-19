@@ -21,6 +21,22 @@ workspace/
                 └── ...
 ```
 
+## Fluxo de persistência e leitura
+
+```mermaid
+flowchart LR
+    INPUT["PerceptionResult[] + StageOutcome[]"] --> WRITER["PerceptionRunWriter"]
+    WRITER --> TMP["diretório temporário irmão"]
+    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
+    FILES --> CHECK["checagem interna de consistência<br/>tamanho + hash + ownership"]
+    CHECK -->|válido| FINAL["run-XXXX__selection__profile/"]
+    FINAL --> READER["PerceptionRunReader"]
+    FINAL -. reconstrução .-> REG["runs.json<br/>registro de conveniência"]
+    READER --> RESULT["result() / list_results()"]
+```
+
+`manifest.json` e os arquivos inventariados no próprio run formam a fonte de verdade. `runs.json` serve apenas para descoberta e pode ser reconstruído; ele não participa da leitura de um run isolado.
+
 Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestamp — o maior índice é o run mais recente nesse escopo sequência+capability. `allocate_run_index()` calcula o próximo índice escaneando os diretórios de run **íntegros** (nunca `runs.json`): além de carregar o manifest, confere presença, tamanho e hash dos arquivos inventariados. Um diretório interrompido ou adulterado não participa da alocação nem de `rebuild_run_registry()`.
 
 ## Decisões desta issue (v0)
