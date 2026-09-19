@@ -30,6 +30,23 @@ flowchart LR
 
 Visualização, busca em linguagem natural, navegação, planejamento, agentes e dashboards são **consumidores externos**. Eles não pertencem ao núcleo deste repositório.
 
+## Estado materializado na `dev`
+
+A documentação global descreve a Solution 1 completa, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os dois primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+
+```mermaid
+flowchart LR
+    RAW["ROS 1 / ROS 2 / fonte registrada"] --> ING["Ingestion<br/>implementado"]
+    ING --> SEQ["SequenceArtifact<br/>sequência canônica imutável"]
+    SEQ --> VP["Visual Perception Core<br/>implementado"]
+    VP --> PR["PerceptionRunArtifact"]
+    PR -. próximo boundary .-> SA["State Estimation / Geometric Mapping /<br/>Sensor Association e downstream<br/>planejados"]
+```
+
+Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception Core possui contratos de evidência, ports substituíveis, grafo de estágios versionado, execução com isolamento de falhas, identidades determinísticas, `PerceptionRunArtifact` e leitura multi-run sem fusão.
+
+Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante da Solution 1, sem duplicar a especificação interna.
+
 ## Ordem recomendada de leitura
 
 1. [PIPELINE.md](PIPELINE.md), fluxo completo da entrada ao `ContextMapArtifact`.
@@ -66,13 +83,12 @@ flowchart TD
     RC --> M
     P --> M
     C --> M
+    AR --> M
 
-    M --> MR[src/contextmap/<module>/docs/README.md]
-    MR --> MP[pipeline.md]
-    MR --> MC[contracts.md]
-    MR --> MA[architecture.md]
-    MR --> ME[evaluation.md]
-    MR --> MB[backends.md]
+    M --> ING[src/contextmap/ingestion/docs/README.md]
+    M --> VP[src/contextmap/visual_perception/docs/README.md]
+    ING --> ID[contracts / artifact / synchronization / calibration / adapters]
+    VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
 ```
 
 ## Responsabilidade de cada documento
@@ -126,7 +142,8 @@ Arquivos complementares só devem existir quando houver conteúdo real. O objeti
 
 Módulos com documentação própria:
 
-- [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração e adapters de fonte.
+- [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração, seleção/replay, provenance e adapters de fonte.
+- [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual por run, ports, preset canônico, execução do DAG, artifacts e leitura multi-run.
 
 ## Integração da documentação
 
@@ -136,6 +153,7 @@ A documentação é fragmentada fisicamente, mas forma um único grafo de conhec
 - cada módulo documenta apenas seu domínio e suas fronteiras;
 - conteúdo global é referenciado por link, não copiado para cada módulo;
 - documentação de upstream/downstream deve apontar para o contrato público relevante;
+- quando um módulo já estiver implementado, seu `src/contextmap/<module>/docs/` é a fonte de verdade para detalhes de comportamento; os documentos globais resumem e conectam esse comportamento ao sistema;
 - uma alteração arquitetural ou de contrato deve atualizar código e documentação no mesmo PR;
 - `docs/README.md` é o índice canônico dos pontos de entrada globais.
 
