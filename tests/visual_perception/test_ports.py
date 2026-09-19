@@ -14,9 +14,14 @@ from contextmap.visual_perception import (
     SceneContext,
     SemanticClaim,
     SemanticInferenceProvenance,
+    SemanticInterpretationExecution,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
     SemanticInterpreter,
+    SemanticInterpreterCapabilities,
     SemanticScorer,
     SemanticSupport,
+    VisualViewKind,
 )
 from contextmap.visual_perception.models import ClaimId, HypothesisRole
 from contextmap.visual_perception.models import PreparedImage as ModelPreparedImage
@@ -130,6 +135,17 @@ class _FakeSemanticInterpreter:
 
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
         return None
+
+    def capabilities(self) -> SemanticInterpreterCapabilities:
+        return SemanticInterpreterCapabilities(
+            supported_modes=frozenset(SemanticInterpretationMode),
+            supported_view_kinds=frozenset(VisualViewKind),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+        )
+
+    def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
+        raise NotImplementedError
 
     def interpret_regions(
         self, image: PreparedImage, regions: Sequence[Region2D]
@@ -266,6 +282,19 @@ def test_one_model_can_satisfy_two_capabilities_via_distinct_adapters() -> None:
 
         def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
             return None
+
+        def capabilities(self) -> SemanticInterpreterCapabilities:
+            return SemanticInterpreterCapabilities(
+                supported_modes=frozenset(SemanticInterpretationMode),
+                supported_view_kinds=frozenset(VisualViewKind),
+                accepts_visual_features=False,
+                accepts_scene_context=False,
+            )
+
+        def interpret(
+            self, request: SemanticInterpretationRequest
+        ) -> SemanticInterpretationExecution:
+            raise NotImplementedError
 
         def interpret_regions(
             self, image: PreparedImage, regions: Sequence[Region2D]

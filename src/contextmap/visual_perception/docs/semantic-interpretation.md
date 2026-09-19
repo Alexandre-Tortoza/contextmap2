@@ -80,3 +80,20 @@ fora de `[0, 1]` e conteúdo obrigatório ausente causam
 externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
 nunca completa labels, confidence ou atributos ausentes e registra o hash da
 resposta bruta separadamente dos outputs canônicos.
+
+## Adapter Qwen
+
+`QwenSemanticInterpreter` é o adapter local substituível. Ele recebe apenas o
+request canônico, valida as capacidades e o fingerprint de configuração,
+renderiza o template compartilhado, delega a geração a `QwenRuntime` e usa o
+parser canônico. Modelo, device, precision, quantização, token limit e
+temperature formam o fingerprint e permanecem disponíveis na configuração
+efetiva da execução.
+
+O seam de runtime mantém Transformers/Torch e objetos Qwen fora dos contratos.
+Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito.
+Métricas de tokens, latência, memória e warnings são registradas quando o
+runtime consegue medi-las. A cobertura CI usa runtime fake determinístico; uma
+execução de referência com pesos reais continua exigindo ambiente compatível e
+deve ser registrada pelo protocolo de avaliação, nunca simulada como evidência
+real.

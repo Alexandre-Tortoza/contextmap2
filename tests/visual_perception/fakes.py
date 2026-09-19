@@ -10,6 +10,7 @@ fallback.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from contextmap.visual_perception import (
@@ -22,10 +23,19 @@ from contextmap.visual_perception import (
     Region2D,
     RegionId,
     SceneContext,
+    SemanticBackendDiagnostics,
     SemanticClaim,
     SemanticEvidenceReference,
     SemanticInferenceProvenance,
+    SemanticInterpretationExecution,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticInterpreterCapabilities,
+    SemanticPromptTemplate,
     VisualFeature,
+    VisualViewKind,
+    parse_semantic_response,
+    render_semantic_prompt,
 )
 from contextmap.visual_perception.models import ClaimId, FeatureId
 
@@ -133,6 +143,56 @@ class FakeSemanticInterpreter:
             provider="fake",
             model="fake",
             version="0.1",
+        )
+
+    def capabilities(self) -> SemanticInterpreterCapabilities:
+        return SemanticInterpreterCapabilities(
+            supported_modes=frozenset(SemanticInterpretationMode),
+            supported_view_kinds=frozenset(VisualViewKind),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+        )
+
+    def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
+        template = SemanticPromptTemplate.default_for(request.mode)
+        rendered = render_semantic_prompt(request, template)
+        raw_response = json.dumps(
+            {
+                "abstained": False,
+                "claims": [
+                    {
+                        "hypothesis": (
+                            "an indoor corridor"
+                            if request.mode is SemanticInterpretationMode.SCENE
+                            else "a fake object"
+                        ),
+                        "role": "primary",
+                        "category": None,
+                        "region_kind": None,
+                        "attributes": {},
+                        "confidence": None,
+                    }
+                ],
+                "scene_context": (
+                    {"scene_type": "corridor"}
+                    if request.mode is SemanticInterpretationMode.SCENE
+                    else None
+                ),
+            }
+        )
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity=f"fake-{request.mode.value}",
+            prompt_template_id=request.prompt_template_id,
+            output_schema_version=request.requested_output_schema,
+        )
+        return SemanticInterpretationExecution(
+            request=request,
+            rendered_prompt=rendered,
+            raw_response=raw_response,
+            parsed=parse_semantic_response(raw_response, request, provenance),
+            diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+            effective_configuration={"backend": "fake"},
         )
 
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
