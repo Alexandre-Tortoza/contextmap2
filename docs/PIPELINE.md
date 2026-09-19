@@ -1,8 +1,8 @@
-# Pipeline da Solution 1
+# Canonical Pipeline do ContextMap2
 
 Este documento descreve o pipeline end-to-end alvo do ContextMap2, desde uma fonte registrada de sensores até o `ContextMapArtifact` final.
 
-Ele documenta **o fluxo canônico planejado para a Solution 1**. As capabilities são implementadas por milestones independentes, portanto uma etapa descrita aqui pode ainda não estar disponível no código.
+Ele documenta **o canonical pipeline planejado do ContextMap2**. As capabilities são implementadas por milestones independentes, portanto uma etapa descrita aqui pode ainda não estar disponível no código.
 
 Para ownership e dependências, consulte [architecture.md](architecture.md). Para a semântica dos objetos que atravessam módulos, consulte [CONTRACTS.md](CONTRACTS.md). Para persistência e lineage, consulte [ARTIFACTS.md](ARTIFACTS.md).
 
@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo da Solution 1. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact`:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact`:
 
 ```mermaid
 flowchart LR
@@ -533,7 +533,7 @@ Opcional/experimental:
 
 - PTv3 learned 3D representation.
 
-PTv3 não é requisito automático da Solution 1. Seu uso deve ser justificado por avaliação/ablation.
+PTv3 não é requisito automático do canonical pipeline. Seu uso deve ser justificado por avaliação/ablation.
 
 ### Saída
 
