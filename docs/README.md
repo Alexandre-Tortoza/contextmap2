@@ -4,7 +4,7 @@ Este diretório é o ponto de entrada da documentação global do ContextMap2.
 
 O objetivo da documentação principal é permitir que uma pessoa entenda **o que o projeto produz, como o pipeline funciona, quais contratos conectam os módulos e como os resultados permanecem reproduzíveis** sem precisar reconstruir essas decisões a partir das issues.
 
-> A documentação descreve a arquitetura alvo da **Solution 1**. Uma capability documentada pode ainda estar planejada ou em implementação. O fato de uma etapa aparecer no pipeline não significa, por si só, que ela já esteja concluída no código.
+> A documentação descreve a arquitetura alvo do **canonical pipeline**. Uma capability documentada pode ainda estar planejada ou em implementação. O fato de uma etapa aparecer no pipeline não significa, por si só, que ela já esteja concluída no código.
 
 ## O que é o ContextMap2
 
@@ -32,7 +32,7 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 
 ## Estado materializado na `dev`
 
-A documentação global descreve a Solution 1 completa, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os dois primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os dois primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
 
 ```mermaid
 flowchart LR
@@ -45,7 +45,7 @@ flowchart LR
 
 Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception Core possui contratos de evidência, ports substituíveis, grafo de estágios versionado, execução com isolamento de falhas, identidades determinísticas, `PerceptionRunArtifact` e leitura multi-run sem fusão.
 
-Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante da Solution 1, sem duplicar a especificação interna.
+Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
 ## Ordem recomendada de leitura
 
@@ -159,13 +159,13 @@ A documentação é fragmentada fisicamente, mas forma um único grafo de conhec
 
 ## Estado da arquitetura
 
-A Solution 1 é **pre-alpha** e evolui por milestones. Os documentos principais descrevem o desenho canônico que as milestones devem materializar.
+O canonical pipeline é **pre-alpha** e evolui por milestones. Os documentos principais descrevem o desenho canônico que as milestones devem materializar.
 
 Ao ler uma etapa do pipeline, diferencie:
 
 - **contrato**, semântica que deve permanecer estável na fronteira do módulo;
 - **backend**, implementação substituível de uma capability;
-- **pipeline canônico**, configuração escolhida para a validação da Solution 1;
+- **canonical pipeline**, composição integrada de referência que as milestones materializam e validam;
 - **experimento**, alternativa que não substitui silenciosamente o baseline;
 - **artefato**, resultado persistido e imutável de uma execução.
 
