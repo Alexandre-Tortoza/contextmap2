@@ -6,14 +6,56 @@ Este documento descreve os tipos definidos em `src/contextmap/visual_perception/
 
 `SourceObservation` (Ingestion) é a observação física — Visual Perception nunca a possui, apenas a referencia via `source_observation_id`. `PerceptionResult` é o resultado de **uma** execução de inferência sobre essa observação. A mesma `SourceObservation` pode ser processada por múltiplos `PerceptionRun`s, cada um produzindo um `PerceptionResult` distinto:
 
-```text
-SourceObservation frame-0124
-├── run-0001 → PerceptionResult A
-├── run-0002 → PerceptionResult B
-└── run-0003 → PerceptionResult C
+```mermaid
+flowchart LR
+    OBS["SourceObservation<br/>frame-0124"]
+    R1["PerceptionRun<br/>run-0001"] --> A["PerceptionResult A"]
+    R2["PerceptionRun<br/>run-0002"] --> B["PerceptionResult B"]
+    R3["PerceptionRun<br/>run-0003"] --> C["PerceptionResult C"]
+    OBS --> A
+    OBS --> B
+    OBS --> C
 ```
 
 Reprocessar não modifica `A`/`B`/`C` anteriores nem a `SourceObservation` original — sempre cria um novo `PerceptionResult`.
+
+## Estrutura dos contratos
+
+```mermaid
+classDiagram
+    class SourceObservation {
+        SourceObservationId observation_id
+    }
+    class PerceptionRun {
+        PerceptionRunId run_id
+        int run_index
+        str sequence_artifact_id
+        str selection_id
+    }
+    class PerceptionResult {
+        PerceptionResultId result_id
+        SourceObservationId source_observation_id
+        PerceptionRunId run_id
+    }
+    class Region2D
+    class VisualFeature
+    class SemanticClaim
+    class SceneContext
+    class BackendProvenance
+
+    PerceptionRun --> PerceptionResult : produz
+    PerceptionResult --> SourceObservation : referencia
+    PerceptionResult --> Region2D : regions
+    PerceptionResult --> VisualFeature : features
+    PerceptionResult --> SemanticClaim : claims
+    PerceptionResult --> SceneContext : scene_context
+    Region2D --> BackendProvenance : provenance
+    VisualFeature --> BackendProvenance : provenance
+    SemanticClaim --> BackendProvenance : provenance
+    SceneContext --> BackendProvenance : provenance
+```
+
+A estrutura preserva três separações: a observação física continua pertencendo a Ingestion; o run descreve uma execução configurada; e o resultado contém apenas a evidência produzida para uma observação naquele run. `SemanticSupport`, quando produzido por um `SemanticScorer`, é um julgamento separado referenciando uma claim e não é incorporado por mutação à `SemanticClaim`.
 
 ## Identidade local, não persistente
 
