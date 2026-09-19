@@ -1,7 +1,6 @@
-from fixtures import build_valid_sequence
-
 from contextmap.ingestion import SequenceDiagnostics, summarize_observations
 from contextmap.ingestion.diagnostics import decode_diagnostics_summary, encode_diagnostics
+from fixtures import build_valid_sequence
 
 
 def test_summary_counts_observations_per_modality() -> None:

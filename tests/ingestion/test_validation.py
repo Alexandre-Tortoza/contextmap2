@@ -1,12 +1,3 @@
-from fixtures import (
-    build_calibration_set,
-    build_image_with_data_size_mismatch,
-    build_lidar_with_inconsistent_fields,
-    build_non_monotonic_observations,
-    build_observation_with_unknown_frame,
-    build_valid_sequence,
-)
-
 from contextmap.ingestion import (
     FrameId,
     ImageEncoding,
@@ -21,6 +12,14 @@ from contextmap.ingestion import (
     validate_timestamp_ordering,
 )
 from contextmap.shared import SourceTimestamp
+from fixtures import (
+    build_calibration_set,
+    build_image_with_data_size_mismatch,
+    build_lidar_with_inconsistent_fields,
+    build_non_monotonic_observations,
+    build_observation_with_unknown_frame,
+    build_valid_sequence,
+)
 
 
 def test_valid_sequence_has_no_problems() -> None:

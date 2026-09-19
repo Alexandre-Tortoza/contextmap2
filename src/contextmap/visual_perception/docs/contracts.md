@@ -76,7 +76,7 @@ Amarra um `PerceptionRun` a uma `SourceObservation`, carregando as evidências p
 
 ## `Region2D`
 
-Candidato de região aceito ou rejeitado (`is_accepted`). `mask_reference`/`bounding_box` descrevem geometria; `mask_reference` é sempre uma referência a payload (path), nunca a máscara bruta inline — mesma convenção de "referência, não payload duplicado" usada em Ingestion. Um `Region2D` rejeitado permanece auditável via `rejection_reason`.
+Contrato único de geometria 2D consumido por todo Visual Perception. `region_id` é local ao `PerceptionResult`; o próprio resultado fornece os escopos de run e observação. `bounding_box`, máscara inline opcional ou `mask_reference`, dimensões, área, proposal contributors e `discovery_provenance` preservam a geometry freeze e a auditoria sem criar outra classe `Region2D`. O `BackendProvenance` é preservado diretamente do adapter durante a normalização, sem inferir provider a partir do `backend_id`. Payloads grandes devem usar `mask_reference`; a máscara inline permanece disponível quando a normalização/evaluation precisa inspecionar pixels. Um `Region2D` rejeitado permanece auditável via `rejection_reason`.
 
 ## `VisualFeature`
 
