@@ -248,7 +248,7 @@ flowchart LR
 
 Region Discovery agora possui adapters concretos para SAM2, SAM3 e Florence-2, além de image preparation auditável, tiling/scale com validação da imagem materializada, remapeamento global, filtros/constraints, merge e diagnostics. O output do estágio continua sendo o `Region2D` canônico; candidatos e decisões intermediárias permanecem evidence/audit da execução. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/region-discovery.md).
 
-### Feature Extraction core implementado
+### Feature Extraction e backends implementados
 
 ```mermaid
 flowchart LR
@@ -263,9 +263,9 @@ flowchart LR
     DFM -. preset alternativo .-> ENH["FeatureResolutionEnhancement"]
 ```
 
-Feature Extraction já possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` já fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`.
+Feature Extraction possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`.
 
-Isso não equivale a declarar modelos concretos como suportados. DINOv2, DINOv3, CLIP e AlphaCLIP ainda não possuem adapters integrados na `dev`; o core e a CI usam fakes determinísticos para validar os contratos. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
+Os adapters concretos DINOv2 e DINOv3 produzem mapas densos nativos; CLIP produz features globais ou de região; AlphaCLIP produz features de região condicionadas por máscara. Todos ficam isolados em `visual_perception/backends/`, carregam runtimes de forma lazy e falham explicitamente sem fallback. A CI valida os contratos com runtimes determinísticos injetados, não a equivalência numérica de checkpoints reais. A seleção concreta ainda pertence à composition root. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
 
 Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [espaço de embedding](../src/contextmap/visual_perception/docs/embedding_space.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/feature_extraction.md).
 
@@ -286,7 +286,7 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP para `FeatureExtractor`;
+- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
 - backends reais de Semantic Interpretation;
 - integração de `SemanticScorer` como estágio do DAG;

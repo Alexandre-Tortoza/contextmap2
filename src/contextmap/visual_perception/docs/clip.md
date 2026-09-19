@@ -49,7 +49,7 @@ O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz
 
 Os testes com runtime fake cobrem modos global/região, crops com contexto e borda, proveniência por view, persistência, normalização, compatibilidade de espaço, validação e ausência de scoring.
 
-Por instrução do usuário, nenhum checkpoint real foi baixado ou executado. A issue #70 requer uma execução controlada na máquina de inferência para confirmar a projeção/dimensão do checkpoint, tolerância numérica e comportamento do processor antes do merge.
+Por instrução do usuário, nenhum checkpoint real foi baixado ou executado. Uma execução controlada na máquina de inferência ainda deve confirmar a projeção/dimensão do checkpoint, tolerância numérica e comportamento do processor antes de considerar o backend validado com pesos reais.
 
 ## O que este backend não faz
 

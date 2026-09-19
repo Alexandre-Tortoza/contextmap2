@@ -43,7 +43,7 @@ flowchart LR
     PR -. próximo boundary .-> SA["State Estimation / Geometric Mapping /<br/>Sensor Association e downstream<br/>planejados"]
 ```
 
-Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e o core de Feature Extraction, incluindo compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Backends concretos de Feature Extraction ainda não estão integrados.
+Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Os adapters de features têm testes determinísticos sem pesos; a validação numérica com checkpoints reais permanece uma etapa explícita da máquina de inferência.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 

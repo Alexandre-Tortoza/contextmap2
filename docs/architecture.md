@@ -263,10 +263,10 @@ flowchart LR
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
 
-    D2["DINOv2"] -. planejado/integração separada .-> FE
-    D3["DINOv3"] -. planejado/integração separada .-> FE
-    CLIP["CLIP"] -. planejado/integração separada .-> FE
-    ACLIP["AlphaCLIP"] -. planejado/integração separada .-> FE
+    D2["DINOv2"] -->|implementado| FE
+    D3["DINOv3"] -->|implementado| FE
+    CLIP["CLIP"] -->|implementado| FE
+    ACLIP["AlphaCLIP"] -->|implementado| FE
     Q["Qwen"] -. planejado .-> SI
     G["Gemini"] -. planejado .-> SI
     F2 -. adapter semântico separado .-> SI
@@ -280,7 +280,7 @@ flowchart LR
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
 
-No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa Region Discovery, Feature Extraction e as operações de Semantic Interpretation; `SemanticScorer` ainda não está ligado ao DAG. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction já possui contratos e infraestrutura backend-neutral, mas DINOv2, DINOv3, CLIP e AlphaCLIP continuam sem adapters integrados na `dev`; o enhancement também não possui backend aprendido nem faz parte do preset canônico. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md).
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa Region Discovery, Feature Extraction e as operações de Semantic Interpretation; `SemanticScorer` ainda não está ligado ao DAG. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction possui adapters DINOv2, DINOv3, CLIP e AlphaCLIP atrás do mesmo port; eles não são exportados pela API pública nem selecionados implicitamente pelo preset. O enhancement não possui backend aprendido nem faz parte do preset canônico. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md).
 
 ## Composition root
 
