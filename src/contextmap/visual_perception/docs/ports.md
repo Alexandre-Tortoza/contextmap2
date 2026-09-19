@@ -39,7 +39,7 @@ Os ports não codificam `RegionDiscovery -> FeatureExtractor -> SemanticInterpre
 DINOv3 (dense)         requires: PreparedImage                    provides: VisualFeature[] (dense)
 resolution enhancement requires: DenseFeatureMap                  provides: DenseFeatureMap
 AlphaCLIP (region)     requires: PreparedImage + Region2D[]       provides: VisualFeature[] (region)
-Gemini (region)        requires: PreparedImage + Region2D[]       provides: SemanticClaim[]
+Gemini (region)        requires: SemanticInterpretationRequest    provides: SemanticInterpretationExecution
 CLIP (scorer)          requires: SemanticClaim[] + PreparedImage  provides: SemanticSupport[]
 ```
 
@@ -61,6 +61,14 @@ Em vez de multiplicar tipos de port por escopo (dense/global/region), um único 
 
 É um port separado porque possui input/output de artifact, custo, falha e ativação próprios. Recebe um `DenseFeatureMap` já produzido e devolve outro `DenseFeatureMap`, com lineage completa em `FeatureResolutionEnhancementProvenance`. Não é um modo interno do DINO e não aparece no caminho canônico quando ausente da configuração.
 
+## `SemanticInterpreter`
+
+O port recebe um único `SemanticInterpretationRequest`, declara antecipadamente
+seus modes/views/evidências suportados e devolve
+`SemanticInterpretationExecution`. A execução mantém separados request, prompt
+renderizado, resposta bruta, parsing canônico, configuração efetiva e métricas.
+Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
+
 ## `SemanticScorer` nunca muta uma claim
 
 `score()` retorna `SemanticSupport[]` — um julgamento de suporte separado, referenciando `claim_id` — nunca modifica a `SemanticClaim` original. Isso preserva a claim como evidência imutável.
@@ -75,7 +83,7 @@ Qualquer classe que implemente os métodos de um port satisfaz esse port (`Proto
 
 ## Estado no pipeline canônico
 
-Os quatro ports acima são contratos públicos implementados em `ports.py`, mas isso não significa que todos estejam ligados ao preset canônico. Hoje, `CANONICAL_PRESET_V1` executa `RegionDiscovery`, `FeatureExtractor` e as duas operações de `SemanticInterpreter` (`scene_interpretation` e `region_interpretation`). `SemanticScorer` existe como ponto de substituição público, porém ainda não possui um estágio em `_CAPABILITY_ADAPTERS` nem no preset canônico.
+Os quatro ports acima são contratos públicos implementados em `ports.py`, mas isso não significa que todos estejam ligados ao preset canônico. O adapter de capability `semantic_interpreter` aceita um request pré-construído e permite seleção de backend por `StageSpec`. `CANONICAL_PRESET_V1` ainda preserva temporariamente os dois estágios anteriores de cena/região até a política de construção de requests ser integrada; Qwen não é inserido silenciosamente nesse preset. `SemanticScorer` existe como ponto de substituição público, porém ainda não possui um estágio no preset canônico.
 
 Essa separação é intencional: adicionar um port ou backend não altera automaticamente a topologia executada. Integrar uma nova capability ao pipeline exige uma decisão explícita de inputs, outputs, validação e preset.
 

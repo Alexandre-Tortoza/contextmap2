@@ -168,6 +168,10 @@ from contextmap.visual_perception.run_artifact import (
     allocate_run_index,
     rebuild_run_registry,
 )
+from contextmap.visual_perception.semantic_backend import (
+    SemanticBackendDiagnostics,
+    SemanticInterpretationExecution,
+)
 from contextmap.visual_perception.semantic_prompt import (
     ParsedSemanticResponse,
     RenderedSemanticPrompt,
@@ -295,10 +299,12 @@ __all__ = [
     "RunArtifactManifest",
     "SceneContext",
     "SemanticAttribute",
+    "SemanticBackendDiagnostics",
     "SemanticClaim",
     "SemanticEvidenceReference",
     "SemanticFeatureReference",
     "SemanticInferenceProvenance",
+    "SemanticInterpretationExecution",
     "SemanticInterpretationMode",
     "SemanticInterpretationRequest",
     "SemanticInterpreter",
