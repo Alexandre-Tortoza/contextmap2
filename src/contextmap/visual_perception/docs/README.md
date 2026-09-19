@@ -31,6 +31,8 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
+Feature Extraction possui o core implementado para identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação e enhancement opcional. Os adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados na `dev`; detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
+
 ## O que este módulo explicitamente não possui
 
 - identidade persistente de entidade 3D (pertence a Entity Resolution/Semantic Mapping);
@@ -82,6 +84,12 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 
 - [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
 - [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
+- [`feature-extraction.md`](feature-extraction.md) — visão integrada do core de Feature Extraction, contratos, payloads, sampling, pooling, diagnostics, enhancement opcional, avaliação e estado dos backends concretos.
+- [`embedding_space.md`](embedding_space.md) — identidade e compatibilidade de espaços de embedding.
+- [`feature_store.md`](feature_store.md) — persistência, indexação e carregamento lazy de payloads.
+- [`dense_region_association.md`](dense_region_association.md) — geometria de sampling e pooling dense para região.
+- [`feature_diagnostics.md`](feature_diagnostics.md) — métricas obrigatórias e debug auditável.
+- [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) — estágio opcional native→enhanced e lineage.
 - [`ports.md`](ports.md) — pontos de substituição de backend e contratos de capability.
 - [`pipeline.md`](pipeline.md) — presets versionados, topologia canônica, validação e resolução de backends.
 - [`service.md`](service.md) — execução do DAG, estados de estágio, isolamento de falhas e montagem do resultado.
