@@ -33,7 +33,7 @@ flowchart LR
 
 ## Workspace local
 
-A Solution 1 usa filesystem local como storage primário.
+O canonical pipeline usa filesystem local como storage primário.
 
 ```text
 workspace/
@@ -64,7 +64,7 @@ Pode conter manifests/reports que referenciam runs imutáveis usados em compara�
 
 Conteúdo efêmero. Nada em `tmp/` pode ser dependência contratual de um artifact válido.
 
-Remote storage, S3, MinIO, database ou distributed registry não são requisitos da Solution 1.
+Remote storage, S3, MinIO, database ou distributed registry não são requisitos do canonical pipeline.
 
 ## Artefatos principais
 
