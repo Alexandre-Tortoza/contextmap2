@@ -14,7 +14,7 @@ O pipeline não é uma única sequência linear. Depois da Ingestion, Percepçã
 flowchart TD
     RAW[Raw recorded source]
     ING[Ingestion]
-    SEQ[CanonicalSequenceArtifact]
+    SEQ[SequenceArtifact]
 
     VP[Visual Perception]
     PR[PerceptionRunArtifact]
@@ -76,6 +76,21 @@ flowchart TD
     CM --> OUT
 ```
 
+## Estado atual da pipeline
+
+O diagrama end-to-end acima é o alvo da Solution 1. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact`:
+
+```mermaid
+flowchart LR
+    RAW["Fonte registrada"] --> ING["Ingestion"]
+    ING --> SEQ["SequenceArtifact"]
+    SEQ --> VP["Visual Perception Core"]
+    VP --> PRA["PerceptionRunArtifact"]
+    PRA -. próximo estágio ainda não integrado .-> FUT["State Estimation + Geometric Mapping +<br/>Sensor Association + downstream"]
+```
+
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion e Visual Perception Core possuem implementação consolidada neste ponto.
+
 ## Regra fundamental
 
 Cada estágio consome **contratos públicos e artefatos imutáveis**. Um estágio posterior não deve reabrir detalhes privados do backend anterior nem corrigir silenciosamente o resultado upstream.
@@ -133,316 +148,118 @@ dependency edges
 
 ## 1. Ingestion
 
-Ingestion transforma dados específicos de uma fonte em uma sequência canônica independente de ROS, dataset ou formato de gravação.
+Ingestion transforma dados específicos de uma fonte em observações canônicas e em um `SequenceArtifact` independente de ROS, dataset ou formato de gravação.
 
 ```mermaid
 flowchart TD
-    S[ROS1 bag / ROS2 bag / dataset / files]
-    A[Source adapter]
-    E[Normalized sensor events]
-    T[Temporal index]
-    G[Synchronization / grouping]
-    C[Calibration + frame metadata]
-    Q[Canonical source observations]
-    P[CanonicalSequenceArtifact]
-
-    S --> A --> E --> T --> G --> Q --> P
-    A --> C --> P
+    SRC["ROS 1 bag / ROS 2 bag / fonte registrada"] --> AD["SourceAdapter"]
+    AD --> OBS["SourceObservation[]"]
+    AD --> CAL["CalibrationSet"]
+    OBS --> VAL["Validação estrutural"]
+    OBS --> SYNC["synchronize()"]
+    SYNC --> DIAG["SynchronizationDiagnostics"]
+    OBS --> ART["SequenceArtifact"]
+    CAL --> ART
+    DIAG --> ART
+    ART --> SEL["resolve_selection()<br/>seleção / replay"]
+    SEL --> DOWN["capabilities downstream"]
 ```
 
-### Entrada
+O adapter decodifica e normaliza a fonte. Sincronização não altera a identidade das observações físicas e não cria truth persistente; ela produz agrupamentos e diagnósticos auditáveis. O artefato persiste as observações normalizadas, calibração/provenance/diagnósticos quando disponíveis e pode ser reaberto sem a fonte ROS original.
 
-Uma fonte registrada pode fornecer, conforme disponibilidade:
+### Contratos implementados
 
-- RGB;
-- LiDAR ou point cloud;
-- IMU;
-- pose/odometria externa;
-- timestamps e clock domains;
-- camera info;
-- transforms estáticos/dinâmicos;
-- metadados de origem.
+- `SourceObservation`, com `ImageObservation`, `LidarObservation`, `ImuObservation` e `ExternalPoseMeasurement`;
+- `CalibrationSet`, modelos pinhole/fisheye e `RigidTransform`;
+- `ProcessingObservation`, `SynchronizationDiagnostics` e `DroppedEvent`;
+- `SequenceSelection` e `selection_identity()`;
+- `SequenceArtifactWriter` / `SequenceArtifactReader`;
+- `SequenceProvenance`, validação e diagnósticos.
 
-### Processamento
+`ExternalPoseMeasurement` continua sendo evidência de entrada. Ela não é automaticamente um `PoseEstimate` do mapa.
 
-Ingestion:
+### Saída implementada
 
-1. decodifica a fonte através de um adapter;
-2. remove dependência de tipos ROS/dataset da fronteira pública;
-3. normaliza timestamp, sensor/frame IDs e unidades;
-4. preserva identidade do evento físico original;
-5. cria um índice temporal determinístico;
-6. aplica política explícita de sincronização/grouping;
-7. normaliza calibração e coordinate frames;
-8. persiste uma sequência canônica reutilizável.
+`SequenceArtifact`, persistido de forma imutável e reabrível.
 
-### Contratos principais
-
-Conceitos esperados incluem:
-
-```text
-SourceObservation
-ImageObservation
-LidarObservation
-ImuObservation
-ExternalPoseMeasurement
-Calibration / frame metadata
-SequenceSelection
-```
-
-Uma `ExternalPoseMeasurement` é uma medição de entrada. Ela não é automaticamente um `PoseEstimate` do mapa.
-
-### Saída
-
-`CanonicalSequenceArtifact`.
-
-O artefato deve poder ser reaberto sem o bag original e sem ROS instalado.
+Detalhes: [documentação de Ingestion](../src/contextmap/ingestion/docs/README.md), especialmente [contracts](../src/contextmap/ingestion/docs/contracts.md), [artifact](../src/contextmap/ingestion/docs/artifact.md), [synchronization](../src/contextmap/ingestion/docs/synchronization.md) e [calibration](../src/contextmap/ingestion/docs/calibration.md).
 
 ### Não responsabilidade
 
-Ingestion não faz:
-
-- percepção semântica;
-- state estimation canônica;
-- projeção 2D↔3D;
-- fusão;
-- criação de entidades.
+Ingestion não faz percepção semântica, state estimation canônica, projeção 2D↔3D, fusão ou criação de entidades.
 
 ## 2. Branch de Visual Perception
 
-Visual Perception transforma uma imagem de uma observação física em evidências visuais e semânticas de uma execução específica.
+Visual Perception transforma uma observação física de imagem em evidência visual canônica para um `PerceptionRun`, sem decidir projeção 2D↔3D, identidade persistente de entidade ou fusão multi-view.
 
-Uma mesma `SourceObservation` pode ser processada por vários runs. Cada run produz um `PerceptionResult` distinto.
-
-```mermaid
-flowchart TD
-    S[SourceObservation]
-    P[Image Preparation]
-
-    RD[Region Discovery]
-    DF[Dense Feature Extraction]
-    SI[Scene Interpretation]
-
-    RN[Region Normalize / Merge]
-    GF[Geometry Freeze]
-    RV[Region Evidence Views]
-
-    RF[Region Feature Extraction]
-    RSI[Region Semantic Interpretation]
-
-    SS[Semantic Scoring, optional]
-    REF[Semantic Refinement, optional]
-    EA[Evidence Assembly]
-    AUD[Audit]
-    OUT[PerceptionResult]
-
-    S --> P
-    P --> RD --> RN --> GF --> RV
-    P --> DF
-    P --> SI
-    RV --> RF
-    RV --> RSI
-    RF --> SS
-    RSI --> SS
-    SS --> REF --> EA
-    DF --> EA
-    SI --> EA
-    RF --> EA
-    RSI --> EA
-    EA --> AUD --> OUT
-```
-
-### 2.1 Image Preparation
-
-Prepara a imagem sem alterar a observação física original.
-
-Operações são opcionais e provenance-visible:
-
-- resize;
-- crop;
-- rectification;
-- normalization;
-- valid-region constraints;
-- exclusion-region constraints.
-
-Nenhuma regra genérica deve assumir fisheye, drone visível ou um dataset específico.
-
-Saída: `PreparedImage`.
-
-### 2.2 Region Discovery
-
-Descobre candidatos geométricos 2D.
-
-Backends planejados podem incluir:
-
-- SAM2;
-- SAM3;
-- Florence-2 em um adapter específico de Region Discovery.
-
-A saída nativa é normalizada para `RegionCandidate[]`.
-
-Region Discovery responde:
-
-> Quais regiões visuais devem ser preservadas como candidatos geométricos?
-
-Ele não decide identidade de objeto persistente.
-
-### 2.3 Discovery passes e tiling
-
-A execução mais simples é full-frame. Tiling é uma estratégia opcional, não um requisito arquitetural.
+### Topologia implementada: `canonical/1`
 
 ```mermaid
 flowchart LR
-    I[PreparedImage]
-    F[Full-frame pass]
-    T1[Tile pass]
-    T2[Optional additional scale]
-    U[RegionCandidate union]
+    IMG["image_preparation<br/>PreparedImage"]
+    REG["region_discovery<br/>Region2D[]"]
+    DENSE["dense_feature_extraction<br/>VisualFeature[] DENSE"]
+    RFEAT["region_feature_extraction<br/>VisualFeature[] REGION"]
+    SCENE["scene_interpretation<br/>SceneContext | None"]
+    RINT["region_interpretation<br/>SemanticClaim[]"]
+    RESULT["PerceptionResult"]
 
-    I --> F --> U
-    I -. configured .-> T1 --> U
-    I -. configured .-> T2 --> U
+    IMG --> REG
+    IMG --> DENSE
+    IMG --> RFEAT
+    REG --> RFEAT
+    IMG --> SCENE
+    IMG --> RINT
+    REG --> RINT
+    REG --> RESULT
+    DENSE --> RESULT
+    RFEAT --> RESULT
+    SCENE --> RESULT
+    RINT --> RESULT
 ```
 
-Cada proposta preserva pass, tile, escala, backend e remapeamento de coordenadas.
+`image_preparation` é atualmente um estágio fonte: `PreparedImage` é fornecida externamente ao grafo. `resolve_pipeline()` valida o preset antes de construir backends; os backends são resolvidos uma vez e reutilizados entre observações. `execute_stage_graph()` isola falhas por branch: um estágio `FAILED` faz apenas seus dependentes ficarem `SKIPPED`, enquanto branches independentes continuam contribuindo evidência.
 
-### 2.4 Region normalize, merge e Geometry Freeze
+### Contratos implementados
 
-`RegionCandidate[]` passa por validação geométrica, filtros configurados, análise de overlap/containment e merge de duplicatas.
+- `PreparedImage`;
+- `Region2D`;
+- `VisualFeature` com scopes `DENSE`, `GLOBAL` e `REGION`;
+- `SemanticClaim`, incluindo hipóteses `PRIMARY` e `ALTERNATIVE`;
+- `SceneContext`;
+- `SemanticSupport`, produzido por `SemanticScorer` sem mutar a claim;
+- `PerceptionRun` e `PerceptionResult`;
+- `BackendProvenance`.
 
-Saída: `Region2D[]`.
+`RegionId`, `FeatureId` e `ClaimId` são locais ao `PerceptionResult`. Reprocessar a mesma `SourceObservation` em outro run cria outro `PerceptionResult`; não cria uma nova observação física e não funde resultados anteriores.
 
-Depois de `Geometry Freeze`:
+### Persistência e leitura multi-run
 
-- mask canônica não muda;
-- bbox/geometria não muda;
-- region ID não muda dentro do `PerceptionResult`;
-- estágios semânticos apenas anexem evidência.
-
-### 2.5 Dense Feature Extraction
-
-Extratores densos podem rodar diretamente sobre `PreparedImage`, sem depender de regiões.
-
-Backends planejados incluem DINOv2 e DINOv3.
-
-Saída conceitual:
-
-```text
-VisualFeature
-scope = dense
-shape = Hf x Wf x C
-embedding_space = <explicit identity>
-payload_reference = <persisted array>
+```mermaid
+flowchart LR
+    RESULT["PerceptionResult[]"] --> W["PerceptionRunWriter"]
+    W --> ART["PerceptionRunArtifact"]
+    ART --> R["PerceptionRunReader"]
+    R --> SET["PerceptionEvidenceSet"]
+    SET -. preserva resultados por run .-> FUT["Semantic Fusion futura"]
 ```
 
-DINO produz representação visual, não label.
+`PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
 
-### 2.6 Region Feature Extraction
+### Ainda não materializado no preset canônico
 
-Features de região podem ser produzidas de formas diferentes:
+Os seguintes elementos aparecem na arquitetura alvo, mas não fazem parte de `CANONICAL_PRESET_V1` hoje:
 
-- pooling mask-aware de um dense feature map;
-- CLIP sobre crop/context view;
-- AlphaCLIP usando a mask explícita da região.
+- backends reais de SAM/DINO/CLIP/VLM;
+- integração de `SemanticScorer` como estágio do DAG;
+- region normalization/merge e Geometry Freeze como estágios explícitos;
+- semantic refinement;
+- implementação concreta de image preparation;
+- integração end-to-end com State Estimation, geometria e Sensor Association.
 
-O `EmbeddingSpace` deve ser explícito. Mesma dimensionalidade não significa espaço compatível.
+Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 
-### 2.7 Scene Interpretation
-
-Interpretação de cena pode rodar independentemente de Region Discovery.
-
-O resultado pode incluir `SceneContext` com campos como:
-
-```text
-scene_type
-environment
-layout
-lighting
-visibility
-navigability
-```
-
-Scene context é contexto de evidência, não verdade persistente do mapa.
-
-### 2.8 Region Semantic Interpretation
-
-Recebe uma requisição explícita contendo a região e as evidências selecionadas, por exemplo:
-
-- masked subject;
-- tight crop;
-- contextual crop;
-- scene context;
-- features selecionadas quando suportadas.
-
-Backends planejados incluem:
-
-- Qwen;
-- Gemini;
-- Florence-2 através de adapter semântico separado.
-
-Saída: `SemanticClaim[]`.
-
-Uma claim pode conter `PRIMARY`, `ALTERNATIVE`, atributos e confiança opcional. Falta de confidence continua `None`, não vira `1.0` ou `0.0`.
-
-### 2.9 Semantic Scoring opcional
-
-CLIP ou AlphaCLIP podem produzir suporte visual para uma hipótese.
-
-`SemanticScore` deve permanecer diferente de:
-
-- confidence de uma VLM;
-- suporte acumulado por Semantic Fusion;
-- probabilidade calibrada.
-
-### 2.10 Semantic Refinement opcional
-
-Estágio opcional que pode consolidar `SemanticClaim[]` e `SemanticScore[]` de 2.8/2.9 em um conjunto menor e priorizado de hipóteses, por exemplo removendo redundância trivial entre claims equivalentes ou aplicando uma política explícita de priorização.
-
-Não é um requisito da Solution 1, da mesma forma que Semantic Scoring e Point Representation são opcionais.
-
-Regras:
-
-- não inventa evidência nova; só reorganiza o que já existe;
-- não sobrescreve nem descarta silenciosamente as claims/scores de origem — o resultado refinado preserva referência a elas;
-- ausência deste estágio deve produzir um `PerceptionResult` igualmente válido, apenas com as claims/scores originais não refinadas.
-
-### 2.11 Evidence Assembly
-
-Reúne as evidências produzidas pelo branch de Visual Perception em uma única estrutura, sem reinterpretá-las:
-
-- `Region2D[]` (via Region Evidence Views);
-- `VisualFeature[]`, dense e region;
-- `SemanticClaim[]`, refinadas ou não;
-- `SemanticScore[]`, quando produzido;
-- `SceneContext`, quando produzido.
-
-Evidence Assembly é agregação, não fusão nem interpretação. Nenhuma evidência recebida é descartada silenciosamente; a ausência de um canal opcional (Scene Interpretation, Semantic Scoring, Semantic Refinement) fica explícita na estrutura montada, não implícita.
-
-### 2.12 Audit
-
-Valida a evidência montada antes de permitir a emissão do `PerceptionResult`, reforçando os invariantes já definidos para o pipeline e para os contratos:
-
-- toda claim referencia uma região ou observação existente;
-- toda `VisualFeature` declara `embedding_space` explícito;
-- confidence ausente permanece `None`, nunca convertida para `0.0`/`1.0`;
-- inconsistências geram warning/erro registrado, nunca falha silenciosa.
-
-Auditoria é o mecanismo concreto que materializa, neste estágio, o princípio de auditabilidade descrito em [architecture.md](architecture.md#auditabilidade-como-requisito-arquitetural). O que Audit produz é diagnóstico: pode alimentar `events.jsonl`/`debug/` do `PerceptionRunArtifact` (ver [ARTIFACTS.md](ARTIFACTS.md)), mas nenhum estágio downstream depende de `debug/` para funcionar.
-
-### 2.13 Saída da percepção
-
-Um resultado representa uma inferência sobre **uma observação física em um run específico**:
-
-```text
-SourceObservation frame-0124
-├── run-0001 -> PerceptionResult A
-├── run-0002 -> PerceptionResult B
-└── run-0003 -> PerceptionResult C
-```
-
-A percepção não funde A, B e C.
-
-Saída persistida: `PerceptionRunArtifact`.
+Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
 
 ## 3. Branch de State Estimation
 
@@ -450,7 +267,7 @@ State Estimation produz a trajetória canônica usada para colocar observações
 
 ```mermaid
 flowchart TD
-    SEQ[CanonicalSequenceArtifact]
+    SEQ[SequenceArtifact]
     PRE[Geometry/frame preflight]
     EXT[External pose backend]
     FL[FAST-LIO backend]
@@ -548,7 +365,7 @@ flowchart TD
 
 ### Entrada
 
-- `CanonicalSequenceArtifact`;
+- `SequenceArtifact`;
 - selection;
 - `StateEstimationRunArtifact`;
 - static extrinsics/calibration;
@@ -1034,7 +851,7 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 
 | Estágio | Artefato principal | Consumo downstream |
 | --- | --- | --- |
-| Ingestion | `CanonicalSequenceArtifact` | perception, state estimation, geometry |
+| Ingestion | `SequenceArtifact` | perception, state estimation, geometry |
 | Visual Perception | `PerceptionRunArtifact` | sensor association, evaluation |
 | State Estimation | `StateEstimationRunArtifact` | geometry, sensor association |
 | Geometric Mapping | `GeometricMapArtifact` | association, point representation, final map |
