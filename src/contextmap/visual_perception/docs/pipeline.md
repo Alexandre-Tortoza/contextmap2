@@ -8,7 +8,7 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 - **Uma instância de backend concreta** — construída por uma `StageBackendFactory` fornecida pelo chamador. Este módulo nunca constrói uma sozinho e nunca importa um SDK de modelo.
 - **`PipelinePreset`** — uma seleção nomeada e versionada de estágios/dependências/backends/parâmetros (ex.: `"canonical/1"`).
 
-Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities que um `StageSpec` pode declarar é a tabela pequena e fixa `_CAPABILITY_ADAPTERS`, espelhando exatamente os ports em `ports.py` (`region_discovery`, `feature_extractor`, `scene_interpretation`, `region_interpretation`). Adicionar um quinto port significa adicionar uma função a essa tabela — nunca um mecanismo de despacho genérico.
+Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`, `scene_interpretation`, `region_interpretation`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
 
 ## Preset canônico versionado
 
@@ -16,9 +16,49 @@ Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto 
 
 Duas presets com topologias diferentes nunca compartilham `preset_id` — uma versão nunca é reaproveitada para uma topologia diferente.
 
+### Topologia de `canonical/1`
+
+```mermaid
+flowchart LR
+    IMG["image_preparation<br/>PreparedImage"]
+    REG["region_discovery<br/>Region2D[]"]
+    DENSE["dense_feature_extraction<br/>VisualFeature[] DENSE"]
+    RFEAT["region_feature_extraction<br/>VisualFeature[] REGION"]
+    SCENE["scene_interpretation<br/>SceneContext | None"]
+    RINT["region_interpretation<br/>SemanticClaim[]"]
+
+    IMG --> REG
+    IMG --> DENSE
+    IMG --> RFEAT
+    REG --> RFEAT
+    IMG --> SCENE
+    IMG --> RINT
+    REG --> RINT
+```
+
+`image_preparation` é um estágio fonte (`backend_id=None`): sua saída é injetada por `ResolvedPipeline.build_stage_graph()`. Os demais estágios resolvem backends uma única vez por pipeline resolvido. `region_feature_extraction` e `region_interpretation` dependem explicitamente das regiões; `dense_feature_extraction` e `scene_interpretation` permanecem branches independentes.
+
+O estágio `region_discovery` pode ser satisfeito pelos adapters SAM2, SAM3 ou Florence-2 implementados na capability. Passes full-frame/tiles, scale, remapeamento, normalização e Geometry Freeze ficam encapsulados atrás do port `RegionDiscovery`; a topologia do pipeline continua vendo apenas `PreparedImage -> Region2D[]`. Ver [`region-discovery.md`](region-discovery.md).
+
 ## Validar antes de carregar modelos pesados
 
 `validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido, ciclos, nomes obrigatórios/permitidos de inputs e compatibilidade da capability produtora. `image` deve vir de `image_preparation`; `regions`, de `region_discovery`. Um `feature_extractor` declara `feature_scope`: `REGION` exige `image` e `regions`, enquanto `DENSE`/`GLOBAL` aceitam somente `image`. `resolve_pipeline()` chama essa validação **antes** de qualquer `StageBackendFactory`, portanto uma configuração inválida não carrega modelos pesados.
+
+### Ciclo de resolução e execução
+
+```mermaid
+flowchart LR
+    PRESET["PipelinePreset"] --> VALID["validate_pipeline_preset()"]
+    VALID --> FACT["StageBackendFactory<br/>carrega backends uma vez"]
+    FACT --> RES["ResolvedPipeline"]
+    OBS["PreparedImage por observação"] --> BUILD["build_stage_graph()"]
+    RES --> BUILD
+    BUILD --> EXEC["execute_stage_graph()"]
+    EXEC --> OUT["StageOutcome[]"]
+    OUT --> RESULT["assemble_perception_result()<br/>PerceptionResult"]
+```
+
+A validação estrutural ocorre antes da construção de qualquer backend pesado. Depois da resolução, apenas o grafo por observação é reconstruído; as instâncias de backend são reutilizadas.
 
 ## Resolver uma vez, construir o grafo por observação
 
@@ -55,4 +95,4 @@ Ambos — o preset resolvido e o `configuration_digest` — são persistidos no 
 
 - Não decide qual preset é o "certo" para uma execução — isso é uma decisão de composição root/configuração de runtime, fora do escopo deste módulo.
 - Não interpreta `parameters` — apenas os repassa, primitivos e serializáveis, para a `StageBackendFactory` do estágio.
-- Não introduz um registro de maturidade de backend nem um sistema de plugin genérico — a lista de capabilities conhecidas é pequena, fixa, e cresce um item por vez junto com `ports.py`.
+- Não introduz um registro de maturidade de backend nem um sistema de plugin genérico — a lista de capabilities executáveis é pequena e cresce apenas quando uma nova capability recebe adapter, contrato de inputs e inclusão explícita em um preset.

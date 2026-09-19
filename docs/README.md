@@ -4,7 +4,7 @@ Este diretório é o ponto de entrada da documentação global do ContextMap2.
 
 O objetivo da documentação principal é permitir que uma pessoa entenda **o que o projeto produz, como o pipeline funciona, quais contratos conectam os módulos e como os resultados permanecem reproduzíveis** sem precisar reconstruir essas decisões a partir das issues.
 
-> A documentação descreve a arquitetura alvo da **Solution 1**. Uma capability documentada pode ainda estar planejada ou em implementação. O fato de uma etapa aparecer no pipeline não significa, por si só, que ela já esteja concluída no código.
+> A documentação descreve a arquitetura alvo do **canonical pipeline**. Uma capability documentada pode ainda estar planejada ou em implementação. O fato de uma etapa aparecer no pipeline não significa, por si só, que ela já esteja concluída no código.
 
 ## O que é o ContextMap2
 
@@ -29,6 +29,23 @@ flowchart LR
 ```
 
 Visualização, busca em linguagem natural, navegação, planejamento, agentes e dashboards são **consumidores externos**. Eles não pertencem ao núcleo deste repositório.
+
+## Estado materializado na `dev`
+
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os dois primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+
+```mermaid
+flowchart LR
+    RAW["ROS 1 / ROS 2 / fonte registrada"] --> ING["Ingestion<br/>implementado"]
+    ING --> SEQ["SequenceArtifact<br/>sequência canônica imutável"]
+    SEQ --> VP["Visual Perception Core<br/>implementado"]
+    VP --> PR["PerceptionRunArtifact"]
+    PR -. próximo boundary .-> SA["State Estimation / Geometric Mapping /<br/>Sensor Association e downstream<br/>planejados"]
+```
+
+Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception Core possui contratos de evidência, ports substituíveis, grafo de estágios versionado, execução com isolamento de falhas, identidades determinísticas, `PerceptionRunArtifact` e leitura multi-run sem fusão.
+
+Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
 ## Ordem recomendada de leitura
 
@@ -66,13 +83,12 @@ flowchart TD
     RC --> M
     P --> M
     C --> M
+    AR --> M
 
-    M --> MR[src/contextmap/<module>/docs/README.md]
-    MR --> MP[pipeline.md]
-    MR --> MC[contracts.md]
-    MR --> MA[architecture.md]
-    MR --> ME[evaluation.md]
-    MR --> MB[backends.md]
+    M --> ING[src/contextmap/ingestion/docs/README.md]
+    M --> VP[src/contextmap/visual_perception/docs/README.md]
+    ING --> ID[contracts / artifact / synchronization / calibration / adapters]
+    VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
 ```
 
 ## Responsabilidade de cada documento
@@ -126,7 +142,8 @@ Arquivos complementares só devem existir quando houver conteúdo real. O objeti
 
 Módulos com documentação própria:
 
-- [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração e adapters de fonte.
+- [`ingestion`](../src/contextmap/ingestion/docs/README.md) — observações de sensor canônicas, sequência, sincronização, calibração, seleção/replay, provenance e adapters de fonte.
+- [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual por run, ports, preset canônico, execução do DAG, artifacts e leitura multi-run; [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) documenta SAM2/SAM3/Florence-2, passes, normalização e avaliação geométrica.
 
 ## Integração da documentação
 
@@ -136,18 +153,19 @@ A documentação é fragmentada fisicamente, mas forma um único grafo de conhec
 - cada módulo documenta apenas seu domínio e suas fronteiras;
 - conteúdo global é referenciado por link, não copiado para cada módulo;
 - documentação de upstream/downstream deve apontar para o contrato público relevante;
+- quando um módulo já estiver implementado, seu `src/contextmap/<module>/docs/` é a fonte de verdade para detalhes de comportamento; os documentos globais resumem e conectam esse comportamento ao sistema;
 - uma alteração arquitetural ou de contrato deve atualizar código e documentação no mesmo PR;
 - `docs/README.md` é o índice canônico dos pontos de entrada globais.
 
 ## Estado da arquitetura
 
-A Solution 1 é **pre-alpha** e evolui por milestones. Os documentos principais descrevem o desenho canônico que as milestones devem materializar.
+O canonical pipeline é **pre-alpha** e evolui por milestones. Os documentos principais descrevem o desenho canônico que as milestones devem materializar.
 
 Ao ler uma etapa do pipeline, diferencie:
 
 - **contrato**, semântica que deve permanecer estável na fronteira do módulo;
 - **backend**, implementação substituível de uma capability;
-- **pipeline canônico**, configuração escolhida para a validação da Solution 1;
+- **canonical pipeline**, composição integrada de referência que as milestones materializam e validam;
 - **experimento**, alternativa que não substitui silenciosamente o baseline;
 - **artefato**, resultado persistido e imutável de uma execução.
 
