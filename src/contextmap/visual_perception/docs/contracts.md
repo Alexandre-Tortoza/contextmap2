@@ -28,6 +28,8 @@ Contexto de execução: qual sequência (`sequence_artifact_id`), qual seleção
 Amarra um `PerceptionRun` a uma `SourceObservation`, carregando as evidências produzidas (`regions`, `features`, `claims`, `scene_context`). Valida na construção:
 
 - nenhum `region_id` duplicado entre as `regions`;
+- nenhum `feature_id` duplicado entre as `features`;
+- nenhum `claim_id` duplicado entre as `claims`;
 - toda `feature`/`claim` que referencia um `region_id` deve referenciar uma região presente em `regions`.
 
 ## `Region2D`

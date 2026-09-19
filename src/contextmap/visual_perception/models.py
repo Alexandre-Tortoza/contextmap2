@@ -340,16 +340,22 @@ class PerceptionResult:
     scene_context: SceneContext | None = None
 
     def __post_init__(self) -> None:
-        """Validate region identities are unique and every reference resolves.
+        """Validate local identities are unique and every reference resolves.
 
         Raises:
-            ValueError: If ``regions`` has a duplicate ``region_id``, or a
-                feature/claim references a ``region_id`` absent from
-                ``regions``.
+            ValueError: If regions, features, or claims contain a
+                duplicate local identity, or a feature/claim references
+                a ``region_id`` absent from ``regions``.
         """
         region_ids = {region.region_id for region in self.regions}
         if len(region_ids) != len(self.regions):
             raise ValueError("duplicate region_id in PerceptionResult")
+        feature_ids = {feature.feature_id for feature in self.features}
+        if len(feature_ids) != len(self.features):
+            raise ValueError("duplicate feature_id in PerceptionResult")
+        claim_ids = {claim.claim_id for claim in self.claims}
+        if len(claim_ids) != len(self.claims):
+            raise ValueError("duplicate claim_id in PerceptionResult")
         for feature in self.features:
             if feature.region_id is not None and feature.region_id not in region_ids:
                 raise ValueError(f"feature references unknown region_id: {feature.region_id!r}")

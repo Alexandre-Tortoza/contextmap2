@@ -67,7 +67,9 @@ class PerceptionEvidenceSet:
 
         Raises:
             EvidenceSetError: If ``runs`` is empty, or the selected runs
-                reference more than one canonical sequence artifact.
+                reference more than one canonical sequence artifact,
+                declare duplicate ``run_id`` values, or contain a result
+                whose ``run_id`` disagrees with its owning manifest.
         """
         if not runs:
             raise EvidenceSetError("at least one run must be selected")
@@ -78,12 +80,21 @@ class PerceptionEvidenceSet:
                 f"selected runs reference incompatible sequence artifacts: {sorted(sequence_ids)}"
             )
 
+        run_ids = [run.manifest.run_id for run in runs]
+        if len(set(run_ids)) != len(run_ids):
+            raise EvidenceSetError("selected runs contain a duplicate run_id")
+
         self._runs = tuple(runs)
         self._by_observation: dict[
             SourceObservationId, dict[PerceptionRunId, PerceptionResult]
         ] = {}
         for run in self._runs:
             for result in run.list_results():
+                if result.run_id != run.manifest.run_id:
+                    raise EvidenceSetError(
+                        f"result run_id {result.run_id!r} does not match owning manifest "
+                        f"run_id {run.manifest.run_id!r}"
+                    )
                 self._by_observation.setdefault(result.source_observation_id, {})[
                     run.manifest.run_id
                 ] = result
@@ -101,7 +112,7 @@ class PerceptionEvidenceSet:
 
         Raises:
             EvidenceSetError: If ``run_dirs`` is empty, or the selected
-                runs reference more than one canonical sequence artifact.
+                runs are not mutually compatible; see :meth:`__init__`.
         """
         return cls([PerceptionRunReader(run_dir) for run_dir in run_dirs])
 

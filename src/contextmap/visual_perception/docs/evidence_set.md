@@ -41,6 +41,8 @@ Nenhum payload é copiado ou reescrito para construir essa view — `PerceptionE
 
 `open()`/`__init__` levantam `EvidenceSetError` se os runs selecionados referenciarem mais de um `sequence_artifact_id` — misturar evidência de sequências diferentes sob uma única observação não faz sentido semântico.
 
+A seleção também é rejeitada quando dois diretórios declaram o mesmo `run_id`, pois a chave deixaria de identificar univocamente a origem da evidência. Para cada resultado lido, a view confirma ainda que `PerceptionResult.run_id` coincide com o `run_id` do manifest que o possui, evitando atribuição silenciosa a outro run.
+
 ## Sem `runs.json`
 
 Cada run é aberto via `PerceptionRunReader` (issue #52), que nunca requer `runs.json` — a view multi-run funciona igual quando o registro de convite está ausente.

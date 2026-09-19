@@ -40,6 +40,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from contextmap.visual_perception.models import (
     BackendProvenance,
+    FeatureScope,
     PreparedImage,
     Region2D,
     SceneContext,
@@ -56,7 +57,7 @@ from contextmap.visual_perception.serialization import (
 )
 from contextmap.visual_perception.service import StageDefinition
 
-PIPELINE_SCHEMA_VERSION = "0.1.0"
+PIPELINE_SCHEMA_VERSION = "0.2.0"
 """Pipeline preset encoding schema version."""
 
 
@@ -99,6 +100,10 @@ class StageSpec:
             this stage's :data:`StageBackendFactory`, e.g.
             ``{"confidence_threshold": 0.5}``. Never a place for
             secrets/credentials.
+        feature_scope: Output scope selected for a ``feature_extractor``
+            stage. ``REGION`` makes the ``regions`` input mandatory;
+            ``DENSE`` and ``GLOBAL`` accept only the prepared image.
+            Must be ``None`` for every other capability.
     """
 
     stage_id: str
@@ -107,6 +112,7 @@ class StageSpec:
     backend_id: str | None = None
     optional: bool = False
     parameters: Mapping[str, object] = field(default_factory=dict)
+    feature_scope: FeatureScope | None = None
 
     @property
     def depends_on(self) -> frozenset[str]:
@@ -197,14 +203,26 @@ Adding a new port (a fifth capability) means adding one adapter function
 to ``_CAPABILITY_ADAPTERS`` — never a generic dispatch/plugin mechanism.
 """
 
+_BASE_REQUIRED_INPUTS: Mapping[str, frozenset[str]] = {
+    "region_discovery": frozenset({"image"}),
+    "feature_extractor": frozenset({"image"}),
+    "scene_interpretation": frozenset({"image"}),
+    "region_interpretation": frozenset({"image", "regions"}),
+}
+
+_INPUT_PRODUCER_CAPABILITIES: Mapping[str, frozenset[str]] = {
+    "image": frozenset({"image_preparation"}),
+    "regions": frozenset({"region_discovery"}),
+}
+
 
 def validate_pipeline_preset(preset: PipelinePreset) -> None:
     """Validate a preset's structure without constructing any backend.
 
-    Checks stage dependency order, that every referenced stage exists,
-    that every backend stage declares a known capability, and that the
-    graph has no cycle — everything the issue calls "compile and
-    validate before loading heavy models".
+    Checks stage dependency order, named input signatures and producer
+    compatibility, that every referenced stage exists, that every
+    backend stage declares a known capability, and that the graph has no
+    cycle — before any heavy model is loaded.
 
     Args:
         preset: The preset to validate.
@@ -212,7 +230,8 @@ def validate_pipeline_preset(preset: PipelinePreset) -> None:
     Raises:
         PipelineConfigError: If ``preset`` has a duplicate ``stage_id``,
             a stage depending on an unknown ``stage_id``, a backend
-            stage with an unrecognized ``capability``, or a cycle.
+            stage with an unrecognized ``capability``, an invalid input
+            signature or producer, or a cycle.
     """
     by_id: dict[str, StageSpec] = {}
     for stage in preset.stages:
@@ -235,8 +254,57 @@ def validate_pipeline_preset(preset: PipelinePreset) -> None:
                 f"adapter for {stage.capability!r}; known capabilities: "
                 f"{sorted(_CAPABILITY_ADAPTERS)}"
             )
-
     _ensure_acyclic(preset.preset_id, by_id)
+
+    for stage in preset.stages:
+        if stage.backend_id is not None:
+            _validate_stage_inputs(preset.preset_id, stage, by_id)
+
+
+def _validate_stage_inputs(
+    preset_id: str, stage: StageSpec, by_id: Mapping[str, StageSpec]
+) -> None:
+    """Validate one backend stage's named input contract."""
+    required_inputs = _BASE_REQUIRED_INPUTS[stage.capability]
+    if stage.capability == "feature_extractor":
+        if stage.feature_scope is None:
+            raise PipelineConfigError(
+                f"preset {preset_id!r}: feature_extractor stage {stage.stage_id!r} "
+                "must declare feature_scope"
+            )
+        if stage.feature_scope is FeatureScope.REGION:
+            required_inputs |= {"regions"}
+    elif stage.feature_scope is not None:
+        raise PipelineConfigError(
+            f"preset {preset_id!r}: stage {stage.stage_id!r} declares feature_scope "
+            "but is not a feature_extractor"
+        )
+
+    declared_inputs = frozenset(stage.inputs)
+    missing_inputs = required_inputs - declared_inputs
+    if missing_inputs:
+        raise PipelineConfigError(
+            f"preset {preset_id!r}: stage {stage.stage_id!r} is missing required "
+            f"input(s): {sorted(missing_inputs)}"
+        )
+
+    allowed_inputs = required_inputs
+    unexpected_inputs = declared_inputs - allowed_inputs
+    if unexpected_inputs:
+        raise PipelineConfigError(
+            f"preset {preset_id!r}: stage {stage.stage_id!r} declares unexpected "
+            f"input(s): {sorted(unexpected_inputs)}; allowed inputs: {sorted(allowed_inputs)}"
+        )
+
+    for input_name, upstream_id in stage.inputs.items():
+        producer_capability = by_id[upstream_id].capability
+        compatible_capabilities = _INPUT_PRODUCER_CAPABILITIES[input_name]
+        if producer_capability not in compatible_capabilities:
+            raise PipelineConfigError(
+                f"preset {preset_id!r}: stage {stage.stage_id!r} input {input_name!r} "
+                f"must come from capability {sorted(compatible_capabilities)}, not "
+                f"{producer_capability!r}"
+            )
 
 
 def _ensure_acyclic(preset_id: str, by_id: Mapping[str, StageSpec]) -> None:
@@ -383,6 +451,7 @@ def encode_stage_spec(stage: StageSpec) -> dict[str, Any]:
         "backend_id": stage.backend_id,
         "optional": stage.optional,
         "parameters": dict(stage.parameters),
+        "feature_scope": stage.feature_scope.value if stage.feature_scope is not None else None,
     }
 
 
@@ -395,6 +464,9 @@ def decode_stage_spec(record: Mapping[str, Any]) -> StageSpec:
         backend_id=record["backend_id"],
         optional=record["optional"],
         parameters=dict(record["parameters"]),
+        feature_scope=(
+            FeatureScope(record["feature_scope"]) if record["feature_scope"] is not None else None
+        ),
     )
 
 
@@ -477,12 +549,14 @@ CANONICAL_PRESET_V1 = PipelinePreset(
             capability="feature_extractor",
             inputs={"image": "image_preparation"},
             backend_id="dense_feature_extractor/canonical",
+            feature_scope=FeatureScope.DENSE,
         ),
         StageSpec(
             stage_id="region_feature_extraction",
             capability="feature_extractor",
             inputs={"image": "image_preparation", "regions": "region_discovery"},
             backend_id="region_feature_extractor/canonical",
+            feature_scope=FeatureScope.REGION,
         ),
         StageSpec(
             stage_id="scene_interpretation",

@@ -4,7 +4,7 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 
 ## Três conceitos, não um motor de workflow genérico
 
-- **`StageSpec`** — um estágio declarativo: `capability`, como seus `inputs` nomeados se ligam a `stage_id`s upstream, qual `backend_id` o preenche (ou `None` para um estágio "fonte", cuja saída é fornecida externamente — ex.: a imagem preparada), e seus `parameters` resolvidos.
+- **`StageSpec`** — um estágio declarativo: `capability`, como seus `inputs` nomeados se ligam a `stage_id`s upstream, qual `backend_id` o preenche (ou `None` para um estágio "fonte", cuja saída é fornecida externamente — ex.: a imagem preparada), seus `parameters` resolvidos e, para `feature_extractor`, o `feature_scope` produzido.
 - **Uma instância de backend concreta** — construída por uma `StageBackendFactory` fornecida pelo chamador. Este módulo nunca constrói uma sozinho e nunca importa um SDK de modelo.
 - **`PipelinePreset`** — uma seleção nomeada e versionada de estágios/dependências/backends/parâmetros (ex.: `"canonical/1"`).
 
@@ -18,7 +18,7 @@ Duas presets com topologias diferentes nunca compartilham `preset_id` — uma ve
 
 ## Validar antes de carregar modelos pesados
 
-`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido para um estágio de backend, e ciclos. `resolve_pipeline()` chama esta validação **antes** de chamar qualquer `StageBackendFactory` — é isso que garante que um preset/config invalido nunca dispara o carregamento de um modelo pesado.
+`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido, ciclos, nomes obrigatórios/permitidos de inputs e compatibilidade da capability produtora. `image` deve vir de `image_preparation`; `regions`, de `region_discovery`. Um `feature_extractor` declara `feature_scope`: `REGION` exige `image` e `regions`, enquanto `DENSE`/`GLOBAL` aceitam somente `image`. `resolve_pipeline()` chama essa validação **antes** de qualquer `StageBackendFactory`, portanto uma configuração inválida não carrega modelos pesados.
 
 ## Resolver uma vez, construir o grafo por observação
 
@@ -45,11 +45,11 @@ A mesma lógica se aplica ao exemplo do issue de um estágio opcional de realce 
 
 ## Reprodutibilidade e proveniência
 
-- `encode_pipeline_preset()`/`decode_pipeline_preset()` — round-trip JSON simétrico de um `PipelinePreset` inteiro (schema próprio, `PIPELINE_SCHEMA_VERSION`).
+- `encode_pipeline_preset()`/`decode_pipeline_preset()` — round-trip JSON simétrico de um `PipelinePreset` inteiro (schema próprio, `PIPELINE_SCHEMA_VERSION`; versão `0.2.0` inclui `feature_scope`).
 - `ResolvedPipeline.backend_provenance()` — um `BackendProvenance` por estágio de backend resolvido.
 - `ResolvedPipeline.configuration_digest()` — hash determinístico sobre o preset codificado e a proveniência de cada backend resolvido; duas resoluções produzem o mesmo digest se e somente se compartilham o mesmo conteúdo de preset **e** a mesma identidade de backend resolvida (mesmo checkpoint/versão) para cada estágio.
 
-Ambos — o preset resolvido e o `configuration_digest` — são persistidos no `manifest.json` de todo `PerceptionRunArtifact` (`run_artifact.py`, `schema_version` 0.2.0), então o grafo de estágios e as identidades de backend efetivamente usados por um run são inspecionáveis sem precisar reconstruir o pipeline.
+Ambos — o preset resolvido e o `configuration_digest` — são persistidos no `manifest.json` de todo `PerceptionRunArtifact` (`run_artifact.py`, `schema_version` 0.3.0), então o grafo de estágios, o escopo de feature e as identidades de backend efetivamente usados por um run são inspecionáveis sem precisar reconstruir o pipeline.
 
 ## O que este módulo explicitamente não faz
 

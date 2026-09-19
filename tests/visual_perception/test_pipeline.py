@@ -15,6 +15,7 @@ from contextmap.visual_perception import (
     KNOWN_CAPABILITIES,
     BackendProvenance,
     BoundingBox2D,
+    FeatureScope,
     PerceptionResultId,
     PerceptionRunId,
     PipelineConfigError,
@@ -108,6 +109,73 @@ def test_heavy_backends_are_not_constructed_until_validation_succeeds() -> None:
         resolve_pipeline(
             invalid_preset, backend_factories=_canonical_backend_factories(call_log=call_log)
         )
+
+    assert call_log == []
+
+
+def test_validate_rejects_wrong_input_name_before_constructing_backends() -> None:
+    call_log: list[str] = []
+    preset = PipelinePreset(
+        preset_id="broken/inputs",
+        stages=(
+            StageSpec(stage_id="image_preparation", capability="image_preparation"),
+            StageSpec(
+                stage_id="region_discovery",
+                capability="region_discovery",
+                inputs={"wrong": "image_preparation"},
+                backend_id="region_discovery/canonical",
+            ),
+        ),
+    )
+
+    with pytest.raises(PipelineConfigError, match=r"required input.*image"):
+        resolve_pipeline(preset, backend_factories=_canonical_backend_factories(call_log=call_log))
+
+    assert call_log == []
+
+
+def test_validate_rejects_incompatible_input_producer() -> None:
+    preset = PipelinePreset(
+        preset_id="broken/input-contract",
+        stages=(
+            StageSpec(stage_id="image_preparation", capability="image_preparation"),
+            StageSpec(
+                stage_id="first_discovery",
+                capability="region_discovery",
+                inputs={"image": "image_preparation"},
+                backend_id="region_discovery/first",
+            ),
+            StageSpec(
+                stage_id="second_discovery",
+                capability="region_discovery",
+                inputs={"image": "first_discovery"},
+                backend_id="region_discovery/second",
+            ),
+        ),
+    )
+
+    with pytest.raises(PipelineConfigError, match=r"input 'image'.*image_preparation"):
+        resolve_pipeline(preset, backend_factories={})
+
+
+def test_region_feature_scope_requires_regions_before_constructing_backends() -> None:
+    call_log: list[str] = []
+    preset = PipelinePreset(
+        preset_id="broken/region-feature-inputs",
+        stages=(
+            StageSpec(stage_id="image_preparation", capability="image_preparation"),
+            StageSpec(
+                stage_id="region_feature_extraction",
+                capability="feature_extractor",
+                inputs={"image": "image_preparation"},
+                backend_id="region_feature_extractor/canonical",
+                feature_scope=FeatureScope.REGION,
+            ),
+        ),
+    )
+
+    with pytest.raises(PipelineConfigError, match=r"required input.*regions"):
+        resolve_pipeline(preset, backend_factories=_canonical_backend_factories(call_log=call_log))
 
     assert call_log == []
 
@@ -230,6 +298,7 @@ def test_optional_stage_can_be_inserted_without_touching_downstream_capability_c
                 capability="feature_extractor",
                 inputs={"image": "image_preparation", "regions": "region_refinement"},
                 backend_id="region_feature_extractor/canonical",
+                feature_scope=FeatureScope.REGION,
             ),
         ),
     )

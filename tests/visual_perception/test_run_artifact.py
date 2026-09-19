@@ -30,8 +30,9 @@ _PROVENANCE = BackendProvenance(
 _RUN_DIR_NAME = "run-0001__frames-0000-0010__fake"
 
 
-def _run_dir(tmp_path: Path, sequence_name: str = "corridor-02") -> Path:
-    return tmp_path / "runs" / "visual-perception" / sequence_name / _RUN_DIR_NAME
+def _run_dir(tmp_path: Path, sequence_name: str = "corridor-02", run_index: int = 1) -> Path:
+    run_dir_name = f"run-{run_index:04d}__frames-0000-0010__fake"
+    return tmp_path / "runs" / "visual-perception" / sequence_name / run_dir_name
 
 
 def _result(observation_id: str, run_id: str) -> PerceptionResult:
@@ -111,6 +112,37 @@ def test_result_lookup_raises_for_unknown_observation(tmp_path: Path) -> None:
         reader.result(SourceObservationId("does-not-exist"))
 
 
+def test_writer_rejects_result_owned_by_another_run(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+
+    with pytest.raises(RunArtifactError, match="run_id"):
+        writer.add_result(_result("frame-0001", "run-9999"))
+
+
+def test_writer_rejects_result_from_another_sequence_artifact(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    result = _result("frame-0001", "run-0001")
+    foreign_result = PerceptionResult(
+        result_id=result.result_id,
+        source_observation_id=result.source_observation_id,
+        run_id=result.run_id,
+        sequence_artifact_id="another-sequence-artifact",
+        created_at=result.created_at,
+        regions=result.regions,
+    )
+
+    with pytest.raises(RunArtifactError, match="sequence_artifact_id"):
+        writer.add_result(foreign_result)
+
+
+def test_writer_rejects_duplicate_source_observation(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+
+    with pytest.raises(RunArtifactError, match="source_observation_id"):
+        writer.add_result(_result("frame-0001", "run-0001"))
+
+
 def test_stage_outcomes_are_persisted_as_metrics(tmp_path: Path) -> None:
     outcomes = execute_stage_graph(
         [
@@ -180,6 +212,29 @@ def test_allocate_run_index_ignores_interrupted_tmp_directories(tmp_path: Path) 
     stray.mkdir(parents=True)
 
     assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 2
+
+
+def test_allocate_run_index_ignores_finalized_run_with_missing_output(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path, run_index=9)
+    writer.add_result(_result("frame-0001", "run-0009"))
+    writer.finalize()
+    (_run_dir(tmp_path, run_index=9) / "outputs" / "results.jsonl").unlink()
+
+    assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 1
+
+
+def test_registry_excludes_finalized_run_with_corrupt_output(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+    results_path = _run_dir(tmp_path) / "outputs" / "results.jsonl"
+    results_path.write_text("corrupt\n", encoding="utf-8")
+
+    rebuild_run_registry(tmp_path, "corridor-02")
+
+    registry_path = tmp_path / "runs" / "visual-perception" / "corridor-02" / "runs.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["runs"] == []
 
 
 def test_registry_is_rebuilt_after_finalize_and_can_be_rebuilt_independently(
