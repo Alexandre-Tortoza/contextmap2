@@ -589,7 +589,7 @@ Agrupa `SpatialObservation` com suporte 3D suficientemente compatível para acum
 Podem participar, conforme policy/configuração:
 
 - `SemanticClaim`;
-- `SemanticScore`;
+- `SemanticSupport`;
 - visual feature references;
 - visibility/coverage;
 - optional `PointRepresentation`;
