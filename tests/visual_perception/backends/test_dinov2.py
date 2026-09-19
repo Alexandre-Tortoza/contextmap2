@@ -12,11 +12,15 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureExtractor,
     FeatureScope,
+    PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
     RegionId,
+    VisualFeature,
     embedding_space_fingerprint,
+    feature_id_for,
     pool_region_feature,
 )
 from contextmap.visual_perception.backends.dinov2 import (
@@ -26,6 +30,7 @@ from contextmap.visual_perception.backends.dinov2 import (
     DinoV2InferenceError,
     DinoV2NativeOutput,
     HuggingFaceDinoV2Runtime,
+    _patch_tokens_and_register_count,
 )
 
 
@@ -62,7 +67,7 @@ def _image() -> PreparedImage:
         payload_reference="prepared/frame-0001.png",
         width=12,
         height=8,
-        transformations=("rectify:v1",),
+        transformations=(),
     )
 
 
@@ -81,6 +86,7 @@ def _backend(
     runtime: FakeDinoV2Runtime | None = None,
     sink: RecordingPayloadSink | None = None,
     l2_normalize: bool = False,
+    feature_stage_id: str = "dense_feature_extraction",
 ) -> tuple[DinoV2DenseFeatureBackend, FakeDinoV2Runtime, RecordingPayloadSink]:
     selected_runtime = runtime or FakeDinoV2Runtime(_native_output())
     selected_sink = sink or RecordingPayloadSink()
@@ -96,6 +102,7 @@ def _backend(
             l2_normalize=l2_normalize,
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id=feature_stage_id,
         source_artifact_id="perception-run-0001",
         payload_sink=selected_sink,
         runtime=selected_runtime,
@@ -144,8 +151,11 @@ def test_extract_port_returns_the_same_canonical_feature_and_persists_payload() 
     features = backend.extract(_image())
 
     assert len(features) == 1
-    assert features[0] == sink.calls[0][0]
-    assert features[0].payload_reference.endswith(".npy")
+    feature = features[0]
+    assert feature == sink.calls[0][0]
+    payload_reference = feature.payload_reference
+    assert payload_reference is not None
+    assert payload_reference.endswith(".npy")
 
 
 def test_embedding_space_and_backend_provenance_are_exact_and_auditable() -> None:
@@ -159,7 +169,7 @@ def test_embedding_space_and_backend_provenance_are_exact_and_auditable() -> Non
     assert space.family == "dinov2"
     assert space.model == "facebook/dinov2-small"
     assert space.checkpoint == "facebook/dinov2-small@commit-abc123"
-    assert space.layer == "last_hidden_state.patch_tokens"
+    assert space.layer == "last_hidden_state.patch_tokens_after_cls_and_0_registers"
     assert space.dimension == 4
     assert space.normalization == "none"
     assert feature.embedding_space_id == embedding_space_fingerprint(space)
@@ -179,6 +189,79 @@ def test_identical_image_model_and_config_are_deterministic() -> None:
     assert first.dense_map == second.dense_map
     assert first.embedding_space == second.embedding_space
     np.testing.assert_array_equal(first.array, second.array)
+
+
+def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
+    dense_backend, _, _ = _backend(feature_stage_id="dense_feature_extraction")
+    dense_feature = dense_backend.extract_dense(_image()).dense_map.feature
+    result_id = PerceptionResultId("run-0001--frame-0001")
+    global_feature_id = feature_id_for(result_id=result_id, index=0)
+    global_feature = VisualFeature(
+        feature_id=global_feature_id,
+        scope=FeatureScope.GLOBAL,
+        embedding_space_id="global-space",
+        shape=(4,),
+        dtype="float32",
+        normalization="none",
+        payload_reference=f"features/{global_feature_id}.npy",
+        provenance=BackendProvenance(
+            backend_id="fake_global_extractor",
+            capability="feature_extractor",
+            provider="fake",
+            model="fake-global",
+            version="1",
+        ),
+    )
+
+    result = PerceptionResult(
+        result_id=result_id,
+        source_observation_id=_image().source_observation_id,
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-0001",
+        created_at="2026-09-19T00:00:00+00:00",
+        features=(dense_feature, global_feature),
+    )
+
+    assert len({feature.feature_id for feature in result.features}) == 2
+    assert len({feature.payload_reference for feature in result.features}) == 2
+
+
+def test_register_tokens_are_removed_from_the_spatial_patch_layout() -> None:
+    hidden_state = np.arange(22, dtype=np.float32).reshape(1, 11, 2)
+
+    patch_tokens, register_count = _patch_tokens_and_register_count(
+        hidden_state,
+        type("Config", (), {"num_register_tokens": 4})(),
+    )
+
+    assert register_count == 4
+    np.testing.assert_array_equal(patch_tokens, hidden_state[:, 5:, :])
+
+
+def test_register_token_layout_changes_embedding_space_identity() -> None:
+    without_registers, _, _ = _backend()
+    with_registers, _, _ = _backend(
+        runtime=FakeDinoV2Runtime(
+            DinoV2NativeOutput(
+                array=_native_output().array,
+                model_input_width=6,
+                model_input_height=4,
+                patch_width=2,
+                patch_height=2,
+                register_token_count=4,
+            )
+        )
+    )
+
+    base = without_registers.extract_dense(_image())
+    registered = with_registers.extract_dense(_image())
+
+    registered_layer = registered.embedding_space.layer
+    assert registered_layer is not None
+    assert registered_layer.endswith("_4_registers")
+    assert base.dense_map.feature.embedding_space_id != (
+        registered.dense_map.feature.embedding_space_id
+    )
 
 
 def test_l2_normalization_is_explicit_and_deterministic() -> None:
@@ -269,6 +352,7 @@ def test_runtime_failure_is_not_replaced_by_a_fallback() -> None:
             input_height=4,
         ),
         run_id=PerceptionRunId("run-0001"),
+        feature_stage_id="dense_feature_extraction",
         source_artifact_id="perception-run-0001",
         payload_sink=RecordingPayloadSink(),
         runtime=FailingRuntime(),

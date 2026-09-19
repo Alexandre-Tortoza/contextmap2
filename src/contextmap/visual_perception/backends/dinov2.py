@@ -26,10 +26,12 @@ from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
 )
-from contextmap.visual_perception.identity import feature_id_for, perception_result_id_for
+from contextmap.visual_perception.identity import perception_result_id_for
 from contextmap.visual_perception.models import (
     BackendProvenance,
+    FeatureId,
     FeatureScope,
+    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -129,6 +131,8 @@ class DinoV2NativeOutput:
         model_input_height: Height actually supplied to the model.
         patch_width: Native model patch width in model-input pixels.
         patch_height: Native model patch height in model-input pixels.
+        register_token_count: Non-spatial register tokens removed before
+            reshaping the patch grid.
     """
 
     array: NDArray[Any]
@@ -136,6 +140,7 @@ class DinoV2NativeOutput:
     model_input_height: int
     patch_width: int
     patch_height: int
+    register_token_count: int = 0
 
     def __post_init__(self) -> None:
         """Validate the native output has spatial and channel dimensions."""
@@ -149,6 +154,8 @@ class DinoV2NativeOutput:
         ):
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.register_token_count < 0:
+            raise ValueError("register_token_count must be non-negative")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -196,6 +203,7 @@ class DinoV2DenseFeatureBackend:
         *,
         config: DinoV2Config,
         run_id: PerceptionRunId,
+        feature_stage_id: str,
         source_artifact_id: str,
         payload_sink: FeaturePayloadSink,
         runtime: DinoV2Runtime | None = None,
@@ -206,6 +214,8 @@ class DinoV2DenseFeatureBackend:
         Args:
             config: Effective model and execution configuration.
             run_id: Perception run owning produced feature identities.
+            feature_stage_id: Pipeline stage identity used to namespace features
+                within the complete ``PerceptionResult``.
             source_artifact_id: Run/artifact owning persisted feature payloads.
             payload_sink: Usually ``PerceptionRunWriter``; receives arrays before
                 atomic artifact finalization.
@@ -219,12 +229,15 @@ class DinoV2DenseFeatureBackend:
         """
         if not str(run_id):
             raise ValueError("run_id must not be empty")
+        if not feature_stage_id:
+            raise ValueError("feature_stage_id must not be empty")
         if not source_artifact_id:
             raise ValueError("source_artifact_id must not be empty")
         if runtime is None and prepared_image_root is None:
             raise ValueError("prepared_image_root is required for the default runtime")
         self._config = config
         self._run_id = run_id
+        self._feature_stage_id = feature_stage_id
         self._source_artifact_id = source_artifact_id
         self._payload_sink = payload_sink
         self._runtime = runtime or HuggingFaceDinoV2Runtime(
@@ -291,7 +304,10 @@ class DinoV2DenseFeatureBackend:
             model=self._config.checkpoint,
             version=self._config.revision,
             checkpoint=f"{self._config.checkpoint}@{self._config.revision}",
-            layer="last_hidden_state.patch_tokens",
+            layer=(
+                "last_hidden_state.patch_tokens_after_cls_and_"
+                f"{native.register_token_count}_registers"
+            ),
             dimension=channels,
             normalization=normalization,
         )
@@ -299,7 +315,11 @@ class DinoV2DenseFeatureBackend:
             run_id=self._run_id,
             source_observation_id=image.source_observation_id,
         )
-        feature_id = feature_id_for(result_id=result_id, index=0)
+        feature_id = _feature_id_for_stage(
+            result_id=result_id,
+            feature_stage_id=self._feature_stage_id,
+            index=0,
+        )
         feature = VisualFeature(
             feature_id=feature_id,
             scope=FeatureScope.DENSE,
@@ -374,7 +394,10 @@ class HuggingFaceDinoV2Runtime:
             patch_width, patch_height = _patch_dimensions(self._model.config.patch_size)
             grid_width = int(pixel_values.shape[3]) // patch_width
             grid_height = int(pixel_values.shape[2]) // patch_height
-            patch_tokens = output.last_hidden_state[:, 1:, :]
+            patch_tokens, register_count = _patch_tokens_and_register_count(
+                output.last_hidden_state,
+                self._model.config,
+            )
             expected_tokens = grid_width * grid_height
             if int(patch_tokens.shape[1]) != expected_tokens:
                 raise DinoV2InferenceError(
@@ -401,6 +424,7 @@ class HuggingFaceDinoV2Runtime:
             model_input_height=int(pixel_values.shape[2]),
             patch_width=patch_width,
             patch_height=patch_height,
+            register_token_count=register_count,
         )
 
     def _ensure_loaded(self) -> None:
@@ -471,6 +495,24 @@ def _configuration_fingerprint(config: DinoV2Config) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _feature_id_for_stage(
+    *, result_id: PerceptionResultId, feature_stage_id: str, index: int
+) -> FeatureId:
+    """Namespace a feature identity by the composing pipeline stage."""
+    stage_digest = hashlib.sha256(feature_stage_id.encode("utf-8")).hexdigest()
+    return FeatureId(f"{result_id}--feature-stage-{stage_digest}-{index:04d}")
+
+
+def _patch_tokens_and_register_count(last_hidden_state: Any, model_config: Any) -> tuple[Any, int]:
+    """Remove CLS and the register-token count declared by the model config."""
+    register_count = getattr(model_config, "num_register_tokens", 0)
+    if isinstance(register_count, bool) or not isinstance(register_count, int):
+        raise DinoV2InferenceError("model num_register_tokens must be an integer")
+    if register_count < 0:
+        raise DinoV2InferenceError("model num_register_tokens must be non-negative")
+    return last_hidden_state[:, 1 + register_count :, :], register_count
+
+
 def _validate_native_output(native: DinoV2NativeOutput, config: DinoV2Config) -> None:
     """Validate SDK output against configured preprocessing and patch geometry."""
     if (native.model_input_width, native.model_input_height) != (
@@ -516,6 +558,10 @@ def _sampling_for(
             "center_crop": False,
         },
         "patch": {"width": native.patch_width, "height": native.patch_height},
+        "token_layout": {
+            "class_token_count": 1,
+            "register_token_count": native.register_token_count,
+        },
         "config_fingerprint": _configuration_fingerprint(config),
     }
     encoded = json.dumps(transform_payload, sort_keys=True, separators=(",", ":")).encode()
