@@ -10,6 +10,34 @@ Diagnósticos são evidência de depuração, nunca dependência contratual (`do
 
 Calcula um sumário legível por humano de um conjunto de observações: contagem por modalidade, intervalo de tempo, clocks, fontes, contagem por tópico, resoluções de imagem, layouts de point cloud, inventário de calibração/frames e, quando fornecido, contagens e offsets das decisões de sincronização. Não requer artefato persistido — funciona sobre qualquer `Sequence[SourceObservation]`, incluindo diretamente a saída de um `SourceAdapter` antes mesmo de persistir.
 
+
+
+## Fluxo de diagnóstico
+
+```mermaid
+flowchart LR
+    OBS[SourceObservations] --> SUM[summarize_observations]
+    CAL[CalibrationSet] --> SUM
+    SYNC[SynchronizationDiagnostics] --> SUM
+    WARN[Warnings / validation problems] --> SET[set_diagnostics]
+    SUM --> SET
+    SYNC --> SET
+
+    SET --> S[summary.json]
+    SET --> W[warnings.jsonl]
+    SET --> Y[synchronization.jsonl]
+    SET --> E[dropped-events.jsonl]
+    SET --> F[frame-graph.json]
+
+    S --> READ[read_diagnostics]
+    W --> READ
+    Y --> READ
+    E --> READ
+    F --> READ
+```
+
+Esses arquivos aumentam auditabilidade e inspeção humana, mas permanecem fora do contrato consumido por stages downstream.
+
 ## Persistência estruturada
 
 `writer.set_diagnostics(warnings=[...], synchronization=...)` antes de `finalize()` ativa a escrita de diagnósticos. O sumário é computado automaticamente a partir das observações, da calibração e das decisões fornecidas. `reader.read_diagnostics()` reconstrói `SequenceDiagnostics` ou retorna `None` quando diagnósticos não foram persistidos.

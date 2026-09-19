@@ -58,6 +58,31 @@ O path não é o contrato semântico — `manifest.json` é o ponto autoritativo
 
 Um objeto JSON por linha, um por observação, na ordem em que foi adicionada ao writer. Cada linha tem um campo `"modality"` (`"image"`, `"lidar"`, `"imu"`, `"external_pose"`) mais os campos do contrato correspondente (ver [`contracts.md`](contracts.md)). Para `image`/`lidar`, o payload binário fica em `rgb/`/`pointcloud/` e a linha do índice referencia o arquivo via `payload_path`; para `imu`/`external_pose`, todos os valores ficam inline.
 
+
+
+## Ciclo de persistência
+
+```mermaid
+flowchart TD
+    O[SourceObservations] --> TMP[Diretório temporário]
+    C[CalibrationSet opcional] --> TMP
+    P[SequenceProvenance opcional] --> TMP
+    D[Diagnostics opcionais] --> TMP
+
+    TMP --> IDX[index.jsonl + payloads]
+    IDX --> INV[Gerar file_inventory + hashes]
+    INV --> V{Consistência íntegra?}
+    V -- não --> FAIL[Abortar e remover temporário]
+    V -- sim --> REN[Rename atômico]
+    REN --> ART[SequenceArtifact imutável]
+
+    ART --> R[SequenceArtifactReader]
+    R --> VERIFY[verify_integrity]
+    R --> REPLAY[Seleção / replay]
+```
+
+O artefato final só passa a existir depois que o conteúdo temporário foi escrito e verificado. Leitura e replay nunca dependem da fonte ROS/dataset original.
+
 ## Escrita atômica
 
 `SequenceArtifactWriter.finalize()` escreve todo o conteúdo em um diretório temporário irmão (`.tmp-<artifact-id>-<random>/`), roda uma checagem de consistência interna (todo arquivo referenciado pelo manifest existe, com tamanho e hash corretos) e só então renomeia o diretório para o path final. Qualquer falha durante a escrita remove o diretório temporário — o path final (`<artifact-id>/`) nunca chega a existir parcialmente escrito.
