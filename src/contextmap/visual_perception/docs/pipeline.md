@@ -8,7 +8,7 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 - **Uma instância de backend concreta** — construída por uma `StageBackendFactory` fornecida pelo chamador. Este módulo nunca constrói uma sozinho e nunca importa um SDK de modelo.
 - **`PipelinePreset`** — uma seleção nomeada e versionada de estágios/dependências/backends/parâmetros (ex.: `"canonical/1"`).
 
-Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`, `scene_interpretation`, `region_interpretation`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
+Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`, `feature_resolution_enhancement`, `scene_interpretation`, `region_interpretation`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
 
 ## Preset canônico versionado
 
@@ -42,7 +42,7 @@ O estágio `region_discovery` pode ser satisfeito pelos adapters SAM2, SAM3 ou F
 
 ## Validar antes de carregar modelos pesados
 
-`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido, ciclos, nomes obrigatórios/permitidos de inputs e compatibilidade da capability produtora. `image` deve vir de `image_preparation`; `regions`, de `region_discovery`. Um `feature_extractor` declara `feature_scope`: `REGION` exige `image` e `regions`, enquanto `DENSE`/`GLOBAL` aceitam somente `image`. `resolve_pipeline()` chama essa validação **antes** de qualquer `StageBackendFactory`, portanto uma configuração inválida não carrega modelos pesados.
+`validate_pipeline_preset()` verifica, apenas a partir da estrutura declarativa (nenhum backend é construído): `stage_id` duplicado, dependência (`inputs`) para um `stage_id` desconhecido, capability sem adaptador conhecido, ciclos, nomes obrigatórios/permitidos de inputs e compatibilidade da capability produtora. `image` deve vir de `image_preparation`; `regions`, de `region_discovery`; `dense_map`, de `dense_feature_map_source` ou de outro `feature_resolution_enhancement`. Um `feature_extractor` declara `feature_scope`: `REGION` exige `image` e `regions`, enquanto `DENSE`/`GLOBAL` aceitam somente `image`. `resolve_pipeline()` chama essa validação **antes** de qualquer `StageBackendFactory`, portanto uma configuração inválida não carrega modelos pesados.
 
 ### Ciclo de resolução e execução
 
@@ -81,7 +81,7 @@ Um estágio marcado `optional=True` documenta que um preset alternativo pode omi
 
 Exemplo (`tests/visual_perception/test_pipeline.py::test_optional_stage_can_be_inserted_without_touching_downstream_capability_code`): um preset experimental insere um estágio opcional `region_refinement` (capability `region_discovery`) entre `image_preparation` e `region_feature_extraction`, apenas mudando de qual `stage_id` o `inputs["regions"]` deste último aponta — nenhuma função em `pipeline.py` ou `ports.py` precisa mudar. `region_feature_extraction` nunca sabe, e nunca precisa saber, se o backend que produziu suas regiões foi o `region_discovery` canônico ou o `region_refinement` experimental — apenas que o contrato (`Sequence[Region2D]`) é o mesmo.
 
-A mesma lógica se aplica ao exemplo do issue de um estágio opcional de realce de resolução entre `dense_feature_extraction` e seus consumidores: tanto o caminho nativo quanto o realçado expõem o mesmo contrato público `Sequence[VisualFeature]` (`FeatureScope.DENSE`) — nenhum consumidor downstream contém `if loftup` ou equivalente.
+A mesma lógica é implementada para o estágio opcional de aumento de resolução: um preset experimental pode ligar um `DenseFeatureMap` nativo a `feature_resolution_enhancement`, enquanto o preset canônico continua omitindo esse nó. Ambos os caminhos expõem o mesmo contrato público `DenseFeatureMap`; nenhum consumidor downstream contém `if loftup` ou equivalente. Ver [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md).
 
 ## Reprodutibilidade e proveniência
 

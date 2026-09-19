@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
+from contextmap.visual_perception.dense_region_association import DenseFeatureMap
 from contextmap.visual_perception.models import (
     BackendProvenance,
     FeatureScope,
@@ -96,6 +97,28 @@ class FeatureExtractor(Protocol):
 
         Returns:
             Extracted features, matching :meth:`required_scope`.
+        """
+        ...
+
+
+@runtime_checkable
+class FeatureResolutionEnhancement(Protocol):
+    """Capability port: increase a dense feature map's spatial resolution."""
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Report the selected enhancement model and effective configuration."""
+        ...
+
+    def enhance(self, source: DenseFeatureMap) -> DenseFeatureMap:
+        """Produce a separately identified dense map from one source artifact.
+
+        Args:
+            source: Immutable source dense map, including payload/artifact
+                references and exact sampling semantics.
+
+        Returns:
+            Enhanced map with complete enhancement lineage. Representation
+            changes must use a distinct embedding-space fingerprint.
         """
         ...
 

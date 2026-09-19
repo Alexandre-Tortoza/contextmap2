@@ -1,6 +1,6 @@
 # Capability ports
 
-Este documento descreve `src/contextmap/visual_perception/ports.py`: os quatro `Protocol`s que qualquer backend concreto de percepção visual implementa.
+Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `Protocol`s que backends concretos de percepção visual podem implementar.
 
 ## Mapeamento capability/backend
 
@@ -9,6 +9,7 @@ flowchart LR
     subgraph PORTS[Capability ports]
         RD["RegionDiscovery"]
         FE["FeatureExtractor"]
+        FRE["FeatureResolutionEnhancement"]
         SI["SemanticInterpreter"]
         SS["SemanticScorer"]
     end
@@ -25,6 +26,7 @@ flowchart LR
     ACLIP -. adapter planejado .-> SS
     QWEN["Qwen"] -. adapter planejado .-> SI
     GEMINI["Gemini"] -. adapter planejado .-> SI
+    ENH["Backend aprendido"] -. futuro e opcional .-> FRE
 ```
 
 Um mesmo modelo pode satisfazer mais de uma capability através de adapters **distintos** — Florence-2 como `RegionDiscovery` e Florence-2 como `SemanticInterpreter` continuam sendo dois adapters de capability separados, mesmo compartilhando o runtime do modelo internamente. O mesmo vale para CLIP como `FeatureExtractor` vs. CLIP como `SemanticScorer`.
@@ -35,6 +37,7 @@ Os ports não codificam `RegionDiscovery -> FeatureExtractor -> SemanticInterpre
 
 ```text
 DINOv3 (dense)         requires: PreparedImage                    provides: VisualFeature[] (dense)
+resolution enhancement requires: DenseFeatureMap                  provides: DenseFeatureMap
 AlphaCLIP (region)     requires: PreparedImage + Region2D[]       provides: VisualFeature[] (region)
 Gemini (region)        requires: PreparedImage + Region2D[]       provides: SemanticClaim[]
 CLIP (scorer)          requires: SemanticClaim[] + PreparedImage  provides: SemanticSupport[]
@@ -53,6 +56,10 @@ Os tipos adapter-facing são exportados para configuração, diagnóstico e aval
 ## `FeatureExtractor.required_scope()`
 
 Em vez de multiplicar tipos de port por escopo (dense/global/region), um único `FeatureExtractor` declara seu escopo via `required_scope()`. Um extrator dense/global só recebe `image`; um extrator region-scoped também recebe `regions`. Isso evita forçar uma assinatura mandatória `PreparedImage + Region2D[]` em extratores que não precisam de regiões (ex.: DINOv3 dense).
+
+## `FeatureResolutionEnhancement`
+
+É um port separado porque possui input/output de artifact, custo, falha e ativação próprios. Recebe um `DenseFeatureMap` já produzido e devolve outro `DenseFeatureMap`, com lineage completa em `FeatureResolutionEnhancementProvenance`. Não é um modo interno do DINO e não aparece no caminho canônico quando ausente da configuração.
 
 ## `SemanticScorer` nunca muta uma claim
 

@@ -1,6 +1,8 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.ingestion import SourceObservationId
@@ -8,6 +10,8 @@ from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
     BackendProvenance,
     BoundingBox2D,
+    FeatureId,
+    FeatureScope,
     IncompleteRunArtifactError,
     PerceptionResult,
     PerceptionResultId,
@@ -19,6 +23,7 @@ from contextmap.visual_perception import (
     RunArtifactError,
     StageDefinition,
     StageStatus,
+    VisualFeature,
     allocate_run_index,
     execute_stage_graph,
     rebuild_run_registry,
@@ -35,7 +40,12 @@ def _run_dir(tmp_path: Path, sequence_name: str = "corridor-02", run_index: int 
     return tmp_path / "runs" / "visual-perception" / sequence_name / run_dir_name
 
 
-def _result(observation_id: str, run_id: str) -> PerceptionResult:
+def _result(
+    observation_id: str,
+    run_id: str,
+    *,
+    features: tuple[VisualFeature, ...] = (),
+) -> PerceptionResult:
     region = Region2D(
         region_id=RegionId("region-0001"),
         bounding_box=BoundingBox2D(x=0, y=0, width=10, height=10),
@@ -48,6 +58,7 @@ def _result(observation_id: str, run_id: str) -> PerceptionResult:
         sequence_artifact_id="corridor-02-a1b2c3",
         created_at="2026-01-01T00:00:00+00:00",
         regions=(region,),
+        features=features,
     )
 
 
@@ -275,3 +286,91 @@ def test_verify_integrity_detects_a_missing_output_file(tmp_path: Path) -> None:
 
     reader = PerceptionRunReader(run_dir)
     assert any("missing file" in problem for problem in reader.verify_integrity())
+
+
+def _dense_feature(feature_id: str = "feature-dense-0000") -> VisualFeature:
+    return VisualFeature(
+        feature_id=FeatureId(feature_id),
+        scope=FeatureScope.DENSE,
+        embedding_space_id="fake-dense-space",
+        shape=(2, 2),
+        dtype="float32",
+        payload_reference=f"frame-0001/{feature_id}.npy",
+        provenance=_PROVENANCE,
+    )
+
+
+def test_feature_payload_is_persisted_and_lazily_loadable(tmp_path: Path) -> None:
+    feature = _dense_feature()
+    array = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", features=(feature,)))
+    writer.add_feature_payload(feature, SourceObservationId("frame-0001"), array)
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    reader = PerceptionRunReader(run_dir)
+    assert reader.verify_integrity() == []
+
+    store = reader.feature_store()
+    observation_id = SourceObservationId("frame-0001")
+    assert store.feature_keys() == ((observation_id, feature.feature_id),)
+    # Metadata is readable without loading the array.
+    entry = store.entry(observation_id, feature.feature_id)
+    assert entry.shape == (2, 2)
+
+    loaded = store.load(observation_id, feature.feature_id)
+    np.testing.assert_array_equal(loaded, array)
+
+
+def test_finalize_rejects_payload_absent_from_result(tmp_path: Path) -> None:
+    feature = _dense_feature()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_feature_payload(
+        feature,
+        SourceObservationId("frame-0001"),
+        np.zeros((2, 2), dtype="float32"),
+    )
+
+    with pytest.raises(RunArtifactError, match="does not resolve to exactly one result feature"):
+        writer.finalize()
+
+
+def test_finalize_rejects_payload_for_wrong_observation(tmp_path: Path) -> None:
+    feature = _dense_feature()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", features=(feature,)))
+    writer.add_feature_payload(
+        feature,
+        SourceObservationId("frame-0002"),
+        np.zeros((2, 2), dtype="float32"),
+    )
+
+    with pytest.raises(RunArtifactError, match="does not resolve to exactly one result feature"):
+        writer.finalize()
+
+
+def test_finalize_rejects_payload_metadata_that_disagrees_with_result(tmp_path: Path) -> None:
+    feature = _dense_feature()
+    contradictory_feature = replace(feature, normalization="l2")
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", features=(feature,)))
+    writer.add_feature_payload(
+        contradictory_feature,
+        SourceObservationId("frame-0001"),
+        np.zeros((2, 2), dtype="float32"),
+    )
+
+    with pytest.raises(RunArtifactError, match="normalization"):
+        writer.finalize()
+
+
+def test_a_run_with_no_feature_payloads_has_an_empty_feature_store(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.feature_store().feature_keys() == ()

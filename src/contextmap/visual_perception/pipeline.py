@@ -20,10 +20,10 @@ Three concepts only, matching the issue's boundary:
 - :class:`PipelinePreset` — a versioned, named selection of stages,
   dependencies, backends, and parameters (e.g. ``"canonical/1"``).
 
-This is deliberately not a generic plugin/workflow engine: the set of
-capabilities a :class:`StageSpec` can declare is the small, fixed table
-in ``_CAPABILITY_ADAPTERS``, matching exactly the ports in
-:mod:`contextmap.visual_perception.ports`. See
+This is deliberately not a generic plugin/workflow engine: the executable
+capabilities a :class:`StageSpec` can declare form the small, fixed table
+in ``_CAPABILITY_ADAPTERS``. Public ports that are not wired into the graph,
+such as ``SemanticScorer``, are intentionally absent. See
 ``src/contextmap/visual_perception/docs/pipeline.md`` for the full
 design rationale, the canonical preset's topology, and a worked example
 of inserting an optional stage without touching downstream capability
@@ -38,6 +38,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from contextmap.visual_perception.dense_region_association import DenseFeatureMap
+from contextmap.visual_perception.feature_resolution_enhancement import (
+    enhance_feature_resolution,
+)
 from contextmap.visual_perception.models import (
     BackendProvenance,
     FeatureScope,
@@ -49,6 +53,7 @@ from contextmap.visual_perception.models import (
 )
 from contextmap.visual_perception.ports import (
     FeatureExtractor,
+    FeatureResolutionEnhancement,
     RegionDiscovery,
     SemanticInterpreter,
 )
@@ -171,6 +176,15 @@ def _run_feature_extractor(
     return backend.extract(image, regions=regions)  # type: ignore[arg-type]
 
 
+def _run_feature_resolution_enhancement(
+    backend: object, inputs: Mapping[str, object]
+) -> DenseFeatureMap:
+    assert isinstance(backend, FeatureResolutionEnhancement)
+    dense_map = inputs["dense_map"]
+    assert isinstance(dense_map, DenseFeatureMap)
+    return enhance_feature_resolution(dense_map, enhancer=backend)
+
+
 def _run_scene_interpretation(backend: object, inputs: Mapping[str, object]) -> SceneContext | None:
     assert isinstance(backend, SemanticInterpreter)
     image = inputs["image"]
@@ -190,6 +204,7 @@ def _run_region_interpretation(
 
 
 _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], object]] = {
+    "feature_resolution_enhancement": _run_feature_resolution_enhancement,
     "region_discovery": _run_region_discovery,
     "feature_extractor": _run_feature_extractor,
     "scene_interpretation": _run_scene_interpretation,
@@ -199,18 +214,20 @@ _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], obje
 KNOWN_CAPABILITIES = frozenset(_CAPABILITY_ADAPTERS)
 """Capability names this module knows how to invoke on a resolved backend.
 
-Adding a new port (a fifth capability) means adding one adapter function
+Adding a new executable capability means adding one adapter function
 to ``_CAPABILITY_ADAPTERS`` — never a generic dispatch/plugin mechanism.
 """
 
 _BASE_REQUIRED_INPUTS: Mapping[str, frozenset[str]] = {
     "region_discovery": frozenset({"image"}),
     "feature_extractor": frozenset({"image"}),
+    "feature_resolution_enhancement": frozenset({"dense_map"}),
     "scene_interpretation": frozenset({"image"}),
     "region_interpretation": frozenset({"image", "regions"}),
 }
 
 _INPUT_PRODUCER_CAPABILITIES: Mapping[str, frozenset[str]] = {
+    "dense_map": frozenset({"dense_feature_map_source", "feature_resolution_enhancement"}),
     "image": frozenset({"image_preparation"}),
     "regions": frozenset({"region_discovery"}),
 }
