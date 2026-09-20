@@ -24,7 +24,7 @@ Geometria é **onde** algo está. Evidência visual, semântica e identidade de 
 
 ## Estado implementado
 
-Existem os **contratos** e a fronteira de leitura `GeometrySource`. Estão **planejados**, e serão documentados aqui quando forem implementados: montagem dos inputs de geometria, transformação fonte→mapa, estado de correção de movimento, acumulação com referências estáveis, índice espacial e lookup, `GeometricMapArtifact` e a validação.
+Existem os **contratos**, a fronteira de leitura `GeometrySource` e o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: montagem dos inputs de geometria, transformação fonte→mapa, acumulação com referências estáveis, índice espacial e lookup, `GeometricMapArtifact` e a validação.
 
 ## Contratos públicos
 
@@ -33,13 +33,14 @@ Existem os **contratos** e a fronteira de leitura `GeometrySource`. Estão **pla
 - `TransformLineage`, `TransformStep`, `TransformKind` — a cadeia `T_map_body(t) · T_body_sensor` que produziu a coordenada.
 - `GeometricMap`, `GeometricMapProvenance`, `SpatialIndexMetadata` — identidade, frame, limites, observações de origem e proveniência de um mapa.
 - `Bounds3D` — caixa alinhada aos eixos que declara o frame em que está expressa.
+- `MotionCorrectionState`, `MotionCorrectionRecord`, `MotionCorrectionEvidence`, `MotionCorrectionPolicy`, `ScanDisposition`, `MotionCorrectionVerdict` — se um scan foi corrigido para o movimento da plataforma (`RAW`/`CORRECTED`/`UNKNOWN`), com a evidência que sustenta a afirmação e a política aplicada.
 - `GeometrySource` — fronteira de leitura (`get`, `iter_geometry`, `query_bounds`) que Sensor Association e demais consumidores usam sem depender de como o mapa é armazenado ou indexado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
 ## Módulos consumidos
 
-- `contextmap.ingestion`: `FrameId`, `SequenceArtifactId`, `SourceObservationId`.
+- `contextmap.ingestion`: `FrameId`, `SequenceArtifactId`, `SourceObservationId`, `LidarObservation`.
 - `contextmap.state_estimation`: `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupPolicy`, `TimeBounds`.
 - `contextmap.shared`: `SourceTimestamp`, `Vector3`.
 
@@ -50,5 +51,6 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, convenções de coordenada, identidade e serialização.
+- [`motion-correction.md`](motion-correction.md) — estado de correção de movimento, evidência e política de scans não corrigidos.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `GeometryPoint`, `GeometryReference` e `GeometricMap` no contexto global de contratos.

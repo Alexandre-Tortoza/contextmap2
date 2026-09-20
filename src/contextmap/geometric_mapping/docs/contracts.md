@@ -42,6 +42,8 @@ Cada `TransformStep` declara `kind` (`STATIC_CALIBRATION` ou `DYNAMIC_POSE`), `p
 
 Um ponto é `MEASURED` (uma medição do sensor, transformada) ou `AGGREGATED` (produzido por uma regra explícita de deduplicação ou downsampling). Um ponto agregado **nunca finge ser uma medição crua**: nomeia a `aggregation_rule`, informa `contributing_point_count` (pelo menos dois) e não carrega `source_point_index`.
 
+Cada ponto também carrega `motion_correction` (`RAW`, `CORRECTED` ou `UNKNOWN`, padrão `UNKNOWN`): o estado de correção de movimento do scan de origem, nunca inferido. Ver [`motion-correction.md`](motion-correction.md).
+
 ## `Bounds3D`
 
 Caixa alinhada aos eixos, com `frame_id`, `minimum_m` e `maximum_m`. Fronteiras são **inclusivas**: um ponto sobre uma face está contido e duas caixas que se tocam se intersectam. `contains` e `intersects` exigem o mesmo frame e falham caso contrário. `Bounds3D.enclosing` constrói a caixa justa de um conjunto de pontos.

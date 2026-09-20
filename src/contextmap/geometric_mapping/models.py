@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import NewType
 
+from contextmap.geometric_mapping.motion_correction import MotionCorrectionState
 from contextmap.ingestion import (
     FrameId,
     SequenceArtifactId,
@@ -314,11 +315,15 @@ class GeometryPointProvenance:
             ``None`` for a measured one.
         contributing_point_count: Measurements behind the point: exactly one for
             a measured point, at least two for an aggregated one.
+        motion_correction: Whether the scan the point came from was corrected
+            for platform motion. Explicit for every point and ``UNKNOWN`` unless a
+            declaration says otherwise; never inferred.
     """
 
     origin: PointOrigin = PointOrigin.MEASURED
     aggregation_rule: str | None = None
     contributing_point_count: int = 1
+    motion_correction: MotionCorrectionState = MotionCorrectionState.UNKNOWN
 
     def __post_init__(self) -> None:
         """Validate that the provenance is coherent.
