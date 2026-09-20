@@ -50,7 +50,9 @@ from contextmap.visual_perception import (
 __all__ = [
     "decode_point_correspondence",
     "decode_spatial_observation",
+    "encode_calibration_ref",
     "encode_point_correspondence",
+    "encode_pose_ref",
     "encode_spatial_observation",
 ]
 
@@ -71,6 +73,30 @@ def _encode_pixel(pixel: PixelCoordinate | None) -> list[float] | None:
 
 def _decode_pixel(record: list[float] | None) -> PixelCoordinate | None:
     return None if record is None else (record[0], record[1])
+
+
+def encode_calibration_ref(calibration: CalibrationRef) -> dict[str, Any]:
+    """Encode which calibration and camera turned geometry into pixels."""
+    return {
+        "calibration_identity": calibration.calibration_identity,
+        "camera_calibration_id": str(calibration.camera_calibration_id),
+        "camera_model_kind": calibration.camera_model_kind,
+        "camera_frame": str(calibration.camera_frame),
+    }
+
+
+def encode_pose_ref(pose: PoseRef) -> dict[str, Any]:
+    """Encode which pose placed the camera, without embedding the pose."""
+    return {
+        "trajectory_id": str(pose.trajectory_id),
+        "state_estimation_run_id": None
+        if pose.state_estimation_run_id is None
+        else str(pose.state_estimation_run_id),
+        "source_estimate_ids": [str(item) for item in pose.source_estimate_ids],
+        "lookup_outcome": pose.lookup_outcome.value,
+        "time_delta_ns": pose.time_delta_ns,
+        "interpolation_fraction": pose.interpolation_fraction,
+    }
 
 
 def encode_point_correspondence(record: PointCorrespondence) -> dict[str, Any]:
@@ -135,22 +161,8 @@ def encode_spatial_observation(observation: SpatialObservation) -> dict[str, Any
         "semantic_claim_refs": [
             {"claim_id": str(claim.claim_id)} for claim in observation.semantic_claim_refs
         ],
-        "calibration_ref": {
-            "calibration_identity": calibration.calibration_identity,
-            "camera_calibration_id": str(calibration.camera_calibration_id),
-            "camera_model_kind": calibration.camera_model_kind,
-            "camera_frame": str(calibration.camera_frame),
-        },
-        "pose_ref": {
-            "trajectory_id": str(pose.trajectory_id),
-            "state_estimation_run_id": None
-            if pose.state_estimation_run_id is None
-            else str(pose.state_estimation_run_id),
-            "source_estimate_ids": [str(item) for item in pose.source_estimate_ids],
-            "lookup_outcome": pose.lookup_outcome.value,
-            "time_delta_ns": pose.time_delta_ns,
-            "interpolation_fraction": pose.interpolation_fraction,
-        },
+        "calibration_ref": encode_calibration_ref(calibration),
+        "pose_ref": encode_pose_ref(pose),
         "visibility": {
             state.value: count for state, count in observation.visibility.counts.items()
         },
