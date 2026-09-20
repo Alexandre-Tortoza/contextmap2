@@ -49,6 +49,7 @@ from contextmap.state_estimation.ports import (
     StateEstimationRequest,
     StateEstimationResult,
 )
+from contextmap.state_estimation.preflight import GeometryRequirements
 
 BACKEND_ID = "external_pose"
 BACKEND_VERSION = "1"
@@ -178,6 +179,15 @@ class ExternalPoseEstimator:
             backend_id=BACKEND_ID,
             backend_version=BACKEND_VERSION,
             configuration_fingerprint=self._config.fingerprint(),
+        )
+
+    def geometry_requirements(self) -> GeometryRequirements:
+        """Declare that this backend needs external poses and no calibration."""
+        return GeometryRequirements(
+            capability=f"state_estimation:{BACKEND_ID}",
+            modalities=frozenset({"external_pose"}),
+            reference_frame=self._config.reference_frame,
+            body_frame=self._config.body_frame,
         )
 
     def estimate(self, request: StateEstimationRequest) -> StateEstimationResult:

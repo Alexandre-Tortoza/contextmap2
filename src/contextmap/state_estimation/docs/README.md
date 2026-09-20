@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator` e o backend `ExternalPose`. Estão **planejados**, e serão documentados aqui quando forem implementados: backend FAST-LIO, preflight do frame graph, `StateEstimationRunArtifact` e o harness de validação.
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, o backend `ExternalPose`, o frame graph estático e o preflight de geometria. Estão **planejados**, e serão documentados aqui quando forem implementados: backend FAST-LIO, `StateEstimationRunArtifact` e o harness de validação.
 
 ## Contratos públicos
 
@@ -35,15 +35,18 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup tempora
 - `TrajectoryLookup`, `LookupPolicy`, `ResolvedPose`, `RejectedLookup`, `LookupOutcome`, `LookupRejection`, `ClockDomainMismatchError` — resolução auditável de `T_map_body(t)` no timestamp de uma observação (exata, mais próxima ou interpolada), com rejeições explícitas.
 - `TemporalAlignmentSummary`, `summarize_lookups()` — métricas de alinhamento temporal de um conjunto de lookups.
 - `StateEstimator` — port de backends de estimação; `StateEstimationRequest`, `StateEstimationResult`, `EstimationDiagnostic`, `DiagnosticSeverity`, `StateEstimationError`, `MissingEstimatorInputError`.
+- `StaticFrameGraph`, `ResolvedTransform`, `LoopInconsistency`, `FrameGraphError` — resolução de `T_parent_child` e verificação de caminhos redundantes sobre os extrínsecos estáticos canônicos.
+- `run_geometry_preflight()`, `GeometryRequirements`, `StaticRelationRequirement`, `GeometryPreflightReport`, `PreflightStatus`, `PreflightTolerances`, `calibration_identity()` — preflight READY/BLOCKED por capability.
+- `execute_state_estimation()`, `StateEstimationOutcome`, `GeometryPreflightError` — executa um backend somente depois do preflight.
 
 O backend `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) não é reexportado por `contextmap.state_estimation`; é importado pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação e [`backends.md`](backends.md) para o port e o backend `ExternalPose`.
+Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação , [`backends.md`](backends.md) para o port e o backend `ExternalPose` e [`preflight.md`](preflight.md) para o frame graph, as checagens e o serviço.
 
 ## Módulos consumidos
 
-- `contextmap.ingestion`: `FrameId`, `SourceObservationId`, `SequenceArtifactId`, `Covariance6x6`.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `Quaternion`, `is_unit_quaternion`.
+- `contextmap.ingestion`: `FrameId`, `SourceObservationId`, `SequenceArtifactId`, `Covariance6x6`, `CalibrationSet`, `RigidTransform`, `SourceObservation`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `Quaternion` e a álgebra de quaternions/transforms rígidos de `shared.geometry`.
 
 ## Módulos que consomem este
 
@@ -54,6 +57,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 - [`contracts.md`](contracts.md) — contratos, convenção de transform, invariantes e serialização.
 - [`lookup.md`](lookup.md) — alinhamento temporal, políticas de lookup, interpolação e métricas.
 - [`backends.md`](backends.md) — port `StateEstimator` e backend `ExternalPose`.
+- [`preflight.md`](preflight.md) — frame graph estático, preflight de geometria e serviço de execução.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PoseEstimate` e `Trajectory` no contexto global de contratos.
 - [`docs/shared-primitives.md`](../../../../docs/shared-primitives.md) — primitivas geométricas compartilhadas.

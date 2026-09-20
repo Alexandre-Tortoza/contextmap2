@@ -7,8 +7,11 @@
 ```python
 class StateEstimator(Protocol):
     def estimator_provenance(self) -> EstimatorProvenance: ...
+    def geometry_requirements(self) -> GeometryRequirements: ...
     def estimate(self, request: StateEstimationRequest) -> StateEstimationResult: ...
 ```
+
+`geometry_requirements()` declara o que o backend exige da sequência e da calibração (modalidades, extrínsecos estáticos e frames dinâmicos); o [preflight](preflight.md) o verifica antes de `estimate()`.
 
 - `StateEstimationRequest`: `trajectory_id`, `sequence_artifact_id`, `selection_id`, `observations` (observações canônicas selecionadas, em ordem de sequência) e `calibration` (`CalibrationSet | None`). O backend usa as modalidades de que precisa e ignora as demais; nunca mantém uma cópia própria da calibração.
 - `StateEstimationResult`: `trajectory`, `diagnostics`, `consumed_observation_count` e `rejected_observation_count`.

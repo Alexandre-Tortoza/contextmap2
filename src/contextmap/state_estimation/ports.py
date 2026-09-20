@@ -23,6 +23,7 @@ from contextmap.ingestion import (
     SourceObservationId,
 )
 from contextmap.state_estimation.models import EstimatorProvenance, Trajectory, TrajectoryId
+from contextmap.state_estimation.preflight import GeometryRequirements
 
 
 class StateEstimationError(Exception):
@@ -112,6 +113,15 @@ class StateEstimator(Protocol):
 
         Returns:
             The provenance attached to every trajectory this backend produces.
+        """
+        ...
+
+    def geometry_requirements(self) -> GeometryRequirements:
+        """Declare what this backend needs from the sequence and its calibration.
+
+        Returns:
+            The modalities, static relations and dynamic frames the backend
+            requires, checked by the geometry preflight before ``estimate``.
         """
         ...
 
