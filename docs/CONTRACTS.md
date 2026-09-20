@@ -205,6 +205,54 @@ evidence_references[]
 
 Evidência semântica de nível de cena. O contrato implementado contém identidades da observação e do resultado, `claims[]` com `region_id=None`, referências de evidência, provenance semântica e campos opcionais `scene_type`, `environment`, `layout`, `lighting`, `visibility` e `navigability`. Claims internas devem pertencer à mesma observação e ao mesmo resultado.
 
+## 8.1. `SemanticInterpretationRequest`
+
+Boundary canônico de uma chamada semântica de cena ou região. Ele não é uma
+claim nem estado persistente; representa a seleção exata de evidência fornecida
+a um backend.
+
+```text
+request_id
+source_observation_id
+perception_result_id
+mode = SCENE | REGION
+region_id?
+visual_views[]
+visual_features[]
+scene_context_reference?
+supporting_metadata[]
+prompt_template_id
+requested_output_schema
+configuration_fingerprint
+```
+
+Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
+`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
+quando aplicável. Features opcionais preservam `feature_id`,
+`embedding_space_id`, scope e região. Evidência não suportada por um backend é
+rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
+descartada silenciosamente.
+
+## 8.2. `SemanticInterpretationExecution`
+
+Registro de uma inferência semântica individual, mantendo camadas que não devem
+ser colapsadas:
+
+```text
+request
+rendered_prompt
+raw_response
+parsed claims / scene_context / abstention
+diagnostics
+effective_configuration
+```
+
+O run artifact persiste o request e a execution, materializa as views exatas,
+exige payload de qualquer feature efetivamente consumida, resolve contexto de
+cena/região e reconcilia o parsing com o `PerceptionResult`. Qwen/Gemini usam
+`SemanticConfidencePolicy.UNSCORED_ONLY`; um backend com score realmente
+medido pode usar a policy `MEASURED`.
+
 ## 9. `SemanticSupport`
 
 Julgamento separado produzido por `SemanticScorer` sobre uma `SemanticClaim`:
@@ -680,4 +728,4 @@ Mas não podem exigir o tipo nativo do backend para serem lidos.
 
 Todo contrato que atravessa uma boundary persistida deve possuir representação serializável/inspectável ou metadata suficiente para resolver seu payload.
 
-Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente. No `PerceptionRunArtifact` atual, `FeatureStoreReader` valida hash, shape e dtype antes do carregamento lazy.
+Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente. No `PerceptionRunArtifact` atual, `FeatureStoreReader` valida hash, shape e dtype antes do carregamento lazy. Evidência usada por Semantic Interpretation recebe regras mais fortes: views são sempre materializadas e content-addressed; features referenciadas semanticamente precisam possuir payload persistido; request, prompt, raw response, parsing e diagnostics da execução ficam auditáveis no mesmo artifact.
