@@ -32,7 +32,7 @@ O NumPy é importado sob demanda: importar `contextmap.sensor_association` conti
 
 - **Frame óptico**: `x` para a direita, `y` para baixo, `z` para a frente, metros. É o frame declarado por `CalibrationEntry.frame_id`; nada é inferido.
 - **Pixel**: `(u, v)` contínuos, com o **centro** do pixel no inteiro. A imagem cobre `[-0.5, largura - 0.5) × [-0.5, altura - 0.5)`; `in_image` usa essa extensão e trata `NaN` como fora.
-- **Alcance e profundidade**: `range_m` é `‖P‖` e `depth_m` é `z`. A oclusão e a visibilidade usam o alcance (ver `contracts.md`), porque um campo de visão acima de 180° enxerga pontos com `z <= 0`.
+- **Alcance e profundidade**: `range_m` é `‖P‖` e `depth_m` é `z`; ambos são preservados. A oclusão usa a métrica que o modelo de câmera pede (`z` no pinhole, alcance nos modelos de campo amplo, onde `z` pode ser não positivo), registrada em cada resultado; ver [`visibility.md`](visibility.md).
 
 ## Modelos
 

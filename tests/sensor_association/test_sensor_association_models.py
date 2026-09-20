@@ -20,6 +20,7 @@ from contextmap.geometric_mapping import GeometryReference, MapId
 from contextmap.ingestion import CalibrationReferenceId, FrameId
 from contextmap.sensor_association import (
     CalibrationRef,
+    DepthMetric,
     PixelCoordinate,
     PointCorrespondence,
     ProjectionSummary,
@@ -194,6 +195,7 @@ def test_the_projection_summary_is_consistent() -> None:
     with pytest.raises(ValueError, match="image_transform_id"):
         ProjectionSummary(
             camera_model_kind="pinhole",
+            depth_metric=DepthMetric.OPTICAL_AXIS,
             image_transform_id="",
             prepared_image_size=(640, 480),
             considered_count=1,
@@ -202,11 +204,19 @@ def test_the_projection_summary_is_consistent() -> None:
     with pytest.raises(ValueError, match="prepared_image_size"):
         ProjectionSummary(
             camera_model_kind="pinhole",
+            depth_metric=DepthMetric.OPTICAL_AXIS,
             image_transform_id="x",
             prepared_image_size=(0, 480),
             considered_count=1,
             visible_count=1,
         )
+
+
+def test_the_projection_summary_states_how_depth_is_measured() -> None:
+    summary = make_spatial_observation().projection_summary
+
+    assert summary.depth_metric is DepthMetric.RAY_RANGE
+    assert {metric.value for metric in DepthMetric} == {"optical_axis", "ray_range"}
 
 
 def test_the_region_diagnostics_cannot_exceed_what_the_projection_considered_or_kept_visible() -> (
@@ -335,10 +345,10 @@ def _correspondence(state: VisibilityState, **overrides: object) -> PointCorresp
     values: dict[str, object] = {
         "geometry": refs((3,))[0],
         "visibility": state,
-        "camera_range_m": 4.2,
+        "camera_depth_m": 4.2,
         "raw_pixel": (320.5, 240.25),
         "prepared_pixel": (160.25, 120.125),
-        "support_range_m": 4.1,
+        "support_depth_m": 4.1,
     }
     values.update(overrides)
     return PointCorrespondence(**values)  # type: ignore[arg-type]
@@ -354,32 +364,42 @@ def _correspondence(state: VisibilityState, **overrides: object) -> PointCorresp
     ],
 )
 def test_a_point_that_reaches_the_prepared_image_carries_its_pixel(state: VisibilityState) -> None:
-    record = _correspondence(state, support_range_m=3.0)
+    record = _correspondence(state, support_depth_m=3.0)
 
     assert record.prepared_pixel == (160.25, 120.125)
     with pytest.raises(ValueError, match="prepared_pixel"):
         _correspondence(state, prepared_pixel=None)
 
 
-def test_the_range_is_the_distance_along_the_viewing_ray_and_never_negative() -> None:
-    with pytest.raises(ValueError, match="camera_range_m"):
-        _correspondence(VisibilityState.ASSOCIATED, camera_range_m=-1.0)
-    with pytest.raises(ValueError, match="support_range_m"):
-        _correspondence(VisibilityState.ASSOCIATED, support_range_m=-0.1)
+def test_a_depth_is_negative_only_for_a_point_behind_the_camera() -> None:
+    with pytest.raises(ValueError, match="camera_depth_m"):
+        _correspondence(VisibilityState.ASSOCIATED, camera_depth_m=-1.0)
+    with pytest.raises(ValueError, match="camera_depth_m"):
+        _correspondence(VisibilityState.OUTSIDE_IMAGE, camera_depth_m=-1.0, support_depth_m=None)
+    with pytest.raises(ValueError, match="support_depth_m"):
+        _correspondence(VisibilityState.ASSOCIATED, support_depth_m=-0.1)
+    behind = _correspondence(
+        VisibilityState.BEHIND_CAMERA,
+        camera_depth_m=-2.0,
+        raw_pixel=None,
+        prepared_pixel=None,
+        support_depth_m=None,
+    )
+    assert behind.camera_depth_m == -2.0
 
 
 def test_a_point_the_camera_model_cannot_project_has_no_pixel_and_no_support() -> None:
     behind = _correspondence(
         VisibilityState.BEHIND_CAMERA,
-        camera_range_m=2.0,
+        camera_depth_m=2.0,
         raw_pixel=None,
         prepared_pixel=None,
-        support_range_m=None,
+        support_depth_m=None,
     )
 
     assert behind.prepared_pixel is None
     with pytest.raises(ValueError, match="prepared_pixel"):
-        _correspondence(VisibilityState.BEHIND_CAMERA, camera_range_m=2.0)
+        _correspondence(VisibilityState.BEHIND_CAMERA, camera_depth_m=2.0)
 
 
 def test_a_point_outside_the_image_may_keep_the_pixel_the_model_produced() -> None:
@@ -387,31 +407,31 @@ def test_a_point_outside_the_image_may_keep_the_pixel_the_model_produced() -> No
         VisibilityState.OUTSIDE_IMAGE,
         raw_pixel=(700.0, 10.0),
         prepared_pixel=(350.0, 5.0),
-        support_range_m=None,
+        support_depth_m=None,
     )
     dropped = _correspondence(
-        VisibilityState.OUTSIDE_IMAGE, raw_pixel=None, prepared_pixel=None, support_range_m=None
+        VisibilityState.OUTSIDE_IMAGE, raw_pixel=None, prepared_pixel=None, support_depth_m=None
     )
 
     assert kept.prepared_pixel == (350.0, 5.0)
     assert dropped.prepared_pixel is None
-    with pytest.raises(ValueError, match="support_range_m"):
+    with pytest.raises(ValueError, match="support_depth_m"):
         _correspondence(VisibilityState.OUTSIDE_IMAGE, prepared_pixel=None, raw_pixel=None)
 
 
 def test_an_occluded_point_names_the_nearer_surface_that_hides_it() -> None:
-    occluded = _correspondence(VisibilityState.OCCLUDED, camera_range_m=6.0, support_range_m=3.5)
+    occluded = _correspondence(VisibilityState.OCCLUDED, camera_depth_m=6.0, support_depth_m=3.5)
 
-    assert occluded.support_range_m == 3.5
-    with pytest.raises(ValueError, match="support_range_m"):
-        _correspondence(VisibilityState.OCCLUDED, support_range_m=None)
-    with pytest.raises(ValueError, match="support_range_m"):
-        _correspondence(VisibilityState.OCCLUDED, camera_range_m=4.0, support_range_m=4.0)
+    assert occluded.support_depth_m == 3.5
+    with pytest.raises(ValueError, match="support_depth_m"):
+        _correspondence(VisibilityState.OCCLUDED, support_depth_m=None)
+    with pytest.raises(ValueError, match="support_depth_m"):
+        _correspondence(VisibilityState.OCCLUDED, camera_depth_m=4.0, support_depth_m=4.0)
 
 
-def test_pixels_and_ranges_must_be_finite() -> None:
+def test_pixels_and_depths_must_be_finite() -> None:
     with pytest.raises(ValueError, match="finite"):
-        _correspondence(VisibilityState.ASSOCIATED, camera_range_m=float("nan"))
+        _correspondence(VisibilityState.ASSOCIATED, camera_depth_m=float("nan"))
     with pytest.raises(ValueError, match="finite"):
         _correspondence(VisibilityState.ASSOCIATED, prepared_pixel=(float("inf"), 1.0))
     with pytest.raises(ValueError, match="finite"):

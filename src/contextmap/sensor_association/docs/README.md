@@ -27,12 +27,12 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 
 ## Estado implementado
 
-Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto. Estão **planejados**, e serão documentados aqui quando forem implementados: visibilidade e oclusão, pertencimento à máscara, amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
+Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto e a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão). Estão **planejados**, e serão documentados aqui quando forem implementados: pertencimento à máscara, amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
 
 ## Contratos públicos
 
 - `SpatialObservation`, `SpatialObservationId`, `spatial_observation_id_for()` — a geometria que uma região enxerga, por referência.
-- `VisibilityState`, `VisibilityDiagnostics` — por que um candidato entrou ou não como evidência.
+- `VisibilityState`, `VisibilityDiagnostics`, `DepthMetric` — por que um candidato entrou ou não como evidência, e como a profundidade foi medida.
 - `PointCorrespondence`, `PixelCoordinate` — registro de baixo nível do resultado 2D de um elemento do mapa.
 - `ProjectionSummary` — fatos da projeção no nível do frame.
 - `VisualFeatureRef`, `SemanticClaimRef` — referências à evidência visual do mesmo resultado, nunca cópias.
@@ -41,7 +41,7 @@ Existem os **contratos** e sua serialização, a **projeção de câmera calibra
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
-A cadeia de projeção (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`) é interna à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
+A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `OcclusionPolicy`, `VisibilityResolution`) são internas à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
 
 ## Módulos consumidos
 
@@ -59,5 +59,6 @@ A cadeia de projeção (`GeometryCloud`, `RawToPreparedTransform`, `FrameProject
 - [`contracts.md`](contracts.md) — contratos, convenções, identidade e serialização.
 - [`camera_models.md`](camera_models.md) — modelos de câmera, convenções de pixel, domínio de visão e verificação.
 - [`projection_chain.md`](projection_chain.md) — cadeia mapa → câmera → imagem preparada, suporte, proveniência e validação.
+- [`visibility.md`](visibility.md) — oclusão por suporte de profundidade local, política, métrica de profundidade e diagnósticos.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.

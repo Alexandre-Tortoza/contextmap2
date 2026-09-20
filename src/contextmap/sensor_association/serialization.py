@@ -20,6 +20,7 @@ from contextmap.ingestion import (
 from contextmap.sensor_association.models import (
     AssociationProvenance,
     CalibrationRef,
+    DepthMetric,
     PixelCoordinate,
     PointCorrespondence,
     PoseRef,
@@ -77,10 +78,10 @@ def encode_point_correspondence(record: PointCorrespondence) -> dict[str, Any]:
     return {
         "geometry": _encode_reference(record.geometry),
         "visibility": record.visibility.value,
-        "camera_range_m": record.camera_range_m,
+        "camera_depth_m": record.camera_depth_m,
         "raw_pixel": _encode_pixel(record.raw_pixel),
         "prepared_pixel": _encode_pixel(record.prepared_pixel),
-        "support_range_m": record.support_range_m,
+        "support_depth_m": record.support_depth_m,
     }
 
 
@@ -93,10 +94,10 @@ def decode_point_correspondence(record: Mapping[str, Any]) -> PointCorrespondenc
     return PointCorrespondence(
         geometry=_decode_reference(record["geometry"]),
         visibility=VisibilityState(record["visibility"]),
-        camera_range_m=record["camera_range_m"],
+        camera_depth_m=record["camera_depth_m"],
         raw_pixel=_decode_pixel(record["raw_pixel"]),
         prepared_pixel=_decode_pixel(record["prepared_pixel"]),
-        support_range_m=record["support_range_m"],
+        support_depth_m=record["support_depth_m"],
     )
 
 
@@ -116,6 +117,7 @@ def encode_spatial_observation(observation: SpatialObservation) -> dict[str, Any
         ],
         "projection_summary": {
             "camera_model_kind": summary.camera_model_kind,
+            "depth_metric": summary.depth_metric.value,
             "image_transform_id": summary.image_transform_id,
             "prepared_image_size": list(summary.prepared_image_size),
             "considered_count": summary.considered_count,
@@ -184,6 +186,7 @@ def decode_spatial_observation(record: Mapping[str, Any]) -> SpatialObservation:
         geometry_support=tuple(_decode_reference(item) for item in record["geometry_support"]),
         projection_summary=ProjectionSummary(
             camera_model_kind=summary["camera_model_kind"],
+            depth_metric=DepthMetric(summary["depth_metric"]),
             image_transform_id=summary["image_transform_id"],
             prepared_image_size=(width, height),
             considered_count=summary["considered_count"],

@@ -16,9 +16,11 @@ Two ideas are kept apart on purpose:
   (behind the camera, outside the image, occluded, ...), so that a missing point
   is explainable instead of silently absent.
 
-Ranges are distances along the viewing ray from the camera optical center, in
-meters. They are used instead of ``z`` depth because a camera model with a field
-of view above 180 degrees can see points with ``z <= 0``.
+Depth is measured under an explicit :class:`DepthMetric` chosen from the camera
+model and recorded in every :class:`ProjectionSummary`: along the optical axis for a
+perspective camera, and along the viewing ray for a model whose field of view can
+exceed the hemisphere in front of the camera, where ``z`` is undefined or
+non-positive. It is never a silent proxy for the other.
 
 No ROS, NumPy, Torch or point-cloud type appears here: a persisted observation is
 readable with the standard library alone. See
@@ -79,6 +81,20 @@ def spatial_observation_id_for(
     return SpatialObservationId(f"spatial--{perception_result_id}--{region_id}")
 
 
+class DepthMetric(Enum):
+    """How the depth of a point is measured for occlusion and diagnostics.
+
+    Attributes:
+        OPTICAL_AXIS: The ``z`` coordinate in the camera optical frame. Natural for a
+            perspective camera, where a fronto-parallel surface has constant depth.
+        RAY_RANGE: The distance from the optical center along the viewing ray. Used
+            when the field of view can exceed a hemisphere, so ``z`` can be non-positive.
+    """
+
+    OPTICAL_AXIS = "optical_axis"
+    RAY_RANGE = "ray_range"
+
+
 class VisibilityState(Enum):
     """Why a candidate geometry element is, or is not, evidence for a region.
 
@@ -115,10 +131,10 @@ def _require_finite_pair(name: str, pixel: PixelCoordinate | None) -> None:
         raise ValueError(f"{name} must be finite, got {pixel!r}")
 
 
-def _require_range(name: str, value: float) -> None:
+def _require_depth(name: str, value: float, *, allow_negative: bool = False) -> None:
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
-    if value < 0:
+    if value < 0 and not allow_negative:
         raise ValueError(f"{name} must not be negative, got {value!r}")
 
 
@@ -134,32 +150,38 @@ class PointCorrespondence:
     Attributes:
         geometry: The map element.
         visibility: What became of it.
-        camera_range_m: Distance from the camera optical center, in meters.
+        camera_depth_m: Depth of the point under the frame's :class:`DepthMetric`, in meters.
         raw_pixel: Pixel in the raw image, when the model produced one.
         prepared_pixel: Pixel in the prepared image, when the point reached it.
-        support_range_m: Range of the nearest surface seen at that pixel, in
-            meters; the occluder's range for an ``OCCLUDED`` point.
+        support_depth_m: Depth of the nearest surface supported around that pixel, in
+            meters, under the same metric; the occluder's depth for an ``OCCLUDED`` point.
     """
 
     geometry: GeometryReference
     visibility: VisibilityState
-    camera_range_m: float
+    camera_depth_m: float
     raw_pixel: PixelCoordinate | None
     prepared_pixel: PixelCoordinate | None
-    support_range_m: float | None
+    support_depth_m: float | None
 
     def __post_init__(self) -> None:
         """Validate the record against its visibility state.
 
         Raises:
-            ValueError: If a value is not finite, a range is negative, a pixel is
-                missing for a point that reached the prepared image, a pixel or
-                support is present for a point the model cannot project, or an
-                occluded point is not hidden by a strictly nearer surface.
+            ValueError: If a value is not finite, a depth is negative (except for a
+                point behind the camera), a pixel is missing for a point that reached
+                the prepared image, a pixel or support is present for a point the model
+                cannot project, or an occluded point is not hidden by a strictly nearer
+                surface.
         """
-        _require_range("camera_range_m", self.camera_range_m)
-        if self.support_range_m is not None:
-            _require_range("support_range_m", self.support_range_m)
+        # Só um ponto atrás da câmera pode ter profundidade óptica negativa.
+        _require_depth(
+            "camera_depth_m",
+            self.camera_depth_m,
+            allow_negative=self.visibility is VisibilityState.BEHIND_CAMERA,
+        )
+        if self.support_depth_m is not None:
+            _require_depth("support_depth_m", self.support_depth_m)
         _require_finite_pair("raw_pixel", self.raw_pixel)
         _require_finite_pair("prepared_pixel", self.prepared_pixel)
         state = self.visibility
@@ -168,19 +190,19 @@ class PointCorrespondence:
         if state is VisibilityState.BEHIND_CAMERA and (
             self.raw_pixel is not None
             or self.prepared_pixel is not None
-            or self.support_range_m is not None
+            or self.support_depth_m is not None
         ):
             raise ValueError(
-                "a behind_camera point has no raw_pixel, prepared_pixel or support_range_m"
+                "a behind_camera point has no raw_pixel, prepared_pixel or support_depth_m"
             )
-        if state is VisibilityState.OUTSIDE_IMAGE and self.support_range_m is not None:
-            raise ValueError("an outside_image point has no support_range_m")
+        if state is VisibilityState.OUTSIDE_IMAGE and self.support_depth_m is not None:
+            raise ValueError("an outside_image point has no support_depth_m")
         if state is VisibilityState.OCCLUDED and (
-            self.support_range_m is None or self.support_range_m >= self.camera_range_m
+            self.support_depth_m is None or self.support_depth_m >= self.camera_depth_m
         ):
             raise ValueError(
-                "an occluded point needs a support_range_m nearer than its camera_range_m, "
-                f"got {self.support_range_m!r} and {self.camera_range_m!r}"
+                "an occluded point needs a support_depth_m nearer than its camera_depth_m, "
+                f"got {self.support_depth_m!r} and {self.camera_depth_m!r}"
             )
 
 
@@ -227,6 +249,7 @@ class ProjectionSummary:
 
     Attributes:
         camera_model_kind: Camera model used, e.g. ``"pinhole"`` or ``"mei"``.
+        depth_metric: How depth is measured in this frame's diagnostics.
         image_transform_id: Identity of the raw-to-prepared image transform the
             pixels are expressed after.
         prepared_image_size: ``(width, height)`` of the prepared image, in pixels.
@@ -236,6 +259,7 @@ class ProjectionSummary:
     """
 
     camera_model_kind: str
+    depth_metric: DepthMetric
     image_transform_id: str
     prepared_image_size: tuple[int, int]
     considered_count: int

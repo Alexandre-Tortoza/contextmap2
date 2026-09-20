@@ -50,19 +50,19 @@ Uma região **sem suporte** é representável: o suporte é vazio e `visibility`
 
 ## `PointCorrespondence`
 
-Registro de baixo nível do que aconteceu com **um** elemento do mapa em **um** frame: `geometry`, `visibility`, `camera_range_m`, `raw_pixel`, `prepared_pixel` e `support_range_m`. Serve a diagnósticos e a verificações de reprojeção; consumidores downstream usam `SpatialObservation`.
+Registro de baixo nível do que aconteceu com **um** elemento do mapa em **um** frame: `geometry`, `visibility`, `camera_depth_m`, `raw_pixel`, `prepared_pixel` e `support_depth_m`. Serve a diagnósticos e a verificações de reprojeção; consumidores downstream usam `SpatialObservation`.
 
 Regras por estado:
 
 - `OUTSIDE_VALID_SUPPORT`, `OCCLUDED`, `VISIBLE_UNASSIGNED` e `ASSOCIATED` chegaram a um pixel da imagem preparada e **carregam `prepared_pixel`**;
 - `BEHIND_CAMERA` não tem pixel algum nem suporte;
 - `OUTSIDE_IMAGE` pode guardar o pixel que o modelo produziu, mas não tem suporte;
-- `OCCLUDED` nomeia o `support_range_m` da superfície que o esconde, estritamente menor que o seu `camera_range_m`;
-- todo valor é finito e nenhum alcance é negativo.
+- `OCCLUDED` nomeia o `support_depth_m` da superfície que o esconde, estritamente menor que o seu `camera_depth_m`;
+- todo valor é finito e nenhuma profundidade é negativa, exceto a de um ponto `BEHIND_CAMERA` (cuja profundidade óptica é `z <= 0`).
 
 ## Convenções
 
-- **Alcance (`range`)**: distância, em metros, do centro óptico da câmera ao ponto, **ao longo do raio de visada**. Usa-se alcance e não profundidade `z` porque um modelo com campo de visão acima de 180° enxerga pontos com `z <= 0`; o alcance é definido e positivo em qualquer modelo.
+- **Profundidade (`depth`)**: medida sob uma `DepthMetric` **explícita e registrada** em `ProjectionSummary.depth_metric`, nunca um proxy silencioso da outra. `OPTICAL_AXIS` é o `z` no frame óptico, natural para uma câmera perspectiva (uma superfície fronto-paralela tem profundidade constante). `RAY_RANGE` é a distância do centro óptico ao ponto ao longo do raio de visada, usada quando o campo de visão pode passar de um hemisfério e `z` é indefinido ou não positivo na periferia. A métrica é escolhida pelo modelo de câmera (ver [`visibility.md`](visibility.md)).
 - **Pixel**: `(u, v)` contínuos, com o **centro** do pixel no inteiro. Aparece em dois sistemas: `raw_pixel` (imagem crua) e `prepared_pixel` (depois da transformação identificada por `ProjectionSummary.image_transform_id`).
 - **Frames e unidades**: `CalibrationRef.camera_frame` declara o frame óptico em que a projeção foi feita; distâncias em metros.
 

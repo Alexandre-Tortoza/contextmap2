@@ -35,6 +35,7 @@ def test_a_spatial_observation_round_trips_through_json() -> None:
         {"map_id": "map-0001", "geometry_id": ref.geometry_id} for ref in refs((3, 5, 9, 21))
     ]
     assert record["visibility"]["associated"] == 4
+    assert record["projection_summary"]["depth_metric"] == "ray_range"
 
 
 def test_a_direct_pose_reference_round_trips() -> None:
@@ -71,18 +72,18 @@ def test_a_point_correspondence_round_trips_including_absent_fields() -> None:
     associated = PointCorrespondence(
         geometry=refs((3,))[0],
         visibility=VisibilityState.ASSOCIATED,
-        camera_range_m=4.2,
+        camera_depth_m=4.2,
         raw_pixel=(320.5, 240.25),
         prepared_pixel=(160.25, 120.125),
-        support_range_m=4.1,
+        support_depth_m=4.1,
     )
     behind = PointCorrespondence(
         geometry=refs((4,))[0],
         visibility=VisibilityState.BEHIND_CAMERA,
-        camera_range_m=1.0,
+        camera_depth_m=1.0,
         raw_pixel=None,
         prepared_pixel=None,
-        support_range_m=None,
+        support_depth_m=None,
     )
 
     for record in (associated, behind):

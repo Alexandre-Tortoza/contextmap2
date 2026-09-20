@@ -19,6 +19,7 @@ from contextmap.sensor_association.camera_models import (
 from contextmap.sensor_association.models import (
     AssociationProvenance,
     CalibrationRef,
+    DepthMetric,
     PixelCoordinate,
     PointCorrespondence,
     PoseRef,
@@ -37,6 +38,7 @@ __all__ = [
     "CalibrationRef",
     "CameraIdentity",
     "CameraProjection",
+    "DepthMetric",
     "PixelCoordinate",
     "PixelProjection",
     "PointCorrespondence",
