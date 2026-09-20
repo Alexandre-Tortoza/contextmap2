@@ -100,7 +100,7 @@ flowchart TD
 
 ## Artefatos materializados hoje
 
-Na `dev`, quatro formatos já existem e são integrados:
+Na `dev`, cinco formatos já existem e são integrados:
 
 ```mermaid
 flowchart LR
@@ -121,11 +121,17 @@ flowchart LR
     GM --> MW["GeometricMapArtifactWriter"]
     MW --> MAP["GeometricMapArtifact"]
     MAP --> MR["GeometricMapArtifactReader"]
+    PRA --> SA["Sensor Association"]
+    MAP --> SA
+    TRA --> SA
+    SA --> AW["SensorAssociationRunWriter"]
+    AW --> ASA["SensorAssociationRunArtifact"]
+    ASA --> AR["SensorAssociationRunReader"]
 ```
 
-`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. Os artifacts downstream do diagrama anterior permanecem planejados.
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -211,6 +217,32 @@ workspace/runs/geometric-mapping/<sequence-name>/
 ```
 
 A identidade do mapa é `<sequência>--<run_id>` e toda `GeometryReference` a carrega; as referências são locais ao artifact. O `manifest.json` inventaria os arquivos contratuais com tamanho e SHA-256, e `debug/` fica fora do inventário. O leitor abre sem ROS, sem FAST-LIO, sem biblioteca de modelo e sem NumPy, e `geometry()` devolve um `GeometrySource` sobre o payload mapeado, sem lê-lo. A configuração é JSON (`config.json`), não YAML. Detalhes: [Geometric Mapping artifact](../src/contextmap/geometric_mapping/docs/artifact.md).
+
+### `SensorAssociationRunArtifact` atual
+
+```text
+workspace/runs/sensor-association/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<canal>/
+    ├── README.md
+    ├── manifest.json
+    ├── outputs/
+    │   ├── spatial-observations.jsonl     # um SpatialObservation por linha
+    │   ├── observation-index.jsonl        # id, frame, região e offsets
+    │   ├── geometry-support.u32           # região → geometria, tabela colunar de uint32
+    │   ├── observation-quality.jsonl      # ObservationQuality por observação
+    │   ├── projection-records.jsonl       # por frame: câmera, pose, extrínseco, cadeia de imagem
+    │   ├── visibility-records.jsonl       # por frame: política, contagens, pertencimento
+    │   ├── dense-feature-associations.jsonl
+    │   └── dense-feature-cells.bin        # índices e pesos, sem vetores de feature
+    ├── metrics/
+    │   ├── frame-diagnostics.jsonl
+    │   ├── summary.json
+    │   └── runtime.json                   # somente quando medido
+    └── debug/                             # somente standard/full; nunca inventariado
+```
+
+O run não repete XYZ nem vetores de embedding: a geometria é referenciada por posição (a identidade do mapa é posicional) e a amostragem densa guarda índices e pesos. `manifest.json` carrega a linhagem exata (sequência, seleção, mapa geométrico, trajetória, calibração, runs de percepção, políticas, fingerprint, código, canais de features com as fontes exatas) e o inventário; `debug/` fica fora dele. Uma execução nativa e uma melhorada de features compartilham os mesmos artifacts a montante e continuam identificáveis de forma independente. O leitor abre sem ROS, sem modelos e sem NumPy. Detalhes: [Sensor Association artifact](../src/contextmap/sensor_association/docs/artifact.md).
 
 ### Evidência auditável de Region Discovery
 
