@@ -54,7 +54,7 @@ runtime
 
 ## Estado atual
 
-`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. O que já existe é um **DAG interno de Visual Perception**, implementado dentro da própria capability, que materializa parte das regras descritas aqui sem se tornar o runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. A futura composition root continua responsável por selecionar e construir esses adapters explicitamente.
+`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. O que já existe é um **DAG interno de Visual Perception**, implementado dentro da própria capability, que materializa parte das regras descritas aqui sem se tornar o runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Semantic Interpretation também possui um port executável `semantic_interpreter`, request/output auditáveis e adapters Qwen/Gemini/Florence-2 atrás de runtime/client injetáveis. O preset `canonical/1` ainda conserva temporariamente os estágios semânticos legados porque a política de construção dos requests canônicos ainda não foi promovida para a topologia default. A futura composition root continua responsável por selecionar e construir esses adapters explicitamente.
 
 ```mermaid
 flowchart LR
@@ -408,7 +408,7 @@ O importante não é esse construtor específico; são os invariantes:
 A divisão arquitetural já está parcialmente materializada:
 
 - **Ingestion**, implementado, produz e reabre `SequenceArtifact`;
-- **Visual Perception**, implementado no nível de core, inclui Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`;
+- **Visual Perception**, implementado no nível de core, inclui Region Discovery concreto, Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP e Semantic Interpretation no boundary canônico (requests, prompts/parsing, execution audit e adapters Qwen/Gemini/Florence-2), além de contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`;
 - **Runtime & Configuration**, ainda planejado, deverá compor o DAG end-to-end, configuração, reuse, CLI e lifecycle entre capabilities;
 - artifacts downstream serão adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
 

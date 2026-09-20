@@ -121,6 +121,37 @@ identidades da observação e do resultado. Ao receber os mesmos outcomes,
 de debug declarado pela proveniência. Assim, execução, evidência canônica e
 artifact permanecem ligados pelo mesmo request id.
 
+`SemanticDebugLevel` controla apenas o conteúdo humano em
+`debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
+`STANDARD` grava request, prompt, parsing, outputs finais e diagnostics, e
+`FULL` acrescenta a resposta bruta. Os outputs canônicos, hashes, métricas e
+views content-addressed continuam válidos em qualquer nível. Antes da
+serialização, campos de credencial conhecidos são redigidos recursivamente;
+contadores como `input_tokens`/`output_tokens` não são confundidos com secrets.
+
+## Scoring semântico
+
+`SemanticScore` registra separadamente o suporte de uma feature visual a uma
+claim: ids do score/claim/feature, tipo e valor do score, embedding space,
+observação, resultado e provenance completa do scorer. O campo opcional
+`calibrated_probability` permanece `None` nos adapters atuais. Uma claim sem
+score continua sendo evidência válida; ausência de record nunca é serializada
+como suporte zero.
+
+`ClipSemanticScorer` compara claims de cena com `VisualFeature` global.
+`AlphaClipSemanticScorer` compara claims regionais somente com a feature da
+mesma região congelada. Ambos exigem espaço de embedding idêntico entre texto e
+imagem, vetores declarados e verificados como L2-normalized, payload
+unidimensional finito e provenance de modelo/configuração. O valor persistido é
+cosine similarity em `[-1, 1]`, sem remapeamento ou comparação implícita entre
+as escalas CLIP e AlphaCLIP.
+
+O encoder de texto e o carregador lazy de payload são seams internos
+injetáveis; tensores/objetos nativos não entram no contrato público. O
+compilador do DAG conhece `semantic_scorer` com inputs `claims` e `features`, e
+`assemble_perception_result()` materializa os scores dos estágios selecionados.
+O preset canônico não escolhe um scorer automaticamente.
+
 ## Adapter Qwen
 
 `QwenSemanticInterpreter` é o adapter local substituível. Ele recebe apenas o
@@ -147,3 +178,46 @@ entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
 limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
+
+## Adapter Florence-2
+
+`Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
+quando ambos compartilham lifecycle/modelo no composition root. Sua
+`Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
+suportados, device, precision e geração. A task e o mode entram em
+`task_identity`; checkpoint, revisão e configuração entram na provenance e no
+fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
+passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+
+## Avaliação
+
+`contextmap.evaluation.semantic_interpretation` fornece um report comum para
+Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
+região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
+custo permanecem em blocos distintos. O baseline usa a policy versionada
+`casefold-exact/1`.
+
+
+## Estado do milestone
+
+O branch de integração materializa:
+
+- `SemanticClaim`/`SceneContext`, request/evidence e prompt/parser possuem
+  contratos canônicos, provenance e incerteza explícita;
+- requests e executions são persistidos com views exatas content-addressed,
+  features consumidas materializadas no feature store e contexto de cena
+  resolvível;
+- Qwen e Gemini implementam o mesmo boundary `SemanticInterpreter`, usando
+  `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
+- Florence-2 implementa o mesmo boundary por adapter separado de Region
+  Discovery;
+- auditoria possui níveis explícitos e redaction de secrets;
+- o harness de avaliação compara qualidade e custo sem Semantic Fusion;
+- testes determinísticos cobrem parsing, abstention, retries, materialização no
+  `PerceptionResult` e reabertura do run artifact.
+
+Execuções reais controladas ainda dependem de pesos/runtime local para Qwen e
+Florence-2 e de credenciais/acesso para Gemini. O ambiente de CI valida seams,
+contratos, parsing, provenance, falhas e report schema com doubles
+determinísticos; isso não é registrado como evidência experimental real.
