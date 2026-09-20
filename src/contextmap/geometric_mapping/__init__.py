@@ -9,6 +9,15 @@ through :class:`GeometryReference`. See
 documentation.
 """
 
+from contextmap.geometric_mapping.accumulation import (
+    AccumulatedMap,
+    AccumulationError,
+    MapAccumulator,
+    ScanVoxelPolicy,
+    accumulate_plan,
+    map_provenance_from_plan,
+)
+from contextmap.geometric_mapping.geometry_storage import PackedGeometry, ScanRecord
 from contextmap.geometric_mapping.inputs import (
     GeometryInput,
     GeometryInputError,
@@ -37,6 +46,7 @@ from contextmap.geometric_mapping.models import (
     TransformLineage,
     TransformStep,
     geometry_id_for,
+    geometry_index_of,
 )
 from contextmap.geometric_mapping.motion_correction import (
     MotionCorrectionEvidence,
@@ -62,6 +72,8 @@ from contextmap.geometric_mapping.transformation import (
 )
 
 __all__ = [
+    "AccumulatedMap",
+    "AccumulationError",
     "Bounds3D",
     "GeometricMap",
     "GeometricMapProvenance",
@@ -76,15 +88,19 @@ __all__ = [
     "GeometrySource",
     "GeometryTransformError",
     "InputRejectionReason",
+    "MapAccumulator",
     "MapId",
     "MotionCorrectionEvidence",
     "MotionCorrectionPolicy",
     "MotionCorrectionRecord",
     "MotionCorrectionState",
     "MotionCorrectionVerdict",
+    "PackedGeometry",
     "PointCloudLayout",
     "PointOrigin",
     "ScanDisposition",
+    "ScanRecord",
+    "ScanVoxelPolicy",
     "SpatialIndexMetadata",
     "SpatialIndexParameter",
     "TracedTransform",
@@ -94,11 +110,14 @@ __all__ = [
     "TransformTrace",
     "TransformedScan",
     "UnsupportedPointCloudLayoutError",
+    "accumulate_plan",
     "apply_motion_correction_policy",
     "assemble_geometry_inputs",
     "assemble_geometry_inputs_from_artifacts",
     "declared_raw_motion_correction",
     "geometry_id_for",
+    "geometry_index_of",
+    "map_provenance_from_plan",
     "resolve_point_cloud_layout",
     "transform_scan",
     "transform_scans",

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from contextmap.geometric_mapping.geometry_storage import ScanRecord
 from contextmap.geometric_mapping.models import (
     Bounds3D,
     GeometricMap,
@@ -206,6 +207,7 @@ def encode_geometric_map(geometric_map: GeometricMap) -> dict[str, Any]:
             "configuration_fingerprint": provenance.configuration_fingerprint,
             "code_version": provenance.code_version,
         },
+        "aggregation_rule": geometric_map.aggregation_rule,
     }
 
 
@@ -252,6 +254,7 @@ def decode_geometric_map(record: Mapping[str, Any]) -> GeometricMap:
             configuration_fingerprint=provenance["configuration_fingerprint"],
             code_version=provenance["code_version"],
         ),
+        aggregation_rule=record["aggregation_rule"],
     )
 
 
@@ -319,6 +322,24 @@ def decode_motion_correction_policy(record: Mapping[str, Any]) -> MotionCorrecti
     )
 
 
+def encode_traced_transform(transform: TracedTransform) -> dict[str, Any]:
+    """Encode one factor of a chain with the numbers that were applied."""
+    return {
+        "step": encode_transform_step(transform.step),
+        "translation_m": list(transform.translation_m),
+        "rotation": list(transform.rotation),
+    }
+
+
+def decode_traced_transform(record: Mapping[str, Any]) -> TracedTransform:
+    """Decode one factor of a chain."""
+    return TracedTransform(
+        step=decode_transform_step(record["step"]),
+        translation_m=_vector3(record["translation_m"]),
+        rotation=_quaternion(record["rotation"]),
+    )
+
+
 def encode_transform_trace(trace: TransformTrace) -> dict[str, Any]:
     """Encode the audit trace of one point.
 
@@ -332,14 +353,7 @@ def encode_transform_trace(trace: TransformTrace) -> dict[str, Any]:
         "map_frame": str(trace.map_frame),
         "acquisition_timestamp": trace.acquisition_timestamp.to_record(),
         "source_coordinates_m": list(trace.source_coordinates_m),
-        "transforms": [
-            {
-                "step": encode_transform_step(transform.step),
-                "translation_m": list(transform.translation_m),
-                "rotation": list(transform.rotation),
-            }
-            for transform in trace.transforms
-        ],
+        "transforms": [encode_traced_transform(transform) for transform in trace.transforms],
         "map_coordinates_m": list(trace.map_coordinates_m),
     }
 
@@ -355,14 +369,7 @@ def decode_transform_trace(record: Mapping[str, Any]) -> TransformTrace:
         map_frame=FrameId(record["map_frame"]),
         acquisition_timestamp=SourceTimestamp.from_record(record["acquisition_timestamp"]),
         source_coordinates_m=(sx, sy, sz),
-        transforms=tuple(
-            TracedTransform(
-                step=decode_transform_step(transform["step"]),
-                translation_m=_vector3(transform["translation_m"]),
-                rotation=_quaternion(transform["rotation"]),
-            )
-            for transform in record["transforms"]
-        ),
+        transforms=tuple(decode_traced_transform(transform) for transform in record["transforms"]),
         map_coordinates_m=(mx, my, mz),
     )
 
@@ -373,3 +380,42 @@ def _vector3(values: Sequence[float]) -> Vector3:
 
 def _quaternion(values: Sequence[float]) -> Quaternion:
     return (values[0], values[1], values[2], values[3])
+
+
+def encode_scan_record(record: ScanRecord) -> dict[str, Any]:
+    """Encode one entry of the source index.
+
+    The transform chain appears once here, so no per-point lineage is persisted.
+    """
+    return {
+        "ordinal": record.ordinal,
+        "observation_id": str(record.observation_id),
+        "source_frame": str(record.source_frame),
+        "acquisition_timestamp": record.acquisition_timestamp.to_record(),
+        "payload_hash": record.payload_hash,
+        "motion_correction": record.motion_correction.value,
+        "transform_chain": [encode_traced_transform(item) for item in record.transform_chain],
+        "source_point_count": record.source_point_count,
+        "dropped_non_finite_count": record.dropped_non_finite_count,
+        "first_geometry_index": record.first_geometry_index,
+        "geometry_count": record.geometry_count,
+        "bounds": None if record.bounds is None else encode_bounds(record.bounds),
+    }
+
+
+def decode_scan_record(record: Mapping[str, Any]) -> ScanRecord:
+    """Decode an entry of the source index and revalidate it."""
+    return ScanRecord(
+        ordinal=record["ordinal"],
+        observation_id=SourceObservationId(record["observation_id"]),
+        source_frame=FrameId(record["source_frame"]),
+        acquisition_timestamp=SourceTimestamp.from_record(record["acquisition_timestamp"]),
+        payload_hash=record["payload_hash"],
+        motion_correction=MotionCorrectionState(record["motion_correction"]),
+        transform_chain=tuple(decode_traced_transform(item) for item in record["transform_chain"]),
+        source_point_count=record["source_point_count"],
+        dropped_non_finite_count=record["dropped_non_finite_count"],
+        first_geometry_index=record["first_geometry_index"],
+        geometry_count=record["geometry_count"],
+        bounds=None if record["bounds"] is None else decode_bounds(record["bounds"]),
+    )
