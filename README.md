@@ -25,8 +25,10 @@ flowchart LR
     SEN --> SENA["SensorAssociationRunArtifact<br/>implementado"]
     MA --> PTR["Point Representation<br/>implementado, opcional"]
     PTR --> PTRA["PointRepresentationRunArtifact<br/>implementado"]
-    SENA -. próximo boundary .-> F["Fusion +<br/>Semantic Mapping planejados"]
-    PTRA -.-> F
+    SENA --> FUS["Semantic Fusion<br/>implementado"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact<br/>implementado"]
+    FUSA -. próximo boundary .-> F["Semantic Mapping +<br/>Entity Resolution planejados"]
     F --> G["ContextMapArtifact<br/>alvo"]
 ```
 
@@ -52,7 +54,7 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 
 ## Estado implementado
 
-A branch `dev` já contém seis módulos de domínio, além da capability de avaliação que mede seus resultados:
+A branch `dev` já contém sete módulos de domínio, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
 - [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e o core de Feature Extraction, incluindo `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
@@ -60,7 +62,8 @@ A branch `dev` já contém seis módulos de domínio, além da capability de ava
 - [`contextmap.geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), com `GeometryPoint`, `GeometryReference` e `GeometricMap`, estado explícito de correção de movimento, montagem de inputs, transformação fonte→mapa com traces, acumulação com referências estáveis, acesso espacial por `GeometrySource` e o `GeometricMapArtifact`;
 - [`contextmap.sensor_association`](src/contextmap/sensor_association/docs/README.md), com `SpatialObservation` (a geometria persistente que uma região enxerga, por referência), modelos de câmera calibrados (pinhole, fisheye e MEI), a cadeia mapa→câmera→imagem preparada, visibilidade e oclusão, pertencimento à máscara de `Region2D`, amostragem de features densas, `ObservationQuality` (medidas separadas, nunca confiança semântica), diagnósticos e o `SensorAssociationRunArtifact`; ainda sem dados reais, porque o mapa geométrico do FAST-LIO está pendente;
 - [`contextmap.point_representation`](src/contextmap/point_representation/docs/README.md), capability **opcional** com `PointRepresentation` e `RepresentationSpace`, extração de suporte local sobre `GeometrySource`, o port `PointEncoder`, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3 e o `PointRepresentationRunArtifact`; o PTv3 nunca foi executado de verdade (sem torch nem pesos) e a comparação real contra `off` está pendente;
-- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation, Geometric Mapping, Sensor Association e Point Representation.
+- [`contextmap.semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md), com `FusionSupport` (onde a evidência é acumulada, sem identidade de objeto), `EvidenceContribution`, agrupamento por observação física (inferência repetida é correlacionada, não votos independentes), a política baseline de acumulação, a preservação de ambiguidade, contradição, empate e abstenção, canais de evidência tipados, uma política opcional ciente de qualidade e o `SemanticFusionRunArtifact`; toda a verificação é sintética e nenhuma decisão sobre a política ciente de qualidade foi tomada;
+- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion.
 
 Os adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados na `dev`; a infraestrutura de Feature Extraction não deve ser confundida com suporte a esses modelos.
 
