@@ -63,5 +63,5 @@ Nenhum campo de label, `SemanticClaim`, embedding, entidade ou relação existe 
 
 ## Limitações
 
-- `query_bounds` percorre linearmente todos os registros: o índice espacial ainda **não existe** (está planejado). Medida sintética de 600 mil pontos: `get` leva dezenas de microssegundos, e uma consulta que devolve todos os pontos leva cerca de 3 s (construir cada `GeometryPoint` domina).
+- A consulta espacial e o índice derivado estão em [`spatial-access.md`](spatial-access.md).
 - A escrita exige NumPy (extras `dev` e `ros1`, não as dependências base).
