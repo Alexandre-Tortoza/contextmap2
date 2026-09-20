@@ -9,10 +9,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from contextmap.ingestion import (
+    ExternalPoseMeasurement,
     FrameId,
     ImuObservation,
     SensorId,
     SequenceArtifactId,
+    SourceObservation,
     SourceObservationId,
     SourceProvenance,
 )
@@ -22,6 +24,7 @@ from contextmap.state_estimation import (
     PoseEstimate,
     PoseProvenance,
     PoseValidity,
+    StateEstimationRequest,
     Trajectory,
     TrajectoryGap,
     TrajectoryId,
@@ -80,6 +83,47 @@ def make_imu_observation(
         frame_id=FrameId("imu"),
         timestamp=timestamp_ns(time_ns, clock_id=clock_id),
         provenance=SourceProvenance(source_type="fixture", source_path="fixtures/imu"),
+    )
+
+
+def make_external_pose(
+    index: int,
+    *,
+    time_ns: int | None = None,
+    parent_frame: str = "map",
+    child_frame: str = "body",
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] = IDENTITY_ORIENTATION,
+    covariance: tuple[float, ...] | None = None,
+    clock_id: str = CLOCK_ID,
+) -> ExternalPoseMeasurement:
+    """Build an external pose measurement; by default 100 ms apart along +x."""
+    when = index * 100_000_000 if time_ns is None else time_ns
+    return ExternalPoseMeasurement(
+        observation_id=SourceObservationId(f"pose-{index:04d}"),
+        sensor_id=SensorId("external_pose_source"),
+        frame_id=FrameId(child_frame),
+        timestamp=timestamp_ns(when, clock_id=clock_id),
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/poses"),
+        parent_frame=FrameId(parent_frame),
+        translation=(float(index), 0.0, 0.0) if translation is None else translation,
+        orientation=orientation,
+        pose_covariance=covariance,
+    )
+
+
+def make_request(
+    observations: Sequence[SourceObservation],
+    *,
+    trajectory_id: TrajectoryId = TRAJECTORY_ID,
+) -> StateEstimationRequest:
+    """Build the request a backend receives for the fixture sequence."""
+    return StateEstimationRequest(
+        trajectory_id=trajectory_id,
+        sequence_artifact_id=SequenceArtifactId("sequence-0001"),
+        selection_id="full-sequence",
+        observations=tuple(observations),
+        calibration=None,
     )
 
 
