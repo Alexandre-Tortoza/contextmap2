@@ -132,7 +132,7 @@ src/contextmap/<module>/docs/
 
 A documentação é fragmentada por responsabilidade, mas integrada por links a partir do índice global.
 
-Para detalhes implementacionais, use os READMEs de [`ingestion`](src/contextmap/ingestion/docs/README.md), [`visual_perception`](src/contextmap/visual_perception/docs/README.md) e [`evaluation`](src/contextmap/evaluation/docs/README.md). Dentro de Visual Perception, as visões de [Region Discovery](src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](src/contextmap/visual_perception/docs/feature-extraction.md) descrevem o estado implementado de cada milestone. Os documentos em `docs/` integram esses módulos ao pipeline global e distinguem explicitamente o que já existe do que ainda é alvo arquitetural.
+Para detalhes implementacionais, use os READMEs de [`ingestion`](src/contextmap/ingestion/docs/README.md), [`visual_perception`](src/contextmap/visual_perception/docs/README.md), [`state_estimation`](src/contextmap/state_estimation/docs/README.md), [`geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), [`sensor_association`](src/contextmap/sensor_association/docs/README.md), [`point_representation`](src/contextmap/point_representation/docs/README.md), [`semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md) e [`evaluation`](src/contextmap/evaluation/docs/README.md). Dentro de cada capability, o README é o ponto de entrada e os documentos temáticos registram contratos, policies, artifacts, backends e validação que realmente existem. Os documentos em `docs/` integram esses módulos ao pipeline global e distinguem explicitamente o que já existe do que ainda é alvo arquitetural.
 
 ## Versionamento
 
