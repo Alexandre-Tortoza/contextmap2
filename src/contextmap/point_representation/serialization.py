@@ -17,6 +17,8 @@ from contextmap.point_representation.models import (
     CenteringMode,
     CoordinatePreparation,
     EncoderIdentity,
+    FailedSupport,
+    FailureReason,
     NeighborhoodMethod,
     PointRepresentation,
     PointRepresentationId,
@@ -41,7 +43,7 @@ def encode_representation_space(space: RepresentationSpace) -> dict[str, Any]:
         "dtype": space.dtype,
         "normalization": space.normalization,
         "input_definition": space.input_definition,
-        "support_semantics": _encode_support_policy(space.support_semantics),
+        "support_semantics": encode_support_policy(space.support_semantics),
         "feature_names": list(space.feature_names),
     }
 
@@ -61,18 +63,25 @@ def decode_representation_space(record: Mapping[str, Any]) -> RepresentationSpac
         dtype=record["dtype"],
         normalization=record["normalization"],
         input_definition=record["input_definition"],
-        support_semantics=_decode_support_policy(record["support_semantics"]),
+        support_semantics=decode_support_policy(record["support_semantics"]),
         feature_names=tuple(record["feature_names"]),
     )
 
 
 def encode_point_support(support: PointSupport) -> dict[str, Any]:
-    """Encode a support with every geometry reference that formed it."""
+    """Encode a support with every geometry element that formed it.
+
+    Every member belongs to the center's map (a support invariant), so the map is
+    stated once and the members are listed by geometry id: a persisted run holds
+    one support per representation, and repeating the map per member would
+    dominate its size.
+    """
     statistics = support.statistics
     return {
-        "policy": _encode_support_policy(support.policy),
-        "center": _encode_reference(support.center),
-        "geometry_refs": [_encode_reference(reference) for reference in support.geometry_refs],
+        "policy": encode_support_policy(support.policy),
+        "map_id": str(support.center.map_id),
+        "center_geometry_id": str(support.center.geometry_id),
+        "geometry_ids": [str(reference.geometry_id) for reference in support.geometry_refs],
         "map_frame": support.map_frame,
         "statistics": {
             "count": statistics.count,
@@ -93,10 +102,16 @@ def decode_point_support(record: Mapping[str, Any]) -> PointSupport:
         ValueError: If the record is malformed or violates the support contract.
     """
     statistics = record["statistics"]
+    map_id = MapId(record["map_id"])
     return PointSupport(
-        policy=_decode_support_policy(record["policy"]),
-        center=_decode_reference(record["center"]),
-        geometry_refs=tuple(_decode_reference(item) for item in record["geometry_refs"]),
+        policy=decode_support_policy(record["policy"]),
+        center=GeometryReference(
+            map_id=map_id, geometry_id=GeometryId(record["center_geometry_id"])
+        ),
+        geometry_refs=tuple(
+            GeometryReference(map_id=map_id, geometry_id=GeometryId(geometry_id))
+            for geometry_id in record["geometry_ids"]
+        ),
         map_frame=record["map_frame"],
         statistics=SupportStatistics(
             count=statistics["count"],
@@ -160,6 +175,28 @@ def decode_point_representation(record: Mapping[str, Any]) -> PointRepresentatio
     )
 
 
+def encode_failed_support(failed: FailedSupport) -> dict[str, Any]:
+    """Encode a failed support: which geometry was involved, why, and the encoder's detail."""
+    return {
+        "support": encode_point_support(failed.support),
+        "reason": failed.reason.value,
+        "detail": failed.detail,
+    }
+
+
+def decode_failed_support(record: Mapping[str, Any]) -> FailedSupport:
+    """Decode a failed support and revalidate it.
+
+    Raises:
+        ValueError: If the record is malformed or violates the contract.
+    """
+    return FailedSupport(
+        support=decode_point_support(record["support"]),
+        reason=FailureReason(record["reason"]),
+        detail=record["detail"],
+    )
+
+
 def _encode_reference(reference: GeometryReference) -> dict[str, Any]:
     return {"map_id": str(reference.map_id), "geometry_id": str(reference.geometry_id)}
 
@@ -170,7 +207,8 @@ def _decode_reference(record: Mapping[str, Any]) -> GeometryReference:
     )
 
 
-def _encode_support_policy(policy: SupportPolicy) -> dict[str, Any]:
+def encode_support_policy(policy: SupportPolicy) -> dict[str, Any]:
+    """Encode a support policy, including how its coordinates are prepared."""
     return {
         "support_type": policy.support_type.value,
         "method": None if policy.method is None else policy.method.value,
@@ -184,7 +222,8 @@ def _encode_support_policy(policy: SupportPolicy) -> dict[str, Any]:
     }
 
 
-def _decode_support_policy(record: Mapping[str, Any]) -> SupportPolicy:
+def decode_support_policy(record: Mapping[str, Any]) -> SupportPolicy:
+    """Decode a support policy and revalidate it."""
     method = record["method"]
     preparation = record["preparation"]
     return SupportPolicy(

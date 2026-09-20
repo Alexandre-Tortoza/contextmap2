@@ -72,4 +72,4 @@ Um suporte que não pôde ser representado é um resultado explícito, nunca um 
 
 ## Serialização
 
-`serialization.py` converte os contratos para registros com apenas primitivas JSON, legíveis sem NumPy ou biblioteca de modelo, e **revalida os contratos ao decodificar**: um registro adulterado (por exemplo, a âncora deixando de ser o centro do suporte) falha em vez de produzir uma representação inválida. Um registro de representação nunca contém o vetor numérico.
+`serialization.py` converte os contratos para registros com apenas primitivas JSON, legíveis sem NumPy ou biblioteca de modelo, e **revalida os contratos ao decodificar**: um registro adulterado (por exemplo, a âncora deixando de ser o centro do suporte) falha em vez de produzir uma representação inválida. Um registro de representação nunca contém o vetor numérico. O suporte é codificado de forma compacta: o mapa (único por invariante) e o `center_geometry_id` uma vez e os membros como `geometry_ids`, porque um run persiste um suporte por representação e repetir o mapa por membro dominaria seu tamanho.

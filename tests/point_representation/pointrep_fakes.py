@@ -10,6 +10,7 @@ from contextmap.point_representation import (
     PreparedSupport,
     RepresentationSpace,
     SupportPolicy,
+    UnencodableSupportError,
 )
 
 
@@ -58,3 +59,16 @@ class FakeEncoder:
         mean_x = sum(point[0] for point in prepared.local_coordinates_m) / count
         mean_y = sum(point[1] for point in prepared.local_coordinates_m) / count
         return EncodedVector(values=(float(count), mean_x, mean_y))
+
+
+class RejectingSmallSupportsEncoder(FakeEncoder):
+    """Declares every support below ``minimum`` points unencodable."""
+
+    def __init__(self, policy: SupportPolicy | None = None, *, minimum: int = 4) -> None:
+        super().__init__(policy)
+        self._minimum = minimum
+
+    def encode(self, prepared: PreparedSupport) -> EncodedVector:
+        if len(prepared.support.geometry_refs) < self._minimum:
+            raise UnencodableSupportError(f"fewer than {self._minimum} supporting points")
+        return super().encode(prepared)
