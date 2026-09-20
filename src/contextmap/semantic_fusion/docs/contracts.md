@@ -126,4 +126,4 @@ Coleções cuja ordem não tem significado são exigidas ordenadas e únicas (po
 
 ## O que ainda não existe
 
-Serialização, o artifact de run e os serviços de construção de suporte e acumulação ainda não foram implementados. Nenhum contrato aqui exige compatibilidade com formatos históricos.
+Serialização, o artifact de run e o serviço de acumulação ainda não foram implementados. Nenhum contrato aqui exige compatibilidade com formatos históricos.

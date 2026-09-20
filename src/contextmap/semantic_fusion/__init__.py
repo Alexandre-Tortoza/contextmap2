@@ -37,21 +37,32 @@ from contextmap.semantic_fusion.models import (
     UncertaintyKind,
     UncertaintyRecord,
 )
+from contextmap.semantic_fusion.support import (
+    GEOMETRY_OVERLAP_SUPPORT_POLICY_ID,
+    ExcludedObservation,
+    FusionSupportBuild,
+    GeometryOverlapSupportPolicy,
+    build_fusion_supports,
+)
 
 __all__ = [
+    "GEOMETRY_OVERLAP_SUPPORT_POLICY_ID",
     "PHYSICAL_OBSERVATION_GROUPING_POLICY_ID",
     "EvidenceContribution",
     "EvidenceContributionId",
     "EvidenceReference",
     "EvidenceStance",
+    "ExcludedObservation",
     "FusedEvidence",
     "FusedEvidenceId",
     "FusedEvidenceProvenance",
     "FusedHypothesis",
     "FusedHypothesisId",
     "FusionSupport",
+    "FusionSupportBuild",
     "FusionSupportId",
     "FusionSupportProvenance",
+    "GeometryOverlapSupportPolicy",
     "HypothesisEvidence",
     "ObservationQualityRef",
     "PhysicalObservationGroup",
@@ -62,5 +73,6 @@ __all__ = [
     "SupportSignalKind",
     "UncertaintyKind",
     "UncertaintyRecord",
+    "build_fusion_supports",
     "group_by_physical_observation",
 ]
