@@ -18,7 +18,7 @@ Usa [`rosbags`](https://pypi.org/project/rosbags/) — biblioteca Python pura qu
 
 Decodifica `sensor_msgs/Image` (RGB), `sensor_msgs/PointCloud2` (LiDAR), `sensor_msgs/Imu`, `nav_msgs/Odometry` (pose externa) e `sensor_msgs/CameraInfo` (calibração, via `read_calibration()`, parte do `Protocol SourceAdapter`).
 
-**Fora do escopo v0**: TF estático/dinâmico (`tf2_msgs/TFMessage`) não é decodificado. Extrínsecos estáticos entram como `CalibrationSet` canônico em `SourceAdapterConfig.calibration` e são preservados por `read_calibration()`. O adapter não fabrica um modelo pinhole para calibrações externas não representáveis, como MEI omnidirecional.
+**Fora do escopo v0**: TF estático/dinâmico (`tf2_msgs/TFMessage`) não é decodificado. Extrínsecos estáticos entram como `CalibrationSet` canônico em `SourceAdapterConfig.calibration` e são preservados por `read_calibration()`. O adapter não fabrica um modelo pinhole para calibrações externas que `camera_info` não descreve, como MEI omnidirecional: um `MeiCameraModel` entra pela calibração externa (`SourceAdapterConfig.calibration`), nunca derivado de `camera_info`.
 
 ### Decisões de mapeamento
 

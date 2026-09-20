@@ -10,6 +10,12 @@ XYZ, embeddings nor claims. See
 documentation.
 """
 
+from contextmap.sensor_association.camera_models import (
+    CameraIdentity,
+    CameraProjection,
+    PixelProjection,
+    camera_projection_for,
+)
 from contextmap.sensor_association.models import (
     AssociationProvenance,
     CalibrationRef,
@@ -29,7 +35,10 @@ from contextmap.sensor_association.models import (
 __all__ = [
     "AssociationProvenance",
     "CalibrationRef",
+    "CameraIdentity",
+    "CameraProjection",
     "PixelCoordinate",
+    "PixelProjection",
     "PointCorrespondence",
     "PoseRef",
     "ProjectionSummary",
@@ -39,5 +48,6 @@ __all__ = [
     "VisibilityDiagnostics",
     "VisibilityState",
     "VisualFeatureRef",
+    "camera_projection_for",
     "spatial_observation_id_for",
 ]

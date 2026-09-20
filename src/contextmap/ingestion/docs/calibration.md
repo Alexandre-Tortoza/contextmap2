@@ -26,9 +26,9 @@ flowchart LR
 A separação é intencional: Ingestion preserva intrínsecos, extrínsecos estáticos e frames; Sensor Association aplica esses dados geometricamente. Movimento no tempo não é transform estático de calibração.
 
 
-## Pinhole e fisheye sem conversão com perda
+## Pinhole, fisheye e MEI sem conversão com perda
 
-`CameraModel = PinholeCameraModel | FisheyeCameraModel` — dois tipos distintos, não um único record genérico. `PinholeCameraModel` usa o modelo de distorção radial/tangencial do OpenCV (`none`, `plumb_bob`, `rational_polynomial`); `FisheyeCameraModel` usa o modelo equidistante (Kannala-Brandt) com exatamente 4 coeficientes. Forçar fisheye em uma representação pinhole perderia informação — por isso nunca há conversão implícita entre os dois; um consumidor precisa tratar cada um explicitamente (`camera_model_kind()` retorna `"pinhole"`/`"fisheye"`).
+`CameraModel = PinholeCameraModel | FisheyeCameraModel | MeiCameraModel` — três tipos distintos, não um único record genérico. `PinholeCameraModel` usa o modelo de distorção radial/tangencial do OpenCV (`none`, `plumb_bob`, `rational_polynomial`); `FisheyeCameraModel` usa o modelo equidistante (Kannala-Brandt) com exatamente 4 coeficientes. Forçar fisheye em uma representação pinhole perderia informação — `MeiCameraModel` descreve o modelo omnidirecional unificado (Geyer-Daniilidis / Mei) na parametrização do CamOdoCal, usada por calibrações com `model_type: MEI`: `xi` (parâmetro do espelho, finito e não negativo), `fx`/`fy` (`gamma1`/`gamma2`), `cx`/`cy` (`u0`/`v0`) e exatamente 4 coeficientes `(k1, k2, p1, p2)`, dois radiais e dois tangenciais aplicados no plano normalizado. Por isso nunca há conversão implícita entre os três; um consumidor precisa tratar cada um explicitamente (`camera_model_kind()` retorna `"pinhole"`, `"fisheye"` ou `"mei"`).
 
 ## Convenção de transform: `T_parent_child`
 
@@ -50,7 +50,7 @@ Cada `CalibrationEntry` tem um `calibration_id` (`CalibrationReferenceId`, já d
 
 ## Validação
 
-`validate_calibration_set()` retorna uma lista de problemas (lista vazia = válido); `ensure_valid_calibration_set()` levanta `CalibrationError` se houver algum. Verificações: `width`/`height`/`fx`/`fy` positivos, contagem de coeficientes de distorção compatível com o modelo declarado, quaternion de cada transform com norma ≈ 1, ausência de transforms duplicados ou com `parent_frame == child_frame`. `SequenceArtifactWriter.set_calibration()` chama `ensure_valid_calibration_set()` automaticamente — não é possível persistir uma calibração inválida.
+`validate_calibration_set()` retorna uma lista de problemas (lista vazia = válido); `ensure_valid_calibration_set()` levanta `CalibrationError` se houver algum. Verificações: `width`/`height`/`fx`/`fy` positivos, `fx`/`fy`/`cx`/`cy` e coeficientes de distorção **finitos** em todo modelo, contagem de coeficientes de distorção compatível com o modelo declarado (e `xi` finito e não negativo em MEI), quaternion de cada transform com norma ≈ 1, ausência de transforms duplicados ou com `parent_frame == child_frame`. `SequenceArtifactWriter.set_calibration()` chama `ensure_valid_calibration_set()` automaticamente — não é possível persistir uma calibração inválida.
 
 ## Persistência no artefato de sequência
 
