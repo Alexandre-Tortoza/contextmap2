@@ -66,6 +66,10 @@ O vetor **não é embutido**: só é referenciado. Uma referência de payload va
 
 Uma representação **não é verdade semântica**: não carrega label, claim, entidade nem feature visual, e nenhum contrato concatena canais.
 
+## `FailedSupport`
+
+Um suporte que não pôde ser representado é um resultado explícito, nunca um vetor nulo ou padrão: `support` (qual geometria estava envolvida), `reason` (`FailureReason`: `UNENCODABLE_SUPPORT` ou `NON_FINITE_OUTPUT`) e `detail` (a explicação do encoder, obrigatória). Ver [`execution.md`](execution.md).
+
 ## Serialização
 
 `serialization.py` converte os contratos para registros com apenas primitivas JSON, legíveis sem NumPy ou biblioteca de modelo, e **revalida os contratos ao decodificar**: um registro adulterado (por exemplo, a âncora deixando de ser o centro do suporte) falha em vez de produzir uma representação inválida. Um registro de representação nunca contém o vetor numérico.
