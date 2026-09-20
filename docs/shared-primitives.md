@@ -35,6 +35,17 @@ Os aliases `Vector3` e `Quaternion` e as funções sobre quaternions entraram em
 
 `shared.geometry` cresce apenas quando uma issue tem consumidor real da nova função; tipos de domínio (`PoseEstimate`, `GeometryPoint`, `RigidTransform`) permanecem com seus owners.
 
+### Mecânica de run directory em `shared.run_directory`
+
+`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash, e o índice de run é monotônico por capability e sequência calculado a partir dos runs válidos no disco. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index` e `write_run_registry` implementam essas regras uma vez, sem conhecer o conteúdo de um run.
+
+- **quem usa:** `state_estimation` agora; `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` nas milestones seguintes, todos com a mesma regra de `ARTIFACTS.md`;
+- **owner natural:** nenhuma capability de domínio; a regra é global;
+- **API pública:** apenas `pathlib` e tipos primitivos, sem NumPy nem SDK;
+- **o que continua com cada capability:** quais arquivos existem, os campos do manifest e o que torna um run válido.
+
+Os writers de Ingestion e Visual Perception mantêm suas implementações próprias; unificá-los é uma refatoração posterior, separada, sem mudança de comportamento.
+
 ## Critérios para entrar em `shared`
 
 Um tipo só pode ser movido para `shared` quando todos os critérios abaixo forem verdadeiros:

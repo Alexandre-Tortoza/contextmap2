@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, o backend `ExternalPose`, o frame graph estático e o preflight de geometria. Estão **planejados**, e serão documentados aqui quando forem implementados: backend FAST-LIO, `StateEstimationRunArtifact` e o harness de validação.
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, o backend `ExternalPose`, o frame graph estático, o preflight de geometria, as métricas de movimento e o `StateEstimationRunArtifact`. Estão **planejados**, e serão documentados aqui quando forem implementados: backend FAST-LIO e o harness de validação.
 
 ## Contratos públicos
 
@@ -38,15 +38,17 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup tempora
 - `StaticFrameGraph`, `ResolvedTransform`, `LoopInconsistency`, `FrameGraphError` — resolução de `T_parent_child` e verificação de caminhos redundantes sobre os extrínsecos estáticos canônicos.
 - `run_geometry_preflight()`, `GeometryRequirements`, `StaticRelationRequirement`, `GeometryPreflightReport`, `PreflightStatus`, `PreflightTolerances`, `calibration_identity()` — preflight READY/BLOCKED por capability.
 - `execute_state_estimation()`, `StateEstimationOutcome`, `GeometryPreflightError` — executa um backend somente depois do preflight.
+- `summarize_motion()`, `motion_deltas()`, `MotionSummary`, `MotionDelta`, `DistributionSummary` — distribuições de deslocamento, rotação e velocidades por intervalo.
+- `StateEstimationRunWriter`, `StateEstimationRunReader`, `StateEstimationRunManifest`, `StateEstimationRunId`, `StateEstimationDebugLevel`, `allocate_run_index()`, `rebuild_run_registry()`, `RunArtifactError`, `IncompleteRunArtifactError` — persistência imutável e leitura de um run.
 
 O backend `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) não é reexportado por `contextmap.state_estimation`; é importado pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação , [`backends.md`](backends.md) para o port e o backend `ExternalPose` e [`preflight.md`](preflight.md) para o frame graph, as checagens e o serviço.
+Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação , [`backends.md`](backends.md) para o port e o backend `ExternalPose` e [`preflight.md`](preflight.md) para o frame graph, as checagens e o serviço e [`artifact.md`](artifact.md) para o formato persistido.
 
 ## Módulos consumidos
 
 - `contextmap.ingestion`: `FrameId`, `SourceObservationId`, `SequenceArtifactId`, `Covariance6x6`, `CalibrationSet`, `RigidTransform`, `SourceObservation`.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `Quaternion` e a álgebra de quaternions/transforms rígidos de `shared.geometry`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `Quaternion`, a álgebra de quaternions/transforms rígidos de `shared.geometry` e a mecânica de run directory de `shared.run_directory`.
 
 ## Módulos que consomem este
 
@@ -58,6 +60,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 - [`lookup.md`](lookup.md) — alinhamento temporal, políticas de lookup, interpolação e métricas.
 - [`backends.md`](backends.md) — port `StateEstimator` e backend `ExternalPose`.
 - [`preflight.md`](preflight.md) — frame graph estático, preflight de geometria e serviço de execução.
+- [`artifact.md`](artifact.md) — layout, manifest, níveis de debug e integridade do `StateEstimationRunArtifact`.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PoseEstimate` e `Trajectory` no contexto global de contratos.
 - [`docs/shared-primitives.md`](../../../../docs/shared-primitives.md) — primitivas geométricas compartilhadas.
