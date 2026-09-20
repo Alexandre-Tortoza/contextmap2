@@ -211,6 +211,12 @@ a box nativa XYWH para XYXY, destaca a máscara binária e preserva `predicted_i
 `stability_score` e área. `from_model` constrói o generator com os thresholds e settings que
 participam do digest, sem tornar SAM2 dependência obrigatória do pacote principal.
 
+O `bbox` do SDK oficial usa **índices de pixel inclusivos** (`[x0, y0, x1 - x0, y1 - y0]`), e a
+`BoundingBox` canônica é semiaberta. A conversão soma um pixel às duas bordas máximas
+(`x + w + 1`, `y + h + 1`), o que torna a caixa justa à máscara. Sem isso a normalização, que exige
+que a caixa contenha a máscara, rejeitaria todo candidato real como `invalid_geometry`. O
+comportamento foi confirmado com o SDK e o checkpoint SAM 2.1 tiny em frames reais (issue #336).
+
 ## Backend SAM3
 
 `Sam3RegionDiscovery` é o adapter concreto de SAM3 para Region Discovery e continua substituível
