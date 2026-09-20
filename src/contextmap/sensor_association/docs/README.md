@@ -27,7 +27,7 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 
 ## Estado implementado
 
-Existem os **contratos** e sua serialização, e a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica). Estão **planejados**, e serão documentados aqui quando forem implementados: a cadeia mapa → câmera → imagem preparada, visibilidade e oclusão, pertencimento à máscara, amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
+Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto. Estão **planejados**, e serão documentados aqui quando forem implementados: visibilidade e oclusão, pertencimento à máscara, amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
 
 ## Contratos públicos
 
@@ -41,12 +41,14 @@ Existem os **contratos** e sua serialização, e a **projeção de câmera calib
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
+A cadeia de projeção (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`) é interna à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
+
 ## Módulos consumidos
 
-- `contextmap.geometric_mapping`: `GeometryReference`, `MapId`.
+- `contextmap.geometric_mapping`: `GeometrySource`, `GeometricMap`, `GeometryReference`, `MapId`, `geometry_id_for`.
 - `contextmap.ingestion`: `CalibrationEntry`, os modelos de câmera canônicos (`PinholeCameraModel`, `FisheyeCameraModel`, `MeiCameraModel`), `FrameId`, `CalibrationReferenceId`, `SequenceArtifactId`, `SourceObservationId`.
-- `contextmap.state_estimation`: `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupOutcome`.
-- `contextmap.visual_perception`: `RegionId`, `FeatureId`, `FeatureScope`, `ClaimId`, `PerceptionResultId`, `PerceptionRunId`.
+- `contextmap.state_estimation`: `TrajectoryLookup`, `LookupPolicy`, `StaticFrameGraph`, `calibration_identity`, `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupOutcome`.
+- `contextmap.visual_perception`: `PreparedImage` e seus registros de transformação, `RegionId`, `FeatureId`, `FeatureScope`, `ClaimId`, `PerceptionResultId`, `PerceptionRunId`.
 
 ## Módulos que consomem este
 
@@ -56,5 +58,6 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 - [`contracts.md`](contracts.md) — contratos, convenções, identidade e serialização.
 - [`camera_models.md`](camera_models.md) — modelos de câmera, convenções de pixel, domínio de visão e verificação.
+- [`projection_chain.md`](projection_chain.md) — cadeia mapa → câmera → imagem preparada, suporte, proveniência e validação.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.
