@@ -13,6 +13,7 @@ from observation_builders import make_perception_run, make_spatial_observation, 
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import (
     EvidenceReference,
+    ExcludedObservation,
     FusionSupport,
     GeometryOverlapSupportPolicy,
     PhysicalObservationGrouping,
@@ -118,10 +119,21 @@ def make_score(
     )
 
 
-def build_scenario(
+@dataclass(frozen=True)
+class ScenarioParts:
+    """Everything the accumulation reads, for any number of supports."""
+
+    supports: tuple[FusionSupport, ...]
+    excluded: tuple[ExcludedObservation, ...]
+    observations: dict[SpatialObservationId, SpatialObservation]
+    grouping: PhysicalObservationGrouping
+    results: dict[PerceptionResultId, PerceptionResult]
+
+
+def build_scenario_parts(
     views: Sequence[View], *, geometry_points: int = 1_000, min_overlap: float = 0.5
-) -> Scenario:
-    """Observations, results, grouping and the single support that joins them."""
+) -> ScenarioParts:
+    """Observations, results, grouping and every support that joins them."""
     observations: dict[SpatialObservationId, SpatialObservation] = {}
     claims_of_result: dict[PerceptionResultId, list[SemanticClaim]] = {}
     regions_of_result: dict[PerceptionResultId, set[str]] = {}
@@ -155,13 +167,30 @@ def build_scenario(
         acquisition_timestamps=timestamps(frames),
         policy=GeometryOverlapSupportPolicy(min_geometry_count=1, min_overlap=min_overlap),
     )
-    assert len(build.supports) == 1, "the scenario must be a single support"
     results = {
         key: _result(key, claims, regions_of_result[key])
         for key, claims in claims_of_result.items()
     }
+    return ScenarioParts(
+        supports=build.supports,
+        excluded=build.excluded,
+        observations=observations,
+        grouping=grouping,
+        results=results,
+    )
+
+
+def build_scenario(
+    views: Sequence[View], *, geometry_points: int = 1_000, min_overlap: float = 0.5
+) -> Scenario:
+    """Observations, results, grouping and the single support that joins them."""
+    parts = build_scenario_parts(views, geometry_points=geometry_points, min_overlap=min_overlap)
+    assert len(parts.supports) == 1, "the scenario must be a single support"
     return Scenario(
-        support=build.supports[0], observations=observations, grouping=grouping, results=results
+        support=parts.supports[0],
+        observations=parts.observations,
+        grouping=parts.grouping,
+        results=parts.results,
     )
 
 

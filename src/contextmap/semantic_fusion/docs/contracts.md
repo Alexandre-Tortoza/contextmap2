@@ -127,6 +127,6 @@ Não há vencedor, hipótese primária nem confiança combinada. Validações de
 
 Coleções cuja ordem não tem significado são exigidas ordenadas e únicas (por identidade), para que a mesma evidência produza sempre o mesmo registro. Quem produz a evidência ordena; o contrato rejeita o resto.
 
-## O que ainda não existe
+## Persistência e compatibilidade
 
-Serialização, o artifact de run e o serviço de acumulação ainda não foram implementados. Nenhum contrato aqui exige compatibilidade com formatos históricos.
+A serialização e o artifact de run estão em [`artifact.md`](artifact.md). Nenhum contrato aqui exige compatibilidade com formatos históricos.
