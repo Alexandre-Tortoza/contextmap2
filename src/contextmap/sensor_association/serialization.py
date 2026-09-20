@@ -32,6 +32,12 @@ from contextmap.sensor_association.models import (
     VisibilityState,
     VisualFeatureRef,
 )
+from contextmap.sensor_association.quality import (
+    ObservationQuality,
+    QualityComponent,
+    ReprojectionStatistics,
+    ValueSummary,
+)
 from contextmap.state_estimation import (
     LookupOutcome,
     PoseEstimateId,
@@ -48,9 +54,11 @@ from contextmap.visual_perception import (
 )
 
 __all__ = [
+    "decode_observation_quality",
     "decode_point_correspondence",
     "decode_spatial_observation",
     "encode_calibration_ref",
+    "encode_observation_quality",
     "encode_point_correspondence",
     "encode_pose_ref",
     "encode_spatial_observation",
@@ -97,6 +105,129 @@ def encode_pose_ref(pose: PoseRef) -> dict[str, Any]:
         "time_delta_ns": pose.time_delta_ns,
         "interpolation_fraction": pose.interpolation_fraction,
     }
+
+
+def _encode_summary(summary: ValueSummary | None) -> dict[str, Any] | None:
+    if summary is None:
+        return None
+    return {
+        "count": summary.count,
+        "minimum": summary.minimum,
+        "median": summary.median,
+        "maximum": summary.maximum,
+    }
+
+
+def _decode_summary(record: Mapping[str, Any] | None) -> ValueSummary | None:
+    if record is None:
+        return None
+    return ValueSummary(
+        count=record["count"],
+        minimum=record["minimum"],
+        median=record["median"],
+        maximum=record["maximum"],
+    )
+
+
+def encode_observation_quality(quality: ObservationQuality) -> dict[str, Any]:
+    """Encode an observation quality; an unavailable component is an explicit ``null``."""
+    reprojection = quality.reprojection
+    return {
+        "definitions_version": quality.definitions_version,
+        "spatial_observation_id": str(quality.spatial_observation_id),
+        "source_observation_id": str(quality.source_observation_id),
+        "geometric_map_id": str(quality.geometric_map_id),
+        "calibration_ref": encode_calibration_ref(quality.calibration_ref),
+        "pose_ref": encode_pose_ref(quality.pose_ref),
+        "image_transform_id": quality.image_transform_id,
+        "visibility_policy_id": quality.visibility_policy_id,
+        "depth_metric": quality.depth_metric.value,
+        "associated_count": quality.associated_count,
+        "footprint_count": quality.footprint_count,
+        "mask_area_px": quality.mask_area_px,
+        "support_density_per_mask_pixel": quality.support_density_per_mask_pixel,
+        "support_pixel_coverage": quality.support_pixel_coverage,
+        "support_depth_m": _encode_summary(quality.support_depth_m),
+        "support_off_axis_angle_rad": _encode_summary(quality.support_off_axis_angle_rad),
+        "border_distance_px": _encode_summary(quality.border_distance_px),
+        "visible_share": quality.visible_share,
+        "occluded_fraction": quality.occluded_fraction,
+        "outside_valid_support_fraction": quality.outside_valid_support_fraction,
+        "reprojection": None
+        if reprojection is None
+        else {
+            "reference_id": reprojection.reference_id,
+            "correspondence_count": reprojection.correspondence_count,
+            "invalid_count": reprojection.invalid_count,
+            "mean_px": reprojection.mean_px,
+            "median_px": reprojection.median_px,
+            "p95_px": reprojection.p95_px,
+            "max_px": reprojection.max_px,
+        },
+        "unavailable": {
+            component.value: reason for component, reason in quality.unavailable.items()
+        },
+    }
+
+
+def decode_observation_quality(record: Mapping[str, Any]) -> ObservationQuality:
+    """Decode an observation quality and revalidate its contract.
+
+    Raises:
+        ValueError: If the record is malformed or violates the contract.
+    """
+    calibration = record["calibration_ref"]
+    pose = record["pose_ref"]
+    reprojection = record["reprojection"]
+    run_id = pose["state_estimation_run_id"]
+    return ObservationQuality(
+        definitions_version=record["definitions_version"],
+        spatial_observation_id=SpatialObservationId(record["spatial_observation_id"]),
+        source_observation_id=SourceObservationId(record["source_observation_id"]),
+        geometric_map_id=MapId(record["geometric_map_id"]),
+        calibration_ref=CalibrationRef(
+            calibration_identity=calibration["calibration_identity"],
+            camera_calibration_id=CalibrationReferenceId(calibration["camera_calibration_id"]),
+            camera_model_kind=calibration["camera_model_kind"],
+            camera_frame=FrameId(calibration["camera_frame"]),
+        ),
+        pose_ref=PoseRef(
+            trajectory_id=TrajectoryId(pose["trajectory_id"]),
+            state_estimation_run_id=None if run_id is None else StateEstimationRunId(run_id),
+            source_estimate_ids=tuple(PoseEstimateId(item) for item in pose["source_estimate_ids"]),
+            lookup_outcome=LookupOutcome(pose["lookup_outcome"]),
+            time_delta_ns=pose["time_delta_ns"],
+            interpolation_fraction=pose["interpolation_fraction"],
+        ),
+        image_transform_id=record["image_transform_id"],
+        visibility_policy_id=record["visibility_policy_id"],
+        depth_metric=DepthMetric(record["depth_metric"]),
+        associated_count=record["associated_count"],
+        footprint_count=record["footprint_count"],
+        mask_area_px=record["mask_area_px"],
+        support_density_per_mask_pixel=record["support_density_per_mask_pixel"],
+        support_pixel_coverage=record["support_pixel_coverage"],
+        support_depth_m=_decode_summary(record["support_depth_m"]),
+        support_off_axis_angle_rad=_decode_summary(record["support_off_axis_angle_rad"]),
+        border_distance_px=_decode_summary(record["border_distance_px"]),
+        visible_share=record["visible_share"],
+        occluded_fraction=record["occluded_fraction"],
+        outside_valid_support_fraction=record["outside_valid_support_fraction"],
+        reprojection=None
+        if reprojection is None
+        else ReprojectionStatistics(
+            reference_id=reprojection["reference_id"],
+            correspondence_count=reprojection["correspondence_count"],
+            invalid_count=reprojection["invalid_count"],
+            mean_px=reprojection["mean_px"],
+            median_px=reprojection["median_px"],
+            p95_px=reprojection["p95_px"],
+            max_px=reprojection["max_px"],
+        ),
+        unavailable={
+            QualityComponent(name): reason for name, reason in record["unavailable"].items()
+        },
+    )
 
 
 def encode_point_correspondence(record: PointCorrespondence) -> dict[str, Any]:

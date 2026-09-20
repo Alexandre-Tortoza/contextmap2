@@ -27,7 +27,7 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 
 ## Estado implementado
 
-Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto, a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão) e o **pertencimento à máscara** de `Region2D`, com índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation`, além da **amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos). Estão **planejados**, e serão documentados aqui quando forem implementados: qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
+Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto, a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão) e o **pertencimento à máscara** de `Region2D`, com índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation`, além da **amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos) e o contrato **`ObservationQuality`**, com a derivação de suas medidas. Estão **planejados**, e serão documentados aqui quando forem implementados: diagnósticos de calibração e reprojeção, o artifact de run e a validação.
 
 ## Contratos públicos
 
@@ -37,6 +37,7 @@ Existem os **contratos** e sua serialização, a **projeção de câmera calibra
 - `ProjectionSummary` — fatos da projeção no nível do frame.
 - `VisualFeatureRef`, `SemanticClaimRef` — referências à evidência visual do mesmo resultado, nunca cópias.
 - `CalibrationRef`, `PoseRef`, `AssociationProvenance` — qual calibração, qual pose e qual execução produziram a observação.
+- `ObservationQuality`, `ValueSummary`, `ReprojectionStatistics`, `QualityComponent` — medidas de qualidade da observação, separadas e tipadas, com ausência explícita; **não** são confiança semântica.
 - `CameraProjection`, `PixelProjection`, `CameraIdentity`, `camera_projection_for()` — projeção 3D → pixel e raio inverso, com domínio de visão explícito e a identidade da calibração em todo resultado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
@@ -62,5 +63,6 @@ A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToP
 - [`visibility.md`](visibility.md) — oclusão por suporte de profundidade local, política, métrica de profundidade e diagnósticos.
 - [`membership.md`](membership.md) — pertencimento à máscara, sobreposição sem vencedor, índices, estatísticas e observações espaciais.
 - [`dense_sampling.md`](dense_sampling.md) — amostragem de features densas, políticas, preflight e proveniência.
+- [`quality.md`](quality.md) — qualidade da observação: componentes, ausência explícita, proveniência e derivação.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.

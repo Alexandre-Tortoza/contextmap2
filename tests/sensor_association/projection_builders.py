@@ -378,17 +378,28 @@ def project_frame(
     *,
     prepared: PreparedImage | None = None,
     calibration: CalibrationSet | None = None,
+    time_ns: int = 0,
+    poses: Sequence[tuple[int, Vector3, tuple[float, float, float, float]]] | None = None,
+    pose_policy: LookupPolicy | None = None,
 ) -> FrameProjection:
-    """Project ``map_points`` at time zero, with the body at the map origin."""
+    """Project ``map_points`` into the camera frame at ``time_ns``.
+
+    By default the body sits at the map origin with identity orientation and the pose is
+    looked up exactly at time zero.
+    """
     calibration = calibration if calibration is not None else make_calibration()
+    trajectory = (
+        make_trajectory(calibration) if poses is None else make_trajectory(calibration, poses)
+    )
     projector = FrameProjector(
         cloud=GeometryCloud.from_source(ArrayGeometrySource(map_points, calibration=calibration)),
-        trajectory=make_lookup(make_trajectory(calibration)),
-        pose_policy=LookupPolicy.exact(),
+        trajectory=make_lookup(trajectory),
+        pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
         calibration=calibration,
     )
     frame = projector.project(
-        make_camera_observation(0), prepared if prepared is not None else make_prepared_image()
+        make_camera_observation(time_ns),
+        prepared if prepared is not None else make_prepared_image(),
     )
     assert isinstance(frame, FrameProjection)
     return frame
