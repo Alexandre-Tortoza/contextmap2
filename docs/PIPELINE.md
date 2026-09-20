@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SensorAssociationRunArtifact` e, de forma opcional, `PointRepresentationRunArtifact`: a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria e a Point Representation descreve a estrutura 3D local:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticFusionRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local e a Semantic Fusion acumula a evidência multi-vista sem criar identidade de objeto:
 
 ```mermaid
 flowchart LR
@@ -97,11 +97,13 @@ flowchart LR
     SA --> ASA["SensorAssociationRunArtifact"]
     MAPA --> PTR["Point Representation<br/>(opcional)"]
     PTR --> PTRA["PointRepresentationRunArtifact"]
-    ASA -. próximo estágio ainda não integrado .-> FUT["Semantic Fusion<br/>+ downstream"]
-    PTRA -.-> FUT
+    ASA --> FUS["Semantic Fusion"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact"]
+    FUSA -. próximo estágio ainda não integrado .-> FUT["Semantic Mapping<br/>+ downstream"]
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association e Point Representation (opcional) possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional) e Semantic Fusion possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -667,11 +669,22 @@ A primeira policy deve ser determinística e preservar:
 
 Não reduzir destrutivamente tudo a um único label.
 
+### Estado implementado
+
+- **Agrupamento por observação física** (`physical-observation-grouping-v1`) sobre uma seleção **explícita** de runs de percepção; a contagem de frames físicos, de resultados de inferência, de runs e de variantes de backend ficam separadas.
+- **`FusionSupport`** por sobreposição de geometria (`geometry-jaccard-support-v1`, limiares declarados e sem valores padrão); observações com pouca geometria vão para uma lista de excluídas explícita.
+- **Política baseline** (`baseline-evidence-accumulation-v1`): uma contribuição por observação espacial, hipóteses por chave de label tipográfica, stances (`SUPPORTING`, `CONFLICTING`, `AMBIGUOUS`, `ABSTAINING`) e sinais tipados, sem ranking e sem ponderar por qualidade.
+- **Incerteza reportada, nunca resolvida:** contradição, ambiguidade, empate e evidência insuficiente com a evidência exata; abstenção só para labels configurados; refinamentos (`pallet` / `wooden pallet`) **não** são reconhecidos.
+- **Canais tipados** (`semantic_claims`, `semantic_scores`, `visual_features`, `observation_quality`, `geometry_support`, `point_representation`) declarados pela política; um canal nunca é ativado só porque há dados.
+- **Política opcional ciente de qualidade** (`quality-aware-evidence-accumulation-v1`), com peso inspecionável e fator neutro registrado; **não** é o padrão e nenhuma decisão de adotá-la foi tomada.
+
 ### Saída
 
 `FusedEvidence`.
 
 Saída persistida: `SemanticFusionRunArtifact`.
+
+Detalhes: [documentação de Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [contratos](../src/contextmap/semantic_fusion/docs/contracts.md), [agrupamento](../src/contextmap/semantic_fusion/docs/grouping.md), [suporte](../src/contextmap/semantic_fusion/docs/support.md), [acumulação](../src/contextmap/semantic_fusion/docs/accumulation.md), [política ciente de qualidade](../src/contextmap/semantic_fusion/docs/quality-aware.md), [artifact](../src/contextmap/semantic_fusion/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_fusion.md).
 
 ## 8. Semantic Mapping
 

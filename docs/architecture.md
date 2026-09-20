@@ -111,7 +111,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association` e `point_representation` já materializam os seis primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` já materializam os sete primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
@@ -130,11 +130,13 @@ flowchart LR
     SEN --> ASA["SensorAssociationRunArtifact"]
     MAPA --> PTR["contextmap.point_representation<br/>contratos + suporte + PointEncoder +<br/>descritor determinístico + fronteira PTv3"]
     PTR --> PTRA["PointRepresentationRunArtifact"]
-    ASA -. contrato downstream futuro .-> NEXT["fusion / map"]
-    PTRA -.-> NEXT
+    ASA --> FUS["contextmap.semantic_fusion<br/>suporte + agrupamento + acumulação +<br/>incerteza + canais + qualidade"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact"]
+    FUSA -. contrato downstream futuro .-> NEXT["semantic_mapping / map"]
 ```
 
-A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`. `geometric_mapping` consome `SequenceArtifact`, calibração e a trajetória de `state_estimation` pelas APIs públicas e devolve geometria por referência: nada a jusante copia XYZ. `sensor_association` consome a percepção, a trajetória e a geometria pelas APIs públicas e devolve `SpatialObservation`, que referencia geometria, features e claims por identidade em vez de copiá-los.
+A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`. `geometric_mapping` consome `SequenceArtifact`, calibração e a trajetória de `state_estimation` pelas APIs públicas e devolve geometria por referência: nada a jusante copia XYZ. `sensor_association` consome a percepção, a trajetória e a geometria pelas APIs públicas e devolve `SpatialObservation`, que referencia geometria, features e claims por identidade em vez de copiá-los. `semantic_fusion` consome `SpatialObservation`, as claims e a estrutura 3D opcional pelas APIs públicas e devolve `FusedEvidence`, que mantém todas as hipóteses e a incerteza sem criar identidade de objeto; suas dependências diretas de `ingestion`, `geometric_mapping` e `state_estimation` são só identidades e o intervalo temporal, e estão declaradas em `tests/architecture/test_boundaries.py`.
 
 Documentação implementacional:
 
@@ -145,7 +147,8 @@ Documentação implementacional:
 - [State Estimation](../src/contextmap/state_estimation/docs/README.md);
 - [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md);
 - [Sensor Association](../src/contextmap/sensor_association/docs/README.md);
-- [Point Representation](../src/contextmap/point_representation/docs/README.md).
+- [Point Representation](../src/contextmap/point_representation/docs/README.md);
+- [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md).
 
 
 ## Ownership
