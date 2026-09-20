@@ -86,9 +86,12 @@ com o request antes da renderização.
 `semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
 `scene_context=null` e ao menos uma claim com exatamente uma primária; SCENE
 exige um objeto `scene_context` e permite `claims=[]` quando os campos
-estruturados contêm ao menos um valor não nulo. Uma resposta SCENE não abstida
-é rejeitada quando não possui claim nem campo de contexto significativo.
-Abstention é explícita e
+estruturados contêm ao menos um valor não nulo. Como tolerância de parsing
+documentada em #340, uma resposta REGION que omite a chave `scene_context` é
+normalizada para `null` e essa normalização entra nos diagnostics; um valor
+não nulo continua inválido. O modo SCENE permanece estrito e continua rejeitando
+a ausência da chave. Uma resposta SCENE não abstida é rejeitada quando não
+possui claim nem campo de contexto significativo. Abstention é explícita e
 não pode carregar saída semântica escondida.
 
 Campos inesperados, tipos inválidos, JSON malformado e conteúdo obrigatório
