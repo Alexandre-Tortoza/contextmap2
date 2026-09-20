@@ -283,7 +283,13 @@ def parse_semantic_response(
     *,
     confidence_policy: SemanticConfidencePolicy,
 ) -> ParsedSemanticResponse:
-    """Parse strict JSON, allowing only recorded non-semantic code-fence removal."""
+    """Parse strict JSON, allowing only recorded non-semantic normalizations.
+
+    The two accepted normalizations are removing one outer code fence and, in region
+    mode, treating an omitted ``scene_context`` as ``null``. The key is null-only in that
+    mode, so its absence carries the same information; both cases add a
+    :class:`SemanticParseDiagnostic` to the result.
+    """
     _validate_parse_identity(request, provenance)
     if not raw_response.strip():
         raise SemanticResponseParseError("raw response must not be empty")
@@ -294,7 +300,23 @@ def parse_semantic_response(
     except (json.JSONDecodeError, SemanticResponseParseError) as error:
         raise SemanticResponseParseError(f"malformed structured response: {error}") from error
     data = _mapping(decoded, "semantic response")
-    _require_exact_keys(data, {"abstained", "claims", "scene_context"}, "semantic response")
+    response_keys = {"abstained", "claims", "scene_context"}
+    scene_mode = request.mode is SemanticInterpretationMode.SCENE
+    _require_keys(
+        data,
+        required=response_keys if scene_mode else response_keys - {"scene_context"},
+        allowed=response_keys,
+        name="semantic response",
+    )
+    if "scene_context" not in data:
+        diagnostics = (
+            *diagnostics,
+            SemanticParseDiagnostic(
+                code="defaulted_null_scene_context",
+                message="Region response omitted the null-only scene_context key; treated as null.",
+            ),
+        )
+    raw_scene_context = data.get("scene_context")
     abstained = data["abstained"]
     if not isinstance(abstained, bool):
         raise SemanticResponseParseError("abstained must be a boolean")
@@ -302,7 +324,7 @@ def parse_semantic_response(
     if not isinstance(raw_claims, list):
         raise SemanticResponseParseError("claims must be an array")
     if abstained:
-        if raw_claims or data["scene_context"] is not None:
+        if raw_claims or raw_scene_context is not None:
             raise SemanticResponseParseError("abstained response must not contain semantic output")
         return ParsedSemanticResponse(
             raw_response_sha256=hashlib.sha256(raw_response.encode("utf-8")).hexdigest(),
@@ -324,14 +346,14 @@ def parse_semantic_response(
     if request.mode is SemanticInterpretationMode.REGION:
         if not claims:
             raise SemanticResponseParseError("non-abstained region response requires a claim")
-        if data["scene_context"] is not None:
+        if raw_scene_context is not None:
             raise SemanticResponseParseError("region response scene_context must be null")
         if sum(claim.role is HypothesisRole.PRIMARY for claim in claims) != 1:
             raise SemanticResponseParseError("region response requires exactly one primary claim")
         output_claims = claims
         scene_context = None
     else:
-        raw_context = _mapping(data["scene_context"], "scene_context")
+        raw_context = _mapping(raw_scene_context, "scene_context")
         allowed_context_keys = {
             "scene_type",
             "environment",
@@ -495,8 +517,14 @@ def _mapping(value: object, name: str) -> Mapping[str, Any]:
 
 
 def _require_exact_keys(data: Mapping[str, Any], keys: set[str], name: str) -> None:
-    missing = keys - data.keys()
-    unexpected = data.keys() - keys
+    _require_keys(data, required=keys, allowed=keys, name=name)
+
+
+def _require_keys(
+    data: Mapping[str, Any], *, required: set[str], allowed: set[str], name: str
+) -> None:
+    missing = required - data.keys()
+    unexpected = data.keys() - allowed
     if missing:
         raise SemanticResponseParseError(f"{name} is missing required fields: {sorted(missing)}")
     if unexpected:

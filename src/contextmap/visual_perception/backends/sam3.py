@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
+from importlib import import_module
 from math import isfinite
 from time import perf_counter
 from typing import Protocol, cast
@@ -30,6 +32,8 @@ from ..region_models import (
     RegionProvenance,
 )
 
+_SUPPORTED_PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
+
 
 class Sam3Strategy(StrEnum):
     """Explicit SAM3 discovery/query strategies supported by the adapter."""
@@ -43,7 +47,12 @@ class Sam3Strategy(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Sam3Config:
-    """Effective configuration for one SAM3 Region Discovery adapter."""
+    """Effective configuration for one SAM3 Region Discovery adapter.
+
+    ``precision`` is the inference precision the official runtime applies: ``float32``
+    runs the SDK as loaded, while ``float16`` and ``bfloat16`` run it under
+    ``torch.autocast``. The official SAM3 image model requires ``bfloat16``.
+    """
 
     checkpoint: str
     model_version: str = "unknown"
@@ -59,6 +68,9 @@ class Sam3Config:
         """Validate strategy-specific configuration without hidden defaults."""
         if not self.checkpoint or not self.model_version or not self.device or not self.precision:
             raise ValueError("SAM3 checkpoint, version, device, and precision must not be empty")
+        if self.precision not in _SUPPORTED_PRECISIONS:
+            supported = ", ".join(sorted(_SUPPORTED_PRECISIONS))
+            raise ValueError(f"SAM3 precision must be one of: {supported}")
         _validate_unit_threshold(self.score_threshold, "score_threshold")
         _validate_unit_threshold(self.mask_threshold, "mask_threshold")
         if self.strategy is Sam3Strategy.TEXT_PROMPT and not self.prompt:
@@ -148,10 +160,20 @@ class Sam3ImageProcessorRuntime:
         *,
         processor: _Sam3ImageProcessor,
         image_loader: Callable[[DiscoveryInput], object],
+        autocast: Callable[[Sam3Config], AbstractContextManager[object]] | None = None,
     ) -> None:
-        """Bind a loaded processor to a pass-aware image loader."""
+        """Bind a loaded processor to a pass-aware image loader.
+
+        Args:
+            processor: Official image processor already built around the model.
+            image_loader: Materializes the exact image of one discovery pass.
+            autocast: Builds the context the SDK runs in for one configuration.
+                Defaults to ``torch.autocast`` for ``float16`` and ``bfloat16`` and to
+                no context for ``float32``; tests inject a recording context.
+        """
         self._processor = processor
         self._image_loader = image_loader
+        self._autocast = autocast or _torch_autocast
 
     def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
         """Run supported official image inference without a strategy fallback."""
@@ -162,11 +184,12 @@ class Sam3ImageProcessorRuntime:
 
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
-        state = self._processor.set_image(image)
-        state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
-        if state is None:
-            raise ValueError("SAM3 processor returned no inference state")
-        output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
+        with self._autocast(config):
+            state = self._processor.set_image(image)
+            state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
+            if state is None:
+                raise ValueError("SAM3 processor returned no inference state")
+            output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
         width = discovery_input.discovery_pass.input_width
         height = discovery_input.discovery_pass.input_height
         proposals = _parse_image_processor_output(
@@ -259,9 +282,34 @@ class Sam3RegionDiscovery:
         width: int,
         height: int,
     ) -> RegionCandidate:
-        """Convert one scalar SAM3 proposal without semantic promotion."""
+        """Convert one scalar SAM3 proposal without semantic promotion.
+
+        A proposal with mask pixels uses the tight half-open box of its mask as
+        candidate geometry. The native box comes from a box head independent of
+        the mask head, so it may leave the image or fail to contain the mask; it is
+        kept as audit metadata instead of geometry. A proposal without mask pixels
+        keeps the native box clamped to the pass, when any part of it is inside, and
+        is rejected explicitly by normalization.
+        """
         if len(proposal.mask) != width * height:
             raise ValueError("SAM3 proposal mask length must match discovery pass dimensions")
+        mask_box = _mask_bounding_box(proposal.mask, width=width, height=height)
+        bounding_box = mask_box or _clamp_box(proposal.box, width=width, height=height)
+        native_metadata: tuple[tuple[str, JsonScalar], ...] = (
+            *proposal.metadata,
+            ("native_box_x_min", proposal.box[0]),
+            ("native_box_y_min", proposal.box[1]),
+            ("native_box_x_max", proposal.box[2]),
+            ("native_box_y_max", proposal.box[3]),
+        )
+        if mask_box is not None:
+            contains_mask = (
+                proposal.box[0] <= mask_box.x_min
+                and proposal.box[1] <= mask_box.y_min
+                and proposal.box[2] >= mask_box.x_max
+                and proposal.box[3] >= mask_box.y_max
+            )
+            native_metadata = (*native_metadata, ("native_box_contains_mask", contains_mask))
         prompt = self._config.prompt
         query_parts = [self._config.strategy.value]
         if prompt:
@@ -274,12 +322,7 @@ class Sam3RegionDiscovery:
             perception_result_id=discovery_input.perception_result_id,
             image_width=width,
             image_height=height,
-            bounding_box=BoundingBox(
-                x_min=proposal.box[0],
-                y_min=proposal.box[1],
-                x_max=proposal.box[2],
-                y_max=proposal.box[3],
-            ),
+            bounding_box=bounding_box,
             mask=InlineMask(width=width, height=height, data=proposal.mask),
             score=BackendScore(
                 name=proposal.score_name,
@@ -297,8 +340,52 @@ class Sam3RegionDiscovery:
                 native_proposal_id=proposal.proposal_id,
                 query=":".join(query_parts),
             ),
-            native_metadata=proposal.metadata,
+            native_metadata=native_metadata,
         )
+
+
+def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:
+    """Return the ``torch.autocast`` context that realizes the configured precision."""
+    if config.precision == "float32":
+        return nullcontext()
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            f"SAM3 {config.precision} inference requires torch autocast; install torch"
+        ) from error
+    return cast(
+        AbstractContextManager[object],
+        torch.autocast(
+            device_type=config.device.split(":", 1)[0],
+            dtype=getattr(torch, config.precision),
+        ),
+    )
+
+
+def _mask_bounding_box(mask: tuple[bool, ...], *, width: int, height: int) -> BoundingBox | None:
+    """Return the tight half-open box of the true pixels, or ``None`` for an empty mask."""
+    rows = [index for index in range(height) if any(mask[index * width : (index + 1) * width])]
+    if not rows:
+        return None
+    x_min = width
+    x_max = 0
+    for index in rows:
+        row = mask[index * width : (index + 1) * width]
+        x_min = min(x_min, row.index(True))
+        x_max = max(x_max, width - row[::-1].index(True))
+    return BoundingBox(x_min=x_min, y_min=rows[0], x_max=x_max, y_max=rows[-1] + 1)
+
+
+def _clamp_box(
+    box: tuple[float, float, float, float], *, width: int, height: int
+) -> BoundingBox | None:
+    """Clip a native box to the pass, or return ``None`` when nothing of it is inside."""
+    x_min, y_min = max(box[0], 0.0), max(box[1], 0.0)
+    x_max, y_max = min(box[2], float(width)), min(box[3], float(height))
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return BoundingBox(x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max)
 
 
 def _validate_unit_threshold(value: float, name: str) -> None:

@@ -301,9 +301,12 @@ def _parse_automatic_mask_record(
     box = _numeric_sequence(record.get("bbox"), "bbox", length=4)
     x, y, box_width, box_height = box
     area = _finite_number(record.get("area"), "area")
+    # O SDK oficial monta o bbox a partir de índices de pixel inclusivos
+    # (largura = x1 - x0), enquanto BoundingBox é semiaberto. Sem o +1 a caixa
+    # fica um pixel menor que a máscara e a normalização rejeita todo candidato.
     return Sam2NativeProposal(
         proposal_id=f"sam2-{index:06d}",
-        box=(x, y, x + box_width, y + box_height),
+        box=(x, y, x + box_width + 1, y + box_height + 1),
         mask=_binary_mask(record.get("segmentation"), width=width, height=height),
         predicted_iou=_finite_number(record.get("predicted_iou"), "predicted_iou"),
         stability_score=_finite_number(record.get("stability_score"), "stability_score"),

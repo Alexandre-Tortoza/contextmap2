@@ -22,6 +22,7 @@ from contextmap.visual_perception.backends._feature_values import (
     validate_and_normalize_feature_values,
 )
 from contextmap.visual_perception.backends._huggingface import (
+    preprocess_pixel_values,
     validate_huggingface_commit_revision,
 )
 from contextmap.visual_perception.dense_region_association import (
@@ -380,18 +381,16 @@ class HuggingFaceDinoV2Runtime:
                         f"prepared image metadata {(image.width, image.height)} does not match "
                         f"decoded payload {rgb_image.size}"
                     )
-                inputs = self._processor(
-                    images=rgb_image,
-                    return_tensors="pt",
-                    do_resize=True,
-                    size={"height": self._config.input_height, "width": self._config.input_width},
+                pixel_values = preprocess_pixel_values(
+                    processor=self._processor,
+                    images=[rgb_image],
+                    width=self._config.input_width,
+                    height=self._config.input_height,
                     resample=self._image_module.Resampling.BICUBIC,
-                    do_center_crop=False,
+                ).to(
+                    device=self._config.device,
+                    dtype=self._torch_dtype,
                 )
-            pixel_values = inputs["pixel_values"].to(
-                device=self._config.device,
-                dtype=self._torch_dtype,
-            )
             with self._torch.no_grad():
                 output = self._model(pixel_values=pixel_values)
             patch_width, patch_height = _patch_dimensions(self._model.config.patch_size)
@@ -440,7 +439,8 @@ class HuggingFaceDinoV2Runtime:
             image_module = importlib.import_module("PIL.Image")
         except ModuleNotFoundError as error:
             raise DinoV2DependencyError(
-                "DINOv2 requires torch, transformers, and Pillow in the runtime environment"
+                "DINOv2 requires torch, transformers, and Pillow (plus torchvision with "
+                "transformers 5.x) in the runtime environment"
             ) from error
 
         if self._config.device == "cuda" and not torch.cuda.is_available():
@@ -461,10 +461,15 @@ class HuggingFaceDinoV2Runtime:
                 self._config.checkpoint,
                 revision=self._config.revision,
                 local_files_only=self._config.local_files_only,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
             )
             model = model.to(self._config.device)
             model.eval()
+        except ImportError as error:
+            raise DinoV2DependencyError(
+                f"DINOv2 could not import a package required by the Hugging Face image "
+                f"processor or model (transformers 5.x needs torchvision): {error}"
+            ) from error
         except Exception as error:
             mode = "local cache" if self._config.local_files_only else "configured model source"
             raise DinoV2ModelLoadError(
@@ -491,7 +496,7 @@ def _configuration_fingerprint(config: DinoV2Config) -> str:
         "local_files_only": config.local_files_only,
         "l2_normalize": config.l2_normalize,
         "payload_prefix": config.payload_prefix,
-        "preprocessing": "huggingface_direct_bicubic_resize_no_crop_v1",
+        "preprocessing": "pillow_direct_bicubic_resize_processor_normalize_no_crop_v2",
         "code_version": config.code_version,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -549,7 +554,7 @@ def _sampling_for(
         "model_input": {
             "width": native.model_input_width,
             "height": native.model_input_height,
-            "resize": "direct_bicubic_by_huggingface_processor",
+            "resize": "direct_bicubic_by_pillow",
             "center_crop": False,
         },
         "patch": {"width": native.patch_width, "height": native.patch_height},

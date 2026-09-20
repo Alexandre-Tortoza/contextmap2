@@ -211,6 +211,12 @@ a box nativa XYWH para XYXY, destaca a máscara binária e preserva `predicted_i
 `stability_score` e área. `from_model` constrói o generator com os thresholds e settings que
 participam do digest, sem tornar SAM2 dependência obrigatória do pacote principal.
 
+O `bbox` do SDK oficial usa **índices de pixel inclusivos** (`[x0, y0, x1 - x0, y1 - y0]`), e a
+`BoundingBox` canônica é semiaberta. A conversão soma um pixel às duas bordas máximas
+(`x + w + 1`, `y + h + 1`), o que torna a caixa justa à máscara. Sem isso a normalização, que exige
+que a caixa contenha a máscara, rejeitaria todo candidato real como `invalid_geometry`. O
+comportamento foi confirmado com o SDK e o checkpoint SAM 2.1 tiny em frames reais (issue #336).
+
 ## Backend SAM3
 
 `Sam3RegionDiscovery` é o adapter concreto de SAM3 para Region Discovery e continua substituível
@@ -228,6 +234,27 @@ fallback silencioso para outra estratégia ou backend.
 máscara são destacados dos tensors antes de sair do runtime. As demais estratégias continuam
 distinguíveis no contrato, mas esse runtime as rejeita explicitamente até existir uma integração
 real específica; selecionar uma delas não aciona comportamento alternativo.
+
+A `precision` de `Sam3Config` (`float32`, `float16` ou `bfloat16`; qualquer outro valor é rejeitado
+na configuração) é a precisão com que a inferência realmente roda: o runtime executa as chamadas do
+SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem contexto para `float32`. O modelo de
+imagem oficial do SAM3 só executa sob autocast `bfloat16`; com `float32` o SDK falha com
+`mat1 and mat2 must have the same dtype`. O contexto é injetável (`autocast=`), então os testes não
+precisam de torch, e `float32` nunca importa torch (issue #338).
+
+### Geometria das propostas SAM3
+
+O SAM3 devolve `boxes` de um head independente do head de máscara. Na prática essa caixa pode
+ultrapassar a imagem em alguns pixels e frequentemente não contém a máscara binarizada. Como a
+normalização exige que a caixa contenha a máscara e que `RegionCandidate` fique dentro da imagem, o
+adapter usa como geometria a **caixa justa e semiaberta da própria máscara** (mesma escolha do
+Florence-2 para polígonos). A caixa nativa não é descartada: ela acompanha o candidato em
+`native_metadata` (`native_box_x_min`, `native_box_y_min`, `native_box_x_max`, `native_box_y_max`) e
+`native_box_contains_mask` registra se ela continha a máscara.
+
+Uma proposta sem pixel de máscara mantém a caixa nativa recortada à janela do pass, quando existe
+interseção, e é rejeitada de forma explícita pela normalização (`invalid_geometry`). Nenhum caso
+levanta exceção que interrompa o pass por causa de uma única proposta (issue #337).
 
 ## Backend Florence-2
 

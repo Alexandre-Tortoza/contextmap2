@@ -37,7 +37,7 @@ O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. A identi
 
 ## Runtime Hugging Face
 
-O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz resize bicúbico direto configurado sem center crop, chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. A interpolação é explícita e não depende do default carregado pelo processor. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
+O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz o resize bicúbico direto configurado no **Pillow**, sem center crop, usa o processor apenas para rescale e normalização (`do_resize=False`), chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. O resize é do adapter, não do processor: a implementação de resize do processor depende do backend instalado (torchvision ou PIL) e dá pixels diferentes (até 1,75e-2) e features diferentes (cosseno mínimo por patch 0,981) para o mesmo checkpoint, config e imagem. Com o resize no Pillow, os dois backends concordam a 2,4e-7 (issue #339). Dependências: `torch`, `transformers` (>= 4.56, que introduziu `dtype=`) e `Pillow`; com `transformers` 5.x o processor padrão importa também `torchvision`, que precisa estar instalado; um pacote ausente vira `ClipDependencyError`. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
 
 `local_files_only=True` é o default; nenhuma inferência baixa pesos implicitamente. `revision` exige o SHA Git completo de 40 caracteres e rejeita referências móveis como `main` antes do carregamento. Dependência, device, checkpoint e inferência possuem erros separados e não acionam fallback.
 
@@ -52,7 +52,9 @@ normalização L2 ou enfileirar o payload.
 
 Os testes com runtime fake cobrem modos global/região, crops com contexto e borda, proveniência por view, persistência, normalização, compatibilidade de espaço, validação e ausência de scoring.
 
-Por instrução do usuário, nenhum checkpoint real foi baixado ou executado. Uma execução controlada na máquina de inferência ainda deve confirmar a projeção/dimensão do checkpoint, tolerância numérica e comportamento do processor antes de considerar o backend validado com pesos reais.
+Execução controlada com pesos reais (issue #70, 2026-09-20; RTX 3060, torch 2.14, transformers 5.17, frames reais de `corridor-02`): `openai/clip-vit-large-patch14` no escopo global produz `(1, 768)` com norma L2 1,0 e repetição idêntica. O vetor está no espaço conjunto imagem-texto: para um frame de corredor, "a photo of an indoor corridor" pontua 0,229 contra 0,137 (cat), 0,118 (forest) e 0,109 (beach). No escopo de região com crops `context_box`, há um vetor por região com `feature_id` único e `region_id` preservado, e uma região não aceita é rejeitada com `ClipInferenceError`. fp16 contra fp32 tem cosseno 0,999994.
+
+Antes da correção do pré-processamento (issue #339) o adapter tinha cosseno 0,99995 (diferença máxima 1,2e-3) contra uma referência independente; depois dela a diferença máxima é 3,6e-7 e os backends torchvision e PIL do processor coincidem.
 
 ## O que este backend não faz
 
