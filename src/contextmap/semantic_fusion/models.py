@@ -67,6 +67,26 @@ FusedHypothesisId = NewType("FusedHypothesisId", str)
 _Item = TypeVar("_Item")
 
 
+def evidence_contribution_id_for(
+    *, fusion_support_id: FusionSupportId, spatial_observation_id: SpatialObservationId
+) -> EvidenceContributionId:
+    """Compute the deterministic identity of one observation's contribution to one support.
+
+    Args:
+        fusion_support_id: The support the evidence is accumulated over.
+        spatial_observation_id: The spatial observation the view comes from.
+
+    Returns:
+        A pure function of the inputs, so a contribution can be referenced without a registry.
+    """
+    return EvidenceContributionId(f"contribution--{fusion_support_id}--{spatial_observation_id}")
+
+
+def fused_evidence_id_for(*, fusion_support_id: FusionSupportId) -> FusedEvidenceId:
+    """Compute the deterministic identity of the evidence fused over one support."""
+    return FusedEvidenceId(f"fused--{fusion_support_id}")
+
+
 def _require_present(owner: object, *names: str) -> None:
     for name in names:
         if not str(getattr(owner, name)).strip():
@@ -80,6 +100,17 @@ def _require_canonical(
     keys = [key(item) for item in items]
     if any(left >= right for left, right in pairwise(keys)):
         raise ValueError(f"{name} must be sorted {detail}and unique")
+
+
+def _time_bounds_of(stamps: Sequence[SourceTimestamp], *, owner: str) -> TimeBounds:
+    """Span the given acquisition timestamps, which must share one clock domain."""
+    clocks = {stamp.clock_id for stamp in stamps}
+    if len(clocks) != 1:
+        raise ValueError(f"{owner} span more than one clock domain: {sorted(clocks)!r}")
+    return TimeBounds(
+        start=min(stamps, key=SourceTimestamp.total_nanoseconds),
+        end=max(stamps, key=SourceTimestamp.total_nanoseconds),
+    )
 
 
 def _producer_key(producer: BackendProvenance) -> tuple[str, ...]:
@@ -799,15 +830,9 @@ class FusedEvidence:
                     )
 
     def _require_temporal_summary(self) -> None:
-        stamps = [group.acquisition_timestamp for group in self.physical_observation_groups]
-        clocks = {stamp.clock_id for stamp in stamps}
-        if len(clocks) != 1:
-            raise ValueError(
-                f"physical observations must share one clock domain, got {sorted(clocks)!r}"
-            )
-        expected = TimeBounds(
-            start=min(stamps, key=SourceTimestamp.total_nanoseconds),
-            end=max(stamps, key=SourceTimestamp.total_nanoseconds),
+        expected = _time_bounds_of(
+            [group.acquisition_timestamp for group in self.physical_observation_groups],
+            owner="the physical observations",
         )
         if self.temporal_summary != expected:
             raise ValueError(

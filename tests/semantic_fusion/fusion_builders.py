@@ -29,6 +29,7 @@ from contextmap.semantic_fusion import (
     SupportSignalKind,
     UncertaintyKind,
     UncertaintyRecord,
+    evidence_contribution_id_for,
 )
 from contextmap.sensor_association import (
     SemanticClaimRef,
@@ -144,7 +145,9 @@ def spatial_id(run: str, frame: str, region: str = "region-0001") -> SpatialObse
 def contribution_id_for(
     run: str, frame: str, region: str = "region-0001"
 ) -> EvidenceContributionId:
-    return EvidenceContributionId(f"contribution--{SUPPORT_ID}--{spatial_id(run, frame, region)}")
+    return evidence_contribution_id_for(
+        fusion_support_id=SUPPORT_ID, spatial_observation_id=spatial_id(run, frame, region)
+    )
 
 
 def make_contribution(
