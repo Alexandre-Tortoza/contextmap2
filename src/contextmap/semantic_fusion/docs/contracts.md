@@ -107,6 +107,7 @@ Conflito, ambiguidade ou falta de evidência, com a evidência exata que o produ
 | `uncertainty` | Conflitos, ambiguidades e falta de evidência. |
 | `temporal_summary` | `TimeBounds` que cobre exatamente a aquisição dos grupos. |
 | `provenance` | `FusedEvidenceProvenance`: `grouping_policy_id`, `fusion_policy_id`, `configuration_fingerprint`, `code_version`. |
+| `weighting` | `QualityWeighting` quando uma política ciente de qualidade rodou; `None` no baseline. Fatores por componente e por contribuição, e o suporte de cada hipótese antes (`supporting_physical_observations`) e depois (`weighted_support`) da ponderação. Não é confiança nem probabilidade; ver [`quality-aware.md`](quality-aware.md). |
 | `channels` | `ChannelProvenance` por canal ativo (`EvidenceChannel`), ordenados, com as identidades que o alimentaram. `semantic_claims` e `geometry_support` sempre estão; dados de qualquer outro canal só existem se o canal está aqui. |
 
 Não há vencedor, hipótese primária nem confiança combinada. Validações de consistência entre as partes:

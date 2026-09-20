@@ -27,7 +27,7 @@ Fusão não é identidade. Um `FusionSupport` afirma apenas que observações es
 
 ## Estado implementado
 
-Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, e a **seleção de canais de evidência** tipados. Estão **planejados**, e serão documentados aqui quando forem implementados: política ciente de qualidade, artifact de run e a validação.
+Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, a **seleção de canais de evidência** tipados e a **política opcional ciente de qualidade**, que pondera sem descartar evidência. Estão **planejados**, e serão documentados aqui quando forem implementados: artifact de run e a validação.
 
 ## Contratos públicos
 
@@ -39,6 +39,8 @@ Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObse
 - `build_fusion_supports()`, `FusionSupportBuild`, `ExcludedObservation`, `GeometryOverlapSupportPolicy`, `GEOMETRY_OVERLAP_SUPPORT_POLICY_ID` — constrói suportes por sobreposição de geometria (Jaccard), com os limiares declarados e as observações excluídas explícitas.
 - `ScoreReference`, `ObservationQualityRef` — referências ao score de um scorer e à qualidade mensurável da vista; nunca valores.
 - `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
+- `accumulate_quality_aware_evidence()`, `QualityAwareAccumulationPolicy`, `QualityRamp`, `QualityInput`, `QUALITY_AWARE_ACCUMULATION_POLICY_ID` — a política opcional que pondera as contribuições por qualidade mensurável, com rampas declaradas e fator neutro registrado.
+- `QualityWeighting`, `ContributionWeight`, `ComponentFactor`, `ComponentTreatment`, `HypothesisSupport`, `ObservationFactor` — o peso derivado, inspecionável: por componente, por contribuição e o suporte de cada hipótese antes e depois.
 - `EvidenceChannel`, `ChannelProvenance` — os canais tipados (claims, scores, features, qualidade, geometria, estrutura 3D) e a proveniência do que alimentou cada canal ativo.
 - `FusedHypothesis`, `FusedHypothesisId`, `HypothesisEvidence`, `EvidenceStance` — um candidato semântico e cada claim que o sustenta, contradiz ou deixa ambíguo.
 - `SupportSignal`, `SupportSignalKind` — score tipado de uma claim, com o modelo que o produziu; `None` significa não pontuado.
@@ -69,5 +71,6 @@ A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe a
 - [`grouping.md`](grouping.md) — agrupamento por observação física, seleção explícita de runs e contagens.
 - [`support.md`](support.md) — política baseline de suporte, medida de sobreposição, mesclagem e casos limite.
 - [`accumulation.md`](accumulation.md) — política baseline de acumulação, regra de label, stances e fronteira de qualidade.
+- [`quality-aware.md`](quality-aware.md) — política opcional ciente de qualidade: regras versionadas, fator neutro, correlação preservada e diagnósticos.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Fusion no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `FusionSupport` e `FusedEvidence` no contexto global de contratos.

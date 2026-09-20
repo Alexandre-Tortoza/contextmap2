@@ -87,7 +87,7 @@ Falha cedo, com mensagem acionável, quando: uma observação do suporte não es
 
 ## O que não faz
 
-- não pondera por qualidade de observação;
+- não pondera por qualidade de observação (a política opcional que pondera é [`quality-aware.md`](quality-aware.md), e este baseline permanece o braço de controle);
 - não reconhece refinamentos compatíveis como `pallet` e `wooden pallet`: isso exige uma regra explícita e versionada que o baseline não tem, então eles competem como hipóteses separadas (o que pode gerar contradição espúria; documentado como limitação);
 - não escolhe vencedor, não calcula probabilidade nem combina confiança, similaridade e qualidade;
 - não cria identidade de entidade nem aplica conhecimento prévio.

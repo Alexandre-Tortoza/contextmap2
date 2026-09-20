@@ -87,6 +87,11 @@ def fused_evidence_id_for(*, fusion_support_id: FusionSupportId) -> FusedEvidenc
     return FusedEvidenceId(f"fused--{fusion_support_id}")
 
 
+def _require_unit_factor(name: str, value: float) -> None:
+    if not (math.isfinite(value) and 0.0 <= value <= 1.0):
+        raise ValueError(f"{name} must be within [0, 1], got {value!r}")
+
+
 def _require_present(owner: object, *names: str) -> None:
     for name in names:
         if not str(getattr(owner, name)).strip():
@@ -169,6 +174,19 @@ class EvidenceChannel(Enum):
     OBSERVATION_QUALITY = "observation_quality"
     GEOMETRY_SUPPORT = "geometry_support"
     POINT_REPRESENTATION = "point_representation"
+
+
+class ComponentTreatment(Enum):
+    """How a quality component entered a contribution factor.
+
+    Attributes:
+        MEASURED: The component was measured and turned into a factor by its ramp.
+        NEUTRAL_FALLBACK: The component could not be measured, so the policy's declared
+            neutral factor was used, and the reason is recorded. Never a silent zero.
+    """
+
+    MEASURED = "measured"
+    NEUTRAL_FALLBACK = "neutral_fallback"
 
 
 class SupportSignalKind(Enum):
@@ -688,6 +706,184 @@ class ChannelProvenance:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ComponentFactor:
+    """The factor one declared quality component gave one contribution.
+
+    Attributes:
+        component: The measured quantity, named by the policy that declared it.
+        treatment: Whether it was measured or replaced by the neutral factor.
+        measured_value: The measured value; ``None`` for a neutral fallback.
+        factor: The factor in ``[0, 1]``.
+        unavailable_reason: Why the component could not be measured; ``None`` when measured.
+    """
+
+    component: str
+    treatment: ComponentTreatment
+    measured_value: float | None
+    factor: float
+    unavailable_reason: str | None
+
+    def __post_init__(self) -> None:
+        """Validate the factor and that the treatment matches the value and the reason.
+
+        Raises:
+            ValueError: If the component is empty, the factor is outside ``[0, 1]``, a
+                measured component has no finite value or has a reason, or a neutral
+                fallback has a value or no reason.
+        """
+        _require_present(self, "component")
+        _require_unit_factor("factor", self.factor)
+        if self.treatment is ComponentTreatment.MEASURED:
+            if self.measured_value is None or not math.isfinite(self.measured_value):
+                raise ValueError("a measured component needs a finite measured_value")
+            if self.unavailable_reason is not None:
+                raise ValueError("unavailable_reason must be None for a measured component")
+        else:
+            if self.measured_value is not None:
+                raise ValueError("measured_value must be None for a neutral fallback")
+            if not (self.unavailable_reason or "").strip():
+                raise ValueError("unavailable_reason is required for a neutral fallback")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ContributionWeight:
+    """The fusion factor of one contribution, with every component behind it.
+
+    The factor is a fusion contribution weight. It is not a semantic confidence, a scorer
+    support or a probability, and it never replaces the raw quality it came from.
+
+    Attributes:
+        contribution_id: The weighted contribution.
+        components: The declared components and their factors, sorted by component.
+        factor: The contribution factor in ``[0, 1]``, combined by the weighting's rule.
+    """
+
+    contribution_id: EvidenceContributionId
+    components: tuple[ComponentFactor, ...]
+    factor: float
+
+    def __post_init__(self) -> None:
+        """Validate the identity, the components and the factor.
+
+        Raises:
+            ValueError: If the identity is empty, there is no component, the components are
+                not sorted and unique, or the factor is outside ``[0, 1]``.
+        """
+        _require_present(self, "contribution_id")
+        if not self.components:
+            raise ValueError("a contribution weight needs at least one component")
+        _require_canonical("components", self.components, lambda item: (item.component,))
+        _require_unit_factor("factor", self.factor)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ObservationFactor:
+    """The factor of one physical observation for one hypothesis.
+
+    Attributes:
+        physical_observation_id: The physical frame.
+        factor: Its factor in ``[0, 1]``, however many inference runs interpreted it.
+    """
+
+    physical_observation_id: SourceObservationId
+    factor: float
+
+    def __post_init__(self) -> None:
+        """Validate the identity and the factor.
+
+        Raises:
+            ValueError: If the identity is empty or the factor is outside ``[0, 1]``.
+        """
+        _require_present(self, "physical_observation_id")
+        _require_unit_factor("factor", self.factor)
+
+
+@dataclass(frozen=True, kw_only=True)
+class HypothesisSupport:
+    """The support of one hypothesis before and after the weighting is applied.
+
+    Attributes:
+        hypothesis_id: The hypothesis.
+        supporting_physical_observations: Distinct supporting physical observations: the
+            support *before* weighting, the same count the baseline uses.
+        observation_factors: The factor of each of those observations, sorted by observation.
+        weighted_support: The sum of those factors, in units of weighted physical
+            observations: the support *after* weighting. It is not a probability.
+    """
+
+    hypothesis_id: FusedHypothesisId
+    supporting_physical_observations: int
+    observation_factors: tuple[ObservationFactor, ...]
+    weighted_support: float
+
+    def __post_init__(self) -> None:
+        """Validate the counts and that the weighted support is the sum of the factors.
+
+        Raises:
+            ValueError: If the identity is empty, the count differs from the factors listed,
+                the factors are not sorted and unique, or the weighted support is not the
+                sum of the factors.
+        """
+        _require_present(self, "hypothesis_id")
+        _require_canonical(
+            "observation_factors",
+            self.observation_factors,
+            lambda item: (item.physical_observation_id,),
+        )
+        if self.supporting_physical_observations != len(self.observation_factors):
+            raise ValueError(
+                f"supporting_physical_observations {self.supporting_physical_observations} "
+                f"must equal the {len(self.observation_factors)} observation_factors listed"
+            )
+        total = math.fsum(item.factor for item in self.observation_factors)
+        if not math.isclose(self.weighted_support, total, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError(
+                f"weighted_support {self.weighted_support!r} must equal the sum of the "
+                f"observation factors, {total!r}"
+            )
+
+
+@dataclass(frozen=True, kw_only=True)
+class QualityWeighting:
+    """How a quality-aware policy weighted the evidence, for inspection and reproduction.
+
+    The evidence itself is untouched: hypotheses, contributions and uncertainty are exactly
+    what the baseline would have produced. This only adds the derived factors.
+
+    Attributes:
+        policy_id: The versioned quality-aware policy.
+        combination_rule: How component factors combine into a contribution factor.
+        observation_rule: How the factors of several contributions of one physical
+            observation combine, so repeated inference is never counted as several views.
+        definitions_version: The quality definitions the components were read under.
+        contributions: The factor of every contribution, sorted by contribution.
+        hypotheses: The support of every hypothesis before and after weighting, sorted.
+    """
+
+    policy_id: str
+    combination_rule: str
+    observation_rule: str
+    definitions_version: str
+    contributions: tuple[ContributionWeight, ...]
+    hypotheses: tuple[HypothesisSupport, ...]
+
+    def __post_init__(self) -> None:
+        """Validate the identities and the ordering.
+
+        Raises:
+            ValueError: If a policy, rule or version is empty, or a collection is not sorted
+                and unique.
+        """
+        _require_present(
+            self, "policy_id", "combination_rule", "observation_rule", "definitions_version"
+        )
+        _require_canonical(
+            "contributions", self.contributions, lambda item: (item.contribution_id,)
+        )
+        _require_canonical("hypotheses", self.hypotheses, lambda item: (item.hypothesis_id,))
+
+
+@dataclass(frozen=True, kw_only=True)
 class FusedEvidenceProvenance:
     """How evidence was grouped and fused.
 
@@ -735,6 +931,7 @@ class FusedEvidence:
             each with the identities that fed it. Semantic claims and geometry support are
             always present; data of any other channel exists only if that channel is here,
             so an effect can be attributed to a channel.
+        weighting: The factors a quality-aware policy derived, or ``None`` for the baseline.
     """
 
     fused_evidence_id: FusedEvidenceId
@@ -747,6 +944,7 @@ class FusedEvidence:
     channels: tuple[ChannelProvenance, ...]
     point_representation_refs: tuple[PointRepresentationRef, ...] = ()
     uncertainty: tuple[UncertaintyRecord, ...] = ()
+    weighting: QualityWeighting | None = None
 
     def __post_init__(self) -> None:
         """Validate that groups, hypotheses and uncertainty agree with the contributions.
@@ -769,6 +967,7 @@ class FusedEvidence:
         self._require_temporal_summary()
         self._require_hypotheses_resolve(contributions)
         self._require_uncertainty_resolves(contributions)
+        self._require_weighting_matches()
 
     @property
     def physical_observation_count(self) -> int:
@@ -808,6 +1007,31 @@ class FusedEvidence:
                 }
             )
         )
+
+    def _require_weighting_matches(self) -> None:
+        weighting = self.weighting
+        if weighting is None:
+            return
+        if EvidenceChannel.OBSERVATION_QUALITY not in {item.channel for item in self.channels}:
+            raise ValueError(
+                "a quality weighting needs the observation_quality channel to be declared"
+            )
+        if [item.contribution_id for item in weighting.contributions] != [
+            item.contribution_id for item in self.contributions
+        ]:
+            raise ValueError("the weighting must cover exactly the contributions of the evidence")
+        if [item.hypothesis_id for item in weighting.hypotheses] != [
+            item.hypothesis_id for item in self.hypotheses
+        ]:
+            raise ValueError("the weighting must cover exactly the hypotheses of the evidence")
+        for support in weighting.hypotheses:
+            expected = self.supporting_physical_observations(support.hypothesis_id)
+            listed = tuple(item.physical_observation_id for item in support.observation_factors)
+            if listed != expected:
+                raise ValueError(
+                    f"hypothesis {support.hypothesis_id!r} has supporting physical observations "
+                    f"{list(expected)!r}, but its weighting lists {list(listed)!r}"
+                )
 
     def _require_channels_match(self) -> None:
         active = {item.channel for item in self.channels}
