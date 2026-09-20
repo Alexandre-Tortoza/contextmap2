@@ -12,22 +12,23 @@ DenseFeatureMap nativo
 
 O contrato não se chama LoftUp, FeatUp ou pelo nome de outro modelo. Um backend concreto implementa `enhance(source)` e devolve o mesmo tipo público consumido por pooling e, futuramente, Sensor Association. `enhance_feature_resolution()` aplica as invariantes comuns sem carregar SDK ou checkpoint.
 
-O mapa de origem é uma dataclass imutável. A saída deve possuir novos `feature_id`, `source_artifact_id` e `payload_reference`; corrigir ou sobrescrever o artifact nativo não é permitido.
+O mapa de origem é uma dataclass imutável. A saída deve possuir novos `feature_id` e `payload_reference`, mas pode pertencer ao mesmo `PerceptionRunArtifact` que a feature nativa. Isso permite que um único run publique as duas representações sem confundir suas identidades. Um artifact já finalizado continua imutável: uma nova execução deve produzir outro artifact em vez de sobrescrever o anterior.
 
 ## Lineage obrigatória
 
 Um mapa nativo possui `DenseFeatureMap.enhancement=None`. Um mapa enhanced carrega `FeatureResolutionEnhancementProvenance`, que registra:
 
-- feature, artifact, payload reference, hash e tamanho do payload de origem;
+- feature, artifact e payload reference de origem;
 - `EmbeddingSpace`, dtype, normalização e transformação espacial de origem;
 - backend/modelo/configuração efetivamente selecionados;
 - dimensões dos grids de entrada e saída;
 - dimensões da imagem preparada;
 - `EmbeddingSpace` declarado para a saída;
 - device, precision, runtime e peak memory;
-- hash e tamanho do payload de saída.
 
-O `DenseFeatureMap` de saída continua registrando shape, dtype, normalização, payload, backend e `DenseFeatureSampling` completos. O wrapper rejeita lineage que não identifica exatamente o input, provenance divergente do backend selecionado, dimensões espaciais inconsistentes, reutilização das identidades imutáveis de origem ou um grid que não aumente ao menos um eixo sem reduzir o outro.
+O `DenseFeatureMap` de saída continua registrando shape, dtype, normalização, payload, backend e `DenseFeatureSampling` completos. O wrapper rejeita lineage que não identifica exatamente o input, provenance divergente do backend selecionado, dimensões espaciais inconsistentes, reutilização do `feature_id` ou `payload_reference` de origem ou um grid que não aumente ao menos um eixo sem reduzir o outro.
+
+Hash e tamanho dos bytes persistidos pertencem ao `FeaturePayloadEntry` mantido pelo feature store. A lineage do backend não repete esses valores porque não recebe o registro persistido e, portanto, não poderia validá-los sem apenas aceitar uma declaração do próprio backend.
 
 Se o enhancement alterar a semântica da representação, o backend deve declarar outro `output_embedding_space_id`. Preservar o fingerprint é permitido somente quando os vetores continuam no mesmo espaço; alterar a normalização mantendo o mesmo fingerprint é rejeitado.
 
@@ -56,7 +57,7 @@ O port, a composição opcional, a lineage e os testes fake deixam a fronteira p
 
 ## Trade-offs explícitos
 
-- O port trabalha com referências de artifact/payload, não com `numpy.ndarray` na identidade pública. O backend selecionado é responsável pelo I/O e pela escrita atômica de seu artifact.
+- O port trabalha com referências de artifact/payload, não com `numpy.ndarray` na identidade pública. O feature store é responsável pela escrita atômica e pela integridade dos payloads persistidos; o backend selecionado produz a feature e sua lineage científica.
 - `peak_memory_bytes` preserva o valor medido, mas a semântica da fonte (VRAM, RSS etc.) deve ser documentada pelo backend; sinais heterogêneos não são somados.
 - A validação exige aumento geométrico do grid, mas não afirma ganho de qualidade. Qualidade, estabilidade e custo permanecem métricas separadas.
 - O estágio aceita um novo `EmbeddingSpace` explícito, mas nunca assume compatibilidade por dimensão.

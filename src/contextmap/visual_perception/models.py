@@ -56,6 +56,13 @@ class HypothesisRole(Enum):
     ALTERNATIVE = "alternative"
 
 
+class SemanticRegionKind(Enum):
+    """Whether a semantic hypothesis describes a countable thing or amorphous stuff."""
+
+    THING = "thing"
+    STUFF = "stuff"
+
+
 class FeatureScope(Enum):
     """What a :class:`VisualFeature` is a representation of."""
 
@@ -299,6 +306,59 @@ class VisualFeature:
 
 
 @dataclass(frozen=True, kw_only=True)
+class SemanticAttribute:
+    """One backend-provided attribute attached to a semantic hypothesis."""
+
+    name: str
+    value: JsonScalar
+
+    def __post_init__(self) -> None:
+        """Reject unnamed attributes."""
+        if not self.name.strip():
+            raise ValueError("semantic attribute name must not be empty")
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticEvidenceReference:
+    """Identify one immutable input or intermediate supporting semantic evidence."""
+
+    evidence_type: str
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        """Require both evidence type and identity for auditability."""
+        if not self.evidence_type.strip():
+            raise ValueError("semantic evidence type must not be empty")
+        if not self.evidence_id.strip():
+            raise ValueError("semantic evidence id must not be empty")
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticInferenceProvenance:
+    """Trace a semantic output through backend, task, prompt, schema, and raw response."""
+
+    backend: BackendProvenance
+    task_identity: str
+    prompt_template_id: str
+    output_schema_version: str
+    raw_response_reference: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require versioned semantic policy identities."""
+        if self.backend.capability != "semantic_interpreter":
+            raise ValueError("semantic inference backend capability must be semantic_interpreter")
+        for field_name, value in (
+            ("task_identity", self.task_identity),
+            ("prompt_template_id", self.prompt_template_id),
+            ("output_schema_version", self.output_schema_version),
+        ):
+            if not value.strip():
+                raise ValueError(f"{field_name} must not be empty")
+        if self.raw_response_reference is not None and not self.raw_response_reference.strip():
+            raise ValueError("raw_response_reference must not be empty when provided")
+
+
+@dataclass(frozen=True, kw_only=True)
 class SemanticClaim:
     """A candidate semantic interpretation of visual evidence.
 
@@ -308,23 +368,30 @@ class SemanticClaim:
 
     Attributes:
         claim_id: Identity local to the owning ``PerceptionResult``.
-        text: The claim's label/text.
+        source_observation_id: Physical observation interpreted by the backend.
+        perception_result_id: Inference result that owns this claim.
+        hypothesis: The backend-proposed label or semantic hypothesis.
         role: Whether this is the ``PRIMARY`` interpretation or an
             ``ALTERNATIVE`` hypothesis.
-        provenance: Backend/prompt that produced this claim.
+        provenance: Backend, task, prompt, schema, and raw-response traceability.
         category: Optional coarse category for the claim.
         confidence: Optional score in ``[0, 1]``. ``None`` means unscored.
-        region_id: The ``Region2D`` this claim describes, when
+        region_id: The frozen ``Region2D`` this claim describes, when
             region-scoped. ``None`` for a scene-level claim.
     """
 
     claim_id: ClaimId
-    text: str
+    source_observation_id: SourceObservationId
+    perception_result_id: PerceptionResultId
+    hypothesis: str
     role: HypothesisRole
-    provenance: BackendProvenance
+    provenance: SemanticInferenceProvenance
     category: str | None = None
+    region_kind: SemanticRegionKind | None = None
+    attributes: tuple[SemanticAttribute, ...] = ()
     confidence: float | None = None
     region_id: RegionId | None = None
+    evidence_references: tuple[SemanticEvidenceReference, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate ``confidence`` is a valid score when present.
@@ -332,8 +399,21 @@ class SemanticClaim:
         Raises:
             ValueError: If ``confidence`` is set and outside ``[0, 1]``.
         """
-        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+        if not self.hypothesis.strip():
+            raise ValueError("hypothesis must not be empty")
+        if self.confidence is not None and (
+            not isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0
+        ):
             raise ValueError(f"confidence must be in [0, 1], got {self.confidence}")
+        attribute_names = [attribute.name for attribute in self.attributes]
+        if len(set(attribute_names)) != len(attribute_names):
+            raise ValueError("semantic attribute names must be unique")
+        evidence_keys = [
+            (reference.evidence_type, reference.evidence_id)
+            for reference in self.evidence_references
+        ]
+        if len(set(evidence_keys)) != len(evidence_keys):
+            raise ValueError("semantic evidence references must be unique")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -344,13 +424,24 @@ class SceneContext:
     evidence; a consumer decides how to reconcile the two explicitly.
 
     Attributes:
+        source_observation_id: Physical observation interpreted by the backend.
+        perception_result_id: Inference result that owns this context.
         claims: Scene-level semantic claims. Every claim must have
             ``region_id=None``.
-        provenance: Backend that produced this scene context.
+        provenance: Backend, task, prompt, schema, and raw-response traceability.
     """
 
-    claims: Sequence[SemanticClaim]
-    provenance: BackendProvenance
+    source_observation_id: SourceObservationId
+    perception_result_id: PerceptionResultId
+    provenance: SemanticInferenceProvenance
+    scene_type: str | None = None
+    environment: str | None = None
+    layout: str | None = None
+    lighting: str | None = None
+    visibility: str | None = None
+    navigability: str | None = None
+    claims: Sequence[SemanticClaim] = ()
+    evidence_references: tuple[SemanticEvidenceReference, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate no scene-level claim references a region.
@@ -361,6 +452,16 @@ class SceneContext:
         """
         if any(claim.region_id is not None for claim in self.claims):
             raise ValueError("SceneContext claims must not reference a region_id")
+        if any(claim.source_observation_id != self.source_observation_id for claim in self.claims):
+            raise ValueError("SceneContext claim source_observation_id must match its context")
+        if any(claim.perception_result_id != self.perception_result_id for claim in self.claims):
+            raise ValueError("SceneContext claim perception_result_id must match its context")
+        evidence_keys = [
+            (reference.evidence_type, reference.evidence_id)
+            for reference in self.evidence_references
+        ]
+        if len(set(evidence_keys)) != len(evidence_keys):
+            raise ValueError("scene evidence references must be unique")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -460,6 +561,15 @@ class PerceptionResult:
         for claim in self.claims:
             if claim.region_id is not None and claim.region_id not in region_ids:
                 raise ValueError(f"claim references unknown region_id: {claim.region_id!r}")
+            if claim.source_observation_id != self.source_observation_id:
+                raise ValueError("claim source_observation_id must match PerceptionResult")
+            if claim.perception_result_id != self.result_id:
+                raise ValueError("claim perception_result_id must match PerceptionResult")
+        if self.scene_context is not None:
+            if self.scene_context.source_observation_id != self.source_observation_id:
+                raise ValueError("scene context source_observation_id must match PerceptionResult")
+            if self.scene_context.perception_result_id != self.result_id:
+                raise ValueError("scene context perception_result_id must match PerceptionResult")
 
 
 @dataclass(frozen=True, slots=True)

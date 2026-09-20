@@ -25,10 +25,14 @@ from contextmap.visual_perception.models import (
     FeatureScope,
     PreparedImage,
     Region2D,
-    SceneContext,
     SemanticClaim,
     SemanticSupport,
     VisualFeature,
+)
+from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
+from contextmap.visual_perception.semantic_requests import (
+    SemanticInterpretationRequest,
+    SemanticInterpreterCapabilities,
 )
 
 
@@ -136,31 +140,19 @@ class SemanticInterpreter(Protocol):
         """
         ...
 
-    def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
-        """Produce scene-level semantic evidence, when this backend supports it.
-
-        Args:
-            image: The prepared image to interpret.
-
-        Returns:
-            Scene-level evidence, or ``None`` when this backend does not
-            support scene-level interpretation.
-        """
+    def capabilities(self) -> SemanticInterpreterCapabilities:
+        """Declare supported modes and canonical evidence before execution."""
         ...
 
-    def interpret_regions(
-        self, image: PreparedImage, regions: Sequence[Region2D]
-    ) -> Sequence[SemanticClaim]:
-        """Produce region-scoped semantic claims, when this backend supports it.
+    def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
+        """Interpret one validated canonical semantic request.
 
         Args:
-            image: The prepared image the regions belong to.
-            regions: Regions to interpret.
+            request: Exact scene/region evidence selection, prompt identity,
+                output schema, and configuration fingerprint.
 
         Returns:
-            Region-scoped claims (every claim's ``region_id`` is one of
-            ``regions``' ids). Empty when this backend does not support
-            region-level interpretation.
+            Raw, parsed, provenance, and diagnostic records for the call.
         """
         ...
 

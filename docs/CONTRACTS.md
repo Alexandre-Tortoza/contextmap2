@@ -186,19 +186,24 @@ Hipótese semântica imutável produzida por inferência.
 
 ```text
 claim_id
-text
+source_observation_id
+perception_result_id
+hypothesis
 role = PRIMARY | ALTERNATIVE
 provenance
 category?
+region_kind? = THING | STUFF
+attributes[]
 confidence?
 region_id?
+evidence_references[]
 ```
 
-`confidence=None` significa explicitamente não pontuado. `PRIMARY` não significa probabilidade calibrada nem truth persistente.
+`confidence=None` significa explicitamente não pontuado. `PRIMARY` não significa probabilidade calibrada nem truth persistente. `region_id` referencia a geometria 2D congelada sem modificá-la. A provenance semântica registra backend/modelo, tarefa, template de prompt, schema de saída e referência opcional à resposta bruta.
 
 ## 8. `SceneContext`
 
-Evidência semântica de nível de cena. O contrato implementado contém `claims[]` com `region_id=None` e `BackendProvenance`. Campos estruturados como `scene_type`, `layout` ou `navigability` continuam possíveis extensões futuras, não campos atuais.
+Evidência semântica de nível de cena. O contrato implementado contém identidades da observação e do resultado, `claims[]` com `region_id=None`, referências de evidência, provenance semântica e campos opcionais `scene_type`, `environment`, `layout`, `lighting`, `visibility` e `navigability`. Claims internas devem pertencer à mesma observação e ao mesmo resultado.
 
 ## 9. `SemanticSupport`
 

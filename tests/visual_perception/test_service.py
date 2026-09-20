@@ -10,9 +10,15 @@ from contextmap.visual_perception import (
     PerceptionRunId,
     Region2D,
     RegionId,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticRequestId,
+    SemanticVisualView,
     StageDefinition,
     StageGraphError,
+    StageOutcome,
     StageStatus,
+    VisualViewKind,
     assemble_perception_result,
     execute_stage_graph,
 )
@@ -20,6 +26,7 @@ from contextmap.visual_perception.models import (
     ClaimId,
     HypothesisRole,
     SemanticClaim,
+    SemanticInferenceProvenance,
     VisualFeature,
 )
 from contextmap.visual_perception.models import FeatureScope as _FeatureScope
@@ -188,9 +195,22 @@ def test_assemble_perception_result_uses_only_succeeded_stages() -> None:
     )
     claim = SemanticClaim(
         claim_id=ClaimId("claim-0001"),
-        text="a doorway",
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("result-0001"),
+        hypothesis="a doorway",
         role=HypothesisRole.PRIMARY,
-        provenance=_PROVENANCE,
+        provenance=SemanticInferenceProvenance(
+            backend=BackendProvenance(
+                backend_id="fake-semantic",
+                capability="semantic_interpreter",
+                provider="fake",
+                model="fake",
+                version="0.1",
+            ),
+            task_identity="region-labeling",
+            prompt_template_id="region/v1",
+            output_schema_version="semantic-response/1",
+        ),
         region_id=region.region_id,
     )
 
@@ -236,4 +256,57 @@ def test_assemble_perception_result_uses_only_succeeded_stages() -> None:
     assert result.regions == (region,)
     assert result.features == (feature,)
     assert result.claims == ()  # semantic_interpretation failed; no claim contributed
-    assert claim.text == "a doorway"  # sanity: claim object itself was never touched
+    assert claim.hypothesis == "a doorway"  # sanity: claim object itself was never touched
+
+
+def test_assemble_perception_result_materializes_semantic_execution() -> None:
+    from fakes import FakeSemanticInterpreter
+
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("region-request-0001"),
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("result-0001"),
+        mode=SemanticInterpretationMode.REGION,
+        region_id=RegionId("region-0001"),
+        visual_views=(
+            SemanticVisualView(
+                view_id="view-0001",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference="outputs/semantic-views/region-0001.jpg",
+                source_observation_id=SourceObservationId("frame-0124"),
+                region_id=RegionId("region-0001"),
+                sha256="0" * 64,
+            ),
+        ),
+        prompt_template_id="region/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint="sha256:fake",
+    )
+    execution = FakeSemanticInterpreter().interpret(request)
+    outcomes = (
+        StageOutcome(
+            stage_id="region_discovery",
+            status=StageStatus.SUCCEEDED,
+            output=(_region(),),
+            duration_ms=1.0,
+        ),
+        StageOutcome(
+            stage_id="semantic_interpretation",
+            status=StageStatus.SUCCEEDED,
+            output=execution,
+            duration_ms=1.0,
+        ),
+    )
+
+    result = assemble_perception_result(
+        result_id=PerceptionResultId("result-0001"),
+        source_observation_id=SourceObservationId("frame-0124"),
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="corridor-02-a1b2c3",
+        created_at="2026-01-01T00:00:00+00:00",
+        outcomes=outcomes,
+        region_stage_id="region_discovery",
+        semantic_execution_stage_ids=("semantic_interpretation",),
+    )
+
+    assert result.claims == execution.parsed.claims
