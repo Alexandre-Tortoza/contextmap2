@@ -25,6 +25,7 @@ import dataclasses
 import math
 import mmap
 import struct
+from array import array
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -176,6 +177,8 @@ class PackedGeometry:
         self._map = geometric_map
         self._scans = tuple(scans)
         self._scan_by_observation = {scan.observation_id: scan for scan in self._scans}
+        # A cadeia é a mesma para todos os pontos de um scan: validada uma vez, não por ponto.
+        self._lineages = tuple(scan.transform_lineage for scan in self._scans)
         self._records = payload
 
     @property
@@ -230,6 +233,28 @@ class PackedGeometry:
         The geometry must not be read after this.
         """
         self._records.release()
+
+    def scan_map_coordinates(self, observation_id: SourceObservationId) -> array[float]:
+        """Return the map-frame coordinates of the geometry one observation contributed.
+
+        Cheaper than iterating :class:`GeometryPoint` objects, for analyses that
+        only need positions.
+
+        Args:
+            observation_id: The accumulated observation.
+
+        Returns:
+            Flat ``(x, y, z)`` triples, in meters and in index order.
+
+        Raises:
+            KeyError: If the observation was not accumulated into this map.
+        """
+        scan = self.scan_record(observation_id)
+        coordinates: array[float] = array("d")
+        first = scan.first_geometry_index
+        for _, row in self._iter_rows(first, first + scan.geometry_count):
+            coordinates.extend(row[0:3])
+        return coordinates
 
     def references_for(self, observation_id: SourceObservationId) -> Iterator[GeometryReference]:
         """Iterate the references of the geometry that came from one observation.
@@ -425,6 +450,6 @@ class PackedGeometry:
             source_observation_id=scan.observation_id,
             source_point_index=point_index,
             acquisition_timestamp=scan.acquisition_timestamp,
-            transform_lineage=scan.transform_lineage,
+            transform_lineage=self._lineages[ordinal],
             provenance=provenance,
         )

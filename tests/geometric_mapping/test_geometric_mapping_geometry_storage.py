@@ -104,6 +104,19 @@ def test_the_source_index_lists_the_references_of_each_observation() -> None:
     assert geometry.scan_record(SourceObservationId("scan-0001")).first_geometry_index == 2
 
 
+def test_the_map_coordinates_of_one_scan_come_out_flat_without_building_points() -> None:
+    scans = make_scans(3)
+    geometry = open_geometry(*accumulate(scans))
+
+    coordinates = geometry.scan_map_coordinates(SourceObservationId("scan-0001"))
+
+    assert len(coordinates) == 3 * scans[1].point_count
+    assert tuple(coordinates[0:3]) == scans[1].map_point(0)
+    assert tuple(coordinates[3:6]) == scans[1].map_point(1)
+    with pytest.raises(KeyError):
+        geometry.scan_map_coordinates(SourceObservationId("scan-9999"))
+
+
 def test_an_observation_that_contributed_nothing_is_a_key_error() -> None:
     geometry = open_geometry(*accumulate(make_scans(2)))
 
