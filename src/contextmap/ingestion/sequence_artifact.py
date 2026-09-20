@@ -8,22 +8,25 @@ pipeline stages read instead of reopening the original source. See
 schema version history, and the design trade-offs made for v0 (notably a
 JSON Lines index instead of a columnar format).
 
-Writing is atomic: :class:`SequenceArtifactWriter` builds the artifact in a
-temporary sibling directory and only makes it visible under its final path
-after an internal integrity check succeeds, so an interrupted write can
-never be mistaken for a complete artifact.
+Writing is atomic and streaming: :class:`SequenceArtifactWriter` writes each
+observation's payload and index line to a temporary sibling directory as it is
+added, so memory use does not grow with payload size, and only makes the
+artifact visible under its final path after an internal integrity check
+succeeds. An interrupted write can never be mistaken for a complete artifact.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import shutil
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NewType
+from types import TracebackType
+from typing import IO, Any, NewType
 from uuid import uuid4
 
 from contextmap.ingestion.calibration import (
@@ -142,13 +145,20 @@ class SequenceArtifactManifest:
 class SequenceArtifactWriter:
     """Builds an immutable canonical sequence artifact on the local filesystem.
 
+    Payloads and index lines are streamed to a temporary directory by
+    :meth:`add_observation`; only observation metadata (payload bytes
+    excluded) is kept in memory, for the diagnostics summary written by
+    :meth:`finalize`. A writer that is not finalized leaves its temporary
+    directory behind until :meth:`abort` is called, so prefer the context
+    manager form, which aborts on any exit path that did not finalize.
+
     Example:
-        writer = SequenceArtifactWriter(
+        with SequenceArtifactWriter(
             workspace_root=Path("workspace"), sequence_name="corridor-02"
-        )
-        writer.add_observation(image_observation)
-        writer.add_observation(lidar_observation)
-        manifest = writer.finalize()
+        ) as writer:
+            writer.add_observation(image_observation)
+            writer.add_observation(lidar_observation)
+            manifest = writer.finalize()
     """
 
     def __init__(
@@ -159,6 +169,9 @@ class SequenceArtifactWriter:
         artifact_id: SequenceArtifactId | None = None,
     ) -> None:
         """Create a writer for a new sequence artifact.
+
+        No filesystem access happens until the first observation is added
+        or :meth:`finalize` is called.
 
         Args:
             workspace_root: Root of the local workspace (contains
@@ -172,13 +185,39 @@ class SequenceArtifactWriter:
         sequence_dir = workspace_root / "sequences" / sequence_name
         self._final_dir = sequence_dir / self._artifact_id
         self._tmp_dir = sequence_dir / f".tmp-{self._artifact_id}-{uuid4().hex[:8]}"
-        self._observations: list[SourceObservation] = []
+        self._index_handle: IO[bytes] | None = None
+        self._index_hash = hashlib.sha256()
+        self._index_size = 0
+        self._payload_entries: list[SequenceArtifactFileEntry] = []
+        self._counts = dict(_MODALITY_COUNTS_TEMPLATE)
+        self._metadata: list[SourceObservation] = []
         self._seen_observation_ids: set[str] = set()
         self._calibration: CalibrationSet | None = None
         self._provenance: SequenceProvenance | None = None
         self._diagnostic_warnings: tuple[str, ...] | None = None
         self._synchronization_diagnostics: SynchronizationDiagnostics | None = None
-        self._finalized = False
+        self._closed_by: str | None = None
+        self._tmp_dir_removed = False
+
+    def __enter__(self) -> SequenceArtifactWriter:
+        """Return the writer for use as a context manager."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Abort the writer unless it was already finalized.
+
+        When the block is already failing, a cleanup error is attached to that
+        exception as a note instead of replacing it.
+        """
+        if exc_value is None:
+            self.abort()
+        else:
+            self._abort_after_failure(exc_value)
 
     def set_diagnostics(
         self,
@@ -200,10 +239,9 @@ class SequenceArtifactWriter:
                 events to persist alongside the summary.
 
         Raises:
-            SequenceArtifactError: If called after :meth:`finalize`.
+            SequenceArtifactError: If called after :meth:`finalize` or :meth:`abort`.
         """
-        if self._finalized:
-            raise SequenceArtifactError("cannot set diagnostics after finalize()")
+        self._require_open("set diagnostics")
         self._diagnostic_warnings = tuple(warnings)
         self._synchronization_diagnostics = synchronization
 
@@ -214,10 +252,9 @@ class SequenceArtifactWriter:
             provenance: Provenance to persist alongside the artifact.
 
         Raises:
-            SequenceArtifactError: If called after :meth:`finalize`.
+            SequenceArtifactError: If called after :meth:`finalize` or :meth:`abort`.
         """
-        if self._finalized:
-            raise SequenceArtifactError("cannot set provenance after finalize()")
+        self._require_open("set provenance")
         self._provenance = provenance
 
     def set_calibration(self, calibration_set: CalibrationSet) -> None:
@@ -228,55 +265,109 @@ class SequenceArtifactWriter:
                 this sequence.
 
         Raises:
-            SequenceArtifactError: If called after :meth:`finalize`.
+            SequenceArtifactError: If called after :meth:`finalize` or :meth:`abort`.
             CalibrationError: If ``calibration_set`` is invalid; see
                 :func:`~contextmap.ingestion.calibration.validate_calibration_set`.
         """
-        if self._finalized:
-            raise SequenceArtifactError("cannot set calibration after finalize()")
+        self._require_open("set calibration")
         ensure_valid_calibration_set(calibration_set)
         self._calibration = calibration_set
 
     def add_observation(self, observation: SourceObservation) -> None:
-        """Queue an observation to be written by :meth:`finalize`.
+        """Write an observation's payload and index line to the temporary artifact.
+
+        The payload is persisted immediately and not retained, so the
+        caller may release ``observation`` as soon as this returns. An I/O
+        failure while writing aborts the writer, since the partial
+        temporary artifact can no longer be trusted.
 
         Args:
             observation: Any canonical source observation.
 
         Raises:
-            SequenceArtifactError: If called after :meth:`finalize`, or if
-                ``observation.observation_id`` was already added.
+            SequenceArtifactError: If called after :meth:`finalize` or
+                :meth:`abort`, or if ``observation.observation_id`` was
+                already added.
         """
-        if self._finalized:
-            raise SequenceArtifactError("cannot add observations after finalize()")
+        self._require_open("add observations")
         observation_id = str(observation.observation_id)
         if observation_id in self._seen_observation_ids:
             raise SequenceArtifactError(f"duplicate observation_id: {observation_id!r}")
+        record, payload = _encode_observation(observation)
+        modality = record["modality"]
+        assert isinstance(modality, str)
+
+        try:
+            index_handle = self._open_temporary_artifact()
+            if payload is not None:
+                relative_path, data = payload
+                absolute_path = self._tmp_dir / relative_path
+                absolute_path.parent.mkdir(parents=True, exist_ok=True)
+                absolute_path.write_bytes(data)
+                self._payload_entries.append(_file_entry(relative_path, data))
+            line = f"{json.dumps(record, sort_keys=True)}\n".encode()
+            index_handle.write(line)
+        except BaseException as error:
+            self._abort_after_failure(error)
+            raise
+
+        self._index_hash.update(line)
+        self._index_size += len(line)
+        self._counts[modality] += 1
         self._seen_observation_ids.add(observation_id)
-        self._observations.append(observation)
+        self._metadata.append(_without_payload(observation))
+
+    def abort(self) -> None:
+        """Discard the temporary artifact and close the writer.
+
+        The writer is closed immediately, even if cleanup then fails. Errors
+        from flushing the index are ignored, since that data is being
+        discarded. A failure to remove the temporary directory is raised so
+        it is never silent; calling :meth:`abort` again retries the removal.
+        It has no effect on a finalized artifact and is a no-op once the
+        temporary directory is gone.
+
+        Raises:
+            OSError: If the temporary directory could not be removed.
+        """
+        if self._closed_by == "finalize()":
+            return
+        self._closed_by = "abort()"
+        handle, self._index_handle = self._index_handle, None
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
+        if not self._tmp_dir_removed:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(self._tmp_dir)
+            self._tmp_dir_removed = True
 
     def finalize(self) -> SequenceArtifactManifest:
-        """Write every queued observation and finalize the artifact atomically.
+        """Complete the temporary artifact and publish it atomically.
 
         The artifact is built under a temporary sibling directory and only
         moved to its final path after an internal integrity check succeeds,
         so a process interrupted mid-write never leaves a directory that
-        looks like a complete artifact at the final path.
+        looks like a complete artifact at the final path. Any failure
+        aborts the writer and removes the temporary directory.
 
         Returns:
             The manifest of the finalized artifact.
 
         Raises:
-            SequenceArtifactError: If already finalized, if an artifact
-                already exists at the target path, or if writing fails.
+            SequenceArtifactError: If already finalized or aborted, if an
+                artifact already exists at the target path, or if writing
+                fails.
         """
-        if self._finalized:
+        if self._closed_by == "finalize()":
             raise SequenceArtifactError("writer already finalized")
-        if self._final_dir.exists():
-            raise SequenceArtifactError(f"sequence artifact already exists: {self._final_dir}")
+        if self._closed_by is not None:
+            raise SequenceArtifactError(f"writer closed by {self._closed_by}")
 
-        self._tmp_dir.mkdir(parents=True, exist_ok=False)
         try:
+            if self._final_dir.exists():
+                raise SequenceArtifactError(f"sequence artifact already exists: {self._final_dir}")
+            self._open_temporary_artifact()
             manifest = self._write_contents()
             problems = _check_file_inventory(
                 self._tmp_dir, manifest
@@ -286,34 +377,45 @@ class SequenceArtifactWriter:
                     f"internal consistency check failed before finalize: {problems}"
                 )
             self._tmp_dir.rename(self._final_dir)
-        except BaseException:
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        except BaseException as error:
+            self._abort_after_failure(error)
             raise
 
-        self._finalized = True
+        self._closed_by = "finalize()"
         return manifest
 
+    def _abort_after_failure(self, error: BaseException) -> None:
+        """Abort without letting a cleanup failure replace ``error``, the real cause."""
+        try:
+            self.abort()
+        except OSError as cleanup_error:
+            error.add_note(
+                f"could not remove temporary artifact {self._tmp_dir}: {cleanup_error}; "
+                "call abort() to retry"
+            )
+
+    def _require_open(self, action: str) -> None:
+        if self._closed_by is not None:
+            raise SequenceArtifactError(f"cannot {action} after {self._closed_by}")
+
+    def _open_temporary_artifact(self) -> IO[bytes]:
+        if self._index_handle is None:
+            self._tmp_dir.mkdir(parents=True, exist_ok=False)
+            self._index_handle = (self._tmp_dir / _INDEX_FILENAME).open("wb")
+        return self._index_handle
+
     def _write_contents(self) -> SequenceArtifactManifest:
-        counts = dict(_MODALITY_COUNTS_TEMPLATE)
-        file_entries: list[SequenceArtifactFileEntry] = []
-        index_lines: list[str] = []
-
-        for observation in self._observations:
-            record, payload = _encode_observation(observation)
-            modality = record["modality"]
-            assert isinstance(modality, str)
-            counts[modality] += 1
-            if payload is not None:
-                relative_path, data = payload
-                absolute_path = self._tmp_dir / relative_path
-                absolute_path.parent.mkdir(parents=True, exist_ok=True)
-                absolute_path.write_bytes(data)
-                file_entries.append(_file_entry(relative_path, data))
-            index_lines.append(json.dumps(record, sort_keys=True))
-
-        index_content = "".join(f"{line}\n" for line in index_lines)
-        (self._tmp_dir / _INDEX_FILENAME).write_text(index_content, encoding="utf-8")
-        file_entries.append(_file_entry(_INDEX_FILENAME, index_content.encode("utf-8")))
+        assert self._index_handle is not None
+        self._index_handle.close()
+        self._index_handle = None
+        file_entries = [
+            *self._payload_entries,
+            SequenceArtifactFileEntry(
+                path=_INDEX_FILENAME,
+                size_bytes=self._index_size,
+                content_hash=f"sha256:{self._index_hash.hexdigest()}",
+            ),
+        ]
 
         if self._calibration is not None:
             calibration_content = json.dumps(
@@ -339,7 +441,7 @@ class SequenceArtifactWriter:
 
         if self._diagnostic_warnings is not None:
             summary = summarize_observations(
-                self._observations,
+                self._metadata,
                 warning_count=len(self._diagnostic_warnings),
                 synchronization=self._synchronization_diagnostics,
                 calibration=self._calibration,
@@ -413,7 +515,7 @@ class SequenceArtifactWriter:
             sequence_name=self._sequence_name,
             schema_version=SCHEMA_VERSION,
             created_at=datetime.now(UTC).isoformat(),
-            observation_counts=counts,
+            observation_counts=dict(self._counts),
             file_inventory=tuple(sorted(file_entries, key=lambda entry: entry.path)),
         )
         manifest_path = self._tmp_dir / _MANIFEST_FILENAME
@@ -787,6 +889,13 @@ def _decode_optional_vector3(
     if len(values) != 3:
         raise SequenceArtifactError(f"expected a three-element vector, found {len(values)}")
     return values[0], values[1], values[2]
+
+
+def _without_payload(observation: SourceObservation) -> SourceObservation:
+    """Return ``observation`` minus its binary payload, keeping every metadata field."""
+    if isinstance(observation, ImageObservation | LidarObservation):
+        return replace(observation, data=b"")
+    return observation
 
 
 def _file_entry(relative_path: str, data: bytes) -> SequenceArtifactFileEntry:

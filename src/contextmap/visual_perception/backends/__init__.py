@@ -1,1 +1,1 @@
-"""Concrete Region Discovery adapters kept outside the public capability API."""
+"""Concrete Visual Perception adapters kept outside the public capability API."""

@@ -46,10 +46,10 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 A branch `dev` já contém dois módulos de domínio completos no nível de core, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
-- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e o core de Feature Extraction, incluindo `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
+- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
 - [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery e Feature Extraction.
 
-Os adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados na `dev`; a infraestrutura de Feature Extraction não deve ser confundida com suporte a esses modelos.
+Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados; a validação numérica com pesos reais continua pendente na máquina de inferência e não é inferida desses testes.
 
 Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 
