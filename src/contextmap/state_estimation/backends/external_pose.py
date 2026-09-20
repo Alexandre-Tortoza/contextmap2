@@ -30,7 +30,6 @@ from contextmap.ingestion import (
     SourceObservationId,
     current_code_version,
 )
-from contextmap.shared import is_unit_quaternion, normalize_quaternion, quaternion_norm
 from contextmap.state_estimation.models import (
     EstimatorProvenance,
     PoseEstimate,
@@ -48,6 +47,11 @@ from contextmap.state_estimation.ports import (
     StateEstimationError,
     StateEstimationRequest,
     StateEstimationResult,
+)
+from contextmap.state_estimation.pose_validation import (
+    canonical_orientation,
+    check_pose_values,
+    gap_between,
 )
 from contextmap.state_estimation.preflight import GeometryRequirements
 
@@ -244,29 +248,22 @@ class ExternalPoseEstimator:
                 continue
 
             pose = self._publish(measurement, request, index=len(poses))
-            if poses and self._config.max_gap_ns is not None:
-                interval_ns = (
-                    pose.timestamp.total_nanoseconds() - poses[-1].timestamp.total_nanoseconds()
+            gap = (
+                gap_between(poses[-1], pose, max_gap_ns=self._config.max_gap_ns) if poses else None
+            )
+            if gap is not None:
+                gaps.append(gap)
+                diagnostics.append(
+                    EstimationDiagnostic(
+                        severity=DiagnosticSeverity.WARNING,
+                        code=f"{_CODE_PREFIX}timestamp_gap",
+                        message=(
+                            f"{gap.duration_ns} ns between {gap.previous_estimate_id!r} and "
+                            f"{gap.next_estimate_id!r} exceeds max_gap_ns={self._config.max_gap_ns}"
+                        ),
+                        observation_id=measurement.observation_id,
+                    )
                 )
-                if interval_ns > self._config.max_gap_ns:
-                    gaps.append(
-                        TrajectoryGap(
-                            previous_estimate_id=poses[-1].estimate_id,
-                            next_estimate_id=pose.estimate_id,
-                            duration_ns=interval_ns,
-                        )
-                    )
-                    diagnostics.append(
-                        EstimationDiagnostic(
-                            severity=DiagnosticSeverity.WARNING,
-                            code=f"{_CODE_PREFIX}timestamp_gap",
-                            message=(
-                                f"{interval_ns} ns between {poses[-1].estimate_id!r} and "
-                                f"{pose.estimate_id!r} exceeds max_gap_ns={self._config.max_gap_ns}"
-                            ),
-                            observation_id=measurement.observation_id,
-                        )
-                    )
             poses.append(pose)
 
         if not poses:
@@ -312,32 +309,14 @@ class ExternalPoseEstimator:
                     f"expected {config.reference_frame!r} -> {config.body_frame!r}"
                 ),
             )
-        if not all(math.isfinite(value) for value in measurement.translation):
-            return _Violation(
-                code=f"{_CODE_PREFIX}non_finite_translation",
-                detail=f"translation is not finite: {measurement.translation!r}",
-            )
-        orientation = measurement.orientation
-        norm = quaternion_norm(orientation)
-        if not all(math.isfinite(value) for value in orientation) or norm == 0.0:
-            return _Violation(
-                code=f"{_CODE_PREFIX}invalid_orientation",
-                detail=f"orientation is not a finite non-zero quaternion: {orientation!r}",
-            )
-        if abs(norm - 1.0) > config.orientation_norm_tolerance:
-            return _Violation(
-                code=f"{_CODE_PREFIX}invalid_orientation",
-                detail=(
-                    f"orientation norm {norm:.6f} differs from 1 by more than "
-                    f"{config.orientation_norm_tolerance}"
-                ),
-            )
-        covariance = measurement.pose_covariance
-        if covariance is not None and not all(math.isfinite(value) for value in covariance):
-            return _Violation(
-                code=f"{_CODE_PREFIX}invalid_covariance",
-                detail="pose covariance contains a non-finite value",
-            )
+        values = check_pose_values(
+            translation=measurement.translation,
+            orientation=measurement.orientation,
+            covariance=measurement.pose_covariance,
+            orientation_norm_tolerance=config.orientation_norm_tolerance,
+        )
+        if values is not None:
+            return _Violation(code=f"{_CODE_PREFIX}{values.rule}", detail=values.detail)
         if accepted:
             previous = accepted[-1].timestamp
             if measurement.timestamp.clock_id != previous.clock_id:
@@ -362,11 +341,7 @@ class ExternalPoseEstimator:
         self, measurement: ExternalPoseMeasurement, request: StateEstimationRequest, *, index: int
     ) -> PoseEstimate:
         """Publish a validated measurement as a canonical pose."""
-        orientation = measurement.orientation
-        conversions: tuple[str, ...] = ()
-        if not is_unit_quaternion(orientation):
-            conversions = (f"renormalized orientation (norm={quaternion_norm(orientation):.9f})",)
-            orientation = normalize_quaternion(orientation)
+        orientation, conversions = canonical_orientation(measurement.orientation)
         return PoseEstimate(
             estimate_id=pose_estimate_id_for(trajectory_id=request.trajectory_id, index=index),
             timestamp=measurement.timestamp,
