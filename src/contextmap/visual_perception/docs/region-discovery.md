@@ -238,8 +238,10 @@ distintas.
 
 O parser interno pode produzir box, máscara opcional, score opcional, texto parseado e diagnostics.
 O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e texto parseado ficam
-como provenance/metadata de descoberta; não geram `SemanticClaim`. Um futuro adapter Florence-2
-para interpretação semântica deve implementar outro port, mesmo que compartilhe o runtime carregado.
+como provenance/metadata de descoberta; não geram `SemanticClaim`.
+`Florence2SemanticInterpreter` já implementa interpretação semântica por outro
+port e outro adapter, mesmo que uma composition root futura possa compartilhar o
+lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
 move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e

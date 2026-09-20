@@ -33,7 +33,9 @@ dimensões espaciais de RGB/alpha antes da inferência.
 
 O contrato usa `family="alphaclip"` e `layer="alpha_conditioned_image_projection"`, com fingerprint combinado dos checkpoints base+alpha, dimensão real e normalização. Essa identidade é deliberadamente diferente de CLIP comum e DINO, mesmo quando a dimensão coincide.
 
-O adapter não codifica texto, não calcula similaridade e não escolhe labels. Um futuro `SemanticScorer` é outro adapter/capability.
+O `AlphaClipRegionFeatureBackend` não codifica texto, não calcula similaridade e
+não escolhe labels. O `AlphaClipSemanticScorer` implementado é um adapter
+separado e só compara claims regionais com a feature da mesma região congelada.
 
 ## Runtime oficial e checkpoints locais
 
@@ -48,7 +50,11 @@ Antes de carregar, o runtime calcula SHA-256 combinado e compara com `checkpoint
 
 ## Persistência e diagnósticos
 
-Cada vetor é enfileirado pelo sink compatível com `PerceptionRunWriter.add_feature_payload()` e reabre pelo `FeatureStoreReader` normal. `AlphaClipDiagnostics` preserva tempo, pico de memória quando disponível e warnings. A persistência consolidada de diagnóstico é escopo da issue #72.
+Cada vetor é enfileirado pelo sink compatível com
+`PerceptionRunWriter.add_feature_payload()` e reabre pelo `FeatureStoreReader`
+normal. `AlphaClipDiagnostics` preserva tempo, pico de memória quando disponível
+e warnings; a persistência comum de métricas e previews já existe via
+`FeatureExtractionDiagnostic` e `PerceptionRunWriter`.
 
 Valores não finitos e vetores de norma zero sob normalização L2 são rejeitados
 antes do sink. Durações não finitas também não são aceitas como diagnóstico.

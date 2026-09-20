@@ -29,7 +29,9 @@ flowchart LR
 - cria entidades persistentes;
 - trata inferência repetida como evidência física independente.
 
-Essas responsabilidades pertencem à Semantic Fusion / Entity Resolution (milestones futuras).
+O agrupamento correlacionado e a acumulação já pertencem a Semantic Fusion;
+identidade persistente continua planejada para Entity Resolution. Esta view não
+executa nenhuma das duas responsabilidades.
 
 ## Seleções sobrepostas
 

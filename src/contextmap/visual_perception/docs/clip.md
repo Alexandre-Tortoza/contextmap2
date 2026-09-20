@@ -33,7 +33,12 @@ A proveniência de cada `VisualFeature` combina o fingerprint do modelo/configur
 
 O espaço canônico registra `family="clip"`, checkpoint+revision, `layer="image_projection"`, dimensão real e normalização (`l2` por default). Global e região produzidos pelo mesmo checkpoint/projeção/normalização pertencem ao mesmo `EmbeddingSpace`: crop/contexto muda a evidência visual, não a definição matemática do espaço.
 
-O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. A identidade preservada é suficiente para um futuro `SemanticScorer` verificar compatibilidade com text embeddings produzidos pelo mesmo modelo, mas este adapter não codifica texto, não calcula similaridade e não escolhe labels.
+O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. Essa
+identidade permite que o `ClipSemanticScorer` implementado verifique
+compatibilidade com text embeddings produzidos pelo mesmo modelo. O
+`ClipVisualFeatureBackend` continua estritamente visual: não codifica texto,
+não calcula similaridade e não escolhe labels; scoring é responsabilidade do
+adapter separado em `backends/semantic_scoring.py`.
 
 ## Runtime Hugging Face
 
@@ -46,13 +51,16 @@ normalização L2 ou enfileirar o payload.
 
 ## Diagnósticos
 
-`ClipDiagnostics` preserva tempo de decode/preprocess/inferência, quantidade de views e warnings de runtime/crop. A persistência geral de evidência/diagnóstico será integrada pela issue #72; nenhum arquivo de debug é dependência downstream.
+`ClipDiagnostics` preserva tempo de decode/preprocess/inferência, quantidade de
+views e warnings de runtime/crop. A persistência comum de métricas e previews já
+existe via `FeatureExtractionDiagnostic` e `PerceptionRunWriter`; nenhum arquivo
+de debug é dependência downstream.
 
 ## Validação desta implementação
 
 Os testes com runtime fake cobrem modos global/região, crops com contexto e borda, proveniência por view, persistência, normalização, compatibilidade de espaço, validação e ausência de scoring.
 
-Por instrução do usuário, nenhum checkpoint real foi baixado ou executado. Uma execução controlada na máquina de inferência ainda deve confirmar a projeção/dimensão do checkpoint, tolerância numérica e comportamento do processor antes de considerar o backend validado com pesos reais.
+O backend também foi executado com pesos reais em frames de `corridor-02` durante a correção #339. Depois que o resize bicúbico passou a ser explícito em Pillow, os caminhos de processor PIL e torchvision diferiram no máximo `3.7e-7` e ambos coincidiram com uma referência Pillow independente. Isso valida o preprocessamento e a estabilidade numérica dessa configuração, não a qualidade semântica do embedding nem um benchmark científico do modelo.
 
 ## O que este backend não faz
 

@@ -31,15 +31,19 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
-Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; validação numérica com pesos reais permanece explícita. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
+Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; DINOv2/CLIP tiveram o preprocessamento verificado com pesos reais, enquanto DINOv3/AlphaCLIP permanecem sem execução real. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
 
 Semantic Interpretation possui contratos canônicos para claims/contexto, request,
-prompt/parser versionados e execução auditável. Qwen e Gemini já implementam o
-boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
-isolados e testes determinísticos; as execuções reais de referência continuam
-pendentes em #77/#78. O `CANONICAL_PRESET_V1` ainda preserva temporariamente os
-estágios legados de cena/região até a construção de `SemanticInterpretationRequest`
-ser integrada ao preset canônico. Detalhes estão em
+prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 implementam
+o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
+isolados e testes determinísticos. `ClipSemanticScorer` e
+`AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Houve
+smoke/diagnósticos reais limitados para SAM2/SAM3, DINOv2/CLIP e Qwen; DINOv3,
+AlphaCLIP, Gemini e Florence-2 semântico continuam sem execução real registrada.
+Nenhum desses checks substitui uma avaliação científica controlada, que permanece
+pendente. O `CANONICAL_PRESET_V1` ainda preserva
+temporariamente os estágios legados de cena/região até a construção de
+`SemanticInterpretationRequest` ser integrada ao preset canônico. Detalhes estão em
 [`semantic-interpretation.md`](semantic-interpretation.md).
 
 ## O que este módulo explicitamente não possui
@@ -89,11 +93,15 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 
 ## Módulos consumidos
 
-`contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`, e futuramente sequência/seleção para orquestração).
+`contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`). A seleção de
+sequência pertence à composição externa; `contextmap.runtime` ainda não existe.
 
 ## Módulos que consomem este
 
-`sensor_association`, `state_estimation` (indiretamente via pose), `semantic_fusion`, `evaluation` e demais capabilities a jusante, sempre através de `contextmap.visual_perception` (nunca de `contextmap.visual_perception.models` diretamente).
+`sensor_association`, `semantic_fusion`, `evaluation` e demais capabilities a
+jusante, sempre através de `contextmap.visual_perception` (nunca de
+`contextmap.visual_perception.models` diretamente). `state_estimation` não consome
+Visual Perception.
 
 ## Onde estão os documentos detalhados
 

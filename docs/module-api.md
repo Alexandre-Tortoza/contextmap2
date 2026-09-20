@@ -31,21 +31,27 @@ __all__ = ["SemanticClaim", "SemanticInterpreter"]
 
 ## Integração pública implementada
 
-As dependências cross-module reais já percorrem as sete capabilities materializadas na `dev`. A regra continua sendo a mesma em todas elas: o consumer importa o producer pela raiz pública `contextmap.<capability>`; backends, adapters e submódulos internos não atravessam o boundary.
+As dependências cross-module reais percorrem sete capabilities de domínio materializadas e a capability transversal `evaluation` na `dev`. A regra continua sendo a mesma em todas elas: o consumer importa o producer pela raiz pública `contextmap.<capability>`; backends, adapters e submódulos internos não atravessam o boundary. O diagrama abaixo representa **imports diretos existentes**, não apenas fluxo conceitual de dados.
 
 ```mermaid
 flowchart LR
     ING["contextmap.ingestion"] --> VP["contextmap.visual_perception"]
     ING --> ST["contextmap.state_estimation"]
+    ING --> GM["contextmap.geometric_mapping"]
     ST --> GM["contextmap.geometric_mapping"]
+    ING --> SA["contextmap.sensor_association"]
     VP --> SA["contextmap.sensor_association"]
     ST --> SA
     GM --> SA
     GM --> PR["contextmap.point_representation<br/>(opcional)"]
-    SA -. contexto opcional .-> PR
+    ING --> SF["contextmap.semantic_fusion"]
+    VP --> SF
+    ST --> SF
+    GM --> SF
     SA --> SF["contextmap.semantic_fusion"]
     PR -. evidência 3D opcional .-> SF
 
+    ING --> EV["contextmap.evaluation"]
     VP --> EV["contextmap.evaluation"]
     ST --> EV
     GM --> EV
@@ -58,7 +64,7 @@ Exemplos concretos dessa integração:
 
 - `geometric_mapping` consome `Trajectory` e contratos de pose pela raiz `contextmap.state_estimation`;
 - `sensor_association` consome evidência visual, trajetória e geometria pelas raízes públicas dos respectivos owners;
-- `point_representation` consome `GeometrySource` e pode registrar contexto explícito de associação sem importar internals;
+- `point_representation` consome `GeometrySource`; seu manifest pode registrar uma identidade opaca de contexto de associação, mas a capability não importa `sensor_association`;
 - `semantic_fusion` consome `SpatialObservation`, evidência visual referenciada e `PointRepresentation` opcional pelas APIs públicas;
 - `evaluation` mede as capabilities implementadas sem acessar seus backends ou mutar seus artifacts.
 
@@ -88,7 +94,7 @@ visual_perception/
 └── docs/
 ```
 
-`visual_perception/backends/` contém adapters concretos de Region Discovery (SAM2, SAM3 e Florence-2), Feature Extraction (DINOv2, DINOv3, CLIP e AlphaCLIP), Semantic Interpretation (Qwen, Gemini e Florence-2) e semantic scoring (CLIP/AlphaCLIP). Eles permanecem internos: a existência do diretório não torna qualquer modelo parte da API pública nem seleciona um backend automaticamente no preset canônico. Testes de backend usam runtimes/clients determinísticos injetados; execuções reais que ainda não foram validadas continuam marcadas como pendentes na documentação da capability.
+`visual_perception/backends/` contém adapters concretos de Region Discovery (SAM2, SAM3 e Florence-2), Feature Extraction (DINOv2, DINOv3, CLIP e AlphaCLIP), Semantic Interpretation (Qwen, Gemini e Florence-2) e semantic scoring (CLIP/AlphaCLIP). Eles permanecem internos: a existência do diretório não torna qualquer modelo parte da API pública nem seleciona um backend automaticamente no preset canônico. Testes de backend usam runtimes/clients determinísticos injetados; smoke/diagnósticos reais e pendências de validação são registrados individualmente na documentação da capability.
 
 Não é obrigatório criar `models.py`, `ports.py`, `service.py`, `backends/` ou `_internal/` antecipadamente. KISS e YAGNI continuam válidos.
 
@@ -157,7 +163,7 @@ Uma exceção pertence à API pública quando o caller precisa reagir ao signifi
 Preferir:
 
 ```python
-from contextmap.sensor_association import AssociationError
+from contextmap.sensor_association import AssociationInputError
 ```
 
 Evitar expor:
@@ -238,6 +244,6 @@ Mesmo que esse import funcione tecnicamente, ele acopla o consumidor ao layout i
 
 ## Revisão e enforcement
 
-Em code review, todo novo import `contextmap.<outra_capability>.<submodule>` deve ser tratado como suspeito. As regras mecanicamente verificáveis serão cobertas por architecture tests na issue de enforcement da milestone.
+Em code review, todo novo import `contextmap.<outra_capability>.<submodule>` deve ser tratado como suspeito. As regras mecanicamente verificáveis são cobertas por `tests/architecture/test_boundaries.py`.
 
 A intenção é preservar refactors internos baratos sem criar facades artificiais ou um package global de contratos.

@@ -6,7 +6,13 @@ Este documento descreve `src/contextmap/sensor_association/quality.py` (o contra
 
 ## O que não é
 
-Não é confiança semântica, similaridade CLIP/AlphaCLIP, probabilidade de o rótulo estar correto nem peso de fusão obrigatório, e **não há um escalar combinado**. Uma política de fusão futura poderá derivar uma contribuição de um subconjunto declarado de componentes; esse cálculo não está definido aqui. A qualidade se liga a uma `SpatialObservation` por identidade e nunca altera uma claim semântica. Estruturalmente:
+Não é confiança semântica, similaridade CLIP/AlphaCLIP, probabilidade de o rótulo
+estar correto nem peso de fusão obrigatório, e **não há um escalar combinado**.
+Semantic Fusion já oferece uma política opcional ciente de qualidade que deriva
+pesos de um subconjunto declarado destes componentes; esse cálculo pertence a
+`contextmap.semantic_fusion`, não é definido aqui e não altera este contrato. A
+qualidade se liga a uma `SpatialObservation` por identidade e nunca altera uma
+claim semântica. Estruturalmente:
 
 - não há campo `confidence`, `score`, `weight`, `probability` nem `label`, nem método que resuma o conjunto;
 - `SemanticClaimRef` guarda só o `claim_id`: confiança de claim e qualidade de observação vivem em objetos diferentes.

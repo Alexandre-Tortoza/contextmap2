@@ -65,7 +65,7 @@ A branch `dev` já contém sete módulos de domínio, além da capability de ava
 - [`contextmap.semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md), com `FusionSupport` (onde a evidência é acumulada, sem identidade de objeto), `EvidenceContribution`, agrupamento por observação física (inferência repetida é correlacionada, não votos independentes), a política baseline de acumulação, a preservação de ambiguidade, contradição, empate e abstenção, canais de evidência tipados, uma política opcional ciente de qualidade e o `SemanticFusionRunArtifact`; toda a verificação é sintética e nenhuma decisão sobre a política ciente de qualidade foi tomada;
 - [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, Semantic Interpretation, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion.
 
-Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados; a validação numérica com pesos reais continua pendente na máquina de inferência e não é inferida desses testes.
+Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados. DINOv2 e CLIP tiveram o preprocessamento verificado com pesos reais em frames de `corridor-02`; DINOv3 e AlphaCLIP continuam sem execução real, e nenhuma dessas verificações equivale a uma avaliação científica comparativa dos embeddings.
 
 Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 

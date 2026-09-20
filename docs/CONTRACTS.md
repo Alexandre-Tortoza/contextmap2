@@ -32,7 +32,9 @@ flowchart LR
     SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
     PE --> GR["GeometryPoint / GeometryReference / GeometricMap<br/>implementado"]
     PR --> SP["SpatialObservation<br/>implementado"]
+    GR --> P3["PointRepresentation<br/>implementado e opcional"]
     SP --> FE["FusedEvidence<br/>implementado"]
+    P3 -. evidência opcional .-> FE
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
 ```
 
@@ -53,7 +55,9 @@ flowchart LR
     PE --> GM["GeometryReference"]
     PR --> SP["SpatialObservation"]
     GM --> SP
+    GM --> P3["PointRepresentation<br/>(opcional)"]
     SP --> FE["FusedEvidence"]
+    P3 -. evidência 3D opcional .-> FE
     FE -. futuro .-> E["Entity"]
     E -. futuro .-> RE["ResolvedEntity"]
     RE -. futuro .-> REL["Relation"]

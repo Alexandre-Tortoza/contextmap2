@@ -26,7 +26,7 @@ flowchart TD
     GEO[GeometricMapArtifact]
 
     SA[Sensor Association]
-    ASSOC[AssociationRunArtifact]
+    ASSOC[SensorAssociationRunArtifact]
 
     P3D[Point Representation, optional]
     PREP[PointRepresentationRunArtifact]
@@ -117,7 +117,7 @@ Exemplos:
 
 ## 0. Runtime e plano de execução
 
-Antes de executar modelos ou transformações pesadas, `runtime` resolve a configuração do experimento.
+Esta etapa permanece **planejada**: `contextmap.runtime` ainda não existe. Quando for materializado, antes de executar modelos ou transformações pesadas, o runtime deverá resolver a configuração do experimento.
 
 ```mermaid
 flowchart LR
@@ -274,10 +274,10 @@ também deixa de ser opcional para aquele run. `scene_context_reference`,
 `region_id` e outputs parseados são reconciliados com evidência persistida
 antes da finalização.
 
-Qwen e Gemini implementam o mesmo port `SemanticInterpreter` e usam o parser
+Qwen, Gemini e Florence-2 implementam o mesmo port `SemanticInterpreter` e usam o parser
 compartilhado com policy `UNSCORED_ONLY`, portanto confidence auto-relatada
-pelo VLM não vira score canônico. As execuções reais controladas de
-checkpoint/API continuam pendentes em #77/#78.
+pelo VLM não vira score canônico. Execuções controladas com checkpoints ou
+serviços reais continuam pendentes.
 
 A capability executável `semantic_interpreter` já existe em
 `visual_perception.pipeline`, recebendo um estágio-fonte `semantic_request`.
@@ -341,9 +341,9 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
+- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global; DINOv2/CLIP já tiveram o preprocessamento verificado com pesos reais, mas DINOv3/AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; as execuções reais controladas de Qwen/Gemini continuam pendentes em #77/#78;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; execuções controladas de Qwen/Gemini/Florence-2 com checkpoints ou serviços reais continuam pendentes;
 - integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
 - conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
@@ -589,7 +589,7 @@ Region-level embeddings continuam associados à região, não são fingidos como
 
 `SpatialObservation` representa evidência visual ancorada em suporte 3D persistente.
 
-Saída persistida: `AssociationRunArtifact`, implementado como `SensorAssociationRunArtifact`.
+Saída persistida: `SensorAssociationRunArtifact`.
 
 Detalhes: [documentação de Sensor Association](../src/contextmap/sensor_association/docs/README.md), [contratos](../src/contextmap/sensor_association/docs/contracts.md), [modelos de câmera](../src/contextmap/sensor_association/docs/camera_models.md), [cadeia de projeção](../src/contextmap/sensor_association/docs/projection_chain.md), [visibilidade](../src/contextmap/sensor_association/docs/visibility.md), [pertencimento à máscara](../src/contextmap/sensor_association/docs/membership.md), [amostragem densa](../src/contextmap/sensor_association/docs/dense_sampling.md), [qualidade da observação](../src/contextmap/sensor_association/docs/quality.md), [diagnósticos](../src/contextmap/sensor_association/docs/diagnostics.md), [artifact](../src/contextmap/sensor_association/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/sensor_association.md).
 
@@ -610,11 +610,12 @@ flowchart LR
 
 ### Support extraction
 
-Políticas iniciais podem incluir:
+As políticas implementadas são:
 
 - radius support;
 - k-nearest support;
-- voxel/cell support quando justificado.
+
+Não existe política voxel/cell no código atual; ela só deve ser adicionada diante de requisito e avaliação concretos.
 
 O suporte precisa preservar quais `GeometryReference` participaram.
 
@@ -959,19 +960,19 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 
 ## 12. Artefatos ao longo do pipeline
 
-| Estágio | Artefato principal | Consumo downstream |
-| --- | --- | --- |
-| Ingestion | `SequenceArtifact` | perception, state estimation, geometry |
-| Visual Perception | `PerceptionRunArtifact` | sensor association, evaluation |
-| State Estimation | `StateEstimationRunArtifact` | geometry, sensor association |
-| Geometric Mapping | `GeometricMapArtifact` | association, point representation, final map |
-| Sensor Association | `AssociationRunArtifact` | semantic fusion |
-| Point Representation | `PointRepresentationRunArtifact` | optional semantic fusion / resolution evidence |
-| Semantic Fusion | `SemanticFusionRunArtifact` | semantic mapping |
-| Semantic Mapping | semantic entity artifact | entity resolution |
-| Entity Resolution | `EntityResolutionRunArtifact` | spatial relations, final map |
-| Spatial Relations | `SpatialRelationsRunArtifact` | final map |
-| Context Map Assembly | `ContextMapArtifact` | external consumers |
+| Estágio | Artefato principal | Estado | Consumo downstream |
+| --- | --- | --- | --- |
+| Ingestion | `SequenceArtifact` | implementado | perception, state estimation, geometry |
+| Visual Perception | `PerceptionRunArtifact` | implementado | sensor association, evaluation |
+| State Estimation | `StateEstimationRunArtifact` | implementado | geometry, sensor association, evaluation |
+| Geometric Mapping | `GeometricMapArtifact` | implementado | association, point representation, evaluation |
+| Sensor Association | `SensorAssociationRunArtifact` | implementado | semantic fusion, evaluation |
+| Point Representation | `PointRepresentationRunArtifact` | implementado e opcional | semantic fusion opcional, evaluation |
+| Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping planejado, evaluation |
+| Semantic Mapping | semantic entity artifact | planejado | entity resolution |
+| Entity Resolution | `EntityResolutionRunArtifact` | planejado | spatial relations, final map |
+| Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |
+| Context Map Assembly | `ContextMapArtifact` | planejado | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
 
@@ -1046,6 +1047,7 @@ Exemplos:
 | State Estimation | ATE/RPE quando referência válida existe, transform consistency |
 | Geometric Mapping | source→map accuracy, scan consistency, reproducibility |
 | Sensor Association | reprojection error, occlusion, mask membership |
+| Point Representation | cobertura/falha do suporte, custo, estabilidade e ablação por braço |
 | Semantic Fusion | multi-view consistency, ambiguity retention, repeated-inference regression |
 | Entity Resolution | false merge, missed merge, unresolved rate |
 | Spatial Relations | precision/recall por predicate, consistency, unresolved rate |

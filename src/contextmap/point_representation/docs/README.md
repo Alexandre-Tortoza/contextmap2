@@ -9,7 +9,7 @@ flowchart LR
     GM["GeometrySource<br/>(Geometric Mapping)"] --> SUP["Suporte local<br/>(raio / k vizinhos)"]
     SUP --> ENC["Encoder<br/>(descritor determinístico ou PTv3)"]
     ENC --> REP["PointRepresentation +<br/>RepresentationSpace"]
-    REP --> DOWN["Semantic Fusion /<br/>Artifact"]
+    REP --> DOWN["Semantic Fusion /<br/>Evaluation"]
 ```
 
 Uma representação é **evidência 3D**: descreve *como a estrutura local se parece*, não *o que ela é*. Fica separada de:
@@ -58,7 +58,9 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 ## Módulos que consomem este
 
-`semantic_fusion` e `artifact` (que leem o run pelo `PointRepresentationRunReader`), sempre através de `contextmap.point_representation`.
+Hoje, `semantic_fusion` e `evaluation`, sempre através de
+`contextmap.point_representation`. O módulo global `artifact` continua
+planejado; quando existir, deverá consumir a API pública e não o layout interno.
 
 ## Onde estão os documentos detalhados
 

@@ -60,9 +60,9 @@ rejeitados antes que qualquer payload seja entregue ao artifact writer.
 
 ## Validação desta implementação
 
-Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download, GPU ou inferência real.
+Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download ou GPU.
 
-Uma execução controlada com pesos reais não foi realizada neste ambiente por decisão explícita do usuário. Portanto, equivalência numérica real para um checkpoint específico ainda precisa ser validada na máquina de inferência antes de encerrar a issue #68.
+O backend também foi executado com pesos reais em frames de `corridor-02` durante a correção #339. O resize bicúbico explícito em Pillow fez os caminhos de processor PIL e torchvision concordarem com cosseno mínimo `0.9999999` por patch, ambos contra uma referência Pillow independente. Isso valida a reprodutibilidade do preprocessamento nessa configuração; não constitui avaliação da qualidade semântica do DINOv2 nem substitui um reference set versionado.
 
 ## O que este backend não faz
 
