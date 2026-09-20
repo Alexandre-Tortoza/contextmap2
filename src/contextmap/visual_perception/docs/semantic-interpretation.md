@@ -93,8 +93,16 @@ não pode carregar saída semântica escondida.
 
 Campos inesperados, tipos inválidos, JSON malformado e conteúdo obrigatório
 ausente causam
-`SemanticResponseParseError`. A única reparação v1 é remover uma code fence JSON
-externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
+`SemanticResponseParseError`. As únicas normalizações v1 são não semânticas e sempre registradas em
+`SemanticParseDiagnostic`: remover uma code fence JSON externa bem-formada (`removed_code_fence`) e,
+no modo REGION, tratar a chave `scene_context` omitida como `null`
+(`defaulted_null_scene_context`). No modo REGION essa chave só pode ser `null`, então sua ausência
+carrega a mesma informação; um valor não nulo continua rejeitado, e no modo SCENE a chave continua
+obrigatória. O prompt e as versões de template/schema (`region/v1`, `semantic-response/1`) não mudam,
+e qualquer outra chave ausente ou inesperada continua rejeitando a resposta inteira. A tolerância
+existe porque modelos reais descrevem corretamente a região mas omitem a chave nula (Qwen3-VL-4B: 3
+de 3 respostas de região, issue #340).
+
 `SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
 prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
 schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
