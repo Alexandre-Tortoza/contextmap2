@@ -26,6 +26,18 @@ from contextmap.geometric_mapping.models import (
     TransformStep,
     geometry_id_for,
 )
+from contextmap.geometric_mapping.motion_correction import (
+    MotionCorrectionEvidence,
+    MotionCorrectionPolicy,
+    MotionCorrectionRecord,
+    MotionCorrectionState,
+    MotionCorrectionVerdict,
+    ScanDisposition,
+    apply_motion_correction_policy,
+    declared_raw_motion_correction,
+    unknown_motion_correction,
+    verify_motion_correction,
+)
 from contextmap.geometric_mapping.ports import GeometrySource
 
 __all__ = [
@@ -38,11 +50,21 @@ __all__ = [
     "GeometryReference",
     "GeometrySource",
     "MapId",
+    "MotionCorrectionEvidence",
+    "MotionCorrectionPolicy",
+    "MotionCorrectionRecord",
+    "MotionCorrectionState",
+    "MotionCorrectionVerdict",
     "PointOrigin",
+    "ScanDisposition",
     "SpatialIndexMetadata",
     "SpatialIndexParameter",
     "TransformKind",
     "TransformLineage",
     "TransformStep",
+    "apply_motion_correction_policy",
+    "declared_raw_motion_correction",
     "geometry_id_for",
+    "unknown_motion_correction",
+    "verify_motion_correction",
 ]

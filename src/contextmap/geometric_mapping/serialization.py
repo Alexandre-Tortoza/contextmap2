@@ -25,6 +25,13 @@ from contextmap.geometric_mapping.models import (
     TransformLineage,
     TransformStep,
 )
+from contextmap.geometric_mapping.motion_correction import (
+    MotionCorrectionEvidence,
+    MotionCorrectionPolicy,
+    MotionCorrectionRecord,
+    MotionCorrectionState,
+    ScanDisposition,
+)
 from contextmap.ingestion import FrameId, SequenceArtifactId, SourceObservationId
 from contextmap.shared import SourceTimestamp
 from contextmap.state_estimation import (
@@ -129,6 +136,7 @@ def encode_geometry_point(point: GeometryPoint) -> dict[str, Any]:
             "origin": point.provenance.origin.value,
             "aggregation_rule": point.provenance.aggregation_rule,
             "contributing_point_count": point.provenance.contributing_point_count,
+            "motion_correction": point.provenance.motion_correction.value,
         },
     }
 
@@ -157,6 +165,7 @@ def decode_geometry_point(record: Mapping[str, Any]) -> GeometryPoint:
             origin=PointOrigin(provenance["origin"]),
             aggregation_rule=provenance["aggregation_rule"],
             contributing_point_count=provenance["contributing_point_count"],
+            motion_correction=MotionCorrectionState(provenance["motion_correction"]),
         ),
     )
 
@@ -244,4 +253,68 @@ def decode_geometric_map(record: Mapping[str, Any]) -> GeometricMap:
             configuration_fingerprint=provenance["configuration_fingerprint"],
             code_version=provenance["code_version"],
         ),
+    )
+
+
+def encode_motion_correction_record(record: MotionCorrectionRecord) -> dict[str, Any]:
+    """Encode a scan's declared correction state and its evidence."""
+    evidence = record.evidence
+    return {
+        "observation_id": str(record.observation_id),
+        "state": record.state.value,
+        "acquisition_start": None
+        if record.acquisition_start is None
+        else record.acquisition_start.to_record(),
+        "acquisition_end": None
+        if record.acquisition_end is None
+        else record.acquisition_end.to_record(),
+        "per_point_timing_available": record.per_point_timing_available,
+        "evidence": None
+        if evidence is None
+        else {
+            "producer": evidence.producer,
+            "trajectory_id": str(evidence.trajectory_id),
+            "payload_hash": evidence.payload_hash,
+            "configuration_fingerprint": evidence.configuration_fingerprint,
+        },
+    }
+
+
+def decode_motion_correction_record(record: Mapping[str, Any]) -> MotionCorrectionRecord:
+    """Decode a correction record and revalidate it.
+
+    Raises:
+        ValueError: If the record is malformed or violates the contract.
+    """
+    evidence = record["evidence"]
+    return MotionCorrectionRecord(
+        observation_id=SourceObservationId(record["observation_id"]),
+        state=MotionCorrectionState(record["state"]),
+        acquisition_start=None
+        if record["acquisition_start"] is None
+        else SourceTimestamp.from_record(record["acquisition_start"]),
+        acquisition_end=None
+        if record["acquisition_end"] is None
+        else SourceTimestamp.from_record(record["acquisition_end"]),
+        per_point_timing_available=record["per_point_timing_available"],
+        evidence=None
+        if evidence is None
+        else MotionCorrectionEvidence(
+            producer=evidence["producer"],
+            trajectory_id=TrajectoryId(evidence["trajectory_id"]),
+            payload_hash=evidence["payload_hash"],
+            configuration_fingerprint=evidence["configuration_fingerprint"],
+        ),
+    )
+
+
+def encode_motion_correction_policy(policy: MotionCorrectionPolicy) -> dict[str, Any]:
+    """Encode the policy so the run manifest records how uncorrected scans were treated."""
+    return {"raw": policy.raw.value, "unknown": policy.unknown.value}
+
+
+def decode_motion_correction_policy(record: Mapping[str, Any]) -> MotionCorrectionPolicy:
+    """Decode a motion-correction policy."""
+    return MotionCorrectionPolicy(
+        raw=ScanDisposition(record["raw"]), unknown=ScanDisposition(record["unknown"])
     )
