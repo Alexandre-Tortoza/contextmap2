@@ -23,7 +23,9 @@ flowchart LR
 ```python
 lookup = TrajectoryLookup(trajectory)
 result = lookup.pose_at(timestamp, policy=LookupPolicy.interpolated())
-result = lookup.pose_for_observation(observation, policy=LookupPolicy.nearest(max_time_delta_ns=5_000_000))
+result = lookup.pose_for_observation(
+    observation, policy=LookupPolicy.nearest(max_time_delta_ns=5_000_000)
+)
 ```
 
 `pose_for_observation` recebe a observação canônica (não apenas o id): usa seu `timestamp` e registra seu `observation_id` no resultado, sem I/O escondido.
