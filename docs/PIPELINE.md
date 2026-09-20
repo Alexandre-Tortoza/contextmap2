@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact` e `GeometricMapArtifact`: a Ingestion alimenta Visual Perception e State Estimation, e o Geometric Mapping consome a trajetória:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SensorAssociationRunArtifact`: a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória e o Sensor Association ancora a percepção na geometria:
 
 ```mermaid
 flowchart LR
@@ -91,11 +91,14 @@ flowchart LR
     SEQ --> GM["Geometric Mapping"]
     TRA --> GM
     GM --> MAPA["GeometricMapArtifact"]
-    PRA -. próximo estágio ainda não integrado .-> FUT["Sensor Association<br/>+ downstream"]
-    MAPA -.-> FUT
+    PRA --> SA["Sensor Association"]
+    MAPA --> SA
+    TRA --> SA
+    SA --> ASA["SensorAssociationRunArtifact"]
+    ASA -. próximo estágio ainda não integrado .-> FUT["Semantic Fusion<br/>+ downstream"]
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation e Geometric Mapping possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping e Sensor Association possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -540,7 +543,9 @@ Region-level embeddings continuam associados à região, não são fingidos como
 
 `SpatialObservation` representa evidência visual ancorada em suporte 3D persistente.
 
-Saída persistida: `AssociationRunArtifact`.
+Saída persistida: `AssociationRunArtifact`, implementado como `SensorAssociationRunArtifact`.
+
+Detalhes: [documentação de Sensor Association](../src/contextmap/sensor_association/docs/README.md), [contratos](../src/contextmap/sensor_association/docs/contracts.md), [modelos de câmera](../src/contextmap/sensor_association/docs/camera_models.md), [cadeia de projeção](../src/contextmap/sensor_association/docs/projection_chain.md), [visibilidade](../src/contextmap/sensor_association/docs/visibility.md), [pertencimento à máscara](../src/contextmap/sensor_association/docs/membership.md), [amostragem densa](../src/contextmap/sensor_association/docs/dense_sampling.md), [qualidade da observação](../src/contextmap/sensor_association/docs/quality.md), [diagnósticos](../src/contextmap/sensor_association/docs/diagnostics.md), [artifact](../src/contextmap/sensor_association/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/sensor_association.md).
 
 ## 6. Point Representation, opcional
 

@@ -19,8 +19,11 @@ flowchart LR
     C --> M["Geometric Mapping<br/>implementado"]
     T --> M
     M --> MA["GeometricMapArtifact<br/>implementado"]
-    E -. próximo boundary .-> F["Sensor Association +<br/>Fusion planejados"]
-    MA -.-> F
+    E --> SEN["Sensor Association<br/>implementado"]
+    MA --> SEN
+    T --> SEN
+    SEN --> SENA["SensorAssociationRunArtifact<br/>implementado"]
+    SENA -. próximo boundary .-> F["Fusion +<br/>Semantic Mapping planejados"]
     F --> G["ContextMapArtifact<br/>alvo"]
 ```
 
@@ -46,13 +49,14 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 
 ## Estado implementado
 
-A branch `dev` já contém quatro módulos de domínio, além da capability de avaliação que mede seus resultados:
+A branch `dev` já contém cinco módulos de domínio, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
 - [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
 - [`contextmap.state_estimation`](src/contextmap/state_estimation/docs/README.md), com `PoseEstimate`/`Trajectory`, lookup temporal auditável, frame graph estático e preflight de geometria, os backends `ExternalPose` e FAST-LIO atrás do port `StateEstimator` e o `StateEstimationRunArtifact`; a execução de referência do FAST-LIO ainda está pendente;
 - [`contextmap.geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), com `GeometryPoint`, `GeometryReference` e `GeometricMap`, estado explícito de correção de movimento, montagem de inputs, transformação fonte→mapa com traces, acumulação com referências estáveis, acesso espacial por `GeometrySource` e o `GeometricMapArtifact`;
-- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation e Geometric Mapping.
+- [`contextmap.sensor_association`](src/contextmap/sensor_association/docs/README.md), com `SpatialObservation` (a geometria persistente que uma região enxerga, por referência), modelos de câmera calibrados (pinhole, fisheye e MEI), a cadeia mapa→câmera→imagem preparada, visibilidade e oclusão, pertencimento à máscara de `Region2D`, amostragem de features densas, `ObservationQuality` (medidas separadas, nunca confiança semântica), diagnósticos e o `SensorAssociationRunArtifact`; ainda sem dados reais, porque o mapa geométrico do FAST-LIO está pendente;
+- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation, Geometric Mapping e Sensor Association.
 
 Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados; a validação numérica com pesos reais continua pendente na máquina de inferência e não é inferida desses testes.
 
