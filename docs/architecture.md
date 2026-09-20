@@ -111,7 +111,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion` e `visual_perception` já materializam os dois primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion`, `visual_perception` e `state_estimation` já materializam os três primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
@@ -119,17 +119,21 @@ flowchart LR
     ING --> SA["SequenceArtifact"]
     SA --> VP["contextmap.visual_perception<br/>core + Region Discovery +<br/>Feature Extraction core"]
     VP --> PRA["PerceptionRunArtifact"]
-    PRA -. contrato downstream futuro .-> NEXT["state_estimation / geometric_mapping /<br/>sensor_association / fusion / map"]
+    SA --> ST["contextmap.state_estimation<br/>contratos + lookup + preflight +<br/>ExternalPose / FAST-LIO"]
+    ST --> TRA["StateEstimationRunArtifact"]
+    PRA -. contrato downstream futuro .-> NEXT["geometric_mapping /<br/>sensor_association / fusion / map"]
+    TRA -.-> NEXT
 ```
 
-A integração entre os dois módulos é feita exclusivamente pelas APIs públicas. `visual_perception` referencia identidades de observação e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
+A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
 
 Documentação implementacional:
 
 - [Ingestion](../src/contextmap/ingestion/docs/README.md);
 - [Visual Perception](../src/contextmap/visual_perception/docs/README.md);
 - [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md);
-- [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md).
+- [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md);
+- [State Estimation](../src/contextmap/state_estimation/docs/README.md).
 
 
 ## Ownership
@@ -272,15 +276,15 @@ flowchart LR
     F2 -. adapter semântico separado .-> SI
     CLIP -. scorer separado .-> SS
     ACLIP -. scorer separado .-> SS
-    EXT["ExternalPose"] -. planejado .-> SE
-    FL["FAST-LIO"] -. planejado .-> SE
+    EXT["ExternalPose"] -->|implementado| SE
+    FL["FAST-LIO"] -->|implementado,<br/>execução de referência pendente| SE
     DET["deterministic descriptor"] -. planejado .-> PE
     PT["PTv3"] -. opcional .-> PE
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
 
-No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa Region Discovery, Feature Extraction e as operações de Semantic Interpretation; `SemanticScorer` ainda não está ligado ao DAG. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction já possui contratos e infraestrutura backend-neutral, mas DINOv2, DINOv3, CLIP e AlphaCLIP continuam sem adapters integrados na `dev`; o enhancement também não possui backend aprendido nem faz parte do preset canônico. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md).
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. O preset canônico usa Region Discovery, Feature Extraction e as operações de Semantic Interpretation; `SemanticScorer` ainda não está ligado ao DAG. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction já possui contratos e infraestrutura backend-neutral, mas DINOv2, DINOv3, CLIP e AlphaCLIP continuam sem adapters integrados na `dev`; o enhancement também não possui backend aprendido nem faz parte do preset canônico. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. `state_estimation` possui o port `StateEstimator` com os adapters `ExternalPose` e FAST-LIO (este com o processo isolado atrás de um `FastLioRunner`); a construção de ambos pertence ao `runtime`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md).
 
 ## Composition root
 

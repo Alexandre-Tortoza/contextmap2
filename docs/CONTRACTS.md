@@ -29,6 +29,7 @@ flowchart LR
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
     SS["SemanticSupport"] --> SC
+    SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
     PR -. future association .-> SP["SpatialObservation<br/>planejado"]
     SP --> FE["FusedEvidence<br/>planejado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
@@ -47,7 +48,7 @@ flowchart LR
     PR --> CTX["SceneContext"]
     SUP["SemanticSupport"] --> SC
 
-    SO -. futuro .-> PE["PoseEstimate"]
+    SO --> PE["PoseEstimate"]
     PE -. futuro .-> GM["GeometryReference"]
     PR -. futuro .-> SP["SpatialObservation"]
     GM -. futuro .-> SP

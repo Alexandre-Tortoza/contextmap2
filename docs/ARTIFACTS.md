@@ -100,7 +100,7 @@ flowchart TD
 
 ## Artefatos materializados hoje
 
-Na `dev`, dois formatos já existem e são integrados:
+Na `dev`, três formatos já existem e são integrados:
 
 ```mermaid
 flowchart LR
@@ -112,9 +112,15 @@ flowchart LR
     PW --> PRA["PerceptionRunArtifact"]
     PRA --> PRR["PerceptionRunReader"]
     PRR --> ES["PerceptionEvidenceSet"]
+    SEL --> ST["State Estimation"]
+    ST --> SW2["StateEstimationRunWriter"]
+    SW2 --> TRA["StateEstimationRunArtifact"]
+    TRA --> TRR["StateEstimationRunReader"]
 ```
 
-`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. State Estimation e os artifacts downstream do diagrama anterior permanecem planejados.
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. Os artifacts downstream do diagrama anterior permanecem planejados.
+
+O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact` e pelos artifacts das próximas capabilities. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -152,6 +158,30 @@ workspace/runs/visual-perception/<sequence-name>/
 ```
 
 No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
+
+### `StateEstimationRunArtifact` atual
+
+```text
+workspace/runs/state-estimation/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<backend>/
+    ├── README.md
+    ├── manifest.json
+    ├── outputs/
+    │   ├── trajectory.json        # metadados da trajetória
+    │   ├── poses.jsonl            # uma pose por linha
+    │   ├── pose-index.jsonl       # leitura de uma pose por identidade ou tempo
+    │   ├── frame-summary.json
+    │   └── quality.json
+    ├── metrics/
+    │   ├── preflight.json
+    │   ├── motion.json
+    │   ├── runtime.json           # somente quando medido
+    │   └── diagnostics.jsonl      # somente quando há eventos
+    └── debug/                     # somente standard/full; nunca inventariado
+```
+
+`manifest.json` traz a linhagem (sequência, seleção, backend e fingerprint de configuração, identidade da calibração, versão do código, frames, clock, contagens) e o inventário dos arquivos contratuais. `debug/` fica fora do inventário, então removê-lo não invalida o run. Um run com preflight de geometria `BLOCKED` nunca é persistido. Detalhes: [State Estimation artifact](../src/contextmap/state_estimation/docs/artifact.md).
 
 ### Evidência auditável de Region Discovery
 
