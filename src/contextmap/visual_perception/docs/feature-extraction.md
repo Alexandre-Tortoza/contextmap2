@@ -41,11 +41,16 @@ O core de Feature Extraction está materializado e exportado por `contextmap.vis
 - `FeatureStoreWriter` e `FeatureStoreReader` para persistência `.npy`, índice versionado e carregamento lazy;
 - diagnostics obrigatórios separados de previews de debug;
 - `FeatureResolutionEnhancement` como estágio opcional `DenseFeatureMap -> DenseFeatureMap`, fora do preset canônico;
+- `DinoV2DenseFeatureBackend` e `DinoV3DenseFeatureBackend` para mapas densos em resolução nativa;
+- `ClipVisualFeatureBackend` para features globais ou de região;
+- `AlphaClipRegionFeatureBackend` para features de região condicionadas por máscara;
 - protocolo de avaliação determinístico em `contextmap.evaluation`.
 
 `CANONICAL_PRESET_V1` possui os estágios `dense_feature_extraction` e `region_feature_extraction`, ambos resolvidos pelo capability port `feature_extractor`. Isso define topologia e contrato, mas não implica que um modelo concreto esteja disponível.
 
-No estado atual da `dev`, adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados. Os testes do core usam fakes determinísticos. O diretório `visual_perception/backends/` contém os adapters concretos de Region Discovery, não backends de Feature Extraction.
+Os quatro adapters concretos ficam em `visual_perception/backends/` e satisfazem o mesmo port sem expor PyTorch, Transformers, AlphaCLIP, Pillow ou arrays na API pública da capability. Carregamento é lazy, checkpoints locais são o default e falhas de dependência, device, checkpoint e inferência permanecem explícitas. Os testes usam runtimes determinísticos injetados e não baixam pesos; portanto, carregamento e equivalência numérica de checkpoints reais ainda devem ser verificados na máquina de inferência antes de afirmar validação científica desses modelos.
+
+Os adapters não são registrados nem selecionados implicitamente por `CANONICAL_PRESET_V1`. A composition root deve importar o módulo interno correspondente, construir a configuração efetiva e fornecê-lo ao `StageBackendFactory`.
 
 ## Contrato `VisualFeature`
 
