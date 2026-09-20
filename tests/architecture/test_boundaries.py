@@ -45,7 +45,10 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "semantic_fusion": frozenset(
         {
             "shared",
+            "ingestion",
             "visual_perception",
+            "state_estimation",
+            "geometric_mapping",
             "sensor_association",
             "point_representation",
         }

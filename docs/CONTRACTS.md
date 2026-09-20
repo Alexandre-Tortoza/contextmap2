@@ -381,11 +381,12 @@ Representa suporte espacial sobre o qual evidências podem ser acumuladas.
 
 ```text
 FusionSupport
-├── support_id
+├── fusion_support_id
+├── geometric_map_id
 ├── geometry_support[]
-├── bounds / centroid
-├── spatial_observation_refs[]
-├── time bounds
+├── spatial_observation_ids[]
+├── bounds / centroid_m
+├── time_bounds
 └── provenance
 ```
 
@@ -393,7 +394,9 @@ FusionSupport
 
 `FusionSupport` não implica same-object identity.
 
-Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion.
+Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion. Não há campo de label, classe, confiança nem identidade de objeto.
+
+Ver [`semantic_fusion/docs/contracts.md`](../src/contextmap/semantic_fusion/docs/contracts.md).
 
 ## 18. Evidence grouping
 
@@ -425,6 +428,8 @@ physical_observation_count = 1
 inference_result_count = 3
 ```
 
+No contrato, essa distinção é `EvidenceContribution.physical_observation_id` (chave de correlação) e `PhysicalObservationGroup`, que lista os resultados e execuções correlacionados de um frame. `FusedEvidence` expõe `physical_observation_count` e `inference_result_count` separadamente.
+
 ## 19. `FusedEvidence`
 
 Acumula evidências preservando hipóteses e conflitos.
@@ -432,17 +437,21 @@ Acumula evidências preservando hipóteses e conflitos.
 ```text
 FusedEvidence
 ├── fused_evidence_id
-├── fusion_support_ref
-├── contributing_observations[]
-├── hypotheses[]
-├── visual_feature_refs[]
+├── fusion_support_id
+├── physical_observation_groups[]
+├── contributions[]          (EvidenceContribution)
+├── hypotheses[]             (FusedHypothesis)
 ├── point_representation_refs[]
-├── ambiguity / uncertainty state
-├── temporal summary
+├── uncertainty[]            (UncertaintyRecord)
+├── temporal_summary
 └── provenance
 ```
 
-Uma hypothesis fundida deve manter references para claims, scores e observações que a sustentam ou contradizem.
+Uma `EvidenceContribution` é uma vista: uma região de um frame físico interpretada por uma execução, com referências para claims, scores de scorer, features visuais, geometria e qualidade de observação. Não carrega `PointRepresentation`: estrutura estática pertence ao suporte e é listada uma vez em `point_representation_refs`, nunca por vista.
+
+Uma hypothesis fundida mantém references para claims e observações que a sustentam, contradizem ou deixam ambíguas (`HypothesisEvidence`, com `stance`, `role` e `SupportSignal` tipados). Um `SupportSignal` com `value=None` é evidência não pontuada, nunca zero.
+
+Qualidade de observação é uma dimensão de evidência separada, referenciada por `ObservationQualityRef`; ela não é confiança semântica, similaridade CLIP nem peso de fusão. `FusedEvidence` não tem vencedor, hipótese primária nem confiança combinada: ambiguidade, contradição, empate e evidência insuficiente são `UncertaintyRecord` com a evidência exata que os produziu.
 
 ## 20. `Entity`
 

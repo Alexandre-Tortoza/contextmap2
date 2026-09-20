@@ -1,0 +1,66 @@
+# Semantic Fusion
+
+## Responsabilidade
+
+Acumular a evidência de várias vistas sobre um **suporte espacial** compartilhado, **sem decidir que objeto ele é**. A saída, `FusedEvidence`, é crença em formação: mantém todas as hipóteses, a evidência exata por trás de cada uma, os conflitos entre observações físicas e o que é simplesmente desconhecido.
+
+```mermaid
+flowchart LR
+    SO["SpatialObservation<br/>(Sensor Association)"] --> SF["Semantic Fusion"]
+    PERC["Claims, scores, features<br/>(Visual Perception)"] --> SF
+    Q["ObservationQuality<br/>(Sensor Association)"] -. referência .-> SF
+    PR["PointRepresentation<br/>(opcional)"] -. referência .-> SF
+    SF --> FE["FusedEvidence<br/>(hipóteses, conflitos, incerteza)"]
+    FE --> DOWN["Semantic Mapping"]
+```
+
+Fusão não é identidade. Um `FusionSupport` afirma apenas que observações espaciais veem geometria compatível sob uma política; não afirma mesmo objeto, mesma classe nem identidade persistente entre versões do mapa.
+
+## O que este módulo explicitamente não possui
+
+- identidade persistente de objeto e `Entity`: Semantic Mapping e Entity Resolution;
+- geometria e suas coordenadas: Geometric Mapping (aqui só há `GeometryReference`);
+- claims, scores de scorer, features: Visual Perception (aqui só há referências);
+- qualidade de observação: Sensor Association (aqui só há `ObservationQualityRef`);
+- representações 3D: Point Representation (aqui só há `PointRepresentationRef`);
+- reexecução da VLM para corrigir um label: fusão nunca chama inferência.
+
+## Estado implementado
+
+Existem os **contratos**: `FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio. Estão **planejados**, e serão documentados aqui quando forem implementados: agrupamento de evidência por observação física, construção de `FusionSupport`, política baseline de acumulação, preservação de ambiguidade e conflito, canais de evidência, política ciente de qualidade, artifact de run e a validação.
+
+## Contratos públicos
+
+- `FusionSupport`, `FusionSupportId`, `FusionSupportProvenance` — onde a evidência é acumulada: geometria, observações espaciais, limites, centroide, intervalo temporal e política.
+- `EvidenceContribution`, `EvidenceContributionId` — uma vista: uma região de um frame físico, interpretada por uma execução de inferência.
+- `PhysicalObservationGroup` — tudo o que foi inferido de um frame físico, separado do próprio frame.
+- `ScoreReference`, `ObservationQualityRef` — referências ao score de um scorer e à qualidade mensurável da vista; nunca valores.
+- `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
+- `FusedHypothesis`, `FusedHypothesisId`, `HypothesisEvidence`, `EvidenceStance` — um candidato semântico e cada claim que o sustenta, contradiz ou deixa ambíguo.
+- `SupportSignal`, `SupportSignalKind` — score tipado de uma claim, com o modelo que o produziu; `None` significa não pontuado.
+- `UncertaintyRecord`, `UncertaintyKind`, `EvidenceReference` — conflito, ambiguidade, empate ou evidência insuficiente, com a evidência exata que o produziu.
+- `PointRepresentationRef` — estrutura 3D estática do suporte, listada uma única vez.
+
+Ver [`contracts.md`](contracts.md) para a referência de campos, as regras de correlação e as invariantes.
+
+## Módulos consumidos
+
+- `contextmap.sensor_association`: `SpatialObservationId`, `SemanticClaimRef`, `VisualFeatureRef`.
+- `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `FeatureScope`, `HypothesisRole`, `PerceptionResultId`, `PerceptionRunId`, `RegionId`.
+- `contextmap.point_representation`: `PointRepresentationId`, `PointRepresentationRunId`.
+- `contextmap.geometric_mapping`: `GeometryReference`, `Bounds3D`, `MapId`.
+- `contextmap.ingestion`: `SourceObservationId`.
+- `contextmap.state_estimation`: `TimeBounds`, reutilizado para o intervalo fechado de aquisição em vez de duplicar a regra.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`.
+
+A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe apenas para identidades e para o tipo de intervalo temporal, sempre pela API pública; Semantic Fusion não usa a lógica dessas capabilities. Ela está declarada em `tests/architecture/test_boundaries.py`.
+
+## Módulos que consomem este
+
+`semantic_mapping`, sempre através de `contextmap.semantic_fusion`.
+
+## Onde estão os documentos detalhados
+
+- [`contracts.md`](contracts.md) — contratos, regras de correlação e invariantes.
+- [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Fusion no fluxo.
+- [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `FusionSupport` e `FusedEvidence` no contexto global de contratos.

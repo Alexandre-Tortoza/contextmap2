@@ -231,6 +231,8 @@ entity_resolution ─────────────┼── artifact / Co
 spatial_relations ─────────────┘
 ```
 
+O grafo acima é conceitual e transitivo. O que o teste `tests/architecture/test_boundaries.py` autoriza são imports diretos da API pública do produtor. `semantic_fusion` importa, além de `sensor_association`, `point_representation` e `visual_perception`, identidades de `geometric_mapping` (`GeometryReference`, `Bounds3D`) e `ingestion` (`SourceObservationId`) e o intervalo temporal `TimeBounds` de `state_estimation`, apenas como tipos: não usa a lógica dessas capabilities.
+
 `runtime` depende das capabilities para compô-las. Capabilities nunca dependem de `runtime`.
 
 ## Data dependency não é import de backend
