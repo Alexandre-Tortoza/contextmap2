@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery (relatórios determinísticos sobre contratos públicos de `visual_perception`) e State Estimation (relatórios sobre `Trajectory` e seus artifacts).
 
 ## O que este módulo explicitamente não possui
 
@@ -31,9 +31,18 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_region_discovery_reports()` — comparação controlada entre relatórios que rejeita drift de variáveis opacas.
 - `write_region_discovery_reference_set()`/`write_region_discovery_report()` — persistência imutável dos inputs e resultados de avaliação.
 
+### State Estimation
+
+- `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
+- `MotionThresholds` — limiares de movimento fornecidos pelo perfil de referência; não há valores padrão.
+- `ReferenceTrajectory`/`ReferenceRole`/`ReferenceComparisonConfig`/`AlignmentMethod` — referência com papel declarado e protocolo de comparação explícito (associação, alinhamento, ATE, RPE).
+- `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
+- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
+- `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
+
 ## Módulos consumidos
 
-`contextmap.ingestion` para a identidade da observação física e `contextmap.visual_perception` exclusivamente por sua API pública.
+`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception` e `contextmap.state_estimation`, exclusivamente por suas APIs públicas.
 
 ## Módulos que consomem este
 
@@ -44,5 +53,6 @@ Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar 
 - [`feature_extraction.md`](feature_extraction.md) — protocolo, invariantes, fixtures determinísticas e trade-offs da avaliação de features.
 - [`../../visual_perception/docs/feature-extraction.md`](../../visual_perception/docs/feature-extraction.md) — visão do core produtor que esta avaliação mede.
 - [`region-discovery.md`](region-discovery.md) — referência, métricas geométricas, diagnósticos, custo e comparação controlada de Region Discovery.
+- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, os backends `ExternalPose` e FAST-LIO (execução de referência com o FAST-LIO ainda pendente), o frame graph estático, o preflight de geometria, as métricas de movimento e o `StateEstimationRunArtifact`. Está **planejado**, e será documentado aqui quando for implementado: o harness de validação.
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, os backends `ExternalPose` e FAST-LIO (execução de referência com o FAST-LIO ainda pendente), o frame graph estático, o preflight de geometria, as métricas de movimento e o `StateEstimationRunArtifact`. A validação de qualidade (estrutura, movimento, transform trace, ATE/RPE contra referência e comparação entre backends) pertence a `evaluation`; ver [avaliação de State Estimation](../../evaluation/docs/state_estimation.md).
 
 ## Contratos públicos
 
@@ -61,6 +61,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 - [`backends.md`](backends.md) — port `StateEstimator`, backend `ExternalPose` e backend FAST-LIO.
 - [`preflight.md`](preflight.md) — frame graph estático, preflight de geometria e serviço de execução.
 - [`artifact.md`](artifact.md) — layout, manifest, níveis de debug e integridade do `StateEstimationRunArtifact`.
+- [avaliação de State Estimation](../../evaluation/docs/state_estimation.md) — harness de validação e relatório comum entre backends.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PoseEstimate` e `Trajectory` no contexto global de contratos.
 - [`docs/shared-primitives.md`](../../../../docs/shared-primitives.md) — primitivas geométricas compartilhadas.
