@@ -31,7 +31,7 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
-Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; validação numérica com pesos reais permanece explícita. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
+Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2 e CLIP e segue pendente para DINOv3 e AlphaCLIP. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
 
 Semantic Interpretation possui contratos canônicos para claims/contexto e para
 a seleção auditável de views, features e contexto entregue a um backend. A

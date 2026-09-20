@@ -26,7 +26,7 @@ O `EmbeddingSpace.layer` é `last_hidden_state.patch_tokens_after_registers`, di
 
 ## Preprocessamento e sampling
 
-O processor faz resize bilinear direto, passado explicitamente, para `input_width × input_height`, sem center crop. O patch size vem da configuração real do modelo. Origem, stride e suporte de cada célula são mapeados por escala aos pixels da `PreparedImage`; dimensões, transformações anteriores, patch size, register count e fingerprint efetivo entram no `coordinate_transform_id`.
+O adapter faz resize bilinear direto para `input_width × input_height` no **Pillow**, sem center crop, e usa o processor apenas para rescale e normalização (`do_resize=False`). O resize é do adapter, não do processor: a implementação de resize do processor depende do backend instalado (torchvision ou PIL) e dá pixels diferentes (até 1,75e-2) e features diferentes (cosseno mínimo por patch 0,981) para o mesmo checkpoint, config e imagem. Com o resize no Pillow, os dois backends concordam a 2,4e-7 (issue #339). O patch size vem da configuração real do modelo. Origem, stride e suporte de cada célula são mapeados por escala aos pixels da `PreparedImage`; dimensões, transformações anteriores, patch size, register count e fingerprint efetivo entram no `coordinate_transform_id`.
 
 Resize direto pode distorcer aspect ratio se as dimensões configuradas não forem coerentes com a imagem preparada. Essa escolha é explícita, reproduzível e deve ser controlada pelo experimento.
 
@@ -36,7 +36,7 @@ Resize direto pode distorcer aspect ratio se as dimensões configuradas não for
 
 Falhas são específicas e nunca acionam fallback:
 
-- `DinoV3DependencyError` — PyTorch, Transformers ou Pillow ausente;
+- `DinoV3DependencyError` — PyTorch, Transformers ou Pillow ausente, incluindo pacotes que o processor ou o modelo importam (por exemplo `torchvision`, exigido pelo `transformers` 5.x; requer `transformers` >= 4.56 por causa de `dtype=`);
 - `DinoV3DeviceError` — device/precisão indisponível;
 - `DinoV3ModelLoadError` — checkpoint/revision não carregável;
 - `DinoV3InferenceError` — erro de payload, preprocessamento, token count, shape ou inferência.
@@ -50,7 +50,7 @@ O espaço `family="dinov3"` não é compatível automaticamente com DINOv2, CLIP
 
 Os testes injetam um runtime determinístico e cobrem o port, persistência, metadata, exclusão de registers, mapping espacial, normalização, determinismo, pooling comum e falhas sem rede ou modelo real.
 
-Por solicitação explícita do usuário, pesos reais não foram baixados nem executados neste ambiente. A issue #69 só deve ser encerrada depois de uma execução controlada na máquina de inferência confirmar carregamento, layout de tokens e repetibilidade numérica do checkpoint selecionado.
+Por solicitação explícita do usuário, pesos reais não foram baixados nem executados neste ambiente. A issue #69 só deve ser encerrada depois de uma execução controlada na máquina de inferência confirmar carregamento, layout de tokens e repetibilidade numérica do checkpoint selecionado. Em 2026-09-20 essa execução foi bloqueada porque os repositórios `facebook/dinov3-*` são *gated* e a conta usada não aceitou os termos (403). O caminho de pré-processamento e de carregamento é o mesmo do DINOv2, validado com pesos reais (ver `dinov2.md`).
 
 ## O que este backend não faz
 
