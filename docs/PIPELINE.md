@@ -229,7 +229,7 @@ flowchart LR
 - `SceneContext`;
 - `SemanticInterpretationRequest`, `SemanticVisualView` e `SemanticFeatureReference`;
 - `SemanticInterpretationExecution`, prompt renderizado, parser estruturado e policy explícita de confidence;
-- `SemanticSupport`, produzido por `SemanticScorer` sem mutar a claim;
+- `SemanticScore`, produzido por `SemanticScorer` sem mutar a claim;
 - `PerceptionRun` e `PerceptionResult`;
 - `BackendProvenance`.
 
@@ -330,7 +330,6 @@ Os seguintes elementos aparecem na arquitetura alvo ou como variation points já
 - adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP para `FeatureExtractor`;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
 - backends reais de Semantic Interpretation;
-- integração de `SemanticScorer` como estágio do DAG;
 - semantic refinement;
 - integração end-to-end com State Estimation, geometria e Sensor Association.
 
@@ -666,7 +665,7 @@ Agrupa `SpatialObservation` com suporte 3D suficientemente compatível para acum
 Podem participar, conforme policy/configuração:
 
 - `SemanticClaim`;
-- `SemanticSupport`;
+- `SemanticScore`;
 - visual feature references;
 - visibility/coverage;
 - optional `PointRepresentation`;

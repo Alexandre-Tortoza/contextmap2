@@ -26,11 +26,14 @@ from contextmap.visual_perception.models import (
     Region2D,
     RegionId,
     SceneContext,
+    ScoreId,
     SemanticAttribute,
     SemanticClaim,
     SemanticEvidenceReference,
     SemanticInferenceProvenance,
     SemanticRegionKind,
+    SemanticScore,
+    SemanticScoreType,
     VisualFeature,
 )
 from contextmap.visual_perception.region_models import (
@@ -272,6 +275,38 @@ def decode_scene_context(record: dict[str, Any]) -> SceneContext:
     )
 
 
+def encode_semantic_score(score: SemanticScore) -> dict[str, Any]:
+    """Encode a semantic score without changing its numerical semantics."""
+    return {
+        "score_id": str(score.score_id),
+        "claim_id": str(score.claim_id),
+        "feature_id": str(score.feature_id),
+        "score_type": score.score_type.value,
+        "value": score.value,
+        "calibrated_probability": score.calibrated_probability,
+        "embedding_space_id": score.embedding_space_id,
+        "source_observation_id": str(score.source_observation_id),
+        "perception_result_id": str(score.perception_result_id),
+        "provenance": encode_provenance(score.provenance),
+    }
+
+
+def decode_semantic_score(record: dict[str, Any]) -> SemanticScore:
+    """Decode one canonical semantic score."""
+    return SemanticScore(
+        score_id=ScoreId(record["score_id"]),
+        claim_id=ClaimId(record["claim_id"]),
+        feature_id=FeatureId(record["feature_id"]),
+        score_type=SemanticScoreType(record["score_type"]),
+        value=record["value"],
+        calibrated_probability=record["calibrated_probability"],
+        embedding_space_id=record["embedding_space_id"],
+        source_observation_id=SourceObservationId(record["source_observation_id"]),
+        perception_result_id=PerceptionResultId(record["perception_result_id"]),
+        provenance=decode_provenance(record["provenance"]),
+    )
+
+
 def encode_perception_result(result: PerceptionResult) -> dict[str, Any]:
     """Encode a :class:`PerceptionResult` into a JSON-serializable dict."""
     return {
@@ -283,6 +318,7 @@ def encode_perception_result(result: PerceptionResult) -> dict[str, Any]:
         "regions": [encode_region(region) for region in result.regions],
         "features": [encode_feature(feature) for feature in result.features],
         "claims": [encode_claim(claim) for claim in result.claims],
+        "semantic_scores": [encode_semantic_score(score) for score in result.semantic_scores],
         "scene_context": (
             encode_scene_context(result.scene_context) if result.scene_context is not None else None
         ),
@@ -300,6 +336,7 @@ def decode_perception_result(record: dict[str, Any]) -> PerceptionResult:
         regions=tuple(decode_region(item) for item in record["regions"]),
         features=tuple(decode_feature(item) for item in record["features"]),
         claims=tuple(decode_claim(item) for item in record["claims"]),
+        semantic_scores=tuple(decode_semantic_score(item) for item in record["semantic_scores"]),
         scene_context=(
             decode_scene_context(record["scene_context"])
             if record["scene_context"] is not None

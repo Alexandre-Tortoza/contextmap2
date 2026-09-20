@@ -48,6 +48,9 @@ FeatureId = NewType("FeatureId", str)
 ClaimId = NewType("ClaimId", str)
 """Identity of a SemanticClaim, local to the owning PerceptionResult."""
 
+ScoreId = NewType("ScoreId", str)
+"""Identity of one semantic scoring judgement within a PerceptionResult."""
+
 
 class HypothesisRole(Enum):
     """Whether a :class:`SemanticClaim` is the leading or a secondary hypothesis."""
@@ -61,6 +64,12 @@ class SemanticRegionKind(Enum):
 
     THING = "thing"
     STUFF = "stuff"
+
+
+class SemanticScoreType(Enum):
+    """Numerical semantics of a :class:`SemanticScore` value."""
+
+    COSINE_SIMILARITY = "cosine_similarity"
 
 
 class FeatureScope(Enum):
@@ -537,6 +546,7 @@ class PerceptionResult:
     features: Sequence[VisualFeature] = ()
     claims: Sequence[SemanticClaim] = ()
     scene_context: SceneContext | None = None
+    semantic_scores: Sequence[SemanticScore] = ()
 
     def __post_init__(self) -> None:
         """Validate local identities are unique and every reference resolves.
@@ -570,6 +580,27 @@ class PerceptionResult:
                 raise ValueError("scene context source_observation_id must match PerceptionResult")
             if self.scene_context.perception_result_id != self.result_id:
                 raise ValueError("scene context perception_result_id must match PerceptionResult")
+        all_claim_ids = set(claim_ids)
+        if self.scene_context is not None:
+            all_claim_ids.update(claim.claim_id for claim in self.scene_context.claims)
+        score_ids = {score.score_id for score in self.semantic_scores}
+        if len(score_ids) != len(self.semantic_scores):
+            raise ValueError("duplicate score_id in PerceptionResult")
+        features_by_id = {feature.feature_id: feature for feature in self.features}
+        for score in self.semantic_scores:
+            if score.claim_id not in all_claim_ids:
+                raise ValueError(f"semantic score references unknown claim_id: {score.claim_id!r}")
+            scored_feature = features_by_id.get(score.feature_id)
+            if scored_feature is None:
+                raise ValueError(
+                    f"semantic score references unknown feature_id: {score.feature_id!r}"
+                )
+            if score.embedding_space_id != scored_feature.embedding_space_id:
+                raise ValueError("semantic score embedding_space_id must match its feature")
+            if score.source_observation_id != self.source_observation_id:
+                raise ValueError("semantic score source_observation_id must match PerceptionResult")
+            if score.perception_result_id != self.result_id:
+                raise ValueError("semantic score perception_result_id must match PerceptionResult")
 
 
 @dataclass(frozen=True, slots=True)
@@ -727,28 +758,49 @@ class PreparedImage:
 
 
 @dataclass(frozen=True, kw_only=True)
-class SemanticSupport:
-    """A scorer's assessment of how well visual evidence supports one SemanticClaim.
+class SemanticScore:
+    """One scorer's support judgement for a claim and visual feature.
 
-    Scoring never mutates the original claim: it produces a separate,
-    referenceable judgement, keeping the claim itself immutable evidence.
-
-    Attributes:
-        claim_id: The claim being scored.
-        support_score: Score in ``[0, 1]``: how well the visual evidence
-            supports the claim.
-        provenance: Backend that produced this support judgement.
+    ``value`` keeps the scale named by ``score_type``. In particular, cosine
+    similarity is not remapped to ``[0, 1]`` and is never presented as a
+    probability. A claim with no score remains valid and is represented by the
+    absence of a ``SemanticScore`` record, not by a zero value.
     """
 
+    score_id: ScoreId
     claim_id: ClaimId
-    support_score: float
+    feature_id: FeatureId
+    score_type: SemanticScoreType
+    value: float
+    calibrated_probability: float | None
+    embedding_space_id: str
+    source_observation_id: SourceObservationId
+    perception_result_id: PerceptionResultId
     provenance: BackendProvenance
 
     def __post_init__(self) -> None:
-        """Validate ``support_score`` is a valid score.
-
-        Raises:
-            ValueError: If ``support_score`` is outside ``[0, 1]``.
-        """
-        if not 0.0 <= self.support_score <= 1.0:
-            raise ValueError(f"support_score must be in [0, 1], got {self.support_score}")
+        """Validate numerical semantics and scorer provenance."""
+        for field_name, value in (
+            ("score_id", str(self.score_id)),
+            ("claim_id", str(self.claim_id)),
+            ("feature_id", str(self.feature_id)),
+            ("embedding_space_id", self.embedding_space_id),
+            ("source_observation_id", str(self.source_observation_id)),
+            ("perception_result_id", str(self.perception_result_id)),
+            ("scorer_id", self.provenance.backend_id),
+            ("scorer_model", self.provenance.model),
+            ("scorer_version", self.provenance.version),
+        ):
+            if not value.strip():
+                raise ValueError(f"{field_name} must not be empty")
+        if not isfinite(self.value):
+            raise ValueError("semantic score value must be finite")
+        if self.score_type is SemanticScoreType.COSINE_SIMILARITY and not -1.0 <= self.value <= 1.0:
+            raise ValueError("cosine similarity must be in [-1, 1]")
+        if self.calibrated_probability is not None and (
+            not isfinite(self.calibrated_probability)
+            or not 0.0 <= self.calibrated_probability <= 1.0
+        ):
+            raise ValueError("calibrated_probability must be finite and in [0, 1]")
+        if self.provenance.capability != "semantic_scorer":
+            raise ValueError("semantic score provenance capability must be semantic_scorer")

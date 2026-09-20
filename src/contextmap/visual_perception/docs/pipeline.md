@@ -10,7 +10,12 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 
 Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`,
 `feature_resolution_enhancement`, `scene_interpretation`,
-`region_interpretation`, `semantic_interpreter`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
+`region_interpretation`, `semantic_interpreter`, `semantic_scorer`). Ela adapta
+os ports necessários ao grafo atual. `semantic_scorer` exige produtores
+explícitos de `claims` e `features`; sua disponibilidade no compilador não o
+insere em `CANONICAL_PRESET_V1`. Tornar uma nova capability executável exige um
+adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo
+de despacho genérico.
 
 ## Preset canônico versionado
 

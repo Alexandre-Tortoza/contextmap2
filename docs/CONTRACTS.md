@@ -28,7 +28,7 @@ flowchart LR
     PR --> VF["VisualFeature"]
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
-    SS["SemanticSupport"] --> SC
+    SS["SemanticScore"] --> SC
     PR -. future association .-> SP["SpatialObservation<br/>planejado"]
     SP --> FE["FusedEvidence<br/>planejado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
@@ -45,7 +45,7 @@ flowchart LR
     PR --> VF["VisualFeature"]
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
-    SUP["SemanticSupport"] --> SC
+    SUP["SemanticScore"] --> SC
 
     SO -. futuro .-> PE["PoseEstimate"]
     PE -. futuro .-> GM["GeometryReference"]
@@ -253,17 +253,29 @@ cena/região e reconcilia o parsing com o `PerceptionResult`. Qwen/Gemini usam
 `SemanticConfidencePolicy.UNSCORED_ONLY`; um backend com score realmente
 medido pode usar a policy `MEASURED`.
 
-## 9. `SemanticSupport`
+## 9. `SemanticScore`
 
 Julgamento separado produzido por `SemanticScorer` sobre uma `SemanticClaim`:
 
 ```text
+score_id
 claim_id
-support_score ∈ [0, 1]
+feature_id
+score_type = cosine_similarity
+value ∈ [-1, 1]
+calibrated_probability?
+embedding_space_id
+source_observation_id
+perception_result_id
 provenance
 ```
 
-`SemanticSupport` não muta a claim, não substitui `SemanticClaim.confidence` e não é suporte acumulado de Semantic Fusion. Embora o port `SemanticScorer` esteja implementado, ele ainda não integra `CANONICAL_PRESET_V1`.
+`SemanticScore` não muta a claim, não substitui `SemanticClaim.confidence` e
+não é suporte acumulado de Semantic Fusion. Cosine similarity preserva sua
+escala original e não é apresentada como probabilidade. Uma claim sem feature
+compatível continua válida e permanece sem records de score; ausência não vira
+zero. O DAG conhece `semantic_scorer`, mas `CANONICAL_PRESET_V1` não seleciona
+silenciosamente um scorer/modelo.
 
 ## 10. `PoseEstimate`
 
@@ -673,7 +685,7 @@ A tabela resume onde uma identidade é válida por padrão.
 | `Region2D` | perception result |
 | `VisualFeature` | perception result |
 | `SemanticClaim` | perception result |
-| `SemanticSupport` | julgamento do scorer referenciando uma claim |
+| `SemanticScore` | julgamento do scorer referenciando uma claim |
 | `PoseEstimate` | state-estimation artifact |
 | `GeometryReference` | geometric-map artifact |
 | `SpatialObservation` | association artifact |
