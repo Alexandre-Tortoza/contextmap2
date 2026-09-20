@@ -24,6 +24,7 @@ from contextmap.sensor_association import (
     SemanticClaimRef,
     SpatialObservation,
     SpatialObservationId,
+    VisualFeatureRef,
     spatial_observation_id_for,
 )
 from contextmap.visual_perception import (
@@ -70,6 +71,7 @@ class View:
     region: str = "region-0001"
     geometry: Sequence[int] = tuple(range(20))
     interpreter: BackendProvenance = field(default_factory=make_interpreter)
+    features: Sequence[VisualFeatureRef] = ()
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,10 @@ def build_scenario(
             view.run, view.frame, view.region, support=tuple(view.geometry)
         )
         observation = _with_claims(observation, claims)
+        observation = dataclasses.replace(
+            observation,
+            visual_feature_refs=tuple(sorted(view.features, key=lambda ref: ref.feature_id)),
+        )
         observations[observation.spatial_observation_id] = observation
         key = result_id(view.run, view.frame)
         claims_of_result.setdefault(key, []).extend(claims)

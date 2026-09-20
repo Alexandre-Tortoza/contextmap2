@@ -55,6 +55,8 @@ from dataclasses import dataclass
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion.grouping import PhysicalObservationGrouping
 from contextmap.semantic_fusion.models import (
+    ChannelProvenance,
+    EvidenceChannel,
     EvidenceContribution,
     EvidenceContributionId,
     EvidenceReference,
@@ -81,6 +83,7 @@ from contextmap.semantic_fusion.models import (
 )
 from contextmap.sensor_association import SpatialObservation, SpatialObservationId
 from contextmap.visual_perception import (
+    BackendProvenance,
     ClaimId,
     HypothesisRole,
     PerceptionResult,
@@ -104,21 +107,35 @@ class BaselineAccumulationPolicy:
         near_tie_margin: The largest difference, in distinct supporting physical
             observations, at which the leading hypotheses still count as tied. ``0`` means
             exactly equal.
+        channels: The evidence channels that take part. Semantic claims are required;
+            geometry support is intrinsic and always active. The default is semantic claims
+            only, so a channel is used only when declared, however much data is offered.
     """
 
     abstention_labels: frozenset[str] = frozenset()
     near_tie_margin: int = 0
+    channels: frozenset[EvidenceChannel] = frozenset({EvidenceChannel.SEMANTIC_CLAIMS})
 
     def __post_init__(self) -> None:
-        """Validate the margin and the labels.
+        """Validate the channels, the margin and the labels.
 
         Raises:
-            ValueError: If the margin is negative or an abstention label is empty.
+            ValueError: If semantic claims are not among the channels, the margin is
+                negative or an abstention label is empty.
         """
+        if EvidenceChannel.SEMANTIC_CLAIMS not in self.channels:
+            raise ValueError(
+                "channels must include semantic_claims: hypotheses come from semantic claims"
+            )
         if self.near_tie_margin < 0:
             raise ValueError(f"near_tie_margin must not be negative, got {self.near_tie_margin}")
         if any(not label_key(label) for label in self.abstention_labels):
             raise ValueError("an abstention label must not be empty")
+
+    @property
+    def active_channels(self) -> frozenset[EvidenceChannel]:
+        """The declared channels plus the intrinsic geometry support."""
+        return self.channels | {EvidenceChannel.GEOMETRY_SUPPORT}
 
     @property
     def abstention_keys(self) -> frozenset[str]:
@@ -137,6 +154,7 @@ class BaselineAccumulationPolicy:
                 "policy_id": BASELINE_ACCUMULATION_POLICY_ID,
                 "abstention_labels": sorted(self.abstention_keys),
                 "near_tie_margin": self.near_tie_margin,
+                "channels": sorted(channel.value for channel in self.active_channels),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -177,14 +195,15 @@ def accumulate_baseline_evidence(
     perception_results: Mapping[PerceptionResultId, PerceptionResult],
     semantic_scores: Mapping[PerceptionResultId, Sequence[SemanticSupport]] | None = None,
     observation_quality_refs: Mapping[SpatialObservationId, ObservationQualityRef] | None = None,
-    point_representation_refs: Iterable[PointRepresentationRef] = (),
+    point_representation_refs: Iterable[PointRepresentationRef] | None = None,
     policy: BaselineAccumulationPolicy | None = None,
     code_version: str | None = None,
 ) -> FusedEvidence:
     """Accumulate the evidence of one support under the baseline policy.
 
-    Evidence channels are opt-in: scorer outputs, quality references and structural
-    references take part only when the caller passes them.
+    Evidence channels are opt-in: the policy declares which take part, and the caller may
+    offer the same inputs to every configuration. Data offered for a channel the policy did
+    not declare is ignored, and a declared channel with no input at all is an error.
 
     Args:
         support: The support to accumulate over.
@@ -193,28 +212,49 @@ def accumulate_baseline_evidence(
         grouping: The physical-observation grouping of the same observations, which
             supplies the acquisition time of each physical observation.
         perception_results: The perception results that own the claims, by identity.
-        semantic_scores: Scorer outputs per perception result. A score for a claim that is
-            not attached to an observation of the support is ignored.
-        observation_quality_refs: References to the measured quality of each observation.
-            The baseline keeps them and never weights by them.
-        point_representation_refs: Static 3D structure. Only references anchored inside the
-            support are kept, each once.
-        policy: What counts as abstention and as a near tie; the default recognises no
-            abstention and only exact ties.
+        semantic_scores: Scorer outputs per perception result, needed by the
+            ``semantic_scores`` channel. A score for a claim that is not attached to an
+            observation of the support is ignored.
+        observation_quality_refs: References to the measured quality of each observation,
+            needed by the ``observation_quality`` channel. The baseline keeps them and never
+            weights by them.
+        point_representation_refs: Static 3D structure, needed by the
+            ``point_representation`` channel. Only references anchored inside the support
+            are kept, each once.
+        policy: The channels, what counts as abstention and as a near tie; the default is
+            semantic claims only, no abstention and only exact ties.
         code_version: Code revision to record in the provenance, when known.
 
     Returns:
         The fused evidence; it does not depend on the order of any input.
 
     Raises:
-        ValueError: If an observation or perception result is missing, a claim is not in its
-            result, an observation belongs to another map or has geometry outside the
+        ValueError: If a declared channel has no input (scores, quality references or
+            structural references), an observation or perception result is missing, a claim
+            is not in its result, an observation belongs to another map or has geometry outside the
             support, the grouping does not cover a physical observation or does not list an
             observation, or a scorer scored one claim twice.
     """
-    scores = {} if semantic_scores is None else semantic_scores
-    quality_refs = {} if observation_quality_refs is None else observation_quality_refs
     chosen = BaselineAccumulationPolicy() if policy is None else policy
+    active = chosen.active_channels
+    _require_input(active, EvidenceChannel.SEMANTIC_SCORES, semantic_scores, "semantic scores")
+    _require_input(
+        active,
+        EvidenceChannel.OBSERVATION_QUALITY,
+        observation_quality_refs,
+        "observation quality references",
+    )
+    _require_input(
+        active,
+        EvidenceChannel.POINT_REPRESENTATION,
+        point_representation_refs,
+        "point representation references",
+    )
+    scores = semantic_scores if EvidenceChannel.SEMANTIC_SCORES in active else None
+    quality_refs = (
+        observation_quality_refs if EvidenceChannel.OBSERVATION_QUALITY in active else None
+    )
+    use_features = EvidenceChannel.VISUAL_FEATURES in active
 
     contributions: list[EvidenceContribution] = []
     claims: list[_Claim] = []
@@ -230,9 +270,10 @@ def accumulate_baseline_evidence(
             support,
             observation,
             result,
-            scores.get(observation.perception_result_id, ()),
-            quality_refs.get(observation_id),
+            () if scores is None else scores.get(observation.perception_result_id, ()),
+            None if quality_refs is None else quality_refs.get(observation_id),
             chosen.abstention_keys,
+            use_features=use_features,
         )
         contributions.append(contribution)
         claims.extend(view_claims)
@@ -241,7 +282,12 @@ def accumulate_baseline_evidence(
     hypotheses = _hypotheses(claims)
     support_geometry = set(support.geometry_support)
     structure = sorted(
-        {ref for ref in point_representation_refs if ref.geometry_reference in support_geometry},
+        {
+            ref
+            for ref in (point_representation_refs or ())
+            if EvidenceChannel.POINT_REPRESENTATION in active
+            and ref.geometry_reference in support_geometry
+        },
         key=lambda ref: (ref.run_id, ref.representation_id),
     )
     return FusedEvidence(
@@ -250,6 +296,7 @@ def accumulate_baseline_evidence(
         physical_observation_groups=groups,
         contributions=tuple(sorted(contributions, key=lambda item: item.contribution_id)),
         hypotheses=hypotheses,
+        channels=_channel_provenance(active, support, claims, contributions, structure),
         point_representation_refs=tuple(structure),
         uncertainty=_uncertainty(hypotheses, claims, contributions, chosen.near_tie_margin),
         temporal_summary=_time_bounds_of(
@@ -296,6 +343,8 @@ def _contribution(
     result_scores: Sequence[SemanticSupport],
     quality: ObservationQualityRef | None,
     abstention_keys: frozenset[str],
+    *,
+    use_features: bool,
 ) -> tuple[EvidenceContribution, list[_Claim]]:
     contribution_id = evidence_contribution_id_for(
         fusion_support_id=support.fusion_support_id,
@@ -334,7 +383,9 @@ def _contribution(
         score_refs=tuple(score_refs),
         visual_feature_refs=tuple(
             sorted(observation.visual_feature_refs, key=lambda ref: ref.feature_id)
-        ),
+        )
+        if use_features
+        else (),
         observation_quality=quality,
     )
     view_claims = [
@@ -578,3 +629,57 @@ def _uncertainty(
 def _sorted_references(references: Iterable[EvidenceReference]) -> tuple[EvidenceReference, ...]:
     unique = {(ref.contribution_id, ref.claim_id or ""): ref for ref in references}
     return tuple(unique[key] for key in sorted(unique))
+
+
+def _require_input(
+    active: frozenset[EvidenceChannel],
+    channel: EvidenceChannel,
+    provided: object | None,
+    what: str,
+) -> None:
+    if channel in active and provided is None:
+        raise ValueError(f"channel {channel.value} is declared but no {what} were provided")
+
+
+def _producer_label(producer: BackendProvenance) -> str:
+    label = f"{producer.backend_id}/{producer.model}/{producer.version}"
+    return (
+        label
+        if producer.configuration_fingerprint is None
+        else (f"{label}@{producer.configuration_fingerprint}")
+    )
+
+
+def _channel_provenance(
+    active: frozenset[EvidenceChannel],
+    support: FusionSupport,
+    claims: Sequence[_Claim],
+    contributions: Sequence[EvidenceContribution],
+    structure: Sequence[PointRepresentationRef],
+) -> tuple[ChannelProvenance, ...]:
+    """Name what fed each active channel, so an effect can be attributed to a channel."""
+    fed: dict[EvidenceChannel, set[str]] = {
+        EvidenceChannel.SEMANTIC_CLAIMS: {
+            _producer_label(item.claim.provenance.backend) for item in claims
+        },
+        EvidenceChannel.SEMANTIC_SCORES: {
+            _producer_label(ref.scorer) for item in contributions for ref in item.score_refs
+        },
+        EvidenceChannel.VISUAL_FEATURES: {
+            ref.embedding_space_id for item in contributions for ref in item.visual_feature_refs
+        },
+        EvidenceChannel.OBSERVATION_QUALITY: {
+            item.observation_quality.definitions_version
+            for item in contributions
+            if item.observation_quality is not None
+        },
+        EvidenceChannel.GEOMETRY_SUPPORT: {
+            f"map:{support.geometric_map_id}",
+            f"support-policy:{support.provenance.support_policy_id}",
+        },
+        EvidenceChannel.POINT_REPRESENTATION: {ref.representation_space_id for ref in structure},
+    }
+    return tuple(
+        ChannelProvenance(channel=channel, identities=tuple(sorted(fed[channel])))
+        for channel in sorted(active, key=lambda item: item.value)
+    )

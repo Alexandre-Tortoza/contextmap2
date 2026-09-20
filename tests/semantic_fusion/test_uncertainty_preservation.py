@@ -8,6 +8,7 @@ from fusion_builders import evidence, make_hypothesis
 
 from contextmap.semantic_fusion import (
     BaselineAccumulationPolicy,
+    EvidenceChannel,
     EvidenceStance,
     FusedEvidence,
     ObservationQualityRef,
@@ -283,7 +284,14 @@ def test_observation_quality_never_changes_the_uncertainty() -> None:
         for observation_id in scenario.observations
     }
 
-    assert _accumulate(scenario, qualities=refs).uncertainty == _accumulate(scenario).uncertainty
+    with_quality = BaselineAccumulationPolicy(
+        channels=frozenset({EvidenceChannel.SEMANTIC_CLAIMS, EvidenceChannel.OBSERVATION_QUALITY})
+    )
+
+    used = _accumulate(scenario, with_quality, qualities=refs)
+
+    assert used.contributions[0].observation_quality is not None
+    assert used.uncertainty == _accumulate(scenario).uncertainty
 
 
 def test_the_policy_is_recorded_in_the_provenance() -> None:
