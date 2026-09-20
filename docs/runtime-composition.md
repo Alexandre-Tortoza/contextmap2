@@ -54,7 +54,9 @@ runtime
 
 ## Estado atual
 
-`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. O que já existe é um **DAG interno de Visual Perception**, implementado dentro da própria capability, que materializa parte das regras descritas aqui sem se tornar o runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. A futura composition root continua responsável por selecionar e construir esses adapters explicitamente.
+`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. Isso não significa que o pipeline esteja limitado a Visual Perception: Ingestion, Visual Perception, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion já possuem APIs públicas, serviços/policies próprios quando necessários e artifacts persistidos. O que permanece ausente é a **composition root global** que selecione e conecte essas capabilities em um DAG end-to-end, resolva configuração, reuse/recompute e lifecycle.
+
+Visual Perception já possui um **DAG interno da própria capability**. Ele materializa apenas a topologia de percepção e não deve ser promovido implicitamente a runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. A futura composition root continua responsável por selecionar e construir esses adapters e por conectar os artifacts das demais capabilities explicitamente.
 
 ```mermaid
 flowchart LR
@@ -405,11 +407,17 @@ O importante não é esse construtor específico; são os invariantes:
 
 ## Relação com as milestones de implementação
 
-A divisão arquitetural já está parcialmente materializada:
+A divisão arquitetural materializada na `dev` é:
 
-- **Ingestion**, implementado, produz e reabre `SequenceArtifact`;
-- **Visual Perception**, implementado no nível de core, inclui Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`;
-- **Runtime & Configuration**, ainda planejado, deverá compor o DAG end-to-end, configuração, reuse, CLI e lifecycle entre capabilities;
-- artifacts downstream serão adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
+- **Ingestion**, produz e reabre `SequenceArtifact`;
+- **Visual Perception**, possui Region Discovery, Feature Extraction, contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`;
+- **State Estimation**, publica `PoseEstimate`/`Trajectory`, lookup temporal, preflight, backends `ExternalPose` e FAST-LIO e `StateEstimationRunArtifact`;
+- **Geometric Mapping**, transforma e acumula geometria persistente, publica `GeometrySource` e persiste `GeometricMapArtifact`;
+- **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;
+- **Point Representation**, opcional, publica representações 3D locais e persiste `PointRepresentationRunArtifact`;
+- **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
+- **Runtime & Configuration**, ainda planejado, deverá compor esse conjunto em um DAG end-to-end, resolver configuração, reuse/recompute, CLI e lifecycle entre capabilities.
 
-O runtime global deve reutilizar as APIs públicas desses módulos, não reimplementar seus pipelines internos.
+Semantic Mapping e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
+
+O runtime global deve reutilizar as APIs públicas e artifacts dessas capabilities, não reimplementar seus pipelines internos.
