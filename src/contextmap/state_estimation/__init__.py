@@ -36,14 +36,26 @@ from contextmap.state_estimation.models import (
     TrajectoryQualitySummary,
     pose_estimate_id_for,
 )
+from contextmap.state_estimation.ports import (
+    DiagnosticSeverity,
+    EstimationDiagnostic,
+    MissingEstimatorInputError,
+    StateEstimationError,
+    StateEstimationRequest,
+    StateEstimationResult,
+    StateEstimator,
+)
 
 __all__ = [
     "ClockDomainMismatchError",
+    "DiagnosticSeverity",
+    "EstimationDiagnostic",
     "EstimatorProvenance",
     "LookupMode",
     "LookupOutcome",
     "LookupPolicy",
     "LookupRejection",
+    "MissingEstimatorInputError",
     "PoseEstimate",
     "PoseEstimateId",
     "PoseLookupResult",
@@ -51,6 +63,10 @@ __all__ = [
     "PoseValidity",
     "RejectedLookup",
     "ResolvedPose",
+    "StateEstimationError",
+    "StateEstimationRequest",
+    "StateEstimationResult",
+    "StateEstimator",
     "TemporalAlignmentSummary",
     "TimeBounds",
     "Trajectory",

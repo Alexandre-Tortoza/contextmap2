@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Existem os contratos canônicos (`PoseEstimate`, `Trajectory`) e o lookup temporal com interpolação. Estão **planejados**, e serão documentados aqui quando forem implementados: port `StateEstimator` e backends (`ExternalPose`, FAST-LIO), preflight do frame graph, `StateEstimationRunArtifact` e o harness de validação.
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator` e o backend `ExternalPose`. Estão **planejados**, e serão documentados aqui quando forem implementados: backend FAST-LIO, preflight do frame graph, `StateEstimationRunArtifact` e o harness de validação.
 
 ## Contratos públicos
 
@@ -34,8 +34,11 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`) e o lookup tempor
 - `pose_estimate_id_for()` — identidade determinística de uma pose dentro da trajetória.
 - `TrajectoryLookup`, `LookupPolicy`, `ResolvedPose`, `RejectedLookup`, `LookupOutcome`, `LookupRejection`, `ClockDomainMismatchError` — resolução auditável de `T_map_body(t)` no timestamp de uma observação (exata, mais próxima ou interpolada), com rejeições explícitas.
 - `TemporalAlignmentSummary`, `summarize_lookups()` — métricas de alinhamento temporal de um conjunto de lookups.
+- `StateEstimator` — port de backends de estimação; `StateEstimationRequest`, `StateEstimationResult`, `EstimationDiagnostic`, `DiagnosticSeverity`, `StateEstimationError`, `MissingEstimatorInputError`.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, e [`lookup.md`](lookup.md) para a semântica de lookup e interpolação.
+O backend `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) não é reexportado por `contextmap.state_estimation`; é importado pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
+
+Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação e [`backends.md`](backends.md) para o port e o backend `ExternalPose`.
 
 ## Módulos consumidos
 
@@ -50,6 +53,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 
 - [`contracts.md`](contracts.md) — contratos, convenção de transform, invariantes e serialização.
 - [`lookup.md`](lookup.md) — alinhamento temporal, políticas de lookup, interpolação e métricas.
+- [`backends.md`](backends.md) — port `StateEstimator` e backend `ExternalPose`.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PoseEstimate` e `Trajectory` no contexto global de contratos.
 - [`docs/shared-primitives.md`](../../../../docs/shared-primitives.md) — primitivas geométricas compartilhadas.
