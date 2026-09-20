@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import NewType
 
+from contextmap.geometric_mapping.motion_correction import MotionCorrectionState
 from contextmap.ingestion import (
     FrameId,
     SequenceArtifactId,
@@ -68,6 +69,32 @@ def geometry_id_for(*, map_id: MapId, index: int) -> GeometryId:
         artifact round-trips without an identity registry.
     """
     return GeometryId(f"{map_id}--geom-{index:09d}")
+
+
+def geometry_index_of(*, map_id: MapId, geometry_id: GeometryId) -> int:
+    """Recover the index a geometry identity was generated from.
+
+    The inverse of :func:`geometry_id_for`. Only the canonical spelling is
+    accepted, so a geometry has exactly one valid identity.
+
+    Args:
+        map_id: The map that owns the geometry.
+        geometry_id: The identity to decode.
+
+    Returns:
+        The zero-based position of the geometry in the map.
+
+    Raises:
+        ValueError: If ``geometry_id`` is not the canonical identity of any
+            geometry of ``map_id``.
+    """
+    prefix = f"{map_id}--geom-"
+    suffix = geometry_id[len(prefix) :] if geometry_id.startswith(prefix) else ""
+    if suffix.isascii() and suffix.isdigit():
+        index = int(suffix)
+        if geometry_id_for(map_id=map_id, index=index) == geometry_id:
+            return index
+    raise ValueError(f"{geometry_id!r} is not a geometry id of map {map_id!r}")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -314,11 +341,15 @@ class GeometryPointProvenance:
             ``None`` for a measured one.
         contributing_point_count: Measurements behind the point: exactly one for
             a measured point, at least two for an aggregated one.
+        motion_correction: Whether the scan the point came from was corrected
+            for platform motion. Explicit for every point and ``UNKNOWN`` unless a
+            declaration says otherwise; never inferred.
     """
 
     origin: PointOrigin = PointOrigin.MEASURED
     aggregation_rule: str | None = None
     contributing_point_count: int = 1
+    motion_correction: MotionCorrectionState = MotionCorrectionState.UNKNOWN
 
     def __post_init__(self) -> None:
         """Validate that the provenance is coherent.
@@ -479,6 +510,9 @@ class GeometricMap:
         time_bounds: Acquisition-time range of those observations.
         spatial_index: Index metadata, when an index was built.
         provenance: Run-level traceability.
+        aggregation_rule: The explicit rule by which measurements were merged
+            into aggregated points; ``None`` when every point is one raw
+            measurement.
     """
 
     map_id: MapId
@@ -489,14 +523,16 @@ class GeometricMap:
     time_bounds: TimeBounds
     spatial_index: SpatialIndexMetadata | None
     provenance: GeometricMapProvenance
+    aggregation_rule: str | None = None
 
     def __post_init__(self) -> None:
         """Validate identity, counts, frames and sources.
 
         Raises:
             ValueError: If an identity or frame is empty, ``point_count`` is not
-                positive, the bounds are in another frame, or the source
-                observations are missing or repeated.
+                positive, the bounds are in another frame, the aggregation rule
+                is set but empty, or the source observations are missing or
+                repeated.
         """
         if not self.map_id or not self.frame_id:
             raise ValueError("map_id and frame_id must not be empty")
@@ -507,6 +543,8 @@ class GeometricMap:
                 f"bounds frame {self.bounds.frame_id!r} differs from the map frame "
                 f"{self.frame_id!r}"
             )
+        if self.aggregation_rule is not None and not self.aggregation_rule:
+            raise ValueError("aggregation_rule must not be empty when set")
         if not self.source_observation_ids:
             raise ValueError("source_observation_ids must list at least one observation")
         if len(set(self.source_observation_ids)) != len(self.source_observation_ids):

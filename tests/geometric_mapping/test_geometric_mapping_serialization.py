@@ -78,6 +78,16 @@ def test_a_map_round_trips_including_its_index_metadata_and_lookup_policy() -> N
     assert record["spatial_index"]["is_derived"] is True
 
 
+def test_a_map_records_its_aggregation_rule_or_the_absence_of_one() -> None:
+    aggregated = make_map(aggregation_rule="scan-voxel-centroid-0.05m")
+
+    record = _through_json(encode_geometric_map(aggregated))
+
+    assert record["aggregation_rule"] == "scan-voxel-centroid-0.05m"
+    assert decode_geometric_map(record) == aggregated
+    assert _through_json(encode_geometric_map(make_map()))["aggregation_rule"] is None
+
+
 def test_decoding_revalidates_the_contracts() -> None:
     record = _through_json(encode_geometry_point(make_point()))
     record["map_frame"] = "odom"

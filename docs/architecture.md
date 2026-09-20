@@ -111,7 +111,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion`, `visual_perception` e `state_estimation` já materializam os três primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping` e `sensor_association` já materializam os cinco primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos e Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação. Backends concretos de Feature Extraction ainda não estão integrados. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
@@ -121,11 +121,17 @@ flowchart LR
     VP --> PRA["PerceptionRunArtifact"]
     SA --> ST["contextmap.state_estimation<br/>contratos + lookup + preflight +<br/>ExternalPose / FAST-LIO"]
     ST --> TRA["StateEstimationRunArtifact"]
-    PRA -. contrato downstream futuro .-> NEXT["geometric_mapping /<br/>sensor_association / fusion / map"]
-    TRA -.-> NEXT
+    SA --> GM["contextmap.geometric_mapping<br/>contratos + transformação + acumulação +<br/>acesso espacial"]
+    TRA --> GM
+    GM --> MAPA["GeometricMapArtifact"]
+    PRA --> SEN["contextmap.sensor_association<br/>SpatialObservation + câmera + visibilidade +<br/>máscara + features densas + qualidade"]
+    MAPA --> SEN
+    TRA --> SEN
+    SEN --> ASA["SensorAssociationRunArtifact"]
+    ASA -. contrato downstream futuro .-> NEXT["fusion / map"]
 ```
 
-A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
+A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`. `geometric_mapping` consome `SequenceArtifact`, calibração e a trajetória de `state_estimation` pelas APIs públicas e devolve geometria por referência: nada a jusante copia XYZ. `sensor_association` consome a percepção, a trajetória e a geometria pelas APIs públicas e devolve `SpatialObservation`, que referencia geometria, features e claims por identidade em vez de copiá-los.
 
 Documentação implementacional:
 
@@ -133,7 +139,9 @@ Documentação implementacional:
 - [Visual Perception](../src/contextmap/visual_perception/docs/README.md);
 - [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md);
 - [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md);
-- [State Estimation](../src/contextmap/state_estimation/docs/README.md).
+- [State Estimation](../src/contextmap/state_estimation/docs/README.md);
+- [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md);
+- [Sensor Association](../src/contextmap/sensor_association/docs/README.md).
 
 
 ## Ownership
