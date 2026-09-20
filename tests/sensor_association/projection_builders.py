@@ -104,6 +104,7 @@ def make_calibration(
     model: CameraModel | None = None,
     camera_frame: str = "camera_optical",
     extrinsic_translation: Vector3 = (0.0, 0.0, 0.0),
+    extrinsic_rotation: tuple[float, float, float, float] = BODY_TO_CAMERA_ROTATION,
     with_extrinsic: bool = True,
 ) -> CalibrationSet:
     camera_model = model if model is not None else pinhole_model()
@@ -125,7 +126,7 @@ def make_calibration(
                 parent_frame=FrameId("body"),
                 child_frame=FrameId(camera_frame),
                 translation=extrinsic_translation,
-                rotation=BODY_TO_CAMERA_ROTATION,
+                rotation=extrinsic_rotation,
             ),
         )
         if with_extrinsic
@@ -373,6 +374,26 @@ def map_point_for_camera_point(camera_point: Vector3) -> Vector3:
     return (camera_point[2], -camera_point[0], -camera_point[1])
 
 
+def make_projector(
+    map_points: Sequence[Vector3],
+    *,
+    calibration: CalibrationSet | None = None,
+    poses: Sequence[tuple[int, Vector3, tuple[float, float, float, float]]] | None = None,
+    pose_policy: LookupPolicy | None = None,
+) -> FrameProjector:
+    """A projector over ``map_points``; by default the body sits at the map origin."""
+    calibration = calibration if calibration is not None else make_calibration()
+    trajectory = (
+        make_trajectory(calibration) if poses is None else make_trajectory(calibration, poses)
+    )
+    return FrameProjector(
+        cloud=GeometryCloud.from_source(ArrayGeometrySource(map_points, calibration=calibration)),
+        trajectory=make_lookup(trajectory),
+        pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
+        calibration=calibration,
+    )
+
+
 def project_frame(
     map_points: Sequence[Vector3],
     *,
@@ -387,15 +408,8 @@ def project_frame(
     By default the body sits at the map origin with identity orientation and the pose is
     looked up exactly at time zero.
     """
-    calibration = calibration if calibration is not None else make_calibration()
-    trajectory = (
-        make_trajectory(calibration) if poses is None else make_trajectory(calibration, poses)
-    )
-    projector = FrameProjector(
-        cloud=GeometryCloud.from_source(ArrayGeometrySource(map_points, calibration=calibration)),
-        trajectory=make_lookup(trajectory),
-        pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
-        calibration=calibration,
+    projector = make_projector(
+        map_points, calibration=calibration, poses=poses, pose_policy=pose_policy
     )
     frame = projector.project(
         make_camera_observation(time_ns),

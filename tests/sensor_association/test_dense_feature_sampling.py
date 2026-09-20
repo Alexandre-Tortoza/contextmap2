@@ -4,8 +4,14 @@ import math
 
 import numpy as np
 import pytest
+from dense_builders import (
+    make_dense_map,
+    make_dense_result,
+    make_enhancement,
+    make_sampling,
+)
 from numpy.typing import NDArray
-from perception_builders import make_feature, make_result
+from perception_builders import make_result
 from projection_builders import (
     artifact,
     make_prepared_image,
@@ -25,15 +31,11 @@ from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.frame_projection import FrameProjection
 from contextmap.sensor_association.visibility import OcclusionPolicy, resolve_visibility
 from contextmap.visual_perception import (
-    BackendProvenance,
     DenseFeatureMap,
     DenseFeatureSampling,
     FeatureId,
-    FeatureResolutionEnhancementProvenance,
-    FeatureScope,
     PerceptionResult,
     ResizeOperation,
-    VisualFeature,
 )
 
 POLICY = OcclusionPolicy(
@@ -42,66 +44,6 @@ POLICY = OcclusionPolicy(
     depth_margin_m=0.1,
     depth_margin_ratio=0.02,
 )
-IMAGE = (640, 480)
-
-
-def _sampling(
-    grid: tuple[int, int] = (40, 30),
-    *,
-    origin: tuple[float, float] = (0.0, 0.0),
-    stride: tuple[float, float] = (16.0, 16.0),
-    support: tuple[float, float] = (16.0, 16.0),
-    image: tuple[int, int] = IMAGE,
-    transform_id: str = "native-grid-v1",
-) -> DenseFeatureSampling:
-    return DenseFeatureSampling(
-        grid_width=grid[0],
-        grid_height=grid[1],
-        source_image_width=image[0],
-        source_image_height=image[1],
-        origin_x=origin[0],
-        origin_y=origin[1],
-        stride_x=stride[0],
-        stride_y=stride[1],
-        support_width=support[0],
-        support_height=support[1],
-        coordinate_transform_id=transform_id,
-    )
-
-
-def _dense_feature(
-    sampling: DenseFeatureSampling,
-    *,
-    feature_id: str = "dense-native",
-    channels: int = 2,
-    space: str = "dinov2:b14",
-    normalization: str | None = None,
-) -> VisualFeature:
-    base = make_feature(feature_id, FeatureScope.DENSE, space=space)
-    return dataclasses.replace(
-        base,
-        shape=(sampling.grid_height, sampling.grid_width, channels),
-        normalization=normalization,
-    )
-
-
-def _dense_map(
-    sampling: DenseFeatureSampling | None = None,
-    *,
-    enhancement: FeatureResolutionEnhancementProvenance | None = None,
-    **feature_options: object,
-) -> DenseFeatureMap:
-    sampling = sampling if sampling is not None else _sampling()
-    return DenseFeatureMap(
-        feature=_dense_feature(sampling, **feature_options),  # type: ignore[arg-type]
-        sampling=sampling,
-        source_artifact_id="perception-artifact-0001",
-        enhancement=enhancement,
-    )
-
-
-def _result(*dense_maps: DenseFeatureMap) -> PerceptionResult:
-    return make_result([], features=[dense_map.feature for dense_map in dense_maps])
 
 
 def _coordinate_field(dense_map: DenseFeatureMap) -> NDArray[np.float32]:
@@ -120,7 +62,7 @@ def _sample(
 ) -> DenseFeatureSamples:
     return sample_dense_features(
         resolve_visibility(frame, POLICY),
-        result if result is not None else _result(dense_map),
+        result if result is not None else make_dense_result(dense_map),
         dense_map,
         interpolation=interpolation,
     )
@@ -130,7 +72,7 @@ def _sample(
 
 
 def test_nearest_takes_the_cell_that_contains_the_prepared_pixel() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     frame = scene_frame((100, 100, 3.0), (5, 5, 3.0), (634, 474, 3.0))
 
     samples = _sample(frame, dense_map)
@@ -142,7 +84,7 @@ def test_nearest_takes_the_cell_that_contains_the_prepared_pixel() -> None:
 
 
 def test_nearest_records_indices_and_never_the_vectors() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     samples = _sample(scene_frame((100, 100, 3.0), (300, 200, 3.0)), dense_map)
 
     assert samples.cell_rows.shape == (2, 1)
@@ -154,8 +96,8 @@ def test_nearest_records_indices_and_never_the_vectors() -> None:
 
 def test_overlapping_supports_pick_the_cell_with_the_nearest_center() -> None:
     # Campos receptivos de 40 px a cada 16 px: vários suportes contêm o pixel.
-    sampling = _sampling(support=(40.0, 40.0), origin=(-12.0, -12.0), grid=(41, 31))
-    dense_map = _dense_map(sampling)
+    sampling = make_sampling(support=(40.0, 40.0), origin=(-12.0, -12.0), grid=(41, 31))
+    dense_map = make_dense_map(sampling)
     pixels = [(100, 100), (333, 217), (15, 8), (620, 470)]
     frame = scene_frame(*[(u, v, 3.0) for u, v in pixels])
 
@@ -182,8 +124,8 @@ def _brute_force_nearest(
 
 
 def test_a_stride_larger_than_the_support_leaves_gaps_that_are_out_of_support() -> None:
-    sampling = _sampling(support=(8.0, 8.0))
-    dense_map = _dense_map(sampling)
+    sampling = make_sampling(support=(8.0, 8.0))
+    dense_map = make_dense_map(sampling)
     # Suporte da célula 0: [0, 8); o pixel 12 (borda 12.5) cai na lacuna até a célula 1 (16).
     frame = scene_frame((3, 3, 3.0), (12, 3, 3.0))
 
@@ -195,8 +137,8 @@ def test_a_stride_larger_than_the_support_leaves_gaps_that_are_out_of_support() 
 
 def test_a_pixel_beyond_the_grid_is_out_of_support_not_clamped() -> None:
     # 45 células de 14 px cobrem 630 px de 640.
-    sampling = _sampling(grid=(45, 34), stride=(14.0, 14.0), support=(14.0, 14.0))
-    dense_map = _dense_map(sampling)
+    sampling = make_sampling(grid=(45, 34), stride=(14.0, 14.0), support=(14.0, 14.0))
+    dense_map = make_dense_map(sampling)
     frame = scene_frame((100, 100, 3.0), (635, 100, 3.0), (100, 478, 3.0))
 
     samples = _sample(frame, dense_map)
@@ -209,7 +151,7 @@ def test_a_pixel_beyond_the_grid_is_out_of_support_not_clamped() -> None:
 
 
 def test_bilinear_reproduces_a_linear_field_exactly() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     frame = scene_frame((100, 100, 3.0), (333, 217, 3.0), (52, 401, 3.0))
 
     samples = _sample(frame, dense_map, interpolation=InterpolationPolicy.BILINEAR)
@@ -226,7 +168,7 @@ def test_bilinear_reproduces_a_linear_field_exactly() -> None:
 
 
 def test_bilinear_needs_the_pixel_between_the_outer_cell_centers() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     # Centro da célula 0 em 8; da última (39), em 632. Antes ou depois, faltam vizinhos.
     frame = scene_frame((3, 100, 3.0), (100, 100, 3.0), (637, 100, 3.0))
 
@@ -238,7 +180,7 @@ def test_bilinear_needs_the_pixel_between_the_outer_cell_centers() -> None:
 
 
 def test_bilinear_next_to_the_last_center_reads_the_last_two_columns() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     # Perto do último centro (borda 632.0) mas antes dele, para não depender de igualdade exata.
     frame = scene_frame((631.4, 100, 3.0))
 
@@ -253,8 +195,8 @@ def test_bilinear_next_to_the_last_center_reads_the_last_two_columns() -> None:
 
 
 def test_an_l2_normalized_feature_stays_normalized_after_interpolation() -> None:
-    sampling = _sampling()
-    dense_map = _dense_map(sampling, normalization="l2", channels=2)
+    sampling = make_sampling()
+    dense_map = make_dense_map(sampling, normalization="l2", channels=2)
     height, width = sampling.grid_height, sampling.grid_width
     angles = np.linspace(0.0, math.pi / 2, width)[None, :].repeat(height, axis=0)
     array = np.stack((np.cos(angles), np.sin(angles)), axis=-1).astype(np.float32)
@@ -271,7 +213,7 @@ def test_an_l2_normalized_feature_stays_normalized_after_interpolation() -> None
 
 
 def test_only_visible_points_are_sampled() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     frame = project_frame(
         [
             map_point_for_pixel(100, 100, 2.0),
@@ -290,41 +232,14 @@ def test_only_visible_points_are_sampled() -> None:
 # --- Native and enhanced maps share one path --------------------------------
 
 
-def _enhancement(
-    native: DenseFeatureMap, output: DenseFeatureSampling
-) -> FeatureResolutionEnhancementProvenance:
-    return FeatureResolutionEnhancementProvenance(
-        source_feature_id=native.feature.feature_id,
-        source_artifact_id=native.source_artifact_id,
-        source_payload_reference=native.feature.payload_reference,
-        source_embedding_space_id=native.feature.embedding_space_id,
-        source_dtype=native.feature.dtype,
-        source_normalization=native.feature.normalization,
-        source_coordinate_transform_id=native.sampling.coordinate_transform_id,
-        backend=BackendProvenance(
-            backend_id="fake_enhancer",
-            capability="feature_resolution_enhancement",
-            provider="fake",
-            model="fake",
-            version="0",
-        ),
-        input_grid_size=(native.sampling.grid_width, native.sampling.grid_height),
-        output_grid_size=(output.grid_width, output.grid_height),
-        source_image_size=(output.source_image_width, output.source_image_height),
-        output_embedding_space_id=native.feature.embedding_space_id,
-        device="cpu",
-        precision="float32",
-        duration_seconds=0.1,
-        peak_memory_bytes=1024,
-    )
-
-
 def test_a_compatible_enhanced_map_is_sampled_exactly_like_a_native_one() -> None:
-    native = _dense_map()
-    fine = _sampling(
+    native = make_dense_map()
+    fine = make_sampling(
         (80, 60), stride=(8.0, 8.0), support=(8.0, 8.0), transform_id="enhanced-grid-v1"
     )
-    enhanced = _dense_map(fine, feature_id="dense-enhanced", enhancement=_enhancement(native, fine))
+    enhanced = make_dense_map(
+        fine, feature_id="dense-enhanced", enhancement=make_enhancement(native, fine)
+    )
     frame = scene_frame((100, 100, 3.0))
 
     coarse_samples = _sample(frame, native)
@@ -341,7 +256,7 @@ def test_a_compatible_enhanced_map_is_sampled_exactly_like_a_native_one() -> Non
 
 
 def test_a_dense_map_over_another_image_size_fails_preflight() -> None:
-    dense_map = _dense_map(_sampling(image=(800, 600)))
+    dense_map = make_dense_map(make_sampling(image=(800, 600)))
 
     with pytest.raises(AssociationInputError, match="prepared image"):
         _sample(scene_frame((100, 100, 3.0)), dense_map)
@@ -355,7 +270,7 @@ def test_a_dense_map_over_the_prepared_image_of_a_resized_frame_is_accepted() ->
             ),
         )
     )
-    dense_map = _dense_map(_sampling((20, 15), image=(320, 240)))
+    dense_map = make_dense_map(make_sampling((20, 15), image=(320, 240)))
 
     samples = _sample(scene_frame((100, 100, 3.0), prepared=prepared), dense_map)
 
@@ -364,23 +279,25 @@ def test_a_dense_map_over_the_prepared_image_of_a_resized_frame_is_accepted() ->
 
 
 def test_a_feature_that_is_not_in_the_perception_result_fails_preflight() -> None:
-    dense_map = _dense_map()
-    other = _dense_map(feature_id="dense-other")
+    dense_map = make_dense_map()
+    other = make_dense_map(feature_id="dense-other")
 
     with pytest.raises(AssociationInputError, match="feature"):
-        _sample(scene_frame((100, 100, 3.0)), dense_map, result=_result(other))
+        _sample(scene_frame((100, 100, 3.0)), dense_map, result=make_dense_result(other))
 
 
 def test_a_feature_in_another_embedding_space_than_the_result_fails_preflight() -> None:
-    dense_map = _dense_map()
-    same_id_other_space = _dense_map(space="clip:vitl14")
+    dense_map = make_dense_map()
+    same_id_other_space = make_dense_map(space="clip:vitl14")
 
     with pytest.raises(AssociationInputError, match="embedding"):
-        _sample(scene_frame((100, 100, 3.0)), dense_map, result=_result(same_id_other_space))
+        _sample(
+            scene_frame((100, 100, 3.0)), dense_map, result=make_dense_result(same_id_other_space)
+        )
 
 
 def test_a_result_of_another_observation_fails_preflight() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     result = make_result(
         [], features=[dense_map.feature], observation_id=SourceObservationId("frame-9999")
     )
@@ -390,21 +307,21 @@ def test_a_result_of_another_observation_fails_preflight() -> None:
 
 
 def test_an_enhancement_that_disagrees_with_its_sampling_fails_preflight() -> None:
-    native = _dense_map()
-    fine = _sampling((80, 60), stride=(8.0, 8.0), support=(8.0, 8.0))
-    wrong_grid = dataclasses.replace(_enhancement(native, fine), output_grid_size=(79, 60))
+    native = make_dense_map()
+    fine = make_sampling((80, 60), stride=(8.0, 8.0), support=(8.0, 8.0))
+    wrong_grid = dataclasses.replace(make_enhancement(native, fine), output_grid_size=(79, 60))
     wrong_space = dataclasses.replace(
-        _enhancement(native, fine), output_embedding_space_id="another:space"
+        make_enhancement(native, fine), output_embedding_space_id="another:space"
     )
 
     for enhancement in (wrong_grid, wrong_space):
-        enhanced = _dense_map(fine, feature_id="dense-enhanced", enhancement=enhancement)
+        enhanced = make_dense_map(fine, feature_id="dense-enhanced", enhancement=enhancement)
         with pytest.raises(AssociationInputError, match="enhancement"):
             _sample(scene_frame((100, 100, 3.0)), enhanced)
 
 
 def test_the_payload_must_match_the_declared_feature() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     samples = _sample(scene_frame((100, 100, 3.0)), dense_map)
 
     with pytest.raises(ValueError, match="shape"):
@@ -417,7 +334,7 @@ def test_the_payload_must_match_the_declared_feature() -> None:
 
 
 def test_the_records_are_reproducible() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     frame = scene_frame((100, 100, 3.0), (300, 200, 3.0))
 
     first = _sample(frame, dense_map, interpolation=InterpolationPolicy.BILINEAR)
@@ -429,7 +346,7 @@ def test_the_records_are_reproducible() -> None:
 
 
 def test_the_sampling_names_every_source_it_depended_on() -> None:
-    dense_map = _dense_map()
+    dense_map = make_dense_map()
     frame = scene_frame((100, 100, 3.0))
 
     provenance = _sample(frame, dense_map, interpolation=InterpolationPolicy.BILINEAR).provenance
@@ -456,19 +373,19 @@ def test_the_sampling_fingerprint_tracks_the_whole_sampling_geometry() -> None:
     frame = scene_frame((100, 100, 3.0))
 
     def fingerprint(sampling: DenseFeatureSampling) -> str:
-        return _sample(frame, _dense_map(sampling)).provenance.sampling_fingerprint
+        return _sample(frame, make_dense_map(sampling)).provenance.sampling_fingerprint
 
-    base = fingerprint(_sampling())
-    assert base == fingerprint(_sampling())
-    assert base != fingerprint(_sampling(origin=(1.0, 0.0)))
-    assert base != fingerprint(_sampling(transform_id="other-v1"))
+    base = fingerprint(make_sampling())
+    assert base == fingerprint(make_sampling())
+    assert base != fingerprint(make_sampling(origin=(1.0, 0.0)))
+    assert base != fingerprint(make_sampling(transform_id="other-v1"))
 
 
 def test_the_provenance_record_is_json() -> None:
-    dense_map = _dense_map()
-    fine = _sampling((80, 60), stride=(8.0, 8.0), support=(8.0, 8.0))
-    enhanced = _dense_map(
-        fine, feature_id="dense-enhanced", enhancement=_enhancement(dense_map, fine)
+    dense_map = make_dense_map()
+    fine = make_sampling((80, 60), stride=(8.0, 8.0), support=(8.0, 8.0))
+    enhanced = make_dense_map(
+        fine, feature_id="dense-enhanced", enhancement=make_enhancement(dense_map, fine)
     )
 
     for candidate in (dense_map, enhanced):
