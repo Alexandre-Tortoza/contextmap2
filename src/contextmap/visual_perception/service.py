@@ -40,6 +40,7 @@ from contextmap.visual_perception.models import (
     SemanticClaim,
     VisualFeature,
 )
+from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
 
 StageRunner = Callable[[Mapping[str, object]], object]
 """A stage's execution logic.
@@ -177,6 +178,7 @@ def assemble_perception_result(
     feature_stage_ids: Sequence[str] = (),
     claim_stage_ids: Sequence[str] = (),
     scene_context_stage_id: str | None = None,
+    semantic_execution_stage_ids: Sequence[str] = (),
 ) -> PerceptionResult:
     """Assemble a PerceptionResult from succeeded stage outcomes.
 
@@ -200,6 +202,9 @@ def assemble_perception_result(
             ``Sequence[SemanticClaim]``.
         scene_context_stage_id: ``stage_id`` whose output is
             ``SceneContext | None``.
+        semantic_execution_stage_ids: ``stage_id``s whose output is a
+            :class:`SemanticInterpretationExecution`. Their parsed claims
+            and scene context are materialized into the canonical result.
 
     Returns:
         The assembled result.
@@ -229,6 +234,31 @@ def assemble_perception_result(
         outcome = by_id.get(scene_context_stage_id)
         if outcome is not None and outcome.status is StageStatus.SUCCEEDED:
             scene_context = outcome.output  # type: ignore[assignment]
+
+    for stage_id in semantic_execution_stage_ids:
+        outcome = by_id.get(stage_id)
+        if outcome is None or outcome.status is not StageStatus.SUCCEEDED:
+            continue
+        execution = outcome.output
+        if not isinstance(execution, SemanticInterpretationExecution):
+            raise TypeError(
+                f"semantic execution stage {stage_id!r} did not produce "
+                "SemanticInterpretationExecution"
+            )
+        if execution.request.source_observation_id != source_observation_id:
+            raise ValueError(
+                f"semantic execution stage {stage_id!r} belongs to another source observation"
+            )
+        if execution.request.perception_result_id != result_id:
+            raise ValueError(
+                f"semantic execution stage {stage_id!r} belongs to another perception result"
+            )
+        claims.extend(execution.parsed.claims)
+        parsed_scene_context = execution.parsed.scene_context
+        if parsed_scene_context is not None:
+            if scene_context is not None:
+                raise ValueError("multiple scene contexts cannot be assembled into one result")
+            scene_context = parsed_scene_context
 
     return PerceptionResult(
         result_id=result_id,

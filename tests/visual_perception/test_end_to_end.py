@@ -54,12 +54,15 @@ def _prepared_image(observation_id: str) -> PreparedImage:
 
 
 def _build_canonical_stage_graph(
-    image: PreparedImage, *, region_discovery: RegionDiscovery | None = None
+    image: PreparedImage,
+    *,
+    result_id: PerceptionResultId,
+    region_discovery: RegionDiscovery | None = None,
 ) -> list[StageDefinition]:
     discovery: RegionDiscovery = region_discovery or FakeRegionDiscovery()
     dense_extractor = FakeDenseFeatureExtractor()
     region_extractor = FakeRegionFeatureExtractor()
-    interpreter = FakeSemanticInterpreter()
+    interpreter = FakeSemanticInterpreter(result_id)
 
     def run_region_discovery(ctx: Mapping[str, object]) -> Sequence[Region2D]:
         return discovery.discover(image)
@@ -121,11 +124,12 @@ def _process_observation(
     observation_id: str, run_id: str, *, region_discovery: RegionDiscovery | None = None
 ) -> tuple[Sequence[StageOutcome], PerceptionResult]:
     image = _prepared_image(observation_id)
+    result_id = PerceptionResultId(f"{run_id}--{observation_id}")
     outcomes = execute_stage_graph(
-        _build_canonical_stage_graph(image, region_discovery=region_discovery)
+        _build_canonical_stage_graph(image, result_id=result_id, region_discovery=region_discovery)
     )
     result = assemble_perception_result(
-        result_id=PerceptionResultId(f"{run_id}--{observation_id}"),
+        result_id=result_id,
         source_observation_id=SourceObservationId(observation_id),
         run_id=PerceptionRunId(run_id),
         sequence_artifact_id="corridor-02-a1b2c3",
@@ -146,7 +150,7 @@ def test_full_pipeline_produces_regions_features_claims_and_scene_context() -> N
     assert len(result.features) == 2  # one dense + one region feature
     assert len(result.claims) == 1
     assert result.scene_context is not None
-    assert result.scene_context.claims[0].text == "an indoor corridor"
+    assert result.scene_context.claims[0].hypothesis == "an indoor corridor"
 
 
 def test_repeated_processing_of_same_frame_yields_distinct_results_same_observation() -> None:

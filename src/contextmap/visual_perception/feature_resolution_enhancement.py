@@ -2,7 +2,7 @@
 
 The stage consumes and produces the same :class:`DenseFeatureMap` contract.
 Concrete learned implementations remain backend details; this module only
-enforces artifact identity, compatibility, spatial, integrity, and provenance
+enforces feature identity, compatibility, spatial, and provenance
 invariants common to every implementation.
 """
 
@@ -26,8 +26,9 @@ def enhance_feature_resolution(
         enhancer: Explicitly selected enhancement backend.
 
     Returns:
-        A separately identified enhanced dense map consumable anywhere a
-        native :class:`DenseFeatureMap` is accepted.
+        A separately identified enhanced feature consumable anywhere a native
+        :class:`DenseFeatureMap` is accepted. It may belong to the same output
+        artifact as the native feature.
 
     Raises:
         FeatureResolutionEnhancementError: If the backend omits or falsifies
@@ -106,10 +107,6 @@ def enhance_feature_resolution(
     if output.feature.feature_id == source.feature.feature_id:
         raise FeatureResolutionEnhancementError(
             "enhancement output must have a distinct feature identity"
-        )
-    if output.source_artifact_id == source.source_artifact_id:
-        raise FeatureResolutionEnhancementError(
-            "enhancement output must belong to a distinct immutable artifact"
         )
     if output.feature.payload_reference == source.feature.payload_reference:
         raise FeatureResolutionEnhancementError(

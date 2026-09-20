@@ -41,6 +41,7 @@ classDiagram
     class VisualFeature
     class SemanticClaim
     class SceneContext
+    class SemanticInferenceProvenance
     class BackendProvenance
 
     PerceptionRun --> PerceptionResult : produz
@@ -51,8 +52,9 @@ classDiagram
     PerceptionResult --> SceneContext : scene_context
     Region2D --> BackendProvenance : provenance
     VisualFeature --> BackendProvenance : provenance
-    SemanticClaim --> BackendProvenance : provenance
-    SceneContext --> BackendProvenance : provenance
+    SemanticClaim --> SemanticInferenceProvenance : provenance
+    SceneContext --> SemanticInferenceProvenance : provenance
+    SemanticInferenceProvenance --> BackendProvenance : backend
 ```
 
 A estrutura preserva três separações: a observação física continua pertencendo a Ingestion; o run descreve uma execução configurada; e o resultado contém apenas a evidência produzida para uma observação naquele run. `SemanticSupport`, quando produzido por um `SemanticScorer`, é um julgamento separado referenciando uma claim e não é incorporado por mutação à `SemanticClaim`.
@@ -73,6 +75,8 @@ Amarra um `PerceptionRun` a uma `SourceObservation`, carregando as evidências p
 - nenhum `feature_id` duplicado entre as `features`;
 - nenhum `claim_id` duplicado entre as `claims`;
 - toda `feature`/`claim` que referencia um `region_id` deve referenciar uma região presente em `regions`.
+- toda claim e todo contexto de cena devem repetir exatamente o
+  `source_observation_id` e o `perception_result_id` do resultado proprietário.
 
 ## `Region2D`
 
@@ -84,12 +88,30 @@ Contrato único de geometria 2D consumido por todo Visual Perception. `region_id
 
 ## `SemanticClaim`
 
-`confidence=None` significa explicitamente "não pontuado" — nunca equivalente a `0.0` ou `1.0`. `role` distingue hipótese `PRIMARY` de `ALTERNATIVE`, preservando alternativas em vez de colapsar para um rótulo único.
+`hypothesis` preserva o texto proposto pelo backend. `confidence=None` significa
+explicitamente "não pontuado" — nunca equivalente a `0.0` ou `1.0`. `role`
+distingue hipótese `PRIMARY` de `ALTERNATIVE`, preservando alternativas em vez
+de colapsar para um rótulo único. A claim registra diretamente a observação e o
+resultado proprietários, referência opcional à geometria congelada por
+`region_id`, `category`, `region_kind` (`THING`/`STUFF`), atributos estruturados
+e as referências exatas das evidências usadas. Duplicatas de atributos ou de
+referências de evidência são rejeitadas.
 
 ## `SceneContext`
 
-Evidência de nível de cena; toda claim dentro de `SceneContext.claims` deve ter `region_id=None` (validado na construção) — evidência de cena nunca se disfarça de evidência de região.
+Evidência de nível de cena com campos opcionais `scene_type`, `environment`,
+`layout`, `lighting`, `visibility` e `navigability`. Toda claim dentro de
+`SceneContext.claims` deve ter `region_id=None` e compartilhar as identidades da
+observação e do resultado do contexto — evidência de cena nunca se disfarça de
+evidência de região.
+
+## `SemanticInferenceProvenance`
+
+Complementa `BackendProvenance` com a identidade da tarefa, o template de
+prompt versionado, a versão do schema de saída e uma referência opcional à
+resposta bruta persistida. Assim, modelo e configuração não são confundidos
+com a política semântica ou com o parser usados na inferência.
 
 ## `BackendProvenance`
 
-Metadata mínima para rastrear qualquer evidência até o backend que a produziu: `backend_id`, `capability`, `provider`, `model`, `version`, `configuration_fingerprint` opcional. Reaproveitada por `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext` e `PerceptionRun` (uma por capability habilitada).
+Metadata mínima para rastrear qualquer evidência até o backend que a produziu: `backend_id`, `capability`, `provider`, `model`, `version`, `configuration_fingerprint` opcional. Reaproveitada diretamente por `Region2D`, `VisualFeature` e `PerceptionRun`; claims e contexto de cena a incluem por meio de `SemanticInferenceProvenance`.

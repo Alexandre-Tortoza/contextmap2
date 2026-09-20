@@ -57,6 +57,8 @@ from contextmap.visual_perception.ports import (
     RegionDiscovery,
     SemanticInterpreter,
 )
+from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
+from contextmap.visual_perception.semantic_requests import SemanticInterpretationRequest
 from contextmap.visual_perception.serialization import (
     encode_provenance as encode_backend_provenance,
 )
@@ -158,6 +160,17 @@ class _ProvenanceCapable(Protocol):
     def backend_provenance(self) -> BackendProvenance: ...
 
 
+@runtime_checkable
+class _SceneRegionSemanticStageBackend(Protocol):
+    """Current canonical/1 scene/region stage shape pending request-stage migration."""
+
+    def interpret_scene(self, image: PreparedImage) -> SceneContext | None: ...
+
+    def interpret_regions(
+        self, image: PreparedImage, regions: Sequence[Region2D]
+    ) -> Sequence[SemanticClaim]: ...
+
+
 def _run_region_discovery(backend: object, inputs: Mapping[str, object]) -> Sequence[Region2D]:
     assert isinstance(backend, RegionDiscovery)
     image = inputs["image"]
@@ -186,7 +199,7 @@ def _run_feature_resolution_enhancement(
 
 
 def _run_scene_interpretation(backend: object, inputs: Mapping[str, object]) -> SceneContext | None:
-    assert isinstance(backend, SemanticInterpreter)
+    assert isinstance(backend, _SceneRegionSemanticStageBackend)
     image = inputs["image"]
     assert isinstance(image, PreparedImage)
     return backend.interpret_scene(image)
@@ -195,12 +208,21 @@ def _run_scene_interpretation(backend: object, inputs: Mapping[str, object]) -> 
 def _run_region_interpretation(
     backend: object, inputs: Mapping[str, object]
 ) -> Sequence[SemanticClaim]:
-    assert isinstance(backend, SemanticInterpreter)
+    assert isinstance(backend, _SceneRegionSemanticStageBackend)
     image = inputs["image"]
     regions = inputs["regions"]
     assert isinstance(image, PreparedImage)
     assert isinstance(regions, Sequence)
     return backend.interpret_regions(image, regions)  # type: ignore[arg-type]
+
+
+def _run_semantic_interpreter(
+    backend: object, inputs: Mapping[str, object]
+) -> SemanticInterpretationExecution:
+    assert isinstance(backend, SemanticInterpreter)
+    request = inputs["request"]
+    assert isinstance(request, SemanticInterpretationRequest)
+    return backend.interpret(request)
 
 
 _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], object]] = {
@@ -209,6 +231,7 @@ _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], obje
     "feature_extractor": _run_feature_extractor,
     "scene_interpretation": _run_scene_interpretation,
     "region_interpretation": _run_region_interpretation,
+    "semantic_interpreter": _run_semantic_interpreter,
 }
 
 KNOWN_CAPABILITIES = frozenset(_CAPABILITY_ADAPTERS)
@@ -224,12 +247,14 @@ _BASE_REQUIRED_INPUTS: Mapping[str, frozenset[str]] = {
     "feature_resolution_enhancement": frozenset({"dense_map"}),
     "scene_interpretation": frozenset({"image"}),
     "region_interpretation": frozenset({"image", "regions"}),
+    "semantic_interpreter": frozenset({"request"}),
 }
 
 _INPUT_PRODUCER_CAPABILITIES: Mapping[str, frozenset[str]] = {
     "dense_map": frozenset({"dense_feature_map_source", "feature_resolution_enhancement"}),
     "image": frozenset({"image_preparation"}),
     "regions": frozenset({"region_discovery"}),
+    "request": frozenset({"semantic_request"}),
 }
 
 

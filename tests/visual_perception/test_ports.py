@@ -6,15 +6,22 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureExtractor,
     FeatureScope,
+    PerceptionResultId,
     PreparedImage,
     Region2D,
     RegionDiscovery,
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticInferenceProvenance,
+    SemanticInterpretationExecution,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
     SemanticInterpreter,
+    SemanticInterpreterCapabilities,
     SemanticScorer,
     SemanticSupport,
+    VisualViewKind,
 )
 from contextmap.visual_perception.models import ClaimId, HypothesisRole
 from contextmap.visual_perception.models import PreparedImage as ModelPreparedImage
@@ -34,6 +41,21 @@ def _image() -> PreparedImage:
         payload_reference="debug/frame-0001/prepared.jpg",
         width=640,
         height=480,
+    )
+
+
+def _semantic_provenance() -> SemanticInferenceProvenance:
+    return SemanticInferenceProvenance(
+        backend=BackendProvenance(
+            backend_id="fake-interpreter",
+            capability="semantic_interpreter",
+            provider="fake",
+            model="interpreter",
+            version="0.1",
+        ),
+        task_identity="region-labeling",
+        prompt_template_id="region/v1",
+        output_schema_version="semantic-response/1",
     )
 
 
@@ -114,15 +136,28 @@ class _FakeSemanticInterpreter:
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
         return None
 
+    def capabilities(self) -> SemanticInterpreterCapabilities:
+        return SemanticInterpreterCapabilities(
+            supported_modes=frozenset(SemanticInterpretationMode),
+            supported_view_kinds=frozenset(VisualViewKind),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+        )
+
+    def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
+        raise NotImplementedError
+
     def interpret_regions(
         self, image: PreparedImage, regions: Sequence[Region2D]
     ) -> Sequence[SemanticClaim]:
         return tuple(
             SemanticClaim(
                 claim_id=ClaimId(f"claim-{region.region_id}"),
-                text="a fake object",
+                source_observation_id=image.source_observation_id,
+                perception_result_id=PerceptionResultId("result-0001"),
+                hypothesis="a fake object",
                 role=HypothesisRole.PRIMARY,
-                provenance=self.backend_provenance(),
+                provenance=_semantic_provenance(),
                 region_id=region.region_id,
             )
             for region in regions
@@ -204,15 +239,11 @@ def test_semantic_scorer_produces_support_without_mutating_claims() -> None:
     scorer = _FakeSemanticScorer()
     claim = SemanticClaim(
         claim_id=ClaimId("claim-0001"),
-        text="a fake object",
+        source_observation_id=SourceObservationId("frame-0001"),
+        perception_result_id=PerceptionResultId("result-0001"),
+        hypothesis="a fake object",
         role=HypothesisRole.PRIMARY,
-        provenance=BackendProvenance(
-            backend_id="fake",
-            capability="semantic_interpreter",
-            provider="fake",
-            model="fake",
-            version="0.1",
-        ),
+        provenance=_semantic_provenance(),
     )
 
     supports = scorer.score((claim,), _image())
@@ -251,6 +282,19 @@ def test_one_model_can_satisfy_two_capabilities_via_distinct_adapters() -> None:
 
         def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
             return None
+
+        def capabilities(self) -> SemanticInterpreterCapabilities:
+            return SemanticInterpreterCapabilities(
+                supported_modes=frozenset(SemanticInterpretationMode),
+                supported_view_kinds=frozenset(VisualViewKind),
+                accepts_visual_features=False,
+                accepts_scene_context=False,
+            )
+
+        def interpret(
+            self, request: SemanticInterpretationRequest
+        ) -> SemanticInterpretationExecution:
+            raise NotImplementedError
 
         def interpret_regions(
             self, image: PreparedImage, regions: Sequence[Region2D]

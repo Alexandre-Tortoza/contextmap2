@@ -10,6 +10,7 @@ fallback.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from contextmap.visual_perception import (
@@ -17,12 +18,25 @@ from contextmap.visual_perception import (
     BoundingBox2D,
     FeatureScope,
     HypothesisRole,
+    PerceptionResultId,
     PreparedImage,
     Region2D,
     RegionId,
     SceneContext,
+    SemanticBackendDiagnostics,
     SemanticClaim,
+    SemanticConfidencePolicy,
+    SemanticEvidenceReference,
+    SemanticInferenceProvenance,
+    SemanticInterpretationExecution,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticInterpreterCapabilities,
+    SemanticPromptTemplate,
     VisualFeature,
+    VisualViewKind,
+    parse_semantic_response,
+    render_semantic_prompt,
 )
 from contextmap.visual_perception.models import ClaimId, FeatureId
 
@@ -120,6 +134,9 @@ class FakeRegionFeatureExtractor:
 class FakeSemanticInterpreter:
     """Deterministic SemanticInterpreter producing scene- and region-level claims."""
 
+    def __init__(self, result_id: PerceptionResultId | None = None) -> None:
+        self._result_id = result_id or PerceptionResultId("run-0001--frame-0124")
+
     def backend_provenance(self) -> BackendProvenance:
         return BackendProvenance(
             backend_id="fake_semantic_interpreter",
@@ -129,30 +146,117 @@ class FakeSemanticInterpreter:
             version="0.1",
         )
 
+    def capabilities(self) -> SemanticInterpreterCapabilities:
+        return SemanticInterpreterCapabilities(
+            supported_modes=frozenset(SemanticInterpretationMode),
+            supported_view_kinds=frozenset(VisualViewKind),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+        )
+
+    def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
+        template = SemanticPromptTemplate.default_for(request.mode)
+        rendered = render_semantic_prompt(
+            request,
+            template,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        )
+        raw_response = json.dumps(
+            {
+                "abstained": False,
+                "claims": [
+                    {
+                        "hypothesis": (
+                            "an indoor corridor"
+                            if request.mode is SemanticInterpretationMode.SCENE
+                            else "a fake object"
+                        ),
+                        "role": "primary",
+                        "category": None,
+                        "region_kind": None,
+                        "attributes": {},
+                        "confidence": None,
+                    }
+                ],
+                "scene_context": (
+                    {"scene_type": "corridor"}
+                    if request.mode is SemanticInterpretationMode.SCENE
+                    else None
+                ),
+            }
+        )
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity=f"fake-{request.mode.value}",
+            prompt_template_id=request.prompt_template_id,
+            output_schema_version=request.requested_output_schema,
+        )
+        return SemanticInterpretationExecution(
+            request=request,
+            rendered_prompt=rendered,
+            raw_response=raw_response,
+            parsed=parse_semantic_response(
+                raw_response,
+                request,
+                provenance,
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            ),
+            diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+            effective_configuration={"backend": "fake"},
+        )
+
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity="scene-description",
+            prompt_template_id="scene/v1",
+            output_schema_version="semantic-response/1",
+        )
         return SceneContext(
+            source_observation_id=image.source_observation_id,
+            perception_result_id=self._result_id,
             claims=(
                 SemanticClaim(
                     claim_id=ClaimId("claim-scene-0000"),
-                    text="an indoor corridor",
+                    source_observation_id=image.source_observation_id,
+                    perception_result_id=self._result_id,
+                    hypothesis="an indoor corridor",
                     role=HypothesisRole.PRIMARY,
-                    provenance=self.backend_provenance(),
+                    provenance=provenance,
+                    evidence_references=(
+                        SemanticEvidenceReference(
+                            evidence_type="prepared_image",
+                            evidence_id=image.payload_reference,
+                        ),
+                    ),
                 ),
             ),
-            provenance=self.backend_provenance(),
+            provenance=provenance,
         )
 
     def interpret_regions(
         self, image: PreparedImage, regions: Sequence[Region2D]
     ) -> Sequence[SemanticClaim]:
-        provenance = self.backend_provenance()
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity="region-labeling",
+            prompt_template_id="region/v1",
+            output_schema_version="semantic-response/1",
+        )
         return tuple(
             SemanticClaim(
                 claim_id=ClaimId(f"claim-{region.region_id}"),
-                text="a fake object",
+                source_observation_id=image.source_observation_id,
+                perception_result_id=self._result_id,
+                hypothesis="a fake object",
                 role=HypothesisRole.PRIMARY,
                 provenance=provenance,
                 region_id=region.region_id,
+                evidence_references=(
+                    SemanticEvidenceReference(
+                        evidence_type="region", evidence_id=str(region.region_id)
+                    ),
+                ),
             )
             for region in regions
         )
