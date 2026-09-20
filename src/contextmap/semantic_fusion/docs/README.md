@@ -27,7 +27,7 @@ Fusão não é identidade. Um `FusionSupport` afirma apenas que observações es
 
 ## Estado implementado
 
-Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, a **seleção de canais de evidência** tipados e a **política opcional ciente de qualidade**, que pondera sem descartar evidência, e o **`SemanticFusionRunArtifact`** persistido. Está **planejada**, e será documentada aqui quando for implementada: a validação.
+Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, a **seleção de canais de evidência** tipados e a **política opcional ciente de qualidade**, que pondera sem descartar evidência, e o **`SemanticFusionRunArtifact`** persistido. A validação vive em `evaluation` e está documentada em [`evaluation/docs/semantic_fusion.md`](../../evaluation/docs/semantic_fusion.md).
 
 ## Contratos públicos
 
