@@ -387,7 +387,7 @@ def pool_region_feature(
         )
 
     box = region.bounding_box
-    expected_mask_shape = _box_mask_shape(box)
+    expected_mask_shape = box_mask_shape(box)
     if mask is None:
         support_mask = np.ones(expected_mask_shape, dtype=np.bool_)
         mask_content_hash = None
@@ -518,7 +518,7 @@ def _local_mask_bounds(
     if intersection_left >= intersection_right or intersection_top >= intersection_bottom:
         return None
 
-    mask_height, mask_width = _box_mask_shape(box)
+    mask_height, mask_width = box_mask_shape(box)
     column_start = max(0, math.floor(intersection_left - box.x))
     column_end = min(mask_width, math.ceil(intersection_right - box.x))
     row_start = max(0, math.floor(intersection_top - box.y))
@@ -528,7 +528,7 @@ def _local_mask_bounds(
     return row_start, row_end, column_start, column_end
 
 
-def _box_mask_shape(box: BoundingBox2D) -> tuple[int, int]:
+def box_mask_shape(box: BoundingBox2D) -> tuple[int, int]:
     """Return the integer raster envelope for a possibly fractional box."""
     return math.ceil(box.height), math.ceil(box.width)
 

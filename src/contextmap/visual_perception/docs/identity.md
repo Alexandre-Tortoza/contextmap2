@@ -50,6 +50,15 @@ A seta tracejada não representa uma conversão automática. Ela marca apenas a 
 - reconstruir os mesmos objetos a partir dos mesmos dados brutos produz os mesmos IDs — útil para testes e para comparar re-execuções determinísticas;
 - a identidade sobrevive a um round-trip de serialização (é só uma string, não um estado externo).
 
+`feature_id_for()` exige também um `producer_id` estável. O helper incorpora o
+SHA-256 desse identificador no `FeatureId`, portanto dois stages podem usar o
+mesmo índice dentro do mesmo resultado sem colisão:
+
+```text
+feature_id_for(result_id=rid, producer_id="dense_feature_extraction", index=0)
+feature_id_for(result_id=rid, producer_id="global_feature_extraction", index=0)
+```
+
 ## Runs repetidos permanecem distintos
 
 Duas execuções (`run_id` diferente) sobre a **mesma** `SourceObservation` produzem `PerceptionResultId`s diferentes (o `run_id` faz parte da chave), mas ambas preservam o mesmo `source_observation_id` — exatamente a distinção central da issue #48/#50: reprocessamento nunca é uma nova observação física.
@@ -67,4 +76,8 @@ Quando duas seleções de sequência se sobrepõem (ex.: `run-0001` processa fra
 
 ## Escopo local, não global
 
-Um `RegionId`/`FeatureId`/`ClaimId` é único **dentro de um `PerceptionResult`** (garantido por `region_id_for(result_id=..., index=...)` incluir o `result_id` na própria string) — nunca global, e nunca comparável entre dois `PerceptionResult`s sem associação explícita posterior por uma capability downstream.
+Um `RegionId`/`FeatureId`/`ClaimId` é único **dentro de um `PerceptionResult`**.
+Regiões e claims incluem o `result_id` e o índice; features incluem também o
+`producer_id`, pois múltiplos stages de extração podem contribuir para o mesmo
+resultado. Esses IDs nunca são globais nem comparáveis entre resultados sem
+associação explícita posterior por uma capability downstream.
