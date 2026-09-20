@@ -113,6 +113,14 @@ identidades da observação e do resultado. Ao receber os mesmos outcomes,
 de debug declarado pela proveniência. Assim, execução, evidência canônica e
 artifact permanecem ligados pelo mesmo request id.
 
+`SemanticDebugLevel` controla apenas o conteúdo humano em
+`debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
+`STANDARD` grava request, prompt, parsing, outputs finais e diagnostics, e
+`FULL` acrescenta a resposta bruta. Os outputs canônicos, hashes, métricas e
+views content-addressed continuam válidos em qualquer nível. Antes da
+serialização, campos de credencial conhecidos são redigidos recursivamente;
+contadores como `input_tokens`/`output_tokens` não são confundidos com secrets.
+
 ## Scoring semântico
 
 `SemanticScore` registra separadamente o suporte de uma feature visual a uma
@@ -163,10 +171,29 @@ limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
 
+## Adapter Florence-2
+
+`Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
+quando ambos compartilham lifecycle/modelo no composition root. Sua
+`Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
+suportados, device, precision e geração. A task e o mode entram em
+`task_identity`; checkpoint, revisão e configuração entram na provenance e no
+fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
+passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+
+## Avaliação
+
+`contextmap.evaluation.semantic_interpretation` fornece um report comum para
+Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
+região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
+custo permanecem em blocos distintos. O baseline usa a policy versionada
+`casefold-exact/1`.
+
 
 ## Estado do milestone
 
-O milestone entrega os contratos #74-#76 no branch de integração:
+O branch de integração materializa:
 
 - `SemanticClaim`/`SceneContext`, request/evidence e prompt/parser possuem
   contratos canônicos, provenance e incerteza explícita;
@@ -175,10 +202,14 @@ O milestone entrega os contratos #74-#76 no branch de integração:
   resolvível;
 - Qwen e Gemini implementam o mesmo boundary `SemanticInterpreter`, usando
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
+- Florence-2 implementa o mesmo boundary por adapter separado de Region
+  Discovery;
+- auditoria possui níveis explícitos e redaction de secrets;
+- o harness de avaliação compara qualidade e custo sem Semantic Fusion;
 - testes determinísticos cobrem parsing, abstention, retries, materialização no
   `PerceptionResult` e reabertura do run artifact.
 
-As issues #77 e #78 permanecem abertas porque exigem execução controlada com
-checkpoint/API reais e a respectiva evidência experimental. Essa pendência não
-altera os contratos entregues neste milestone e não deve ser registrada como se
-um teste fake fosse uma execução real.
+Execuções reais controladas ainda dependem de pesos/runtime local para Qwen e
+Florence-2 e de credenciais/acesso para Gemini. O ambiente de CI valida seams,
+contratos, parsing, provenance, falhas e report schema com doubles
+determinísticos; isso não é registrado como evidência experimental real.

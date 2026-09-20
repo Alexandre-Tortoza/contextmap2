@@ -170,6 +170,12 @@ from contextmap.visual_perception.run_artifact import (
     allocate_run_index,
     rebuild_run_registry,
 )
+from contextmap.visual_perception.semantic_audit import (
+    SEMANTIC_DEBUG_ROOT,
+    SemanticDebugLevel,
+    redact_semantic_secrets,
+    write_semantic_audit,
+)
 from contextmap.visual_perception.semantic_backend import (
     SemanticBackendDiagnostics,
     SemanticInterpretationExecution,
@@ -219,6 +225,7 @@ __all__ = [
     "FEATURE_METRICS_PATH",
     "KNOWN_CAPABILITIES",
     "POOLING_POLICY",
+    "SEMANTIC_DEBUG_ROOT",
     "ArtifactReference",
     "BackendDiagnostics",
     "BackendProvenance",
@@ -306,6 +313,7 @@ __all__ = [
     "SemanticBackendDiagnostics",
     "SemanticClaim",
     "SemanticConfidencePolicy",
+    "SemanticDebugLevel",
     "SemanticEvidenceReference",
     "SemanticFeatureReference",
     "SemanticInferenceProvenance",
@@ -365,6 +373,7 @@ __all__ = [
     "pool_region_feature",
     "prepare_image",
     "rebuild_run_registry",
+    "redact_semantic_secrets",
     "region_id_for",
     "render_semantic_prompt",
     "resolve_pipeline",
@@ -373,4 +382,5 @@ __all__ = [
     "validate_semantic_request",
     "write_feature_diagnostics",
     "write_feature_index",
+    "write_semantic_audit",
 ]

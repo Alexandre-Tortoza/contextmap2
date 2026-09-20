@@ -2,7 +2,10 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
+os resultados do pipeline. As implementações atuais cobrem Feature Extraction,
+Region Discovery e Semantic Interpretation por meio de relatórios
+determinísticos sobre contratos públicos de `visual_perception`.
 
 ## O que este módulo explicitamente não possui
 
@@ -31,6 +34,16 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_region_discovery_reports()` — comparação controlada entre relatórios que rejeita drift de variáveis opacas.
 - `write_region_discovery_reference_set()`/`write_region_discovery_report()` — persistência imutável dos inputs e resultados de avaliação.
 
+### Semantic Interpretation
+
+- `SemanticEvaluationContext` — reference-set, seleção, run, artifact,
+  pipeline digest e versão do evaluator.
+- `SemanticEvaluationReport` — qualidade, custo e falhas em blocos separados.
+- `evaluate_semantic_interpretation()` — avaliação por request/evidence variant
+  com matching policy versionada.
+- `compare_semantic_backends()` — exige exatamente os mesmos requests e
+  variants para Qwen, Gemini e Florence-2.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física e `contextmap.visual_perception` exclusivamente por sua API pública.
@@ -44,5 +57,7 @@ Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar 
 - [`feature_extraction.md`](feature_extraction.md) — protocolo, invariantes, fixtures determinísticas e trade-offs da avaliação de features.
 - [`../../visual_perception/docs/feature-extraction.md`](../../visual_perception/docs/feature-extraction.md) — visão do core produtor que esta avaliação mede.
 - [`region-discovery.md`](region-discovery.md) — referência, métricas geométricas, diagnósticos, custo e comparação controlada de Region Discovery.
+- [`semantic-interpretation.md`](semantic-interpretation.md) — convenção
+  open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

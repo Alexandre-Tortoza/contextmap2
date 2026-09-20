@@ -111,7 +111,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion` e `visual_perception` já materializam os dois primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos/persistência/associação espacial/diagnostics/avaliação e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini. Backends concretos de Feature Extraction ainda não estão integrados; as execuções reais de referência dos adapters semânticos permanecem pendentes em #77/#78. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion` e `visual_perception` já materializam os dois primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos/persistência/associação espacial/diagnostics/avaliação e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. Backends concretos de Feature Extraction ainda não estão integrados; as execuções reais de referência dos adapters semânticos permanecem pendentes em #77/#78. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
