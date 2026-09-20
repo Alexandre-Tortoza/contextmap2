@@ -377,6 +377,9 @@ def test_every_audited_projection_names_its_whole_chain() -> None:
     assert audit.prepared_pixel == pytest.approx(PREPARED_PIXEL)
     assert audit.stage is ProjectionStage.IN_SUPPORT
     assert frame.source_observation_id == "frame-0001"
+    assert frame.image_timestamp == make_camera_observation(0).timestamp
+    assert frame.map_time_bounds.start.total_nanoseconds() == 0
+    assert frame.map_time_bounds.end.total_nanoseconds() == 100_000_000
 
 
 # --- Rejections that are data, not errors -----------------------------------

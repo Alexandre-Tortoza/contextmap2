@@ -24,6 +24,7 @@ else that does not fit together (frames, lineage, calibration, image chain) rais
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -50,7 +51,7 @@ from contextmap.sensor_association.image_transform import (
     raw_to_prepared_transform,
 )
 from contextmap.sensor_association.models import CalibrationRef, PixelCoordinate, PoseRef
-from contextmap.shared import compose_rigid, quaternion_to_rotation_matrix
+from contextmap.shared import SourceTimestamp, compose_rigid, quaternion_to_rotation_matrix
 from contextmap.state_estimation import (
     FrameGraphError,
     LookupPolicy,
@@ -58,6 +59,7 @@ from contextmap.state_estimation import (
     RejectedLookup,
     StateEstimationRunId,
     StaticFrameGraph,
+    TimeBounds,
     TrajectoryLookup,
     calibration_identity,
 )
@@ -155,7 +157,9 @@ class FrameProjection:
 
     Attributes:
         source_observation_id: The camera frame.
+        image_timestamp: When the frame was acquired, in the trajectory's clock domain.
         map_id: The map the geometry belongs to.
+        map_time_bounds: The acquisition window of the geometry the map was built from.
         camera: The calibrated camera used.
         calibration_ref: The calibration and camera entry used.
         pose_ref: The pose that placed the camera.
@@ -172,7 +176,9 @@ class FrameProjection:
     """
 
     source_observation_id: SourceObservationId
+    image_timestamp: SourceTimestamp
     map_id: MapId
+    map_time_bounds: TimeBounds
     camera: CameraIdentity
     calibration_ref: CalibrationRef
     pose_ref: PoseRef
@@ -342,6 +348,28 @@ class FrameProjector:
         self._graph = StaticFrameGraph.from_calibration(calibration)
         self._cameras: dict[CalibrationReferenceId, CameraProjection] = {}
 
+    def restricted_to(self, indices: NDArray[Any]) -> FrameProjector:
+        """Return a projector over a subset of the map, for pixel-only diagnostics.
+
+        Positions in the result follow ``indices``, not the map, so the geometry references
+        of its projections do not identify map elements; use it only where the pixels matter.
+
+        Args:
+            indices: Positions of the map elements to keep, in the order to keep them.
+
+        Returns:
+            A projector with the same trajectory, policy and calibration.
+        """
+        return FrameProjector(
+            cloud=dataclasses.replace(
+                self._cloud, coordinates_m=self._cloud.coordinates_m[indices]
+            ),
+            trajectory=self._trajectory,
+            pose_policy=self._policy,
+            calibration=self._calibration,
+            state_estimation_run_id=self._run_id,
+        )
+
     def project(
         self, observation: ImageObservation, prepared_image: PreparedImage
     ) -> FrameProjection | RejectedProjection:
@@ -406,7 +434,9 @@ class FrameProjector:
         in_support = in_image & _supported(prepared_image, prepared_pixels, in_image)
         return FrameProjection(
             source_observation_id=observation.observation_id,
+            image_timestamp=observation.timestamp,
             map_id=self._cloud.geometric_map.map_id,
+            map_time_bounds=self._cloud.geometric_map.time_bounds,
             camera=camera.identity,
             calibration_ref=CalibrationRef(
                 calibration_identity=self._calibration_identity,
