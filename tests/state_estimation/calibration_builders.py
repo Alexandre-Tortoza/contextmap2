@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import struct
 
 from pose_builders import CLOCK_ID, timestamp_ns
 
@@ -17,8 +18,11 @@ from contextmap.ingestion import (
     ImuObservation,
     LidarObservation,
     PinholeCameraModel,
+    PointFieldDataType,
+    PointFieldDescriptor,
     RigidTransform,
     SensorId,
+    SourceObservation,
     SourceObservationId,
     SourceProvenance,
 )
@@ -144,3 +148,61 @@ def closing_transform(
         inner_rotation=second.rotation,
     )
     return rigid(parent, child, translation, rotation)
+
+
+def lidar_with_points(
+    observation_id: str,
+    *,
+    time_ns: int,
+    frame: str = "velodyne",
+    clock_id: str = CLOCK_ID,
+) -> LidarObservation:
+    """Build a two-point scan (x, y, z as float32) at ``time_ns``."""
+    return LidarObservation(
+        observation_id=SourceObservationId(observation_id),
+        sensor_id=SensorId(f"sensor-{frame}"),
+        frame_id=FrameId(frame),
+        timestamp=timestamp_ns(time_ns, clock_id=clock_id),
+        provenance=_provenance("/velodyne_points"),
+        point_count=2,
+        point_step_bytes=12,
+        fields=tuple(
+            PointFieldDescriptor(
+                name=name, offset_bytes=4 * i, data_type=PointFieldDataType.FLOAT32
+            )
+            for i, name in enumerate(("x", "y", "z"))
+        ),
+        data=struct.pack("<6f", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0),
+        is_dense=True,
+    )
+
+
+def imu_with_motion(
+    observation_id: str, *, time_ns: int, frame: str = "imu", clock_id: str = CLOCK_ID
+) -> ImuObservation:
+    """Build an IMU sample with angular velocity and acceleration but no orientation."""
+    return ImuObservation(
+        observation_id=SourceObservationId(observation_id),
+        sensor_id=SensorId(f"sensor-{frame}"),
+        frame_id=FrameId(frame),
+        timestamp=timestamp_ns(time_ns, clock_id=clock_id),
+        provenance=_provenance("/imu/data"),
+        linear_acceleration=(0.0, 0.0, 9.81),
+        angular_velocity=(0.01, 0.02, 0.03),
+    )
+
+
+def sensor_run(
+    *, scans: int = 3, scan_period_ns: int = 100_000_000, imu_step_ns: int = 10_000_000
+) -> list[SourceObservation]:
+    """Build LiDAR scans and IMU samples covering them, in time order per modality."""
+    lidar_scans = [
+        lidar_with_points(f"scan-{index:04d}", time_ns=index * scan_period_ns)
+        for index in range(scans)
+    ]
+    imu_count = (scans * scan_period_ns) // imu_step_ns + 2
+    imu_samples = [
+        imu_with_motion(f"imu-{index:05d}", time_ns=index * imu_step_ns)
+        for index in range(imu_count)
+    ]
+    return [*lidar_scans, *imu_samples]
