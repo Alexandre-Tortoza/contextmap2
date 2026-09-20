@@ -25,6 +25,7 @@ from contextmap.visual_perception import (
     SceneContext,
     SemanticBackendDiagnostics,
     SemanticClaim,
+    SemanticConfidencePolicy,
     SemanticEvidenceReference,
     SemanticInferenceProvenance,
     SemanticInterpretationExecution,
@@ -155,7 +156,11 @@ class FakeSemanticInterpreter:
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
         template = SemanticPromptTemplate.default_for(request.mode)
-        rendered = render_semantic_prompt(request, template)
+        rendered = render_semantic_prompt(
+            request,
+            template,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        )
         raw_response = json.dumps(
             {
                 "abstained": False,
@@ -190,7 +195,12 @@ class FakeSemanticInterpreter:
             request=request,
             rendered_prompt=rendered,
             raw_response=raw_response,
-            parsed=parse_semantic_response(raw_response, request, provenance),
+            parsed=parse_semantic_response(
+                raw_response,
+                request,
+                provenance,
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            ),
             diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
             effective_configuration={"backend": "fake"},
         )

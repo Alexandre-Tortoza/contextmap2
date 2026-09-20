@@ -1,5 +1,6 @@
 """Contract tests for the Qwen semantic interpreter adapter."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -72,6 +73,9 @@ class _FakeQwenRuntime:
         )
 
 
+_VIEW_PAYLOAD = b"qwen semantic view pixels"
+
+
 def _request(adapter: QwenSemanticInterpreter) -> SemanticInterpretationRequest:
     return SemanticInterpretationRequest(
         request_id=SemanticRequestId("request-0001"),
@@ -83,9 +87,10 @@ def _request(adapter: QwenSemanticInterpreter) -> SemanticInterpretationRequest:
             SemanticVisualView(
                 view_id="tight-crop",
                 kind=VisualViewKind.TIGHT_CROP,
-                payload_reference="outputs/views/region-0007.jpg",
+                payload_reference="outputs/semantic-views/region-0007.jpg",
                 source_observation_id=SourceObservationId("frame-0124"),
                 region_id=RegionId("region-0007"),
+                sha256=hashlib.sha256(_VIEW_PAYLOAD).hexdigest(),
             ),
         ),
         prompt_template_id="region/v1",
@@ -113,7 +118,7 @@ def test_qwen_maps_request_and_returns_canonical_unscored_claim() -> None:
     assert execution.parsed.claims[0].confidence is None
     assert execution.diagnostics.input_tokens == 120
     assert execution.effective_configuration["quantization"] == "4bit"
-    assert runtime.calls[0][0] == ("outputs/views/region-0007.jpg",)
+    assert runtime.calls[0][0] == ("outputs/semantic-views/region-0007.jpg",)
     assert "region/v1" in runtime.calls[0][1]
     assert (
         adapter.backend_provenance().configuration_fingerprint == adapter.configuration_fingerprint
@@ -245,6 +250,7 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
         profile_label="qwen",
     )
     writer.add_result(result)
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _VIEW_PAYLOAD)
     writer.add_stage_outcomes(outcomes)
     writer.finalize()
 

@@ -8,8 +8,11 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     BackendProvenance,
     HypothesisRole,
+    ParsedSemanticResponse,
     PerceptionResultId,
     RegionId,
+    RenderedSemanticPrompt,
+    SemanticConfidencePolicy,
     SemanticInferenceProvenance,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -43,6 +46,7 @@ def _request(mode: SemanticInterpretationMode) -> SemanticInterpretationRequest:
                 payload_reference="outputs/views/input.jpg",
                 source_observation_id=SourceObservationId("frame-0124"),
                 region_id=region_id,
+                sha256="0" * 64,
             ),
         ),
         prompt_template_id=f"{mode.value}/v1",
@@ -68,6 +72,27 @@ def _provenance(mode: SemanticInterpretationMode) -> SemanticInferenceProvenance
     )
 
 
+def _render(
+    request: SemanticInterpretationRequest,
+    template: SemanticPromptTemplate,
+    policy: SemanticConfidencePolicy = SemanticConfidencePolicy.UNSCORED_ONLY,
+) -> RenderedSemanticPrompt:
+    return render_semantic_prompt(request, template, confidence_policy=policy)
+
+
+def _parse(
+    raw: str,
+    request: SemanticInterpretationRequest,
+    policy: SemanticConfidencePolicy = SemanticConfidencePolicy.UNSCORED_ONLY,
+) -> ParsedSemanticResponse:
+    return parse_semantic_response(
+        raw,
+        request,
+        _provenance(request.mode),
+        confidence_policy=policy,
+    )
+
+
 def test_prompt_rendering_is_deterministic_and_version_distinguishable() -> None:
     request = _request(SemanticInterpretationMode.REGION)
     v1 = SemanticPromptTemplate.default_for(request.mode)
@@ -78,9 +103,9 @@ def test_prompt_rendering_is_deterministic_and_version_distinguishable() -> None
         instructions="Describe only the visible region.",
     )
 
-    first = render_semantic_prompt(request, v1)
-    second = render_semantic_prompt(request, v1)
-    changed = render_semantic_prompt(
+    first = _render(request, v1)
+    second = _render(request, v1)
+    changed = _render(
         SemanticInterpretationRequest(**{**request.__dict__, "prompt_template_id": "region/v2"}),
         v2,
     )
@@ -98,9 +123,7 @@ def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
             "supporting_metadata": (SemanticRequestMetadata(name="camera_height_m", value=1.2),),
         }
     )
-    region_prompt = render_semantic_prompt(
-        region_request, SemanticPromptTemplate.default_for(region_request.mode)
-    )
+    region_prompt = _render(region_request, SemanticPromptTemplate.default_for(region_request.mode))
 
     assert '"supporting_metadata":[{"name":"camera_height_m","value":1.2}]' in region_prompt.text
     assert '"scene_context":{"type":"null"}' in region_prompt.text
@@ -108,9 +131,7 @@ def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
     assert '"confidence":{"type":"null"}' in region_prompt.text
 
     scene_request = _request(SemanticInterpretationMode.SCENE)
-    scene_prompt = render_semantic_prompt(
-        scene_request, SemanticPromptTemplate.default_for(scene_request.mode)
-    )
+    scene_prompt = _render(scene_request, SemanticPromptTemplate.default_for(scene_request.mode))
 
     assert '"scene_context":{"additionalProperties":false' in scene_prompt.text
     assert '"minItems":0' in scene_prompt.text
@@ -143,7 +164,7 @@ def test_region_parser_preserves_primary_alternative_and_unscored_claim() -> Non
         }
     )
 
-    parsed = parse_semantic_response(raw, request, _provenance(request.mode))
+    parsed = _parse(raw, request)
 
     assert [claim.role for claim in parsed.claims] == [
         HypothesisRole.PRIMARY,
@@ -182,7 +203,7 @@ def test_scene_parser_produces_structured_context() -> None:
         }
     )
 
-    parsed = parse_semantic_response(raw, request, _provenance(request.mode))
+    parsed = _parse(raw, request)
 
     assert parsed.claims == ()
     assert parsed.scene_context is not None
@@ -200,7 +221,7 @@ def test_scene_parser_accepts_structured_context_without_redundant_claim() -> No
         }
     )
 
-    parsed = parse_semantic_response(raw, request, _provenance(request.mode))
+    parsed = _parse(raw, request)
 
     assert parsed.scene_context is not None
     assert parsed.scene_context.scene_type == "warehouse"
@@ -227,7 +248,46 @@ def test_parser_rejects_model_reported_confidence() -> None:
     )
 
     with pytest.raises(SemanticResponseParseError, match="confidence must be null"):
-        parse_semantic_response(raw, request, _provenance(request.mode))
+        _parse(raw, request)
+
+
+def test_parser_preserves_explicitly_measured_confidence() -> None:
+    request = _request(SemanticInterpretationMode.REGION)
+    raw = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "pallet",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": "thing",
+                    "attributes": {},
+                    "confidence": 0.93,
+                }
+            ],
+            "scene_context": None,
+        }
+    )
+
+    parsed = _parse(raw, request, SemanticConfidencePolicy.MEASURED)
+
+    assert parsed.claims[0].confidence == 0.93
+
+
+def test_scene_parser_rejects_non_abstained_empty_evidence() -> None:
+    request = _request(SemanticInterpretationMode.SCENE)
+    for scene_context in ({}, {"scene_type": None, "layout": None}):
+        raw = json.dumps(
+            {
+                "abstained": False,
+                "claims": [],
+                "scene_context": scene_context,
+            }
+        )
+
+        with pytest.raises(SemanticResponseParseError, match="semantic evidence"):
+            _parse(raw, request)
 
 
 def test_parser_records_safe_code_fence_repair_but_rejects_semantic_repairs() -> None:
@@ -237,16 +297,14 @@ def test_parser_records_safe_code_fence_repair_but_rejects_semantic_repairs() ->
         "claims": [],
         "scene_context": None,
     }
-    repaired = parse_semantic_response(
-        f"```json\n{json.dumps(valid)}\n```", request, _provenance(request.mode)
-    )
+    repaired = _parse(f"```json\n{json.dumps(valid)}\n```", request)
 
     assert repaired.abstained is True
     assert repaired.diagnostics[0].code == "removed_code_fence"
 
     invalid = {**valid, "abstained": False, "claims": [{"role": "primary"}]}
     with pytest.raises(SemanticResponseParseError, match="hypothesis"):
-        parse_semantic_response(json.dumps(invalid), request, _provenance(request.mode))
+        _parse(json.dumps(invalid), request)
 
     invalid_confidence = {
         **valid,
@@ -263,4 +321,4 @@ def test_parser_records_safe_code_fence_repair_but_rejects_semantic_repairs() ->
         ],
     }
     with pytest.raises(SemanticResponseParseError, match="confidence"):
-        parse_semantic_response(json.dumps(invalid_confidence), request, _provenance(request.mode))
+        _parse(json.dumps(invalid_confidence), request)

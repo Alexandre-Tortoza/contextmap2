@@ -34,6 +34,7 @@ def _view(kind: VisualViewKind = VisualViewKind.TIGHT_CROP) -> SemanticVisualVie
         payload_reference="outputs/views/region-0007-tight.jpg",
         source_observation_id=SOURCE_ID,
         region_id=None if kind is VisualViewKind.FULL_FRAME else REGION_ID,
+        sha256="0" * 64,
     )
 
 
@@ -105,6 +106,7 @@ def test_request_rejects_invalid_scene_region_scope_before_execution() -> None:
                     payload_reference="outputs/views/wrong.png",
                     source_observation_id=SOURCE_ID,
                     region_id=RegionId("region-9999"),
+                    sha256="1" * 64,
                 ),
             )
         )

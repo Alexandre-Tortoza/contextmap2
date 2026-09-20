@@ -84,6 +84,7 @@ def _request(adapter: GeminiSemanticInterpreter) -> SemanticInterpretationReques
                 kind=VisualViewKind.FULL_FRAME,
                 payload_reference="outputs/full.jpg",
                 source_observation_id=SourceObservationId("frame-0001"),
+                sha256="0" * 64,
             ),
         ),
         prompt_template_id="scene/v1",

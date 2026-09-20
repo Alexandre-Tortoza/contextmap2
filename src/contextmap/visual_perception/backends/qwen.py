@@ -20,6 +20,7 @@ from contextmap.visual_perception.semantic_backend import (
     SemanticInterpretationExecution,
 )
 from contextmap.visual_perception.semantic_prompt import (
+    SemanticConfidencePolicy,
     SemanticPromptTemplate,
     parse_semantic_response,
     render_semantic_prompt,
@@ -130,7 +131,11 @@ class QwenSemanticInterpreter:
         if request.configuration_fingerprint != self.configuration_fingerprint:
             raise ValueError("Qwen request configuration fingerprint does not match adapter")
         template = SemanticPromptTemplate.default_for(request.mode)
-        rendered = render_semantic_prompt(request, template)
+        rendered = render_semantic_prompt(
+            request,
+            template,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        )
         started = time.monotonic()
         response = self._runtime.generate(
             visual_payload_references=tuple(
@@ -149,7 +154,12 @@ class QwenSemanticInterpreter:
                 f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
             ),
         )
-        parsed = parse_semantic_response(response.text, request, provenance)
+        parsed = parse_semantic_response(
+            response.text,
+            request,
+            provenance,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        )
         configuration: Mapping[str, JsonScalar] = MappingProxyType(self._config.to_dict())
         return SemanticInterpretationExecution(
             request=request,

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +23,8 @@ from contextmap.visual_perception import (
     RegionId,
     RunArtifactError,
     SemanticBackendDiagnostics,
+    SemanticClaim,
+    SemanticConfidencePolicy,
     SemanticInferenceProvenance,
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
@@ -57,6 +60,7 @@ def _result(
     run_id: str,
     *,
     features: tuple[VisualFeature, ...] = (),
+    claims: tuple[SemanticClaim, ...] = (),
 ) -> PerceptionResult:
     region = Region2D(
         region_id=RegionId("region-0001"),
@@ -71,6 +75,7 @@ def _result(
         created_at="2026-01-01T00:00:00+00:00",
         regions=(region,),
         features=features,
+        claims=claims,
     )
 
 
@@ -190,9 +195,10 @@ def test_stage_outcomes_are_persisted_as_metrics(tmp_path: Path) -> None:
     assert record["status"] == StageStatus.SUCCEEDED.value
 
 
-def test_semantic_execution_and_raw_response_are_persisted_and_reopened(
-    tmp_path: Path,
-) -> None:
+_SEMANTIC_VIEW_PAYLOAD = b"exact semantic view pixels"
+
+
+def _semantic_execution() -> SemanticInterpretationExecution:
     request = SemanticInterpretationRequest(
         request_id=SemanticRequestId("region-request-0001"),
         source_observation_id=SourceObservationId("frame-0001"),
@@ -203,9 +209,10 @@ def test_semantic_execution_and_raw_response_are_persisted_and_reopened(
             SemanticVisualView(
                 view_id="crop-0001",
                 kind=VisualViewKind.TIGHT_CROP,
-                payload_reference="outputs/views/crop-0001.jpg",
+                payload_reference="outputs/semantic-views/crop-0001.jpg",
                 source_observation_id=SourceObservationId("frame-0001"),
                 region_id=RegionId("region-0001"),
+                sha256=hashlib.sha256(_SEMANTIC_VIEW_PAYLOAD).hexdigest(),
             ),
         ),
         prompt_template_id="region/v1",
@@ -242,19 +249,35 @@ def test_semantic_execution_and_raw_response_are_persisted_and_reopened(
             "debug/40-semantic-interpretation/region-request-0001/raw-response.txt"
         ),
     )
-    execution = SemanticInterpretationExecution(
+    return SemanticInterpretationExecution(
         request=request,
         rendered_prompt=render_semantic_prompt(
-            request, SemanticPromptTemplate.default_for(request.mode)
+            request,
+            SemanticPromptTemplate.default_for(request.mode),
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
         ),
         raw_response=raw_response,
-        parsed=parse_semantic_response(raw_response, request, provenance),
+        parsed=parse_semantic_response(
+            raw_response,
+            request,
+            provenance,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        ),
         diagnostics=SemanticBackendDiagnostics(latency_ms=3.5, input_tokens=10),
         effective_configuration={"temperature": 0.0},
     )
 
+
+def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
+    tmp_path: Path,
+) -> None:
+    execution = _semantic_execution()
+    request = execution.request
+    provenance = execution.parsed.claims[0].provenance
+
     writer = _write_run(tmp_path)
-    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
     writer.add_stage_outcomes(
         (
             StageOutcome(
@@ -271,10 +294,85 @@ def test_semantic_execution_and_raw_response_are_persisted_and_reopened(
     run_dir = _run_dir(tmp_path)
     assert provenance.raw_response_reference is not None
     raw_path = run_dir / provenance.raw_response_reference
-    assert raw_path.read_text(encoding="utf-8") == raw_response
+    assert raw_path.read_text(encoding="utf-8") == execution.raw_response
+    view_path = run_dir / request.visual_views[0].payload_reference
+    assert view_path.read_bytes() == _SEMANTIC_VIEW_PAYLOAD
+    view_entry = next(
+        entry
+        for entry in manifest.file_inventory
+        if entry.path == request.visual_views[0].payload_reference
+    )
+    assert view_entry.content_hash == f"sha256:{request.visual_views[0].sha256}"
     reopened = PerceptionRunReader(run_dir).list_semantic_executions()
     assert reopened == [execution]
     assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+
+def test_finalize_rejects_semantic_execution_without_owning_result(tmp_path: Path) -> None:
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+
+    with pytest.raises(RunArtifactError, match="does not resolve to exactly one result"):
+        writer.finalize()
+
+
+def test_finalize_rejects_unmaterialized_semantic_claims(tmp_path: Path) -> None:
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+
+    with pytest.raises(RunArtifactError, match="claims were not materialized"):
+        writer.finalize()
+
+
+def test_finalize_rejects_missing_semantic_view_payload(tmp_path: Path) -> None:
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+
+    with pytest.raises(RunArtifactError, match="missing semantic view payload"):
+        writer.finalize()
+
+
+def test_writer_rejects_semantic_view_payload_with_wrong_hash(tmp_path: Path) -> None:
+    execution = _semantic_execution()
+    contradictory_view = replace(execution.request.visual_views[0], sha256="0" * 64)
+    writer = _write_run(tmp_path)
+
+    with pytest.raises(RunArtifactError, match="hash does not match"):
+        writer.add_semantic_view_payload(contradictory_view, _SEMANTIC_VIEW_PAYLOAD)
 
 
 def test_readme_summarizes_the_run(tmp_path: Path) -> None:

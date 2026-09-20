@@ -175,6 +175,7 @@ from contextmap.visual_perception.semantic_backend import (
 from contextmap.visual_perception.semantic_prompt import (
     ParsedSemanticResponse,
     RenderedSemanticPrompt,
+    SemanticConfidencePolicy,
     SemanticParseDiagnostic,
     SemanticPromptTemplate,
     SemanticResponseParseError,
@@ -301,6 +302,7 @@ __all__ = [
     "SemanticAttribute",
     "SemanticBackendDiagnostics",
     "SemanticClaim",
+    "SemanticConfidencePolicy",
     "SemanticEvidenceReference",
     "SemanticFeatureReference",
     "SemanticInferenceProvenance",

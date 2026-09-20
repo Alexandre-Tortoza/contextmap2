@@ -44,8 +44,8 @@ class SemanticVisualView:
     kind: VisualViewKind
     payload_reference: str
     source_observation_id: SourceObservationId
+    sha256: str
     region_id: RegionId | None = None
-    sha256: str | None = None
 
     def __post_init__(self) -> None:
         """Validate identity, payload, scope, and optional content hash."""
@@ -57,10 +57,9 @@ class SemanticVisualView:
             raise ValueError("full-frame visual view must not reference a region_id")
         if self.kind is not VisualViewKind.FULL_FRAME and self.region_id is None:
             raise ValueError("region visual view requires region_id")
-        if self.sha256 is not None:
-            invalid = any(character not in "0123456789abcdef" for character in self.sha256)
-            if len(self.sha256) != 64 or invalid:
-                raise ValueError("visual view sha256 must be 64 lowercase hexadecimal characters")
+        invalid = any(character not in "0123456789abcdef" for character in self.sha256)
+        if len(self.sha256) != 64 or invalid:
+            raise ValueError("visual view sha256 must be 64 lowercase hexadecimal characters")
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -26,7 +26,9 @@ configuration_fingerprint
 
 `SemanticVisualView` distingue full frame, masked subject, tight crop e
 contextual crop. Cada view referencia o payload materializado, a observação de
-origem e, quando aplicável, a região congelada. `SemanticFeatureReference`
+origem, um SHA-256 obrigatório e, quando aplicável, a região congelada. O run
+artifact inventaria os bytes exatos abaixo de `outputs/semantic-views/` e
+valida seu hash antes da finalização. `SemanticFeatureReference`
 registra `feature_id`, scope e `embedding_space_id`; o vetor não é embutido no
 request. `SceneContext` e metadata são opcionais e permanecem explícitos.
 `supporting_metadata` integra o request serializado e o prompt renderizado;
@@ -75,17 +77,21 @@ com o request antes da renderização.
 `semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
 `scene_context=null` e ao menos uma claim com exatamente uma primária; SCENE
 exige um objeto `scene_context` e permite `claims=[]` quando os campos
-estruturados já expressam a evidência sem redundância. Abstention é explícita e
+estruturados contêm ao menos um valor não nulo. Uma resposta SCENE não abstida
+é rejeitada quando não possui claim nem campo de contexto significativo.
+Abstention é explícita e
 não pode carregar saída semântica escondida.
 
-Campos inesperados, tipos inválidos, JSON malformado, confidence diferente de
-`null` e conteúdo obrigatório ausente causam
+Campos inesperados, tipos inválidos, JSON malformado e conteúdo obrigatório
+ausente causam
 `SemanticResponseParseError`. A única reparação v1 é remover uma code fence JSON
 externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
-nunca promove confiança auto-relatada pelo VLM: `SemanticClaim.confidence`
-permanece `None` até existir uma fonte medida ou calibrada fora da resposta do
-modelo. O hash da resposta bruta é registrado separadamente dos outputs
-canônicos.
+`SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
+prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
+schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
+fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
+número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
+bruta é registrado separadamente dos outputs canônicos.
 
 ## Materialização e persistência
 

@@ -54,6 +54,7 @@ from contextmap.visual_perception.semantic_backend import (
     decode_semantic_execution,
     encode_semantic_execution,
 )
+from contextmap.visual_perception.semantic_requests import SemanticVisualView
 from contextmap.visual_perception.serialization import (
     decode_perception_result,
     encode_perception_result,
@@ -223,6 +224,7 @@ class PerceptionRunWriter:
         self._stage_outcomes: list[StageOutcome] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
+        self._semantic_view_payloads: dict[str, bytes] = {}
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
@@ -285,6 +287,35 @@ class PerceptionRunWriter:
                     )
                 self._semantic_executions.append(outcome.output)
                 self._semantic_request_ids.add(request_id)
+
+    def add_semantic_view_payload(self, view: SemanticVisualView, payload: bytes) -> None:
+        """Queue the exact visual payload supplied to one semantic request.
+
+        Args:
+            view: Canonical view whose artifact-relative reference and SHA-256
+                identify the payload.
+            payload: Exact encoded image bytes supplied to the backend.
+
+        Raises:
+            RunArtifactError: If finalized, the reference is outside the
+                semantic-view output namespace, or the payload hash conflicts
+                with the view contract or another queued payload.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add semantic view payloads after finalize()")
+        _validate_semantic_view_payload_reference(view.payload_reference)
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != view.sha256:
+            raise RunArtifactError(
+                "semantic view payload hash does not match SemanticVisualView.sha256: "
+                f"expected {view.sha256!r}, found {digest!r}"
+            )
+        existing = self._semantic_view_payloads.get(view.payload_reference)
+        if existing is not None and existing != payload:
+            raise RunArtifactError(
+                f"conflicting semantic view payload for {view.payload_reference!r}"
+            )
+        self._semantic_view_payloads[view.payload_reference] = payload
 
     def add_feature_payload(
         self,
@@ -353,6 +384,8 @@ class PerceptionRunWriter:
         if self._final_dir.exists():
             raise RunArtifactError(f"perception run artifact already exists: {self._final_dir}")
         self._validate_feature_payload_references()
+        self._validate_semantic_execution_materialization()
+        self._validate_semantic_view_payloads()
 
         self._tmp_dir.mkdir(parents=True, exist_ok=False)
         try:
@@ -408,6 +441,53 @@ class PerceptionRunWriter:
                         f"feature_id={feature.feature_id!r}"
                     )
 
+    def _validate_semantic_execution_materialization(self) -> None:
+        """Require every semantic execution to match canonical persisted evidence."""
+        for execution in self._semantic_executions:
+            matches = [
+                result
+                for result in self._results
+                if result.result_id == execution.request.perception_result_id
+                and result.source_observation_id == execution.request.source_observation_id
+            ]
+            if len(matches) != 1:
+                raise RunArtifactError(
+                    "semantic execution does not resolve to exactly one result: "
+                    f"request_id={execution.request.request_id!r}, matches={len(matches)}"
+                )
+            result = matches[0]
+            missing_claims = [
+                claim.claim_id for claim in execution.parsed.claims if claim not in result.claims
+            ]
+            if missing_claims:
+                raise RunArtifactError(
+                    "semantic execution claims were not materialized in its result: "
+                    f"{missing_claims!r}"
+                )
+            parsed_context = execution.parsed.scene_context
+            if parsed_context is not None and parsed_context != result.scene_context:
+                raise RunArtifactError(
+                    "semantic execution scene_context was not materialized in its result"
+                )
+
+    def _validate_semantic_view_payloads(self) -> None:
+        """Require every referenced semantic view to be content-addressed in this run."""
+        referenced: dict[str, str] = {}
+        for execution in self._semantic_executions:
+            for view in execution.request.visual_views:
+                previous_hash = referenced.setdefault(view.payload_reference, view.sha256)
+                if previous_hash != view.sha256:
+                    raise RunArtifactError(
+                        "semantic view reference has conflicting hashes: "
+                        f"{view.payload_reference!r}"
+                    )
+        missing = sorted(set(referenced) - self._semantic_view_payloads.keys())
+        if missing:
+            raise RunArtifactError(f"missing semantic view payloads: {missing!r}")
+        unused = sorted(self._semantic_view_payloads.keys() - set(referenced))
+        if unused:
+            raise RunArtifactError(f"semantic view payloads are not referenced: {unused!r}")
+
     def _write_contents(self) -> RunArtifactManifest:
         file_entries: list[RunArtifactFileEntry] = []
 
@@ -430,6 +510,12 @@ class PerceptionRunWriter:
         file_entries.append(_file_entry(_METRICS_FILENAME, metrics_content.encode("utf-8")))
 
         if self._semantic_executions:
+            for payload_reference, payload in sorted(self._semantic_view_payloads.items()):
+                payload_path = self._tmp_dir / payload_reference
+                payload_path.parent.mkdir(parents=True, exist_ok=True)
+                payload_path.write_bytes(payload)
+                file_entries.append(_file_entry(payload_reference, payload))
+
             semantic_records: list[dict[str, Any]] = []
             for execution in self._semantic_executions:
                 raw_reference = _semantic_raw_response_reference(execution)
@@ -726,6 +812,20 @@ def _semantic_raw_response_reference(execution: SemanticInterpretationExecution)
     if request_path.name != request_id or request_id in {".", ".."}:
         raise RunArtifactError(f"semantic request_id is not a safe path segment: {request_id!r}")
     return f"{_SEMANTIC_DEBUG_ROOT}/{request_id}/raw-response.txt"
+
+
+def _validate_semantic_view_payload_reference(payload_reference: str) -> None:
+    path = PurePosixPath(payload_reference)
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or path.parts[:2] != ("outputs", "semantic-views")
+        or len(path.parts) < 3
+    ):
+        raise RunArtifactError(
+            "semantic view payload_reference must be a safe path below "
+            f"'outputs/semantic-views/': {payload_reference!r}"
+        )
 
 
 def _validate_semantic_raw_response_reference(

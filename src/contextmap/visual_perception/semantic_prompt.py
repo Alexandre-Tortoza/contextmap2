@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from math import isfinite
 from typing import Any, cast
 
@@ -27,6 +28,13 @@ from contextmap.visual_perception.semantic_requests import (
 
 class SemanticResponseParseError(ValueError):
     """Raised when a backend response cannot become canonical semantic evidence."""
+
+
+class SemanticConfidencePolicy(Enum):
+    """Declare whether a parser caller owns meaningful numeric confidence."""
+
+    UNSCORED_ONLY = "unscored_only"
+    MEASURED = "measured"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -104,6 +112,8 @@ class ParsedSemanticResponse:
 def render_semantic_prompt(
     request: SemanticInterpretationRequest,
     template: SemanticPromptTemplate,
+    *,
+    confidence_policy: SemanticConfidencePolicy,
 ) -> RenderedSemanticPrompt:
     """Render a deterministic prompt after checking template/request identity."""
     if template.mode is not request.mode:
@@ -150,15 +160,25 @@ def render_semantic_prompt(
             "confidence",
         ],
         "properties": {
-            "hypothesis": {"type": "string"},
+            "hypothesis": {"type": "string", "minLength": 1},
             "role": {"enum": ["primary", "alternative"]},
-            "category": {"type": ["string", "null"]},
+            "category": {
+                "anyOf": [
+                    {"type": "string", "minLength": 1},
+                    {"type": "null"},
+                ]
+            },
             "region_kind": {"enum": ["thing", "stuff", None]},
             "attributes": {
                 "type": "object",
+                "propertyNames": {"minLength": 1},
                 "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
             },
-            "confidence": {"type": "null"},
+            "confidence": (
+                {"type": "null"}
+                if confidence_policy is SemanticConfidencePolicy.UNSCORED_ONLY
+                else {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+            ),
         },
     }
     scene_context_schema: dict[str, object]
@@ -178,7 +198,15 @@ def render_semantic_prompt(
         )
         scene_context_schema = {
             "additionalProperties": False,
-            "properties": {name: {"type": ["string", "null"]} for name in scene_fields},
+            "properties": {
+                name: {
+                    "anyOf": [
+                        {"type": "string", "minLength": 1},
+                        {"type": "null"},
+                    ]
+                }
+                for name in scene_fields
+            },
             "type": "object",
         }
     claims_schema: dict[str, object] = {
@@ -188,6 +216,30 @@ def render_semantic_prompt(
     }
     if request.mode is SemanticInterpretationMode.REGION:
         claims_schema["description"] = "Exactly one item must have role=primary."
+    non_abstained_schema: dict[str, object] = {
+        "properties": {
+            "abstained": {"const": False},
+            "claims": claims_schema,
+            "scene_context": scene_context_schema,
+        },
+    }
+    if request.mode is SemanticInterpretationMode.SCENE:
+        non_abstained_schema["anyOf"] = [
+            {"properties": {"claims": {"minItems": 1}}},
+            {
+                "properties": {
+                    "scene_context": {
+                        "anyOf": [
+                            {
+                                "required": [name],
+                                "properties": {name: {"type": "string", "minLength": 1}},
+                            }
+                            for name in scene_fields
+                        ]
+                    }
+                }
+            },
+        ]
     schema: dict[str, object] = {
         "type": "object",
         "additionalProperties": False,
@@ -200,13 +252,7 @@ def render_semantic_prompt(
                     "scene_context": {"type": "null"},
                 },
             },
-            {
-                "properties": {
-                    "abstained": {"const": False},
-                    "claims": claims_schema,
-                    "scene_context": scene_context_schema,
-                },
-            },
+            non_abstained_schema,
         ],
     }
     text = "\n\n".join(
@@ -234,6 +280,8 @@ def parse_semantic_response(
     raw_response: str,
     request: SemanticInterpretationRequest,
     provenance: SemanticInferenceProvenance,
+    *,
+    confidence_policy: SemanticConfidencePolicy,
 ) -> ParsedSemanticResponse:
     """Parse strict JSON, allowing only recorded non-semantic code-fence removal."""
     _validate_parse_identity(request, provenance)
@@ -264,7 +312,13 @@ def parse_semantic_response(
             diagnostics=diagnostics,
         )
     claims = tuple(
-        _parse_claim(item, request=request, provenance=provenance, index=index)
+        _parse_claim(
+            item,
+            request=request,
+            provenance=provenance,
+            confidence_policy=confidence_policy,
+            index=index,
+        )
         for index, item in enumerate(raw_claims)
     )
     if request.mode is SemanticInterpretationMode.REGION:
@@ -291,16 +345,23 @@ def parse_semantic_response(
             raise SemanticResponseParseError(
                 f"scene_context contains unexpected fields: {sorted(unexpected)}"
             )
+        context_values = {
+            "scene_type": _optional_string(raw_context.get("scene_type"), "scene_type"),
+            "environment": _optional_string(raw_context.get("environment"), "environment"),
+            "layout": _optional_string(raw_context.get("layout"), "layout"),
+            "lighting": _optional_string(raw_context.get("lighting"), "lighting"),
+            "visibility": _optional_string(raw_context.get("visibility"), "visibility"),
+            "navigability": _optional_string(raw_context.get("navigability"), "navigability"),
+        }
+        if not claims and all(value is None for value in context_values.values()):
+            raise SemanticResponseParseError(
+                "non-abstained scene response requires semantic evidence"
+            )
         scene_context = SceneContext(
             source_observation_id=request.source_observation_id,
             perception_result_id=request.perception_result_id,
             provenance=provenance,
-            scene_type=_optional_string(raw_context.get("scene_type"), "scene_type"),
-            environment=_optional_string(raw_context.get("environment"), "environment"),
-            layout=_optional_string(raw_context.get("layout"), "layout"),
-            lighting=_optional_string(raw_context.get("lighting"), "lighting"),
-            visibility=_optional_string(raw_context.get("visibility"), "visibility"),
-            navigability=_optional_string(raw_context.get("navigability"), "navigability"),
+            **context_values,
             claims=claims,
             evidence_references=request.evidence_references(),
         )
@@ -361,6 +422,7 @@ def _parse_claim(
     *,
     request: SemanticInterpretationRequest,
     provenance: SemanticInferenceProvenance,
+    confidence_policy: SemanticConfidencePolicy,
     index: int,
 ) -> SemanticClaim:
     data = _mapping(value, f"claim[{index}]")
@@ -397,10 +459,17 @@ def _parse_claim(
             SemanticAttribute(name=name, value=cast(JsonScalar, attribute_value))
         )
     confidence = data.get("confidence")
-    if confidence is not None:
+    if confidence is not None and confidence_policy is SemanticConfidencePolicy.UNSCORED_ONLY:
         raise SemanticResponseParseError(
             f"claim[{index}].confidence must be null; model-reported confidence is uncalibrated"
         )
+    if confidence is not None and (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not isfinite(confidence)
+        or not 0.0 <= confidence <= 1.0
+    ):
+        raise SemanticResponseParseError(f"claim[{index}].confidence must be in [0, 1] or null")
     return SemanticClaim(
         claim_id=ClaimId(
             f"{request.perception_result_id}--semantic-{request.request_id}-{index:04d}"
@@ -413,7 +482,7 @@ def _parse_claim(
         category=category,
         region_kind=region_kind,
         attributes=tuple(parsed_attributes),
-        confidence=None,
+        confidence=None if confidence is None else float(confidence),
         region_id=request.region_id,
         evidence_references=request.evidence_references(),
     )

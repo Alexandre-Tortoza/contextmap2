@@ -275,6 +275,7 @@ def test_assemble_perception_result_materializes_semantic_execution() -> None:
                 payload_reference="outputs/views/region-0001.jpg",
                 source_observation_id=SourceObservationId("frame-0124"),
                 region_id=RegionId("region-0001"),
+                sha256="0" * 64,
             ),
         ),
         prompt_template_id="region/v1",
