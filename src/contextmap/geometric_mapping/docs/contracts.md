@@ -13,7 +13,7 @@ Unidades e frames são explícitos em todo contrato: `Bounds3D` declara o frame 
 
 ## Identidade
 
-`GeometryReference` é `(map_id, geometry_id)` e é **local ao artifact de mapa imutável** identificado por `map_id`. Referências continuam válidas depois de fechar e reabrir o artifact. `geometry_id_for(map_id=..., index=...)` gera identidades como função pura das entradas, então não há registry de identidade.
+`GeometryReference` é `(map_id, geometry_id)` e é **local ao artifact de mapa imutável** identificado por `map_id`. Referências continuam válidas depois de fechar e reabrir o artifact. `geometry_id_for(map_id=..., index=...)` gera identidades como função pura das entradas, então não há registry de identidade, e `geometry_index_of(...)` a inverte: só a grafia canônica é aceita.
 
 Downstream mantém referências em vez de duplicar XYZ ou proveniência; quando precisa da coordenada, resolve a referência por `GeometrySource.get`.
 
@@ -42,6 +42,8 @@ Cada `TransformStep` declara `kind` (`STATIC_CALIBRATION` ou `DYNAMIC_POSE`), `p
 
 Um ponto é `MEASURED` (uma medição do sensor, transformada) ou `AGGREGATED` (produzido por uma regra explícita de deduplicação ou downsampling). Um ponto agregado **nunca finge ser uma medição crua**: nomeia a `aggregation_rule`, informa `contributing_point_count` (pelo menos dois) e não carrega `source_point_index`.
 
+Cada ponto também carrega `motion_correction` (`RAW`, `CORRECTED` ou `UNKNOWN`, padrão `UNKNOWN`): o estado de correção de movimento do scan de origem, nunca inferido. Ver [`motion-correction.md`](motion-correction.md).
+
 ## `Bounds3D`
 
 Caixa alinhada aos eixos, com `frame_id`, `minimum_m` e `maximum_m`. Fronteiras são **inclusivas**: um ponto sobre uma face está contido e duas caixas que se tocam se intersectam. `contains` e `intersects` exigem o mesmo frame e falham caso contrário. `Bounds3D.enclosing` constrói a caixa justa de um conjunto de pontos.
@@ -50,7 +52,9 @@ Caixa alinhada aos eixos, com `frame_id`, `minimum_m` e `maximum_m`. Fronteiras 
 
 Identidade e metadados de um mapa persistente: `map_id`, `frame_id` (o frame global), `point_count`, `bounds` (no mesmo frame), `source_observation_ids` (únicas), `time_bounds`, `spatial_index` opcional e `provenance` (`GeometricMapProvenance`: sequência, seleção, trajetória e run de State Estimation usados, identidade da calibração, política de lookup de pose, fingerprint de configuração e versão do código).
 
-O objeto **não embute os pontos**: eles vivem no storage do artifact e são alcançados por `GeometrySource`. `SpatialIndexMetadata` registra o índice quando ele afeta o comportamento de consulta e distingue um índice derivado (`is_derived`) da geometria autoritativa: um índice derivado corrompido nunca redefine coordenadas.
+`aggregation_rule` registra a regra explícita pela qual medições foram unidas em pontos agregados; `None` quando todo ponto é uma medição crua.
+
+O objeto **não embute os pontos**: eles vivem no storage do artifact e são alcançados por `GeometrySource`. `SpatialIndexMetadata` registra o índice quando ele afeta o comportamento de consulta e distingue um índice derivado (`is_derived`) da geometria autoritativa: um índice derivado corrompido nunca redefine coordenadas. O mapa produzido declara o índice `scan_bounds` (derivado); ver [`spatial-access.md`](spatial-access.md).
 
 ## `GeometrySource`
 
