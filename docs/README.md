@@ -32,7 +32,7 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 
 ## Estado materializado na `dev`
 
-A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os seis primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os sete primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
 
 ```mermaid
 flowchart LR
@@ -51,8 +51,10 @@ flowchart LR
     SA --> AR["SensorAssociationRunArtifact"]
     MAP --> PTR["Point Representation<br/>implementado, opcional"]
     PTR --> PTA["PointRepresentationRunArtifact"]
-    AR -. próximo boundary .-> NEXT["Semantic Fusion<br/>e downstream planejados"]
-    PTA -.-> NEXT
+    AR --> FUS["Semantic Fusion<br/>implementado"]
+    PTA -.-> FUS
+    FUS --> FUA["SemanticFusionRunArtifact"]
+    FUA -. próximo boundary .-> NEXT["Semantic Mapping<br/>e downstream planejados"]
 ```
 
 Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Os adapters de features têm testes determinísticos sem pesos; a validação numérica com checkpoints reais permanece uma etapa explícita da máquina de inferência.
@@ -64,6 +66,8 @@ Geometric Mapping possui os contratos `GeometryPoint`/`GeometryReference`/`Geome
 Sensor Association possui os contratos `SpatialObservation` e `ObservationQuality`, os modelos de câmera calibrados (pinhole, fisheye e MEI, com o MEI adicionado à calibração canônica de Ingestion), a cadeia mapa→câmera→imagem preparada, a resolução de visibilidade e oclusão, o pertencimento à máscara de `Region2D`, a amostragem de features densas (nativas ou melhoradas, como canais distintos), os diagnósticos de calibração, reprojeção e alinhamento temporal, o `SensorAssociationRunArtifact` e o harness de avaliação estratificada em `evaluation`. Toda a verificação usa fixtures sintéticos determinísticos: não há mapa geométrico no frame da trajetória (depende da execução real do FAST-LIO) nem correspondências de referência reais.
 
 Point Representation é uma capability **opcional**: possui os contratos `PointRepresentation`/`RepresentationSpace`, a extração de suporte local sobre `GeometrySource`, o port `PointEncoder` e o serviço de execução independente de backend, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3, o `PointRepresentationRunArtifact` e o harness de ablação em `evaluation`. Ela deve justificar seu custo por avaliação controlada, e essa justificativa **não existe ainda**: o PTv3 nunca foi executado (sem torch nem pesos), a ablação downstream depende de Semantic Fusion e Entity Resolution e toda a verificação usa geometria sintética.
+
+Semantic Fusion acumula a evidência multi-vista **sem criar identidade de objeto**: possui `FusionSupport`, `EvidenceContribution`, o agrupamento por observação física, a política baseline de acumulação (hipóteses por chave de label, stances e sinais tipados, abstenção configurável e registros de incerteza), os canais de evidência tipados, a política opcional ciente de qualidade, o `SemanticFusionRunArtifact` e o harness de validação em `evaluation`. Toda a verificação usa fixtures sintéticos: não há run de fusão sobre dados reais nem anotações de referência reais, então **nenhuma decisão foi tomada** sobre manter a política ciente de qualidade opcional ou adotá-la.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
@@ -169,6 +173,7 @@ Módulos com documentação própria:
 - [`state_estimation`](../src/contextmap/state_estimation/docs/README.md) — pose dinâmica do rig: `PoseEstimate`, `Trajectory`, convenção de transform e provenance.
 - [`geometric_mapping`](../src/contextmap/geometric_mapping/docs/README.md) — geometria 3D persistente no frame global do mapa: `GeometryPoint`, `GeometryReference`, `GeometricMap`, `Bounds3D` e a fronteira de leitura `GeometrySource`.
 - [`sensor_association`](../src/contextmap/sensor_association/docs/README.md) — evidência visual 2D ancorada em geometria 3D persistente: `SpatialObservation`, modelos de câmera, visibilidade e oclusão, pertencimento à máscara, features densas e `ObservationQuality`.
+- [`semantic_fusion`](../src/contextmap/semantic_fusion/docs/README.md) — acumulação de evidência multi-vista sobre suporte espacial, sem identidade de objeto: `FusionSupport`, `FusedEvidence`, agrupamento por observação física, política baseline e ciente de qualidade, canais tipados e o artifact de run.
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 

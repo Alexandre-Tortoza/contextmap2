@@ -1,0 +1,685 @@
+"""The baseline multi-view semantic evidence accumulation policy.
+
+``baseline-evidence-accumulation-v1`` turns the spatial observations of one
+:class:`FusionSupport` into one :class:`FusedEvidence`. It is the canonical control
+arm: transparent, deterministic and deliberately conservative.
+
+What it does:
+
+* every spatial observation of the support is one :class:`EvidenceContribution`, which
+  references its claims, scorer outputs, features and, when provided, its observation
+  quality;
+* claims are grouped into hypotheses by their **label key**: the text under Unicode NFKC
+  normalisation, case-folded, with whitespace collapsed. That is a typographic rule only:
+  ``"Pallet"`` and ``"pallet "`` are one hypothesis, ``"pallet"`` and ``"wooden pallet"``
+  are two, and no synonym, plural or taxonomy is assumed. The label shown is the most
+  common whitespace-collapsed spelling, ties broken by the smallest;
+* each claim is listed under every hypothesis with its stance. A claim that proposes the
+  hypothesis is ``SUPPORTING``. Any other claim is ``AMBIGUOUS`` when it comes from the same
+  contribution as a supporting claim (alternatives of one interpretation) or has the
+  ``ALTERNATIVE`` role, and ``CONFLICTING`` otherwise;
+* each claim carries typed signals: its own confidence (``None`` when unscored, never
+  zero) and one signal per scorer output. Nothing is averaged or combined;
+* hypotheses are numbered by label key, so the order implies no ranking. The number of
+  independent supporters is a *count of distinct physical observations*
+  (:meth:`FusedEvidence.supporting_physical_observations`), so repeated inference over
+  one frame and one claim over many geometry points each count once.
+
+* a claim whose label key is one of the **explicitly configured** abstention labels
+  (``unknown``, ``not sure``, ...) is an *abstention*: it never becomes a hypothesis and it
+  is neither support for a hypothesis nor evidence against it (``ABSTAINING``). No label is
+  an abstention unless the policy says so;
+* uncertainty is reported, never resolved, and always names the exact contributions and
+  claims behind it: ``CONTRADICTION`` when distinct physical observations back
+  incompatible hypotheses with primary claims, ``AMBIGUITY`` when hypotheses compete
+  without such a contradiction (alternatives of one interpretation, or runs that disagree
+  over one frame), ``NEAR_TIE`` when the leading hypotheses' counts of supporting physical
+  observations are within the configured margin, and ``INSUFFICIENT_EVIDENCE`` when no
+  hypothesis exists. Ties compare counts of physical observations only, never scores.
+
+What it deliberately does not do: weight by observation quality (the references are kept,
+never used), recognise refinements such as ``pallet`` and ``wooden pallet`` (that needs an
+explicit, versioned rule the baseline does not have, so they compete as separate
+hypotheses), pick a winner, infer entity identity, or apply prior knowledge.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import unicodedata
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+
+from contextmap.ingestion import SourceObservationId
+from contextmap.semantic_fusion.grouping import PhysicalObservationGrouping
+from contextmap.semantic_fusion.models import (
+    ChannelProvenance,
+    EvidenceChannel,
+    EvidenceContribution,
+    EvidenceContributionId,
+    EvidenceReference,
+    EvidenceStance,
+    FusedEvidence,
+    FusedEvidenceProvenance,
+    FusedHypothesis,
+    FusedHypothesisId,
+    FusionSupport,
+    HypothesisEvidence,
+    ObservationQualityRef,
+    PhysicalObservationGroup,
+    PointRepresentationRef,
+    ScoreReference,
+    SupportSignal,
+    SupportSignalKind,
+    UncertaintyKind,
+    UncertaintyRecord,
+    _producer_key,
+    _time_bounds_of,
+    _uncertainty_key,
+    evidence_contribution_id_for,
+    fused_evidence_id_for,
+)
+from contextmap.sensor_association import SpatialObservation, SpatialObservationId
+from contextmap.visual_perception import (
+    BackendProvenance,
+    ClaimId,
+    HypothesisRole,
+    PerceptionResult,
+    PerceptionResultId,
+    SemanticClaim,
+    SemanticSupport,
+)
+
+BASELINE_ACCUMULATION_POLICY_ID = "baseline-evidence-accumulation-v1"
+"""Versioned identity of the baseline policy, including its label-key rule."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class BaselineAccumulationPolicy:
+    """Configuration of the baseline policy: what counts as abstention and as a near tie.
+
+    Attributes:
+        abstention_labels: Hypothesis texts that express abstention rather than a hypothesis.
+            They are compared by label key, so spelling and case do not matter. Empty by
+            default: no label is an abstention unless the profile says so.
+        near_tie_margin: The largest difference, in distinct supporting physical
+            observations, at which the leading hypotheses still count as tied. ``0`` means
+            exactly equal.
+        channels: The evidence channels that take part. Semantic claims are required;
+            geometry support is intrinsic and always active. The default is semantic claims
+            only, so a channel is used only when declared, however much data is offered.
+    """
+
+    abstention_labels: frozenset[str] = frozenset()
+    near_tie_margin: int = 0
+    channels: frozenset[EvidenceChannel] = frozenset({EvidenceChannel.SEMANTIC_CLAIMS})
+
+    def __post_init__(self) -> None:
+        """Validate the channels, the margin and the labels.
+
+        Raises:
+            ValueError: If semantic claims are not among the channels, the margin is
+                negative or an abstention label is empty.
+        """
+        if EvidenceChannel.SEMANTIC_CLAIMS not in self.channels:
+            raise ValueError(
+                "channels must include semantic_claims: hypotheses come from semantic claims"
+            )
+        if self.near_tie_margin < 0:
+            raise ValueError(f"near_tie_margin must not be negative, got {self.near_tie_margin}")
+        if any(not label_key(label) for label in self.abstention_labels):
+            raise ValueError("an abstention label must not be empty")
+
+    @property
+    def active_channels(self) -> frozenset[EvidenceChannel]:
+        """The declared channels plus the intrinsic geometry support."""
+        return self.channels | {EvidenceChannel.GEOMETRY_SUPPORT}
+
+    @property
+    def abstention_keys(self) -> frozenset[str]:
+        """The abstention labels reduced to their label keys."""
+        return frozenset(label_key(label) for label in self.abstention_labels)
+
+    def fingerprint(self) -> str:
+        """Hash the policy identity and configuration, for provenance.
+
+        Returns:
+            ``sha256:`` followed by the digest of the canonical configuration; labels that
+            differ only typographically give the same fingerprint.
+        """
+        canonical = json.dumps(
+            {
+                "policy_id": BASELINE_ACCUMULATION_POLICY_ID,
+                "abstention_labels": sorted(self.abstention_keys),
+                "near_tie_margin": self.near_tie_margin,
+                "channels": sorted(channel.value for channel in self.active_channels),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+@dataclass(frozen=True)
+class _Claim:
+    """One claim of one contribution, with the signals that came with it."""
+
+    contribution_id: EvidenceContributionId
+    physical_observation_id: SourceObservationId
+    claim: SemanticClaim
+    key: str
+    abstains: bool
+    signals: tuple[SupportSignal, ...]
+
+
+def label_key(text: str) -> str:
+    """Reduce a hypothesis text to the key under which the baseline compares labels.
+
+    Args:
+        text: The hypothesis text as proposed.
+
+    Returns:
+        The text under NFKC normalisation, case-folded, with whitespace collapsed. Only
+        typographic differences are removed; no synonym or taxonomy is applied.
+    """
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def accumulate_baseline_evidence(
+    support: FusionSupport,
+    *,
+    observations: Mapping[SpatialObservationId, SpatialObservation],
+    grouping: PhysicalObservationGrouping,
+    perception_results: Mapping[PerceptionResultId, PerceptionResult],
+    semantic_scores: Mapping[PerceptionResultId, Sequence[SemanticSupport]] | None = None,
+    observation_quality_refs: Mapping[SpatialObservationId, ObservationQualityRef] | None = None,
+    point_representation_refs: Iterable[PointRepresentationRef] | None = None,
+    policy: BaselineAccumulationPolicy | None = None,
+    code_version: str | None = None,
+) -> FusedEvidence:
+    """Accumulate the evidence of one support under the baseline policy.
+
+    Evidence channels are opt-in: the policy declares which take part, and the caller may
+    offer the same inputs to every configuration. Data offered for a channel the policy did
+    not declare is ignored, and a declared channel with no input at all is an error.
+
+    Args:
+        support: The support to accumulate over.
+        observations: The spatial observations, by identity; every observation of the
+            support must be present, and any other is ignored.
+        grouping: The physical-observation grouping of the same observations, which
+            supplies the acquisition time of each physical observation.
+        perception_results: The perception results that own the claims, by identity.
+        semantic_scores: Scorer outputs per perception result, needed by the
+            ``semantic_scores`` channel. A score for a claim that is not attached to an
+            observation of the support is ignored.
+        observation_quality_refs: References to the measured quality of each observation,
+            needed by the ``observation_quality`` channel. The baseline keeps them and never
+            weights by them.
+        point_representation_refs: Static 3D structure, needed by the
+            ``point_representation`` channel. Only references anchored inside the support
+            are kept, each once.
+        policy: The channels, what counts as abstention and as a near tie; the default is
+            semantic claims only, no abstention and only exact ties.
+        code_version: Code revision to record in the provenance, when known.
+
+    Returns:
+        The fused evidence; it does not depend on the order of any input.
+
+    Raises:
+        ValueError: If a declared channel has no input (scores, quality references or
+            structural references), an observation or perception result is missing, a claim
+            is not in its result, an observation belongs to another map or has geometry outside the
+            support, the grouping does not cover a physical observation or does not list an
+            observation, or a scorer scored one claim twice.
+    """
+    chosen = BaselineAccumulationPolicy() if policy is None else policy
+    active = chosen.active_channels
+    _require_input(active, EvidenceChannel.SEMANTIC_SCORES, semantic_scores, "semantic scores")
+    _require_input(
+        active,
+        EvidenceChannel.OBSERVATION_QUALITY,
+        observation_quality_refs,
+        "observation quality references",
+    )
+    _require_input(
+        active,
+        EvidenceChannel.POINT_REPRESENTATION,
+        point_representation_refs,
+        "point representation references",
+    )
+    scores = semantic_scores if EvidenceChannel.SEMANTIC_SCORES in active else None
+    quality_refs = (
+        observation_quality_refs if EvidenceChannel.OBSERVATION_QUALITY in active else None
+    )
+    use_features = EvidenceChannel.VISUAL_FEATURES in active
+
+    contributions: list[EvidenceContribution] = []
+    claims: list[_Claim] = []
+    for observation_id in support.spatial_observation_ids:
+        observation = _observation(support, observations, observation_id)
+        result = perception_results.get(observation.perception_result_id)
+        if result is None:
+            raise ValueError(
+                f"no perception result {observation.perception_result_id!r} for spatial "
+                f"observation {observation_id!r}"
+            )
+        contribution, view_claims = _contribution(
+            support,
+            observation,
+            result,
+            () if scores is None else scores.get(observation.perception_result_id, ()),
+            None if quality_refs is None else quality_refs.get(observation_id),
+            chosen.abstention_keys,
+            use_features=use_features,
+        )
+        contributions.append(contribution)
+        claims.extend(view_claims)
+
+    groups = _groups(contributions, grouping)
+    hypotheses = _hypotheses(claims)
+    support_geometry = set(support.geometry_support)
+    structure = sorted(
+        {
+            ref
+            for ref in (point_representation_refs or ())
+            if EvidenceChannel.POINT_REPRESENTATION in active
+            and ref.geometry_reference in support_geometry
+        },
+        key=lambda ref: (ref.run_id, ref.representation_id),
+    )
+    return FusedEvidence(
+        fused_evidence_id=fused_evidence_id_for(fusion_support_id=support.fusion_support_id),
+        fusion_support_id=support.fusion_support_id,
+        physical_observation_groups=groups,
+        contributions=tuple(sorted(contributions, key=lambda item: item.contribution_id)),
+        hypotheses=hypotheses,
+        channels=_channel_provenance(active, support, claims, contributions, structure),
+        point_representation_refs=tuple(structure),
+        uncertainty=_uncertainty(hypotheses, claims, contributions, chosen.near_tie_margin),
+        temporal_summary=_time_bounds_of(
+            [group.acquisition_timestamp for group in groups], owner="the physical observations"
+        ),
+        provenance=FusedEvidenceProvenance(
+            grouping_policy_id=grouping.grouping_policy_id,
+            fusion_policy_id=BASELINE_ACCUMULATION_POLICY_ID,
+            configuration_fingerprint=chosen.fingerprint(),
+            code_version=code_version,
+        ),
+    )
+
+
+def _observation(
+    support: FusionSupport,
+    observations: Mapping[SpatialObservationId, SpatialObservation],
+    observation_id: SpatialObservationId,
+) -> SpatialObservation:
+    observation = observations.get(observation_id)
+    if observation is None:
+        raise ValueError(
+            f"no spatial observation {observation_id!r} for support {support.fusion_support_id!r}"
+        )
+    if observation.provenance.geometric_map_id != support.geometric_map_id:
+        raise ValueError(
+            f"spatial observation {observation_id!r} references map "
+            f"{observation.provenance.geometric_map_id!r}, but the support is over "
+            f"{support.geometric_map_id!r}"
+        )
+    outside = set(observation.geometry_support) - set(support.geometry_support)
+    if outside:
+        raise ValueError(
+            f"spatial observation {observation_id!r} has {len(outside)} geometry elements "
+            f"outside support {support.fusion_support_id!r}"
+        )
+    return observation
+
+
+def _contribution(
+    support: FusionSupport,
+    observation: SpatialObservation,
+    result: PerceptionResult,
+    result_scores: Sequence[SemanticSupport],
+    quality: ObservationQualityRef | None,
+    abstention_keys: frozenset[str],
+    *,
+    use_features: bool,
+) -> tuple[EvidenceContribution, list[_Claim]]:
+    contribution_id = evidence_contribution_id_for(
+        fusion_support_id=support.fusion_support_id,
+        spatial_observation_id=observation.spatial_observation_id,
+    )
+    result_claims = {claim.claim_id: claim for claim in result.claims}
+    scores_of_claim = _scores_by_claim(observation, result_scores)
+    claim_refs = sorted(observation.semantic_claim_refs, key=lambda ref: ref.claim_id)
+    selected: list[SemanticClaim] = []
+    for ref in claim_refs:
+        claim = result_claims.get(ref.claim_id)
+        if claim is None:
+            raise ValueError(
+                f"perception result {result.result_id!r} does not contain claim {ref.claim_id!r} "
+                f"of spatial observation {observation.spatial_observation_id!r}"
+            )
+        selected.append(claim)
+
+    score_refs = sorted(
+        (
+            ScoreReference(claim_id=claim.claim_id, scorer=score.provenance)
+            for claim in selected
+            for score in scores_of_claim.get(claim.claim_id, ())
+        ),
+        key=lambda ref: (ref.claim_id, *_producer_key(ref.scorer)),
+    )
+    contribution = EvidenceContribution(
+        contribution_id=contribution_id,
+        physical_observation_id=observation.source_observation_id,
+        perception_result_id=observation.perception_result_id,
+        perception_run_id=observation.provenance.perception_run_id,
+        spatial_observation_id=observation.spatial_observation_id,
+        region_id=observation.region_id,
+        geometry_support=observation.geometry_support,
+        claim_refs=tuple(claim_refs),
+        score_refs=tuple(score_refs),
+        visual_feature_refs=tuple(
+            sorted(observation.visual_feature_refs, key=lambda ref: ref.feature_id)
+        )
+        if use_features
+        else (),
+        observation_quality=quality,
+    )
+    view_claims = [
+        _Claim(
+            contribution_id=contribution_id,
+            physical_observation_id=observation.source_observation_id,
+            claim=claim,
+            key=label_key(claim.hypothesis),
+            abstains=label_key(claim.hypothesis) in abstention_keys,
+            signals=_signals(claim, scores_of_claim.get(claim.claim_id, ())),
+        )
+        for claim in selected
+    ]
+    return contribution, view_claims
+
+
+def _scores_by_claim(
+    observation: SpatialObservation, result_scores: Sequence[SemanticSupport]
+) -> dict[ClaimId, list[SemanticSupport]]:
+    by_claim: dict[ClaimId, list[SemanticSupport]] = {}
+    for score in result_scores:
+        by_claim.setdefault(score.claim_id, []).append(score)
+    for claim_id, claim_scores in by_claim.items():
+        scorers = [_producer_key(score.provenance) for score in claim_scores]
+        if len(set(scorers)) != len(scorers):
+            raise ValueError(
+                f"more than one score from the same scorer for claim {claim_id!r} of spatial "
+                f"observation {observation.spatial_observation_id!r}"
+            )
+    return by_claim
+
+
+def _signals(claim: SemanticClaim, scores: Sequence[SemanticSupport]) -> tuple[SupportSignal, ...]:
+    signals = [
+        SupportSignal(
+            kind=SupportSignalKind.CLAIM_CONFIDENCE,
+            producer=claim.provenance.backend,
+            value=claim.confidence,
+        ),
+        *(
+            SupportSignal(
+                kind=SupportSignalKind.SCORER_SUPPORT,
+                producer=score.provenance,
+                value=score.support_score,
+            )
+            for score in scores
+        ),
+    ]
+    return tuple(sorted(signals, key=lambda item: (item.kind.value, *_producer_key(item.producer))))
+
+
+def _groups(
+    contributions: Sequence[EvidenceContribution], grouping: PhysicalObservationGrouping
+) -> tuple[PhysicalObservationGroup, ...]:
+    grouped = {group.physical_observation_id: group for group in grouping.groups}
+    by_frame: dict[SourceObservationId, list[EvidenceContribution]] = {}
+    for contribution in contributions:
+        by_frame.setdefault(contribution.physical_observation_id, []).append(contribution)
+    groups: list[PhysicalObservationGroup] = []
+    for frame in sorted(by_frame):
+        placed = grouped.get(frame)
+        if placed is None:
+            raise ValueError(f"the grouping does not cover physical observation {frame!r}")
+        members = by_frame[frame]
+        for member in members:
+            if member.spatial_observation_id not in placed.spatial_observation_ids:
+                raise ValueError(
+                    f"the grouping does not list spatial observation "
+                    f"{member.spatial_observation_id!r} under physical observation {frame!r}"
+                )
+        groups.append(
+            PhysicalObservationGroup(
+                physical_observation_id=frame,
+                acquisition_timestamp=placed.acquisition_timestamp,
+                spatial_observation_ids=tuple(
+                    sorted(member.spatial_observation_id for member in members)
+                ),
+                perception_result_ids=tuple(
+                    sorted({member.perception_result_id for member in members})
+                ),
+                perception_run_ids=tuple(sorted({member.perception_run_id for member in members})),
+            )
+        )
+    return tuple(groups)
+
+
+def _hypotheses(claims: Sequence[_Claim]) -> tuple[FusedHypothesis, ...]:
+    ordered = sorted(claims, key=lambda item: (item.contribution_id, item.claim.claim_id))
+    by_key: dict[str, list[_Claim]] = {}
+    for item in ordered:
+        if not item.abstains:
+            by_key.setdefault(item.key, []).append(item)
+    hypotheses: list[FusedHypothesis] = []
+    for number, key in enumerate(sorted(by_key), start=1):
+        supporters = {item.contribution_id for item in by_key[key]}
+        hypotheses.append(
+            FusedHypothesis(
+                hypothesis_id=FusedHypothesisId(f"hypothesis-{number:04d}"),
+                label=_spelling(by_key[key]),
+                evidence=tuple(
+                    HypothesisEvidence(
+                        contribution_id=item.contribution_id,
+                        claim_id=item.claim.claim_id,
+                        stance=_stance(item, key, supporters),
+                        role=item.claim.role,
+                        signals=item.signals,
+                    )
+                    for item in ordered
+                ),
+            )
+        )
+    return tuple(hypotheses)
+
+
+def _stance(
+    item: _Claim, key: str, supporting_contributions: set[EvidenceContributionId]
+) -> EvidenceStance:
+    if item.abstains:
+        return EvidenceStance.ABSTAINING
+    if item.key == key:
+        return EvidenceStance.SUPPORTING
+    if (
+        item.contribution_id in supporting_contributions
+        or item.claim.role is HypothesisRole.ALTERNATIVE
+    ):
+        return EvidenceStance.AMBIGUOUS
+    return EvidenceStance.CONFLICTING
+
+
+def _spelling(supporters: Sequence[_Claim]) -> str:
+    """The most common whitespace-collapsed spelling among the claims of a label key."""
+    counts = Counter(" ".join(item.claim.hypothesis.split()) for item in supporters)
+    return min(counts, key=lambda spelling: (-counts[spelling], spelling))
+
+
+def _reference(item: _Claim) -> EvidenceReference:
+    return EvidenceReference(contribution_id=item.contribution_id, claim_id=item.claim.claim_id)
+
+
+def _uncertainty(
+    hypotheses: Sequence[FusedHypothesis],
+    claims: Sequence[_Claim],
+    contributions: Sequence[EvidenceContribution],
+    near_tie_margin: int,
+) -> tuple[UncertaintyRecord, ...]:
+    """Report, never resolve, what the evidence leaves undecided."""
+    rule = BASELINE_ACCUMULATION_POLICY_ID
+    if not hypotheses:
+        claimless = [item for item in contributions if not item.claim_refs]
+        references = [_reference(item) for item in claims] + [
+            EvidenceReference(contribution_id=item.contribution_id) for item in claimless
+        ]
+        return (
+            UncertaintyRecord(
+                kind=UncertaintyKind.INSUFFICIENT_EVIDENCE,
+                hypothesis_ids=(),
+                evidence=_sorted_references(references),
+                rule_id=f"{rule}/insufficient-evidence",
+            ),
+        )
+
+    by_reference = {(item.contribution_id, item.claim.claim_id): item for item in claims}
+    supporting = {
+        hypothesis.hypothesis_id: [
+            by_reference[(item.contribution_id, item.claim_id)]
+            for item in hypothesis.evidence
+            if item.stance is EvidenceStance.SUPPORTING
+        ]
+        for hypothesis in hypotheses
+    }
+    primary = {
+        hypothesis_id: [item for item in items if item.claim.role is HypothesisRole.PRIMARY]
+        for hypothesis_id, items in supporting.items()
+    }
+    candidates = [
+        hypothesis.hypothesis_id for hypothesis in hypotheses if primary[hypothesis.hypothesis_id]
+    ]
+
+    records: list[UncertaintyRecord] = []
+    primary_observations = {
+        item.physical_observation_id
+        for hypothesis_id in candidates
+        for item in primary[hypothesis_id]
+    }
+    if len(candidates) >= 2 and len(primary_observations) >= 2:
+        records.append(
+            UncertaintyRecord(
+                kind=UncertaintyKind.CONTRADICTION,
+                hypothesis_ids=tuple(sorted(candidates)),
+                evidence=_sorted_references(
+                    [
+                        _reference(item)
+                        for hypothesis_id in candidates
+                        for item in primary[hypothesis_id]
+                    ]
+                ),
+                rule_id=f"{rule}/contradiction",
+            )
+        )
+    elif len(hypotheses) >= 2:
+        records.append(
+            UncertaintyRecord(
+                kind=UncertaintyKind.AMBIGUITY,
+                hypothesis_ids=tuple(sorted(hypothesis.hypothesis_id for hypothesis in hypotheses)),
+                evidence=_sorted_references(
+                    [_reference(item) for items in supporting.values() for item in items]
+                ),
+                rule_id=f"{rule}/ambiguity",
+            )
+        )
+
+    if len(candidates) >= 2:
+        counts = {
+            hypothesis_id: len({item.physical_observation_id for item in supporting[hypothesis_id]})
+            for hypothesis_id in candidates
+        }
+        leading = max(counts.values())
+        tied = [
+            hypothesis_id
+            for hypothesis_id in candidates
+            if leading - counts[hypothesis_id] <= near_tie_margin
+        ]
+        if len(tied) >= 2:
+            records.append(
+                UncertaintyRecord(
+                    kind=UncertaintyKind.NEAR_TIE,
+                    hypothesis_ids=tuple(sorted(tied)),
+                    evidence=_sorted_references(
+                        [
+                            _reference(item)
+                            for hypothesis_id in tied
+                            for item in supporting[hypothesis_id]
+                        ]
+                    ),
+                    rule_id=f"{rule}/near-tie/margin-{near_tie_margin}",
+                )
+            )
+    return tuple(sorted(records, key=_uncertainty_key))
+
+
+def _sorted_references(references: Iterable[EvidenceReference]) -> tuple[EvidenceReference, ...]:
+    unique = {(ref.contribution_id, ref.claim_id or ""): ref for ref in references}
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _require_input(
+    active: frozenset[EvidenceChannel],
+    channel: EvidenceChannel,
+    provided: object | None,
+    what: str,
+) -> None:
+    if channel in active and provided is None:
+        raise ValueError(f"channel {channel.value} is declared but no {what} were provided")
+
+
+def _producer_label(producer: BackendProvenance) -> str:
+    label = f"{producer.backend_id}/{producer.model}/{producer.version}"
+    return (
+        label
+        if producer.configuration_fingerprint is None
+        else (f"{label}@{producer.configuration_fingerprint}")
+    )
+
+
+def _channel_provenance(
+    active: frozenset[EvidenceChannel],
+    support: FusionSupport,
+    claims: Sequence[_Claim],
+    contributions: Sequence[EvidenceContribution],
+    structure: Sequence[PointRepresentationRef],
+) -> tuple[ChannelProvenance, ...]:
+    """Name what fed each active channel, so an effect can be attributed to a channel."""
+    fed: dict[EvidenceChannel, set[str]] = {
+        EvidenceChannel.SEMANTIC_CLAIMS: {
+            _producer_label(item.claim.provenance.backend) for item in claims
+        },
+        EvidenceChannel.SEMANTIC_SCORES: {
+            _producer_label(ref.scorer) for item in contributions for ref in item.score_refs
+        },
+        EvidenceChannel.VISUAL_FEATURES: {
+            ref.embedding_space_id for item in contributions for ref in item.visual_feature_refs
+        },
+        EvidenceChannel.OBSERVATION_QUALITY: {
+            item.observation_quality.definitions_version
+            for item in contributions
+            if item.observation_quality is not None
+        },
+        EvidenceChannel.GEOMETRY_SUPPORT: {
+            f"map:{support.geometric_map_id}",
+            f"support-policy:{support.provenance.support_policy_id}",
+        },
+        EvidenceChannel.POINT_REPRESENTATION: {ref.representation_space_id for ref in structure},
+    }
+    return tuple(
+        ChannelProvenance(channel=channel, identities=tuple(sorted(fed[channel])))
+        for channel in sorted(active, key=lambda item: item.value)
+    )
