@@ -1,0 +1,71 @@
+# StateEstimationRunArtifact
+
+Este documento descreve `src/contextmap/state_estimation/run_artifact.py`. As regras gerais de artifacts (imutabilidade, atomicidade, inventário, índice de run) estão em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) e são implementadas uma única vez em `contextmap.shared.run_directory`.
+
+## Por que existe
+
+Quando um mapa ou uma associação câmera-LiDAR sai errada, é preciso descobrir se a causa está na qualidade da trajetória, na semântica de frames, no lookup de timestamps, na configuração do estimador, nos pré-requisitos de calibração ou em um transform downstream. O run persiste a trajetória canônica junto com métricas legíveis por máquina e evidência de auditoria, e abre sem ROS, sem FAST-LIO e sem NumPy.
+
+## Layout
+
+```text
+workspace/runs/state-estimation/<sequence>/
+├── runs.json                              # registry reconstruível
+└── run-000N__<selection>__<backend>/
+    ├── README.md
+    ├── manifest.json
+    ├── outputs/                           # contratual
+    │   ├── trajectory.json                # metadados da trajetória (sem poses)
+    │   ├── poses.jsonl                    # uma pose por linha
+    │   ├── pose-index.jsonl               # id, timestamp_ns, offset e tamanho de cada pose
+    │   ├── frame-summary.json             # frames dinâmicos, frames/arestas estáticas, convenções
+    │   └── quality.json                   # amostragem, gaps, contagens
+    ├── metrics/                           # contratual
+    │   ├── preflight.json                 # relatório completo do preflight de geometria
+    │   ├── motion.json                    # distribuições de translação, rotação e velocidades
+    │   ├── runtime.json                   # somente quando o tempo foi medido
+    │   └── diagnostics.jsonl              # eventos do backend, somente quando existem
+    └── debug/                             # nunca contratual
+```
+
+Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a linhagem e a configuração efetiva (`estimator.configuration_fingerprint`) ficam no `manifest.json` e os eventos em `metrics/diagnostics.jsonl`. Criar arquivos sem produtor real violaria YAGNI, o mesmo critério adotado por `PerceptionRunArtifact`.
+
+## `manifest.json`
+
+Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `trajectory_id`, `estimator` (`backend_id`, `backend_version`, `configuration_fingerprint`), `calibration_identity`, `code_version`, frames dinâmicos (`reference_frame`, `body_frame`), `clock_id`, limites de tempo, contagens (poses, observações consumidas/rejeitadas, gaps), `diagnostic_counts` por código, `preflight_status`, `debug_level`, a semântica de `interpolation` usada por `TrajectoryLookup`, `schema_version` e `created_at`. `file_inventory` lista cada arquivo contratual com tamanho e SHA-256, sem o manifest, o README e o `debug/`.
+
+Um run cujo preflight de geometria estava `BLOCKED` nunca é persistido: o writer recusa.
+
+## Acesso a uma pose
+
+`StateEstimationRunReader` abre um run somente pelo seu diretório. `pose(estimate_id)` e `pose_at(timestamp)` usam `pose-index.jsonl` para ler apenas os bytes daquela pose: não carregam as demais nem qualquer arquivo de debug. `pose_at` exige o mesmo domínio de clock (`ClockDomainMismatchError` caso contrário) e devolve `None` quando nenhuma pose tem exatamente aquele timestamp; para pose mais próxima ou interpolada use `TrajectoryLookup(reader.trajectory())`.
+
+`read_record()` lê JSON de `outputs/` e `metrics/` e recusa `debug/`, para que nenhum estágio downstream dependa dele por engano.
+
+## Investigar anomalias sem reexecutar
+
+- gaps e amostragem: `outputs/quality.json` (contagem, intervalos mínimo/mediano/máximo, `sample_rate_hz`, lista de gaps);
+- saltos e paradas: `metrics/motion.json` (distribuições de deslocamento, rotação e velocidades por intervalo);
+- amostras rejeitadas e avisos: `metrics/diagnostics.jsonl` e `diagnostic_counts`;
+- causa de bloqueio ou de pré-requisito downstream ausente: `metrics/preflight.json`.
+
+Qualidade e tempo de execução ficam separados: `metrics/runtime.json` não entra nas medidas de qualidade.
+
+## Níveis de debug
+
+| Nível | Conteúdo em `debug/` |
+| --- | --- |
+| `none` | nada; os outputs contratuais, a linhagem e as métricas exigidas continuam completos |
+| `standard` | `pose-deltas.jsonl`, `timestamp-gaps.jsonl` (quando há gaps), `trajectory-xy.csv`, `trajectory-xz.csv` |
+| `full` | acrescenta `preflight-checks.jsonl` e `backend-diagnostics/events.jsonl` |
+
+Os projetos XY/XZ são CSV, não imagens: o artifact não exige nenhuma tecnologia de visualização. Arquivos de debug são escritos mas nunca entram no inventário, então removê-los não invalida o run.
+
+## Integridade, imutabilidade e identidade
+
+- a escrita acontece em um diretório temporário e o run só aparece no caminho final depois de a checagem de inventário passar; uma escrita interrompida não pode parecer um run válido;
+- um run finalizado nunca é sobrescrito; reexecutar cria outro `run_index`;
+- `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest levanta `IncompleteRunArtifactError`;
+- `allocate_run_index()` percorre os diretórios de run válidos (nunca o registry), então runs incompletos ou corrompidos não são contados; `rebuild_run_registry()` regenera `runs.json`.
+
+O `run_index` é conveniente e legível, mas não substitui identidade nem hash.

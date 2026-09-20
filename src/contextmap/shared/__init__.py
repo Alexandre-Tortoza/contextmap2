@@ -22,17 +22,32 @@ from contextmap.shared.geometry import (
     quaternion_to_rotation_matrix,
     rotate_vector,
 )
+from contextmap.shared.run_directory import (
+    AtomicRunDirectory,
+    FileEntry,
+    RunDirectoryError,
+    check_file_inventory,
+    file_entry,
+    next_run_index,
+    write_run_registry,
+)
 from contextmap.shared.time import SourceTimestamp
 
 __all__ = [
     "UNIT_QUATERNION_TOLERANCE",
+    "AtomicRunDirectory",
+    "FileEntry",
     "Quaternion",
     "RotationMatrix",
+    "RunDirectoryError",
     "SourceTimestamp",
     "Vector3",
+    "check_file_inventory",
     "compose_rigid",
+    "file_entry",
     "invert_rigid",
     "is_unit_quaternion",
+    "next_run_index",
     "normalize_quaternion",
     "quaternion_angle_between",
     "quaternion_conjugate",
@@ -40,4 +55,5 @@ __all__ = [
     "quaternion_norm",
     "quaternion_to_rotation_matrix",
     "rotate_vector",
+    "write_run_registry",
 ]
