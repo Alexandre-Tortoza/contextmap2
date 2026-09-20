@@ -9,6 +9,11 @@ no winner and never merges heterogeneous scores into one number. See
 documentation.
 """
 
+from contextmap.semantic_fusion.accumulation import (
+    BASELINE_ACCUMULATION_POLICY_ID,
+    accumulate_baseline_evidence,
+    label_key,
+)
 from contextmap.semantic_fusion.grouping import (
     PHYSICAL_OBSERVATION_GROUPING_POLICY_ID,
     PhysicalObservationGrouping,
@@ -36,6 +41,8 @@ from contextmap.semantic_fusion.models import (
     SupportSignalKind,
     UncertaintyKind,
     UncertaintyRecord,
+    evidence_contribution_id_for,
+    fused_evidence_id_for,
 )
 from contextmap.semantic_fusion.support import (
     GEOMETRY_OVERLAP_SUPPORT_POLICY_ID,
@@ -46,6 +53,7 @@ from contextmap.semantic_fusion.support import (
 )
 
 __all__ = [
+    "BASELINE_ACCUMULATION_POLICY_ID",
     "GEOMETRY_OVERLAP_SUPPORT_POLICY_ID",
     "PHYSICAL_OBSERVATION_GROUPING_POLICY_ID",
     "EvidenceContribution",
@@ -73,6 +81,10 @@ __all__ = [
     "SupportSignalKind",
     "UncertaintyKind",
     "UncertaintyRecord",
+    "accumulate_baseline_evidence",
     "build_fusion_supports",
+    "evidence_contribution_id_for",
+    "fused_evidence_id_for",
     "group_by_physical_observation",
+    "label_key",
 ]

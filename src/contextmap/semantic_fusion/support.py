@@ -52,10 +52,10 @@ from contextmap.semantic_fusion.models import (
     FusionSupportId,
     FusionSupportProvenance,
     _require_canonical,
+    _time_bounds_of,
 )
 from contextmap.sensor_association import SpatialObservation, SpatialObservationId
 from contextmap.shared import SourceTimestamp, Vector3
-from contextmap.state_estimation import TimeBounds
 
 GEOMETRY_OVERLAP_SUPPORT_POLICY_ID = "geometry-jaccard-support-v1"
 """Versioned identity of the baseline support policy described in this module."""
@@ -359,12 +359,6 @@ def _support_of(
                 f"no acquisition timestamp for physical observation {item.source_observation_id!r}"
             )
         stamps.append(stamp)
-    clocks = {stamp.clock_id for stamp in stamps}
-    if len(clocks) != 1:
-        raise ValueError(
-            f"the observations of {support_id!r} span more than one clock domain: "
-            f"{sorted(clocks)!r}"
-        )
     return FusionSupport(
         fusion_support_id=support_id,
         geometric_map_id=references[0].map_id,
@@ -372,9 +366,6 @@ def _support_of(
         spatial_observation_ids=tuple(item.spatial_observation_id for item in members),
         bounds=Bounds3D.enclosing(coordinates, frame_id=resolver.frame_id),
         centroid_m=centroid,
-        time_bounds=TimeBounds(
-            start=min(stamps, key=SourceTimestamp.total_nanoseconds),
-            end=max(stamps, key=SourceTimestamp.total_nanoseconds),
-        ),
+        time_bounds=_time_bounds_of(stamps, owner=f"the observations of {support_id!r}"),
         provenance=provenance,
     )
