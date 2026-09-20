@@ -377,3 +377,8 @@ def test_an_implementation_of_the_read_boundary_is_recognized() -> None:
         points[0]
     ]
     assert not isinstance(object(), GeometrySource)
+
+
+def test_an_aggregation_rule_that_is_set_must_not_be_empty() -> None:
+    with pytest.raises(ValueError, match="aggregation_rule"):
+        make_map(aggregation_rule="")

@@ -27,7 +27,17 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 
 ## Estado implementado
 
-Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto, a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão) e o **pertencimento à máscara** de `Region2D`, com índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation`, além da **amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos) e o contrato **`ObservationQuality`**, com a derivação de suas medidas. Estão **planejados**, e serão documentados aqui quando forem implementados: diagnósticos de calibração e reprojeção, o artifact de run e a validação.
+- **Contratos e serialização**: `SpatialObservation`, visibilidade, referências, calibração e pose ([`contracts.md`](contracts.md)).
+- **Projeção de câmera calibrada**: pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica ([`camera_models.md`](camera_models.md)).
+- **Cadeia mapa → câmera → imagem preparada**, com proveniência por ponto ([`projection_chain.md`](projection_chain.md)).
+- **Visibilidade e oclusão** por suporte de profundidade local conservador, com política explícita e sem valores padrão ([`visibility.md`](visibility.md)).
+- **Pertencimento à máscara** de `Region2D`, índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation` ([`membership.md`](membership.md)).
+- **Amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos) ([`dense_sampling.md`](dense_sampling.md)).
+- **Qualidade da observação**: o contrato `ObservationQuality` e a derivação de suas medidas ([`quality.md`](quality.md)).
+- **Diagnósticos** de calibração, reprojeção e alinhamento temporal, com achados explícitos, referência confiável e varredura de deslocamento temporal ([`diagnostics.md`](diagnostics.md)).
+- **Serviço e artifact de run**: `SensorAssociationService`, canais de features densas distintos e o `SensorAssociationRunArtifact` imutável, com tabelas colunares compactas, linhagem e evidência de depuração ([`artifact.md`](artifact.md)).
+
+A **validação** (relatório de avaliação sobre o artifact) está planejada e será documentada aqui quando for implementada.
 
 ## Contratos públicos
 
@@ -37,12 +47,14 @@ Existem os **contratos** e sua serialização, a **projeção de câmera calibra
 - `ProjectionSummary` — fatos da projeção no nível do frame.
 - `VisualFeatureRef`, `SemanticClaimRef` — referências à evidência visual do mesmo resultado, nunca cópias.
 - `CalibrationRef`, `PoseRef`, `AssociationProvenance` — qual calibração, qual pose e qual execução produziram a observação.
+- `SensorAssociationService`, `SensorAssociationRequest`, `SensorAssociationOutcome`, `AssociationFrameInput`, `DenseChannel`, `FrameAssociation`, `OcclusionPolicy`, `DiagnosticTolerances`, `InterpolationPolicy`, `TrustedCorrespondences` — a execução da capability (entradas e resultado).
+- `SensorAssociationRunWriter`, `SensorAssociationRunReader`, `SensorAssociationRunManifest`, `SensorAssociationRunId`, `SensorAssociationDebugLevel`, `allocate_run_index()`, `rebuild_run_registry()` — o artifact de run.
 - `ObservationQuality`, `ValueSummary`, `ReprojectionStatistics`, `QualityComponent` — medidas de qualidade da observação, separadas e tipadas, com ausência explícita; **não** são confiança semântica.
 - `CameraProjection`, `PixelProjection`, `CameraIdentity`, `camera_projection_for()` — projeção 3D → pixel e raio inverso, com domínio de visão explícito e a identidade da calibração em todo resultado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
-A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `OcclusionPolicy`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`) são internas à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
+A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`, `FrameDiagnostics`) são internos à capability: os consumidores externos usam o serviço de associação e leem o artifact, não os passos.
 
 ## Módulos consumidos
 
@@ -53,7 +65,7 @@ A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToP
 
 ## Módulos que consomem este
 
-`semantic_fusion`, `point_representation` e `artifact`, sempre através de `contextmap.sensor_association`.
+`semantic_fusion`, `point_representation`, `runtime`, `evaluation` e `artifact`, sempre através de `contextmap.sensor_association`.
 
 ## Onde estão os documentos detalhados
 
@@ -64,5 +76,7 @@ A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToP
 - [`membership.md`](membership.md) — pertencimento à máscara, sobreposição sem vencedor, índices, estatísticas e observações espaciais.
 - [`dense_sampling.md`](dense_sampling.md) — amostragem de features densas, políticas, preflight e proveniência.
 - [`quality.md`](quality.md) — qualidade da observação: componentes, ausência explícita, proveniência e derivação.
+- [`diagnostics.md`](diagnostics.md) — diagnósticos de calibração, reprojeção e alinhamento temporal, achados e varredura de deslocamento.
+- [`artifact.md`](artifact.md) — serviço, artifact de run, tabelas compactas, canais de features e debug.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.

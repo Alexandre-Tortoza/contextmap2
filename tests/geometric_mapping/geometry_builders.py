@@ -123,6 +123,7 @@ def make_map(
     bounds: Bounds3D | None = None,
     source_observation_ids: Sequence[str] = ("lidar-frame-01824", "lidar-frame-01825"),
     spatial_index: SpatialIndexMetadata | None = None,
+    aggregation_rule: str | None = None,
 ) -> GeometricMap:
     return GeometricMap(
         map_id=map_id,
@@ -133,6 +134,7 @@ def make_map(
         time_bounds=TimeBounds(start=timestamp(1_000_000_000), end=timestamp(2_000_000_000)),
         spatial_index=spatial_index,
         provenance=make_map_provenance(),
+        aggregation_rule=aggregation_rule,
     )
 
 

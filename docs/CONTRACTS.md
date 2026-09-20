@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os demais, de Sensor Association em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)) e de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) também já existem; os demais, de Semantic Fusion em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,8 @@ flowchart LR
     PR --> CTX["SceneContext"]
     SS["SemanticSupport"] --> SC
     SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
-    PR -. future association .-> SP["SpatialObservation<br/>planejado"]
+    PE --> GR["GeometryPoint / GeometryReference / GeometricMap<br/>implementado"]
+    PR --> SP["SpatialObservation<br/>implementado"]
     SP --> FE["FusedEvidence<br/>planejado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
 ```
@@ -49,9 +50,9 @@ flowchart LR
     SUP["SemanticSupport"] --> SC
 
     SO --> PE["PoseEstimate"]
-    PE -. futuro .-> GM["GeometryReference"]
-    PR -. futuro .-> SP["SpatialObservation"]
-    GM -. futuro .-> SP
+    PE --> GM["GeometryReference"]
+    PR --> SP["SpatialObservation"]
+    GM --> SP
     SP -. futuro .-> FE["FusedEvidence"]
     FE -. futuro .-> E["Entity"]
     E -. futuro .-> RE["ResolvedEntity"]
@@ -354,6 +355,8 @@ Não representa:
 - final point label;
 - entity identity.
 
+A qualidade mensurável da observação (alcance, visibilidade, densidade de suporte, posição na imagem, alinhamento temporal e, quando há referência confiável, reprojeção) é um contrato separado, `ObservationQuality`, ligado à observação por identidade. Ela **não** é confiança semântica, similaridade de scorer nem peso de fusão, e não há um escalar combinado ([qualidade da observação](../src/contextmap/sensor_association/docs/quality.md)).
+
 ## 16. `PointRepresentation`
 
 Representa estrutura geométrica local em um `RepresentationSpace` explícito.
@@ -374,6 +377,8 @@ PointRepresentation
 O suporte deve permitir reconstruir quais geometry refs participaram.
 
 `PointRepresentation` é um canal 3D, não `VisualFeature` e não `SemanticClaim`.
+
+Duas representações só são comparáveis quando o `representation_space_id` (o fingerprint do `RepresentationSpace`, que inclui checkpoint, normalização e a política de suporte) é igual; comparar espaços diferentes é um erro explícito.
 
 ## 17. `FusionSupport`
 

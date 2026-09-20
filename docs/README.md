@@ -32,7 +32,7 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 
 ## Estado materializado na `dev`
 
-A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os três primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os seis primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
 
 ```mermaid
 flowchart LR
@@ -42,13 +42,28 @@ flowchart LR
     VP --> PR["PerceptionRunArtifact"]
     SEQ --> ST["State Estimation<br/>implementado"]
     ST --> TR["StateEstimationRunArtifact"]
-    PR -. próximo boundary .-> SA["Geometric Mapping / Sensor Association<br/>e downstream planejados"]
-    TR -.-> SA
+    SEQ --> GM["Geometric Mapping<br/>implementado"]
+    TR --> GM
+    GM --> MAP["GeometricMapArtifact"]
+    PR --> SA["Sensor Association<br/>implementado"]
+    MAP --> SA
+    TR --> SA
+    SA --> AR["SensorAssociationRunArtifact"]
+    MAP --> PTR["Point Representation<br/>implementado, opcional"]
+    PTR --> PTA["PointRepresentationRunArtifact"]
+    AR -. próximo boundary .-> NEXT["Semantic Fusion<br/>e downstream planejados"]
+    PTA -.-> NEXT
 ```
 
 Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e o core de Feature Extraction, incluindo compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Backends concretos de Feature Extraction ainda não estão integrados.
 
 State Estimation possui os contratos `PoseEstimate`/`Trajectory`, lookup temporal com interpolação auditável, frame graph estático e preflight de geometria, o port `StateEstimator` com os backends `ExternalPose` e FAST-LIO, o `StateEstimationRunArtifact` e o harness de avaliação em `evaluation`. A execução de referência com o FAST-LIO instalado ainda está pendente: o backend foi testado com um processo substituto, não com o binário real.
+
+Geometric Mapping possui os contratos `GeometryPoint`/`GeometryReference`/`GeometricMap`, o estado explícito de correção de movimento, a montagem dos inputs, a transformação fonte→mapa com traces auditáveis, a acumulação com referências estáveis, o acesso espacial por `GeometrySource` com índice derivado e verificável, o `GeometricMapArtifact` e o harness de validação em `evaluation`. A validação real usou a trajetória do dataset como entrada, não uma execução FAST-LIO, e não há geometria de referência confiável para o `corridor-02`.
+
+Sensor Association possui os contratos `SpatialObservation` e `ObservationQuality`, os modelos de câmera calibrados (pinhole, fisheye e MEI, com o MEI adicionado à calibração canônica de Ingestion), a cadeia mapa→câmera→imagem preparada, a resolução de visibilidade e oclusão, o pertencimento à máscara de `Region2D`, a amostragem de features densas (nativas ou melhoradas, como canais distintos), os diagnósticos de calibração, reprojeção e alinhamento temporal, o `SensorAssociationRunArtifact` e o harness de avaliação estratificada em `evaluation`. Toda a verificação usa fixtures sintéticos determinísticos: não há mapa geométrico no frame da trajetória (depende da execução real do FAST-LIO) nem correspondências de referência reais.
+
+Point Representation é uma capability **opcional**: possui os contratos `PointRepresentation`/`RepresentationSpace`, a extração de suporte local sobre `GeometrySource`, o port `PointEncoder` e o serviço de execução independente de backend, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3, o `PointRepresentationRunArtifact` e o harness de ablação em `evaluation`. Ela deve justificar seu custo por avaliação controlada, e essa justificativa **não existe ainda**: o PTv3 nunca foi executado (sem torch nem pesos), a ablação downstream depende de Semantic Fusion e Entity Resolution e toda a verificação usa geometria sintética.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
@@ -153,6 +168,8 @@ Módulos com documentação própria:
 - [`visual_perception`](../src/contextmap/visual_perception/docs/README.md) — evidência visual por run, ports, preset canônico, execução do DAG, artifacts e leitura multi-run; [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) documenta SAM2/SAM3/Florence-2, passes, normalização e avaliação geométrica; [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) documenta embeddings, payloads, sampling, pooling, diagnostics, enhancement opcional e o estado dos backends concretos.
 - [`state_estimation`](../src/contextmap/state_estimation/docs/README.md) — pose dinâmica do rig: `PoseEstimate`, `Trajectory`, convenção de transform e provenance.
 - [`geometric_mapping`](../src/contextmap/geometric_mapping/docs/README.md) — geometria 3D persistente no frame global do mapa: `GeometryPoint`, `GeometryReference`, `GeometricMap`, `Bounds3D` e a fronteira de leitura `GeometrySource`.
+- [`sensor_association`](../src/contextmap/sensor_association/docs/README.md) — evidência visual 2D ancorada em geometria 3D persistente: `SpatialObservation`, modelos de câmera, visibilidade e oclusão, pertencimento à máscara, features densas e `ObservationQuality`.
+- [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 
 ## Integração da documentação

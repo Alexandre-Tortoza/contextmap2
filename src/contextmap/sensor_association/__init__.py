@@ -16,6 +16,9 @@ from contextmap.sensor_association.camera_models import (
     PixelProjection,
     camera_projection_for,
 )
+from contextmap.sensor_association.dense_sampling import InterpolationPolicy
+from contextmap.sensor_association.diagnostics import DiagnosticTolerances, TrustedCorrespondences
+from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.models import (
     AssociationProvenance,
     CalibrationRef,
@@ -38,14 +41,42 @@ from contextmap.sensor_association.quality import (
     ReprojectionStatistics,
     ValueSummary,
 )
+from contextmap.sensor_association.run_artifact import (
+    IncompleteRunArtifactError,
+    RunArtifactError,
+    SensorAssociationDebugLevel,
+    SensorAssociationRunId,
+    SensorAssociationRunManifest,
+    SensorAssociationRunReader,
+    SensorAssociationRunWriter,
+    allocate_run_index,
+    rebuild_run_registry,
+)
+from contextmap.sensor_association.service import (
+    AssociationFrameInput,
+    DenseChannel,
+    FrameAssociation,
+    SensorAssociationOutcome,
+    SensorAssociationRequest,
+    SensorAssociationService,
+)
+from contextmap.sensor_association.visibility import OcclusionPolicy
 
 __all__ = [
+    "AssociationFrameInput",
+    "AssociationInputError",
     "AssociationProvenance",
     "CalibrationRef",
     "CameraIdentity",
     "CameraProjection",
+    "DenseChannel",
     "DepthMetric",
+    "DiagnosticTolerances",
+    "FrameAssociation",
+    "IncompleteRunArtifactError",
+    "InterpolationPolicy",
     "ObservationQuality",
+    "OcclusionPolicy",
     "PixelCoordinate",
     "PixelProjection",
     "PointCorrespondence",
@@ -53,13 +84,25 @@ __all__ = [
     "ProjectionSummary",
     "QualityComponent",
     "ReprojectionStatistics",
+    "RunArtifactError",
     "SemanticClaimRef",
+    "SensorAssociationDebugLevel",
+    "SensorAssociationOutcome",
+    "SensorAssociationRequest",
+    "SensorAssociationRunId",
+    "SensorAssociationRunManifest",
+    "SensorAssociationRunReader",
+    "SensorAssociationRunWriter",
+    "SensorAssociationService",
     "SpatialObservation",
     "SpatialObservationId",
+    "TrustedCorrespondences",
     "ValueSummary",
     "VisibilityDiagnostics",
     "VisibilityState",
     "VisualFeatureRef",
+    "allocate_run_index",
     "camera_projection_for",
+    "rebuild_run_registry",
     "spatial_observation_id_for",
 ]
