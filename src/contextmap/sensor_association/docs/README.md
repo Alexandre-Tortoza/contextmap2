@@ -27,7 +27,7 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 
 ## Estado implementado
 
-Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto e a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão). Estão **planejados**, e serão documentados aqui quando forem implementados: pertencimento à máscara, amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
+Existem os **contratos** e sua serialização, a **projeção de câmera calibrada** (pinhole, fisheye equidistante e MEI, escolhida só pela calibração canônica) e a **cadeia mapa → câmera → imagem preparada** com proveniência por ponto, a **visibilidade e oclusão** por suporte de profundidade local conservador (política explícita, sem valores padrão) e o **pertencimento à máscara** de `Region2D`, com índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation`. Estão **planejados**, e serão documentados aqui quando forem implementados: amostragem de features densas, qualidade da observação, diagnósticos de calibração e reprojeção, o artifact de run e a validação.
 
 ## Contratos públicos
 
@@ -41,7 +41,7 @@ Existem os **contratos** e sua serialização, a **projeção de câmera calibra
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
-A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `OcclusionPolicy`, `VisibilityResolution`) são internas à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
+A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `OcclusionPolicy`, `VisibilityResolution`, `FrameMembership`) são internas à capability: os consumidores externos usarão o serviço de associação, não os passos intermediários.
 
 ## Módulos consumidos
 
@@ -60,5 +60,6 @@ A cadeia de projeção e a resolução de visibilidade (`GeometryCloud`, `RawToP
 - [`camera_models.md`](camera_models.md) — modelos de câmera, convenções de pixel, domínio de visão e verificação.
 - [`projection_chain.md`](projection_chain.md) — cadeia mapa → câmera → imagem preparada, suporte, proveniência e validação.
 - [`visibility.md`](visibility.md) — oclusão por suporte de profundidade local, política, métrica de profundidade e diagnósticos.
+- [`membership.md`](membership.md) — pertencimento à máscara, sobreposição sem vencedor, índices, estatísticas e observações espaciais.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.
