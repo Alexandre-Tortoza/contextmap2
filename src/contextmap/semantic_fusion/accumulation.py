@@ -25,13 +25,28 @@ What it does:
   (:meth:`FusedEvidence.supporting_physical_observations`), so repeated inference over
   one frame and one claim over many geometry points each count once.
 
+* a claim whose label key is one of the **explicitly configured** abstention labels
+  (``unknown``, ``not sure``, ...) is an *abstention*: it never becomes a hypothesis and it
+  is neither support for a hypothesis nor evidence against it (``ABSTAINING``). No label is
+  an abstention unless the policy says so;
+* uncertainty is reported, never resolved, and always names the exact contributions and
+  claims behind it: ``CONTRADICTION`` when distinct physical observations back
+  incompatible hypotheses with primary claims, ``AMBIGUITY`` when hypotheses compete
+  without such a contradiction (alternatives of one interpretation, or runs that disagree
+  over one frame), ``NEAR_TIE`` when the leading hypotheses' counts of supporting physical
+  observations are within the configured margin, and ``INSUFFICIENT_EVIDENCE`` when no
+  hypothesis exists. Ties compare counts of physical observations only, never scores.
+
 What it deliberately does not do: weight by observation quality (the references are kept,
-never used), reason about abstention or unknown labels, build uncertainty records, pick a
-winner, infer entity identity, or apply prior knowledge.
+never used), recognise refinements such as ``pallet`` and ``wooden pallet`` (that needs an
+explicit, versioned rule the baseline does not have, so they compete as separate
+hypotheses), pick a winner, infer entity identity, or apply prior knowledge.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -42,6 +57,7 @@ from contextmap.semantic_fusion.grouping import PhysicalObservationGrouping
 from contextmap.semantic_fusion.models import (
     EvidenceContribution,
     EvidenceContributionId,
+    EvidenceReference,
     EvidenceStance,
     FusedEvidence,
     FusedEvidenceProvenance,
@@ -55,8 +71,11 @@ from contextmap.semantic_fusion.models import (
     ScoreReference,
     SupportSignal,
     SupportSignalKind,
+    UncertaintyKind,
+    UncertaintyRecord,
     _producer_key,
     _time_bounds_of,
+    _uncertainty_key,
     evidence_contribution_id_for,
     fused_evidence_id_for,
 )
@@ -74,13 +93,66 @@ BASELINE_ACCUMULATION_POLICY_ID = "baseline-evidence-accumulation-v1"
 """Versioned identity of the baseline policy, including its label-key rule."""
 
 
+@dataclass(frozen=True, kw_only=True)
+class BaselineAccumulationPolicy:
+    """Configuration of the baseline policy: what counts as abstention and as a near tie.
+
+    Attributes:
+        abstention_labels: Hypothesis texts that express abstention rather than a hypothesis.
+            They are compared by label key, so spelling and case do not matter. Empty by
+            default: no label is an abstention unless the profile says so.
+        near_tie_margin: The largest difference, in distinct supporting physical
+            observations, at which the leading hypotheses still count as tied. ``0`` means
+            exactly equal.
+    """
+
+    abstention_labels: frozenset[str] = frozenset()
+    near_tie_margin: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate the margin and the labels.
+
+        Raises:
+            ValueError: If the margin is negative or an abstention label is empty.
+        """
+        if self.near_tie_margin < 0:
+            raise ValueError(f"near_tie_margin must not be negative, got {self.near_tie_margin}")
+        if any(not label_key(label) for label in self.abstention_labels):
+            raise ValueError("an abstention label must not be empty")
+
+    @property
+    def abstention_keys(self) -> frozenset[str]:
+        """The abstention labels reduced to their label keys."""
+        return frozenset(label_key(label) for label in self.abstention_labels)
+
+    def fingerprint(self) -> str:
+        """Hash the policy identity and configuration, for provenance.
+
+        Returns:
+            ``sha256:`` followed by the digest of the canonical configuration; labels that
+            differ only typographically give the same fingerprint.
+        """
+        canonical = json.dumps(
+            {
+                "policy_id": BASELINE_ACCUMULATION_POLICY_ID,
+                "abstention_labels": sorted(self.abstention_keys),
+                "near_tie_margin": self.near_tie_margin,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
 @dataclass(frozen=True)
 class _Claim:
     """One claim of one contribution, with the signals that came with it."""
 
     contribution_id: EvidenceContributionId
+    physical_observation_id: SourceObservationId
     claim: SemanticClaim
     key: str
+    abstains: bool
     signals: tuple[SupportSignal, ...]
 
 
@@ -106,6 +178,7 @@ def accumulate_baseline_evidence(
     semantic_scores: Mapping[PerceptionResultId, Sequence[SemanticSupport]] | None = None,
     observation_quality_refs: Mapping[SpatialObservationId, ObservationQualityRef] | None = None,
     point_representation_refs: Iterable[PointRepresentationRef] = (),
+    policy: BaselineAccumulationPolicy | None = None,
     code_version: str | None = None,
 ) -> FusedEvidence:
     """Accumulate the evidence of one support under the baseline policy.
@@ -126,6 +199,8 @@ def accumulate_baseline_evidence(
             The baseline keeps them and never weights by them.
         point_representation_refs: Static 3D structure. Only references anchored inside the
             support are kept, each once.
+        policy: What counts as abstention and as a near tie; the default recognises no
+            abstention and only exact ties.
         code_version: Code revision to record in the provenance, when known.
 
     Returns:
@@ -139,6 +214,7 @@ def accumulate_baseline_evidence(
     """
     scores = {} if semantic_scores is None else semantic_scores
     quality_refs = {} if observation_quality_refs is None else observation_quality_refs
+    chosen = BaselineAccumulationPolicy() if policy is None else policy
 
     contributions: list[EvidenceContribution] = []
     claims: list[_Claim] = []
@@ -156,11 +232,13 @@ def accumulate_baseline_evidence(
             result,
             scores.get(observation.perception_result_id, ()),
             quality_refs.get(observation_id),
+            chosen.abstention_keys,
         )
         contributions.append(contribution)
         claims.extend(view_claims)
 
     groups = _groups(contributions, grouping)
+    hypotheses = _hypotheses(claims)
     support_geometry = set(support.geometry_support)
     structure = sorted(
         {ref for ref in point_representation_refs if ref.geometry_reference in support_geometry},
@@ -171,14 +249,16 @@ def accumulate_baseline_evidence(
         fusion_support_id=support.fusion_support_id,
         physical_observation_groups=groups,
         contributions=tuple(sorted(contributions, key=lambda item: item.contribution_id)),
-        hypotheses=_hypotheses(claims),
+        hypotheses=hypotheses,
         point_representation_refs=tuple(structure),
+        uncertainty=_uncertainty(hypotheses, claims, contributions, chosen.near_tie_margin),
         temporal_summary=_time_bounds_of(
             [group.acquisition_timestamp for group in groups], owner="the physical observations"
         ),
         provenance=FusedEvidenceProvenance(
             grouping_policy_id=grouping.grouping_policy_id,
             fusion_policy_id=BASELINE_ACCUMULATION_POLICY_ID,
+            configuration_fingerprint=chosen.fingerprint(),
             code_version=code_version,
         ),
     )
@@ -215,6 +295,7 @@ def _contribution(
     result: PerceptionResult,
     result_scores: Sequence[SemanticSupport],
     quality: ObservationQualityRef | None,
+    abstention_keys: frozenset[str],
 ) -> tuple[EvidenceContribution, list[_Claim]]:
     contribution_id = evidence_contribution_id_for(
         fusion_support_id=support.fusion_support_id,
@@ -259,8 +340,10 @@ def _contribution(
     view_claims = [
         _Claim(
             contribution_id=contribution_id,
+            physical_observation_id=observation.source_observation_id,
             claim=claim,
             key=label_key(claim.hypothesis),
+            abstains=label_key(claim.hypothesis) in abstention_keys,
             signals=_signals(claim, scores_of_claim.get(claim.claim_id, ())),
         )
         for claim in selected
@@ -342,7 +425,8 @@ def _hypotheses(claims: Sequence[_Claim]) -> tuple[FusedHypothesis, ...]:
     ordered = sorted(claims, key=lambda item: (item.contribution_id, item.claim.claim_id))
     by_key: dict[str, list[_Claim]] = {}
     for item in ordered:
-        by_key.setdefault(item.key, []).append(item)
+        if not item.abstains:
+            by_key.setdefault(item.key, []).append(item)
     hypotheses: list[FusedHypothesis] = []
     for number, key in enumerate(sorted(by_key), start=1):
         supporters = {item.contribution_id for item in by_key[key]}
@@ -368,6 +452,8 @@ def _hypotheses(claims: Sequence[_Claim]) -> tuple[FusedHypothesis, ...]:
 def _stance(
     item: _Claim, key: str, supporting_contributions: set[EvidenceContributionId]
 ) -> EvidenceStance:
+    if item.abstains:
+        return EvidenceStance.ABSTAINING
     if item.key == key:
         return EvidenceStance.SUPPORTING
     if (
@@ -382,3 +468,113 @@ def _spelling(supporters: Sequence[_Claim]) -> str:
     """The most common whitespace-collapsed spelling among the claims of a label key."""
     counts = Counter(" ".join(item.claim.hypothesis.split()) for item in supporters)
     return min(counts, key=lambda spelling: (-counts[spelling], spelling))
+
+
+def _reference(item: _Claim) -> EvidenceReference:
+    return EvidenceReference(contribution_id=item.contribution_id, claim_id=item.claim.claim_id)
+
+
+def _uncertainty(
+    hypotheses: Sequence[FusedHypothesis],
+    claims: Sequence[_Claim],
+    contributions: Sequence[EvidenceContribution],
+    near_tie_margin: int,
+) -> tuple[UncertaintyRecord, ...]:
+    """Report, never resolve, what the evidence leaves undecided."""
+    rule = BASELINE_ACCUMULATION_POLICY_ID
+    if not hypotheses:
+        claimless = [item for item in contributions if not item.claim_refs]
+        references = [_reference(item) for item in claims] + [
+            EvidenceReference(contribution_id=item.contribution_id) for item in claimless
+        ]
+        return (
+            UncertaintyRecord(
+                kind=UncertaintyKind.INSUFFICIENT_EVIDENCE,
+                hypothesis_ids=(),
+                evidence=_sorted_references(references),
+                rule_id=f"{rule}/insufficient-evidence",
+            ),
+        )
+
+    by_reference = {(item.contribution_id, item.claim.claim_id): item for item in claims}
+    supporting = {
+        hypothesis.hypothesis_id: [
+            by_reference[(item.contribution_id, item.claim_id)]
+            for item in hypothesis.evidence
+            if item.stance is EvidenceStance.SUPPORTING
+        ]
+        for hypothesis in hypotheses
+    }
+    primary = {
+        hypothesis_id: [item for item in items if item.claim.role is HypothesisRole.PRIMARY]
+        for hypothesis_id, items in supporting.items()
+    }
+    candidates = [
+        hypothesis.hypothesis_id for hypothesis in hypotheses if primary[hypothesis.hypothesis_id]
+    ]
+
+    records: list[UncertaintyRecord] = []
+    primary_observations = {
+        item.physical_observation_id
+        for hypothesis_id in candidates
+        for item in primary[hypothesis_id]
+    }
+    if len(candidates) >= 2 and len(primary_observations) >= 2:
+        records.append(
+            UncertaintyRecord(
+                kind=UncertaintyKind.CONTRADICTION,
+                hypothesis_ids=tuple(sorted(candidates)),
+                evidence=_sorted_references(
+                    [
+                        _reference(item)
+                        for hypothesis_id in candidates
+                        for item in primary[hypothesis_id]
+                    ]
+                ),
+                rule_id=f"{rule}/contradiction",
+            )
+        )
+    elif len(hypotheses) >= 2:
+        records.append(
+            UncertaintyRecord(
+                kind=UncertaintyKind.AMBIGUITY,
+                hypothesis_ids=tuple(sorted(hypothesis.hypothesis_id for hypothesis in hypotheses)),
+                evidence=_sorted_references(
+                    [_reference(item) for items in supporting.values() for item in items]
+                ),
+                rule_id=f"{rule}/ambiguity",
+            )
+        )
+
+    if len(candidates) >= 2:
+        counts = {
+            hypothesis_id: len({item.physical_observation_id for item in supporting[hypothesis_id]})
+            for hypothesis_id in candidates
+        }
+        leading = max(counts.values())
+        tied = [
+            hypothesis_id
+            for hypothesis_id in candidates
+            if leading - counts[hypothesis_id] <= near_tie_margin
+        ]
+        if len(tied) >= 2:
+            records.append(
+                UncertaintyRecord(
+                    kind=UncertaintyKind.NEAR_TIE,
+                    hypothesis_ids=tuple(sorted(tied)),
+                    evidence=_sorted_references(
+                        [
+                            _reference(item)
+                            for hypothesis_id in tied
+                            for item in supporting[hypothesis_id]
+                        ]
+                    ),
+                    rule_id=f"{rule}/near-tie/margin-{near_tie_margin}",
+                )
+            )
+    return tuple(sorted(records, key=_uncertainty_key))
+
+
+def _sorted_references(references: Iterable[EvidenceReference]) -> tuple[EvidenceReference, ...]:
+    unique = {(ref.contribution_id, ref.claim_id or ""): ref for ref in references}
+    return tuple(unique[key] for key in sorted(unique))

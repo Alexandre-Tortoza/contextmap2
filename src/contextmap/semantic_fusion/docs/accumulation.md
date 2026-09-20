@@ -10,11 +10,33 @@ Identidade da política: `baseline-evidence-accumulation-v1`. A regra de chave d
 2. **Grupos por observação física.** Os grupos vêm do agrupamento (`PhysicalObservationGrouping`), que fornece o timestamp de aquisição de cada frame.
 3. **Hipóteses por chave de label.** As claims são agrupadas pela *chave de label*: o texto sob normalização Unicode NFKC, em minúsculas (`casefold`) e com espaços colapsados. É uma regra tipográfica: `"Pallet"` e `"pallet "` são uma hipótese; `"pallet"` e `"wooden pallet"` são duas. Nenhum sinônimo, plural ou taxonomia é assumido. O label exibido é a grafia (com espaços colapsados) mais comum, com empate resolvido pela menor.
 4. **Stance de cada claim para cada hipótese.**
+   - `ABSTAINING`: a claim é uma abstenção (ver abaixo): nem suporte nem evidência contra;
    - `SUPPORTING`: a claim propõe a hipótese;
    - `AMBIGUOUS`: qualquer outra claim que vem da mesma contribuição de uma claim que sustenta a hipótese (alternativas de uma só interpretação) ou que tem papel `ALTERNATIVE`;
    - `CONFLICTING`: qualquer outra claim.
 5. **Sinais tipados por claim.** A confiança da própria claim (`CLAIM_CONFIDENCE`, com `None` quando não pontuada, nunca zero) e um `SCORER_SUPPORT` por saída de scorer. Nada é somado, ponderado ou combinado.
 6. **Contagem de evidência independente.** Hipóteses são numeradas pela chave de label (`hypothesis-0001`, …), então a ordem não sugere ranking. A contagem de suporte independente é o número de **observações físicas distintas** (`FusedEvidence.supporting_physical_observations`): inferência repetida sobre um frame e uma claim sobre muita geometria contam uma vez.
+
+## Abstenção
+
+`unknown` **não é evidência negativa**. Uma claim cujo label (pela chave de label) está entre os `abstention_labels` **configurados** nunca vira hipótese, aparece como `ABSTAINING` sob cada hipótese e não conta como suporte nem como conflito: `pallet, unknown, pallet` é uma hipótese com dois frames de suporte e uma abstenção. **Nenhum label é abstenção a menos que a política diga**; por padrão o conjunto é vazio, então `unknown` seria só mais um label. Uma claim sem score continua sendo "não pontuada", nunca zero, e um score baixo continua distinto de um score ausente.
+
+## Incerteza: reportada, nunca resolvida
+
+Cada registro nomeia as contribuições e claims exatas que o produziram (`EvidenceReference`), a regra versionada (`rule_id`) e as hipóteses envolvidas:
+
+| Tipo | Quando |
+| --- | --- |
+| `CONTRADICTION` | Pelo menos duas hipóteses têm claims **primárias** de suporte e essas claims vêm de **pelo menos dois frames físicos distintos**. Uma maioria não esconde a contradição: todas as claims primárias de suporte são listadas. |
+| `AMBIGUITY` | Há duas ou mais hipóteses sem essa contradição: alternativas de uma só interpretação, ou runs que discordam sobre **um único** frame (inferência correlacionada, não frames contraditórios). |
+| `NEAR_TIE` | Duas ou mais hipóteses com suporte primário têm contagens de **frames físicos de suporte** a menos de `near_tie_margin` uma da outra (`0` = exatamente iguais). Compara só contagens, nunca scores. |
+| `INSUFFICIENT_EVIDENCE` | Nenhuma hipótese existe: só abstenções e vistas sem claim. A evidência lista essas claims e essas contribuições. |
+
+Uma contradição e um empate podem coexistir. Uma hipótese única, ou vistas que concordam, não geram registro. Hipóteses que só aparecem como alternativa continuam visíveis em `hypotheses` com o papel preservado, mas não entram na contradição.
+
+## Configuração
+
+`BaselineAccumulationPolicy(abstention_labels, near_tie_margin)`: os labels de abstenção (comparados pela chave de label) e a margem de empate. O `fingerprint()` cobre a identidade da política e a configuração e entra em `FusedEvidenceProvenance.configuration_fingerprint`; grafias que diferem só tipograficamente dão o mesmo fingerprint.
 
 ## Entrada
 
@@ -27,6 +49,7 @@ fused = accumulate_baseline_evidence(
     semantic_scores=scores,  # opcional: SemanticSupport por resultado
     observation_quality_refs=qualities,  # opcional: ObservationQualityRef por observação
     point_representation_refs=structure,  # opcional: PointRepresentationRef
+    policy=policy,  # opcional: BaselineAccumulationPolicy
 )
 ```
 
@@ -45,6 +68,6 @@ Falha cedo, com mensagem acionável, quando: uma observação do suporte não es
 ## O que não faz
 
 - não pondera por qualidade de observação;
-- não trata `unknown`/abstenção de forma especial nem constrói `UncertaintyRecord` (preservação de ambiguidade, conflito e abstenção é a issue #118): hoje um label como `unknown` seria só mais uma hipótese;
+- não reconhece refinamentos compatíveis como `pallet` e `wooden pallet`: isso exige uma regra explícita e versionada que o baseline não tem, então eles competem como hipóteses separadas (o que pode gerar contradição espúria; documentado como limitação);
 - não escolhe vencedor, não calcula probabilidade nem combina confiança, similaridade e qualidade;
 - não cria identidade de entidade nem aplica conhecimento prévio.

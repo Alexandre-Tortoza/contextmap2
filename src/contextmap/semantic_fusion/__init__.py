@@ -11,6 +11,7 @@ documentation.
 
 from contextmap.semantic_fusion.accumulation import (
     BASELINE_ACCUMULATION_POLICY_ID,
+    BaselineAccumulationPolicy,
     accumulate_baseline_evidence,
     label_key,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "BASELINE_ACCUMULATION_POLICY_ID",
     "GEOMETRY_OVERLAP_SUPPORT_POLICY_ID",
     "PHYSICAL_OBSERVATION_GROUPING_POLICY_ID",
+    "BaselineAccumulationPolicy",
     "EvidenceContribution",
     "EvidenceContributionId",
     "EvidenceReference",

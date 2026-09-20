@@ -12,13 +12,20 @@ from observation_builders import make_perception_run, make_spatial_observation, 
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import (
+    EvidenceReference,
     FusionSupport,
     GeometryOverlapSupportPolicy,
     PhysicalObservationGrouping,
     build_fusion_supports,
+    evidence_contribution_id_for,
     group_by_physical_observation,
 )
-from contextmap.sensor_association import SemanticClaimRef, SpatialObservation, SpatialObservationId
+from contextmap.sensor_association import (
+    SemanticClaimRef,
+    SpatialObservation,
+    SpatialObservationId,
+    spatial_observation_id_for,
+)
 from contextmap.visual_perception import (
     BackendProvenance,
     BoundingBox2D,
@@ -182,4 +189,18 @@ def _result(
             for region in sorted(regions)
         ),
         claims=tuple(claims),
+    )
+
+
+def reference_to(scenario: Scenario, view: View, index: int | None = 0) -> EvidenceReference:
+    """The reference that names one claim of one view, or the view itself when ``index`` is None."""
+    return EvidenceReference(
+        contribution_id=evidence_contribution_id_for(
+            fusion_support_id=scenario.support.fusion_support_id,
+            spatial_observation_id=spatial_observation_id_for(
+                perception_result_id=result_id(view.run, view.frame),
+                region_id=RegionId(view.region),
+            ),
+        ),
+        claim_id=None if index is None else claim_id_of(view, index),
     )
