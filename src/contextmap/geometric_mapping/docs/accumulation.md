@@ -40,6 +40,10 @@ Entradas iguais reproduzem os mesmos bytes e as mesmas referências (teste). As 
 
 A abertura valida que o payload tem exatamente um registro por ponto e que o índice de origem ladrilha a geometria; um registro que aponta para o intervalo de outro scan, ou um ponto agregado num mapa que não declara regra de agregação, é detectado no acesso.
 
+## Rastreio de um ponto persistido
+
+`PackedGeometry.trace(reference)` reconstrói o `TransformTrace` de um ponto persistido a partir do payload e do índice de origem, sem o scan original: mostra a pose e a calibração que o colocaram na posição global. `verify_transform_trace` o confere. `close()` libera a visão do payload.
+
 ## Limites e tempo
 
 Os limites do mapa (`GeometricMap.bounds`) e de cada scan são o envelope justo das coordenadas persistidas, no frame do mapa. `time_bounds` cobre os scans que contribuíram com geometria, em um único clock.

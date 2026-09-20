@@ -256,6 +256,8 @@ class GeometryInputPlan:
 
     Attributes:
         sequence_artifact_id: Canonical sequence the scans come from.
+        selection: The selection over that sequence, so a run can be described
+            and repeated, not only identified.
         selection_id: Deterministic identity of the selection over that sequence.
         trajectory_id: Trajectory the poses come from.
         state_estimation_run_id: State Estimation run behind the trajectory, when known.
@@ -272,6 +274,7 @@ class GeometryInputPlan:
     """
 
     sequence_artifact_id: SequenceArtifactId
+    selection: SequenceSelection
     selection_id: str
     trajectory_id: TrajectoryId
     state_estimation_run_id: StateEstimationRunId | None
@@ -395,6 +398,7 @@ def assemble_geometry_inputs(
 
     return GeometryInputPlan(
         sequence_artifact_id=sequence.sequence_artifact_id,
+        selection=sequence.selection,
         selection_id=sequence.selection_id,
         trajectory_id=trajectory.trajectory_id,
         state_estimation_run_id=state_estimation_run_id,

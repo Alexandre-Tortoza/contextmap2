@@ -112,6 +112,15 @@ def test_the_plan_records_the_lineage_and_the_policies_it_was_assembled_under() 
     assert plan.motion_correction_policy == ACCEPT_ALL
 
 
+def test_the_plan_records_the_selection_itself_and_not_only_its_identity() -> None:
+    selection = FrameRangeSelection(start_frame_index=0, end_frame_index=3)
+
+    plan = _assemble(selection=selection)
+
+    assert plan.selection == selection
+    assert plan.selection_id == selection_identity(SEQUENCE_ID, selection)
+
+
 # --- What an input states before any transformation ------------------------
 
 

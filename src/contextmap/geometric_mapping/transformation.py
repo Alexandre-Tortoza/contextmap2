@@ -96,7 +96,8 @@ class TransformTrace:
 
     Attributes:
         source_observation_id: The scan the point came from.
-        source_point_index: Index of the point within that scan.
+        source_point_index: Index of the point within that scan; ``None`` for
+            an aggregated point, which is not one raw measurement.
         source_frame: Frame of ``source_coordinates_m``.
         map_frame: Frame of ``map_coordinates_m``.
         acquisition_timestamp: When the scan was acquired.
@@ -107,7 +108,7 @@ class TransformTrace:
     """
 
     source_observation_id: SourceObservationId
-    source_point_index: int
+    source_point_index: int | None
     source_frame: FrameId
     map_frame: FrameId
     acquisition_timestamp: SourceTimestamp
@@ -141,16 +142,29 @@ def verify_transform_trace(
     if frame != trace.source_frame:
         problems.append(f"the chain ends in {frame!r} but the point is in {trace.source_frame!r}")
 
+    distance = transform_trace_residual_m(trace)
+    if distance > tolerance_m:
+        problems.append(
+            f"the chain places the point {distance:.3e} m from the map coordinates the trace "
+            f"records, {trace.map_coordinates_m}"
+        )
+    return problems
+
+
+def transform_trace_residual_m(trace: TransformTrace) -> float:
+    """Distance between the trace's recorded map coordinates and the chain's result.
+
+    Args:
+        trace: The trace to audit.
+
+    Returns:
+        Meters between ``map_coordinates_m`` and the source coordinates carried
+        through the chain; zero up to floating-point rounding for a sound trace.
+    """
     rebuilt = trace.source_coordinates_m
     for transform in reversed(trace.transforms):
         rebuilt = transform.apply(rebuilt)
-    distance = math.dist(rebuilt, trace.map_coordinates_m)
-    if distance > tolerance_m:
-        problems.append(
-            f"the chain places the point at {rebuilt} but the trace records map coordinates "
-            f"{trace.map_coordinates_m} ({distance:.3e} m apart)"
-        )
-    return problems
+    return math.dist(rebuilt, trace.map_coordinates_m)
 
 
 @dataclass(frozen=True, kw_only=True)

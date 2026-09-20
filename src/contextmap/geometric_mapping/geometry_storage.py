@@ -41,7 +41,7 @@ from contextmap.geometric_mapping.models import (
     geometry_index_of,
 )
 from contextmap.geometric_mapping.motion_correction import MotionCorrectionState
-from contextmap.geometric_mapping.transformation import TracedTransform
+from contextmap.geometric_mapping.transformation import TracedTransform, TransformTrace
 from contextmap.ingestion import FrameId, SourceObservationId
 from contextmap.shared import SourceTimestamp
 
@@ -116,6 +116,31 @@ class ScanRecord:
         return TransformLineage(steps=tuple(transform.step for transform in self.transform_chain))
 
 
+def _require_tiled(
+    geometric_map: GeometricMap, scans: Sequence[ScanRecord], payload_bytes: int
+) -> None:
+    expected = geometric_map.point_count * PACKED_POINT.size
+    if payload_bytes != expected:
+        raise ValueError(
+            f"the geometry payload has {payload_bytes} bytes but {geometric_map.point_count} "
+            f"points need {expected}"
+        )
+    next_index = 0
+    for position, scan in enumerate(scans):
+        if scan.ordinal != position or scan.first_geometry_index != next_index:
+            raise ValueError(
+                f"the source index does not tile the geometry: scan {position} "
+                f"({scan.observation_id!r}) starts at {scan.first_geometry_index}, "
+                f"expected {next_index}"
+            )
+        next_index += scan.geometry_count
+    if next_index != geometric_map.point_count:
+        raise ValueError(
+            f"the source index covers {next_index} points but the map has "
+            f"{geometric_map.point_count}"
+        )
+
+
 class PackedGeometry:
     """Read-only geometry of one map, over a packed payload and its source index.
 
@@ -142,26 +167,12 @@ class PackedGeometry:
                 point of the map, or the source index does not tile the geometry.
         """
         payload = memoryview(records)
-        expected = geometric_map.point_count * PACKED_POINT.size
-        if len(payload) != expected:
-            raise ValueError(
-                f"the geometry payload has {len(payload)} bytes but {geometric_map.point_count} "
-                f"points need {expected}"
-            )
-        next_index = 0
-        for position, scan in enumerate(scans):
-            if scan.ordinal != position or scan.first_geometry_index != next_index:
-                raise ValueError(
-                    f"the source index does not tile the geometry: scan {position} "
-                    f"({scan.observation_id!r}) starts at {scan.first_geometry_index}, "
-                    f"expected {next_index}"
-                )
-            next_index += scan.geometry_count
-        if next_index != geometric_map.point_count:
-            raise ValueError(
-                f"the source index covers {next_index} points but the map has "
-                f"{geometric_map.point_count}"
-            )
+        try:
+            _require_tiled(geometric_map, scans, len(payload))
+        except ValueError:
+            # O view do payload segura o mapa de memória: libera-o antes de propagar.
+            payload.release()
+            raise
         self._map = geometric_map
         self._scans = tuple(scans)
         self._scan_by_observation = {scan.observation_id: scan for scan in self._scans}
@@ -189,6 +200,36 @@ class PackedGeometry:
             raise KeyError(
                 f"observation {observation_id!r} is not in map {self._map.map_id!r}"
             ) from None
+
+    def trace(self, reference: GeometryReference) -> TransformTrace:
+        """Rebuild the audit trace of a persisted point without rerunning the mapping.
+
+        The chain comes from the source index and the coordinates from the
+        payload, so the trace shows the pose and the calibration that placed the
+        point exactly as they were persisted.
+
+        Raises:
+            KeyError: If the reference does not belong to this map.
+        """
+        point = self.get(reference)
+        scan = self.scan_record(point.source_observation_id)
+        return TransformTrace(
+            source_observation_id=point.source_observation_id,
+            source_point_index=point.source_point_index,
+            source_frame=point.source_frame,
+            map_frame=point.map_frame,
+            acquisition_timestamp=point.acquisition_timestamp,
+            source_coordinates_m=point.source_coordinates_m,
+            transforms=scan.transform_chain,
+            map_coordinates_m=point.coordinates_m,
+        )
+
+    def close(self) -> None:
+        """Release the view of the payload, so its memory map can be closed.
+
+        The geometry must not be read after this.
+        """
+        self._records.release()
 
     def references_for(self, observation_id: SourceObservationId) -> Iterator[GeometryReference]:
         """Iterate the references of the geometry that came from one observation.
