@@ -57,7 +57,7 @@ classDiagram
     SemanticInferenceProvenance --> BackendProvenance : backend
 ```
 
-A estrutura preserva três separações: a observação física continua pertencendo a Ingestion; o run descreve uma execução configurada; e o resultado contém apenas a evidência produzida para uma observação naquele run. `SemanticSupport`, quando produzido por um `SemanticScorer`, é um julgamento separado referenciando uma claim e não é incorporado por mutação à `SemanticClaim`.
+A estrutura preserva três separações: a observação física continua pertencendo a Ingestion; o run descreve uma execução configurada; e o resultado contém apenas a evidência produzida para uma observação naquele run. `SemanticScore`, quando produzido por um `SemanticScorer`, é um julgamento separado referenciando uma claim e não é incorporado por mutação à `SemanticClaim`.
 
 ## Identidade local, não persistente
 

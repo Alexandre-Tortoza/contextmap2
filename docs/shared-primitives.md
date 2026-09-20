@@ -18,7 +18,7 @@ flowchart LR
     SH --> SE["contextmap.state_estimation"]
     ING --> SO["SourceObservation"]
     SO --> VP["contextmap.visual_perception"]
-    VP --> E["Region2D / VisualFeature /<br/>SemanticClaim / SemanticSupport"]
+    VP --> E["Region2D / VisualFeature /<br/>SemanticClaim / SemanticScore"]
     E -. não mover para shared .-> DOWN["capabilities downstream"]
 ```
 
@@ -152,7 +152,7 @@ Region2D
 VisualFeature
 EmbeddingSpace
 SemanticClaim
-SemanticSupport
+SemanticScore
 SceneContext
 GeometryPoint
 GeometryReference
@@ -278,7 +278,7 @@ Mover `GeometryReference` para `shared` porque Sensor Association também o cons
 
 ### Incorreto
 
-Criar `shared.SemanticEvidence` para unificar `SemanticClaim`, `SemanticSupport`, `FusedEvidence` e relation evidence. Esses conceitos possuem semânticas e owners diferentes.
+Criar `shared.SemanticEvidence` para unificar `SemanticClaim`, `SemanticScore`, `FusedEvidence` e relation evidence. Esses conceitos possuem semânticas e owners diferentes.
 
 ## Critério de revisão
 

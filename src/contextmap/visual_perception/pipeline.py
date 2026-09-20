@@ -22,8 +22,7 @@ Three concepts only, matching the issue's boundary:
 
 This is deliberately not a generic plugin/workflow engine: the executable
 capabilities a :class:`StageSpec` can declare form the small, fixed table
-in ``_CAPABILITY_ADAPTERS``. Public ports that are not wired into the graph,
-such as ``SemanticScorer``, are intentionally absent. See
+in ``_CAPABILITY_ADAPTERS``. See
 ``src/contextmap/visual_perception/docs/pipeline.md`` for the full
 design rationale, the canonical preset's topology, and a worked example
 of inserting an optional stage without touching downstream capability
@@ -49,6 +48,7 @@ from contextmap.visual_perception.models import (
     Region2D,
     SceneContext,
     SemanticClaim,
+    SemanticScore,
     VisualFeature,
 )
 from contextmap.visual_perception.ports import (
@@ -56,6 +56,7 @@ from contextmap.visual_perception.ports import (
     FeatureResolutionEnhancement,
     RegionDiscovery,
     SemanticInterpreter,
+    SemanticScorer,
 )
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
 from contextmap.visual_perception.semantic_requests import SemanticInterpretationRequest
@@ -225,6 +226,15 @@ def _run_semantic_interpreter(
     return backend.interpret(request)
 
 
+def _run_semantic_scorer(backend: object, inputs: Mapping[str, object]) -> Sequence[SemanticScore]:
+    assert isinstance(backend, SemanticScorer)
+    claims = inputs["claims"]
+    features = inputs["features"]
+    assert isinstance(claims, Sequence)
+    assert isinstance(features, Sequence)
+    return backend.score(claims, features)  # type: ignore[arg-type]
+
+
 _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], object]] = {
     "feature_resolution_enhancement": _run_feature_resolution_enhancement,
     "region_discovery": _run_region_discovery,
@@ -232,6 +242,7 @@ _CAPABILITY_ADAPTERS: Mapping[str, Callable[[object, Mapping[str, object]], obje
     "scene_interpretation": _run_scene_interpretation,
     "region_interpretation": _run_region_interpretation,
     "semantic_interpreter": _run_semantic_interpreter,
+    "semantic_scorer": _run_semantic_scorer,
 }
 
 KNOWN_CAPABILITIES = frozenset(_CAPABILITY_ADAPTERS)
@@ -248,6 +259,7 @@ _BASE_REQUIRED_INPUTS: Mapping[str, frozenset[str]] = {
     "scene_interpretation": frozenset({"image"}),
     "region_interpretation": frozenset({"image", "regions"}),
     "semantic_interpreter": frozenset({"request"}),
+    "semantic_scorer": frozenset({"claims", "features"}),
 }
 
 _INPUT_PRODUCER_CAPABILITIES: Mapping[str, frozenset[str]] = {
@@ -255,6 +267,8 @@ _INPUT_PRODUCER_CAPABILITIES: Mapping[str, frozenset[str]] = {
     "image": frozenset({"image_preparation"}),
     "regions": frozenset({"region_discovery"}),
     "request": frozenset({"semantic_request"}),
+    "claims": frozenset({"semantic_claims", "region_interpretation"}),
+    "features": frozenset({"visual_features", "feature_extractor"}),
 }
 
 
