@@ -563,6 +563,47 @@ class PointRepresentation:
         return bool(self.undefined_components)
 
 
+class FailureReason(Enum):
+    """Why a support produced no representation.
+
+    Attributes:
+        UNENCODABLE_SUPPORT: The encoder declared the support cannot be
+            represented, e.g. too few points for a learned model.
+        NON_FINITE_OUTPUT: The encoder returned NaN or infinity in a component
+            it did not declare undefined.
+    """
+
+    UNENCODABLE_SUPPORT = "unencodable_support"
+    NON_FINITE_OUTPUT = "non_finite_output"
+
+
+@dataclass(frozen=True, kw_only=True)
+class FailedSupport:
+    """A support that could not be represented, recorded instead of a default vector.
+
+    A failure is never turned into a zero or default representation: it is an
+    explicit outcome that keeps which geometry was involved and why.
+
+    Attributes:
+        support: The support the encoder was asked to represent.
+        reason: Why no representation exists.
+        detail: The encoder's own account of the failure.
+    """
+
+    support: PointSupport
+    reason: FailureReason
+    detail: str
+
+    def __post_init__(self) -> None:
+        """Require an explanation.
+
+        Raises:
+            ValueError: If ``detail`` is empty.
+        """
+        if not self.detail:
+            raise ValueError("a failed support needs a detail explaining the failure")
+
+
 def _require_relative_reference(reference: str) -> None:
     """Reject a payload reference that is empty, absolute or leaves the run directory."""
     path = reference.split("#", maxsplit=1)[0]

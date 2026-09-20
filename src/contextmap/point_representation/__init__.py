@@ -19,6 +19,8 @@ from contextmap.point_representation.models import (
     CenteringMode,
     CoordinatePreparation,
     EncoderIdentity,
+    FailedSupport,
+    FailureReason,
     NeighborhoodMethod,
     PointRepresentation,
     PointRepresentationId,
@@ -33,19 +35,36 @@ from contextmap.point_representation.models import (
     SupportType,
     representation_id_for,
 )
+from contextmap.point_representation.ports import (
+    EncodedVector,
+    PointEncoder,
+    UnencodableSupportError,
+)
+from contextmap.point_representation.service import (
+    EncodedRepresentation,
+    RepresentationMetrics,
+    RepresentationService,
+)
 from contextmap.point_representation.support import SupportExtractor
 
 __all__ = [
     "CenteringMode",
     "CoordinatePreparation",
+    "EncodedRepresentation",
+    "EncodedVector",
     "EncoderIdentity",
+    "FailedSupport",
+    "FailureReason",
     "NeighborhoodMethod",
+    "PointEncoder",
     "PointRepresentation",
     "PointRepresentationId",
     "PointRepresentationRunId",
     "PointSupport",
     "PreparedSupport",
+    "RepresentationMetrics",
     "RepresentationProvenance",
+    "RepresentationService",
     "RepresentationSpace",
     "RepresentationSpaceMismatchError",
     "ScaleNormalization",
@@ -53,6 +72,7 @@ __all__ = [
     "SupportPolicy",
     "SupportStatistics",
     "SupportType",
+    "UnencodableSupportError",
     "ensure_compatible_representation_spaces",
     "ensure_compatible_representations",
     "representation_id_for",

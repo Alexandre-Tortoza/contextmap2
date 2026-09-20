@@ -34,7 +34,7 @@ Nada é concatenado em um vetor único e opaco, e features visuais densas nunca 
 
 ## Estado implementado
 
-Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização e a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`). Estão **planejados**, e serão documentados aqui quando forem implementados: a porta `PointEncoder` e o serviço de execução, o descritor geométrico determinístico, o backend opcional PTv3, o `PointRepresentationRunArtifact` e o harness de avaliação.
+Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização, a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`) e a porta `PointEncoder` com o serviço de execução independente de backend. Estão **planejados**, e serão documentados aqui quando forem implementados: o descritor geométrico determinístico, o backend opcional PTv3, o `PointRepresentationRunArtifact` e o harness de avaliação.
 
 ## Contratos públicos
 
@@ -43,6 +43,8 @@ Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, polític
 - `CoordinatePreparation`, `CenteringMode`, `ScaleNormalization`, `PreparedSupport` — a preparação determinística das coordenadas antes do encoder, sempre registrada.
 - `RepresentationSpace`, `representation_space_fingerprint()`, `ensure_compatible_representation_spaces()`, `ensure_compatible_representations()`, `RepresentationSpaceMismatchError` — identidade do espaço vetorial e a regra de comparabilidade.
 - `EncoderIdentity`, `RepresentationProvenance` — qual implementação e qual código produziram a representação.
+- `PointEncoder`, `EncodedVector`, `UnencodableSupportError` — a porta de encoders: um `PreparedSupport` entra, um vetor sai, e uma falha nunca vira vetor padrão.
+- `RepresentationService`, `EncodedRepresentation`, `RepresentationMetrics`, `FailedSupport`, `FailureReason` — a execução independente de backend e seus resultados explícitos; ver [`execution.md`](execution.md).
 - `SupportExtractor` — seleciona o suporte (raio ou k vizinhos) de um elemento pela porta `GeometrySource` e prepara suas coordenadas; ver [`support-extraction.md`](support-extraction.md).
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
@@ -59,6 +61,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, identidade, comparabilidade e serialização.
+- [`execution.md`](execution.md) — porta `PointEncoder`, serviço de execução, falhas explícitas e métricas.
 - [`support-extraction.md`](support-extraction.md) — extração determinística do suporte local, preparação de coordenadas e linha de base de desempenho.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — contratos no contexto global.
