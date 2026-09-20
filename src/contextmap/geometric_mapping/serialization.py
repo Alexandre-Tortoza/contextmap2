@@ -7,7 +7,7 @@ bulk geometry lives in the artifact's storage and is reached through references.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from contextmap.geometric_mapping.models import (
@@ -32,8 +32,9 @@ from contextmap.geometric_mapping.motion_correction import (
     MotionCorrectionState,
     ScanDisposition,
 )
+from contextmap.geometric_mapping.transformation import TracedTransform, TransformTrace
 from contextmap.ingestion import FrameId, SequenceArtifactId, SourceObservationId
-from contextmap.shared import SourceTimestamp
+from contextmap.shared import Quaternion, SourceTimestamp, Vector3
 from contextmap.state_estimation import (
     LookupMode,
     LookupPolicy,
@@ -80,38 +81,36 @@ def decode_geometry_reference(record: Mapping[str, Any]) -> GeometryReference:
     )
 
 
+def encode_transform_step(step: TransformStep) -> dict[str, Any]:
+    """Encode one step of a transform chain."""
+    return {
+        "kind": step.kind.value,
+        "parent_frame": str(step.parent_frame),
+        "child_frame": str(step.child_frame),
+        "reference": step.reference,
+        "source_estimate_ids": [str(item) for item in step.source_estimate_ids],
+    }
+
+
+def decode_transform_step(step: Mapping[str, Any]) -> TransformStep:
+    """Decode one step of a transform chain."""
+    return TransformStep(
+        kind=TransformKind(step["kind"]),
+        parent_frame=FrameId(step["parent_frame"]),
+        child_frame=FrameId(step["child_frame"]),
+        reference=step["reference"],
+        source_estimate_ids=tuple(PoseEstimateId(item) for item in step["source_estimate_ids"]),
+    )
+
+
 def encode_transform_lineage(lineage: TransformLineage) -> dict[str, Any]:
     """Encode the transform chain, map side first."""
-    return {
-        "steps": [
-            {
-                "kind": step.kind.value,
-                "parent_frame": str(step.parent_frame),
-                "child_frame": str(step.child_frame),
-                "reference": step.reference,
-                "source_estimate_ids": [str(item) for item in step.source_estimate_ids],
-            }
-            for step in lineage.steps
-        ]
-    }
+    return {"steps": [encode_transform_step(step) for step in lineage.steps]}
 
 
 def decode_transform_lineage(record: Mapping[str, Any]) -> TransformLineage:
     """Decode a transform chain and revalidate that it is contiguous."""
-    return TransformLineage(
-        steps=tuple(
-            TransformStep(
-                kind=TransformKind(step["kind"]),
-                parent_frame=FrameId(step["parent_frame"]),
-                child_frame=FrameId(step["child_frame"]),
-                reference=step["reference"],
-                source_estimate_ids=tuple(
-                    PoseEstimateId(item) for item in step["source_estimate_ids"]
-                ),
-            )
-            for step in record["steps"]
-        )
-    )
+    return TransformLineage(steps=tuple(decode_transform_step(step) for step in record["steps"]))
 
 
 def encode_geometry_point(point: GeometryPoint) -> dict[str, Any]:
@@ -318,3 +317,59 @@ def decode_motion_correction_policy(record: Mapping[str, Any]) -> MotionCorrecti
     return MotionCorrectionPolicy(
         raw=ScanDisposition(record["raw"]), unknown=ScanDisposition(record["unknown"])
     )
+
+
+def encode_transform_trace(trace: TransformTrace) -> dict[str, Any]:
+    """Encode the audit trace of one point.
+
+    The chain appears once with its numbers, so a persisted sample of traces
+    never duplicates a transform per point.
+    """
+    return {
+        "source_observation_id": str(trace.source_observation_id),
+        "source_point_index": trace.source_point_index,
+        "source_frame": str(trace.source_frame),
+        "map_frame": str(trace.map_frame),
+        "acquisition_timestamp": trace.acquisition_timestamp.to_record(),
+        "source_coordinates_m": list(trace.source_coordinates_m),
+        "transforms": [
+            {
+                "step": encode_transform_step(transform.step),
+                "translation_m": list(transform.translation_m),
+                "rotation": list(transform.rotation),
+            }
+            for transform in trace.transforms
+        ],
+        "map_coordinates_m": list(trace.map_coordinates_m),
+    }
+
+
+def decode_transform_trace(record: Mapping[str, Any]) -> TransformTrace:
+    """Decode an audit trace and revalidate its steps."""
+    sx, sy, sz = record["source_coordinates_m"]
+    mx, my, mz = record["map_coordinates_m"]
+    return TransformTrace(
+        source_observation_id=SourceObservationId(record["source_observation_id"]),
+        source_point_index=record["source_point_index"],
+        source_frame=FrameId(record["source_frame"]),
+        map_frame=FrameId(record["map_frame"]),
+        acquisition_timestamp=SourceTimestamp.from_record(record["acquisition_timestamp"]),
+        source_coordinates_m=(sx, sy, sz),
+        transforms=tuple(
+            TracedTransform(
+                step=decode_transform_step(transform["step"]),
+                translation_m=_vector3(transform["translation_m"]),
+                rotation=_quaternion(transform["rotation"]),
+            )
+            for transform in record["transforms"]
+        ),
+        map_coordinates_m=(mx, my, mz),
+    )
+
+
+def _vector3(values: Sequence[float]) -> Vector3:
+    return (values[0], values[1], values[2])
+
+
+def _quaternion(values: Sequence[float]) -> Quaternion:
+    return (values[0], values[1], values[2], values[3])

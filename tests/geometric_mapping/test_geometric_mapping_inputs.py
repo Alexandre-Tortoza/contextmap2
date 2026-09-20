@@ -4,12 +4,14 @@ from pathlib import Path
 
 import pytest
 from input_builders import (
+    ACCEPT_ALL,
+    INTERPOLATED,
     MS,
     SEQUENCE_ID,
     TRAJECTORY_ID,
+    assemble_plan,
     make_calibration,
     make_external_pose,
-    make_selection_result,
     make_sequence,
     make_trajectory,
     rigid,
@@ -28,7 +30,6 @@ from contextmap.geometric_mapping import (
     PointCloudLayout,
     ScanDisposition,
     UnsupportedPointCloudLayoutError,
-    assemble_geometry_inputs,
     assemble_geometry_inputs_from_artifacts,
     resolve_point_cloud_layout,
 )
@@ -57,7 +58,6 @@ from contextmap.state_estimation import (
     StateEstimationRunId,
     StateEstimationRunReader,
     StateEstimationRunWriter,
-    Trajectory,
     TrajectoryId,
     calibration_identity,
     execute_state_estimation,
@@ -67,34 +67,8 @@ from contextmap.state_estimation.backends.external_pose import (
     ExternalPoseEstimator,
 )
 
-ACCEPT_ALL = MotionCorrectionPolicy(raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.ACCEPT)
 REJECT_UNKNOWN = MotionCorrectionPolicy(raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.REJECT)
-INTERPOLATED = LookupPolicy.interpolated()
-DEFAULT_CALIBRATION = make_calibration()
-
-
-def _assemble(
-    observations: list[SourceObservation] | None = None,
-    *,
-    calibration: CalibrationSet | None = DEFAULT_CALIBRATION,
-    trajectory: Trajectory | None = None,
-    pose_lookup: LookupPolicy = INTERPOLATED,
-    policy: MotionCorrectionPolicy = ACCEPT_ALL,
-    selection: SequenceSelection | None = None,
-    motion_correction: dict[SourceObservationId, MotionCorrectionRecord] | None = None,
-    run_id: StateEstimationRunId | None = None,
-) -> GeometryInputPlan:
-    return assemble_geometry_inputs(
-        sequence=make_selection_result(
-            observations if observations is not None else make_sequence(), selection
-        ),
-        calibration=calibration,
-        trajectory=trajectory if trajectory is not None else make_trajectory(),
-        pose_lookup=pose_lookup,
-        motion_correction_policy=policy,
-        motion_correction=motion_correction,
-        state_estimation_run_id=run_id,
-    )
+_assemble = assemble_plan
 
 
 def _ids(plan: GeometryInputPlan) -> list[str]:
