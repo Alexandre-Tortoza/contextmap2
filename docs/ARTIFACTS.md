@@ -100,7 +100,7 @@ flowchart TD
 
 ## Artefatos materializados hoje
 
-Na `dev`, cinco formatos já existem e são integrados:
+Na `dev`, seis formatos já existem e são integrados:
 
 ```mermaid
 flowchart LR
@@ -127,11 +127,15 @@ flowchart LR
     SA --> AW["SensorAssociationRunWriter"]
     AW --> ASA["SensorAssociationRunArtifact"]
     ASA --> AR["SensorAssociationRunReader"]
+    MAP --> PTE["Point Representation"]
+    PTE --> PW["PointRepresentationRunWriter"]
+    PW --> PTA["PointRepresentationRunArtifact"]
+    PTA --> PTR["PointRepresentationRunReader"]
 ```
 
-`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. Os artifacts downstream do diagrama anterior permanecem planejados.
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -243,6 +247,28 @@ workspace/runs/sensor-association/<sequence-name>/
 ```
 
 O run não repete XYZ nem vetores de embedding: a geometria é referenciada por posição (a identidade do mapa é posicional) e a amostragem densa guarda índices e pesos. `manifest.json` carrega a linhagem exata (sequência, seleção, mapa geométrico, trajetória, calibração, runs de percepção, políticas, fingerprint, código, canais de features com as fontes exatas) e o inventário; `debug/` fica fora dele. Uma execução nativa e uma melhorada de features compartilham os mesmos artifacts a montante e continuam identificáveis de forma independente. O leitor abre sem ROS, sem modelos e sem NumPy. Detalhes: [Sensor Association artifact](../src/contextmap/sensor_association/docs/artifact.md).
+
+### `PointRepresentationRunArtifact` atual
+
+```text
+workspace/runs/point-representation/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<backend>/
+    ├── README.md
+    ├── manifest.json                       # identidade, linhagem e inventário
+    ├── outputs/
+    │   ├── representations.jsonl           # PointRepresentation canônica, uma por linha
+    │   ├── representation-index.jsonl      # representation_id → deslocamento e tamanho
+    │   ├── representation-spaces.json      # RepresentationSpace do run + fingerprint
+    │   ├── geometry-representation-index.jsonl
+    │   ├── failed-supports.jsonl           # suportes que não produziram representação
+    │   └── payloads/vectors.f32|f64        # vetores, uma linha de tamanho fixo cada
+    ├── metrics/
+    │   └── counts.json  support-size.json  norms.json  runtime.json
+    └── debug/                              # somente standard/full; nunca inventariado
+```
+
+O `manifest.json` traz a linhagem (mapa geométrico consumido, seleção dos centros independente da ordem, política de suporte, espaço, encoder e hash do checkpoint, código, contexto de associação **opcional e explícito**) e o inventário. Um suporte que falhou vai para `failed-supports.jsonl` com o motivo; um run só de falhas é um run válido e explícito, e um vetor nunca é inventado. O run abre sem NumPy, sem biblioteca de modelo e sem o mapa geométrico, e os vetores são lidos sob demanda. O escritor ainda acumula em memória; a escrita em fluxo de `shared.run_directory` ainda não foi adotada por ele. Detalhes: [Point Representation artifact](../src/contextmap/point_representation/docs/artifact.md).
 
 ### Evidência auditável de Region Discovery
 

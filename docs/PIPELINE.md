@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SensorAssociationRunArtifact`: a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória e o Sensor Association ancora a percepção na geometria:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SensorAssociationRunArtifact` e, de forma opcional, `PointRepresentationRunArtifact`: a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria e a Point Representation descreve a estrutura 3D local:
 
 ```mermaid
 flowchart LR
@@ -95,10 +95,13 @@ flowchart LR
     MAPA --> SA
     TRA --> SA
     SA --> ASA["SensorAssociationRunArtifact"]
+    MAPA --> PTR["Point Representation<br/>(opcional)"]
+    PTR --> PTRA["PointRepresentationRunArtifact"]
     ASA -. próximo estágio ainda não integrado .-> FUT["Semantic Fusion<br/>+ downstream"]
+    PTRA -.-> FUT
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping e Sensor Association possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association e Point Representation (opcional) possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -584,11 +587,15 @@ Opcional/experimental:
 
 PTv3 não é requisito automático do canonical pipeline. Seu uso deve ser justificado por avaliação/ablation.
 
+No estado atual, o descritor determinístico está implementado e o PTv3 tem apenas a **fronteira** (`PTv3PointEncoder` atrás de um `PTv3Runtime` injetável, sem torch nem pesos no ambiente de desenvolvimento): nenhuma execução real foi feita e a comparação contra `off` e contra o descritor, com custo e VRAM reais, continua pendente.
+
 ### Saída
 
 `PointRepresentation` + `RepresentationSpace`.
 
 Saída persistida: `PointRepresentationRunArtifact`.
+
+Detalhes: [documentação de Point Representation](../src/contextmap/point_representation/docs/README.md), [contratos](../src/contextmap/point_representation/docs/contracts.md), [extração de suporte](../src/contextmap/point_representation/docs/support-extraction.md), [execução](../src/contextmap/point_representation/docs/execution.md), [descritor geométrico](../src/contextmap/point_representation/docs/geometric-descriptor.md), [PTv3](../src/contextmap/point_representation/docs/ptv3.md), [artifact](../src/contextmap/point_representation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/point_representation.md).
 
 ## 7. Semantic Fusion
 
