@@ -4,33 +4,28 @@ import math
 import numpy as np
 import pytest
 from projection_builders import (
-    ArrayGeometrySource,
     artifact,
     make_calibration,
-    make_camera_observation,
-    make_lookup,
     make_prepared_image,
-    make_trajectory,
     map_point_for_camera_point,
     map_point_for_pixel,
     mask_with,
+    project_frame,
+    scene_frame,
 )
 
 from contextmap.ingestion import CalibrationSet, MeiCameraModel
 from contextmap.sensor_association import DepthMetric, VisibilityState
 from contextmap.sensor_association.frame_projection import (
     FrameProjection,
-    FrameProjector,
     ProjectionStage,
 )
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.sensor_association.visibility import (
     OcclusionPolicy,
     depth_metric_for,
     resolve_visibility,
 )
 from contextmap.shared import Vector3
-from contextmap.state_estimation import LookupPolicy
 from contextmap.visual_perception import (
     ExclusionRegion,
     PreparedImage,
@@ -58,23 +53,11 @@ def _frame(
     prepared: PreparedImage | None = None,
     calibration: CalibrationSet | None = None,
 ) -> FrameProjection:
-    calibration = calibration if calibration is not None else make_calibration()
-    source = ArrayGeometrySource(points, calibration=calibration)
-    projector = FrameProjector(
-        cloud=GeometryCloud.from_source(source),
-        trajectory=make_lookup(make_trajectory(calibration)),
-        pose_policy=LookupPolicy.exact(),
-        calibration=calibration,
-    )
-    frame = projector.project(
-        make_camera_observation(0), prepared if prepared is not None else make_prepared_image()
-    )
-    assert isinstance(frame, FrameProjection)
-    return frame
+    return project_frame(points, prepared=prepared, calibration=calibration)
 
 
 def _scene(*pixels: tuple[float, float, float], **options: object) -> FrameProjection:
-    return _frame([map_point_for_pixel(u, v, z) for u, v, z in pixels], **options)  # type: ignore[arg-type]
+    return scene_frame(*pixels, **options)  # type: ignore[arg-type]
 
 
 # --- Front and back surfaces ------------------------------------------------

@@ -39,6 +39,8 @@ from contextmap.ingestion import (
     SourceProvenance,
 )
 from contextmap.ingestion.calibration import compute_content_hash
+from contextmap.sensor_association.frame_projection import FrameProjection, FrameProjector
+from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.state_estimation import (
     EstimatorProvenance,
@@ -369,3 +371,37 @@ def map_point_for_pixel(
 def map_point_for_camera_point(camera_point: Vector3) -> Vector3:
     """The map-frame point at a camera-frame position, under the same placement."""
     return (camera_point[2], -camera_point[0], -camera_point[1])
+
+
+def project_frame(
+    map_points: Sequence[Vector3],
+    *,
+    prepared: PreparedImage | None = None,
+    calibration: CalibrationSet | None = None,
+) -> FrameProjection:
+    """Project ``map_points`` at time zero, with the body at the map origin."""
+    calibration = calibration if calibration is not None else make_calibration()
+    projector = FrameProjector(
+        cloud=GeometryCloud.from_source(ArrayGeometrySource(map_points, calibration=calibration)),
+        trajectory=make_lookup(make_trajectory(calibration)),
+        pose_policy=LookupPolicy.exact(),
+        calibration=calibration,
+    )
+    frame = projector.project(
+        make_camera_observation(0), prepared if prepared is not None else make_prepared_image()
+    )
+    assert isinstance(frame, FrameProjection)
+    return frame
+
+
+def scene_frame(
+    *pixels: tuple[float, float, float],
+    prepared: PreparedImage | None = None,
+    calibration: CalibrationSet | None = None,
+) -> FrameProjection:
+    """Project points given as raw pixel ``(u, v)`` and optical depth ``z`` of a pinhole."""
+    return project_frame(
+        [map_point_for_pixel(u, v, z) for u, v, z in pixels],
+        prepared=prepared,
+        calibration=calibration,
+    )
