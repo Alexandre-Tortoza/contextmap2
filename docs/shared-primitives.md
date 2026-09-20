@@ -10,7 +10,7 @@ As regras gerais de ownership e imports permanecem em [architecture.md](architec
 
 ## Estado atual de `contextmap.shared`
 
-`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
+`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` (com `to_record()`/`from_record()`, o formato de registro compartilhado do timestamp e do clock) e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
 
 ```mermaid
 flowchart LR
@@ -37,9 +37,9 @@ Os aliases `Vector3` e `Quaternion` e as funções sobre quaternions entraram em
 
 ### Mecânica de run directory em `shared.run_directory`
 
-`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash, e o índice de run é monotônico por capability e sequência calculado a partir dos runs válidos no disco. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index` e `write_run_registry` implementam essas regras uma vez, sem conhecer o conteúdo de um run.
+`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash, e o índice de run é monotônico por capability e sequência calculado a partir dos runs válidos no disco. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index` e `write_run_registry` implementam essas regras uma vez, sem conhecer o conteúdo de um run. Um payload maior que a memória é gravado em fluxo por `AtomicRunDirectory.open_binary`, que hasheia durante a escrita, e `check_file_inventory` hasheia em blocos; ambos surgiram do primeiro consumidor real (o payload de geometria) e não mudam as regras.
 
-- **quem usa:** `state_estimation` agora; `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` nas milestones seguintes, todos com a mesma regra de `ARTIFACTS.md`;
+- **quem usa:** `state_estimation` e `geometric_mapping` agora; `sensor_association`, `point_representation` e `semantic_fusion` nas milestones seguintes, todos com a mesma regra de `ARTIFACTS.md`;
 - **owner natural:** nenhuma capability de domínio; a regra é global;
 - **API pública:** apenas `pathlib` e tipos primitivos, sem NumPy nem SDK;
 - **o que continua com cada capability:** quais arquivos existem, os campos do manifest e o que torna um run válido.

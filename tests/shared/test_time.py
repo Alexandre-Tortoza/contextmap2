@@ -42,3 +42,23 @@ def test_different_clock_ids_are_not_assumed_comparable() -> None:
 
     assert bag_time != sensor_time
     assert bag_time.clock_id != sensor_time.clock_id
+
+
+def test_a_timestamp_round_trips_through_a_plain_record() -> None:
+    timestamp = SourceTimestamp(
+        seconds=1_700_000_000, nanoseconds=123_456_789, clock_id="bag:/clock"
+    )
+
+    record = timestamp.to_record()
+
+    assert record == {
+        "seconds": 1_700_000_000,
+        "nanoseconds": 123_456_789,
+        "clock_id": "bag:/clock",
+    }
+    assert SourceTimestamp.from_record(record) == timestamp
+
+
+def test_decoding_a_record_revalidates_the_timestamp() -> None:
+    with pytest.raises(ValueError, match="nanoseconds"):
+        SourceTimestamp.from_record({"seconds": 0, "nanoseconds": 1_000_000_000, "clock_id": "x"})

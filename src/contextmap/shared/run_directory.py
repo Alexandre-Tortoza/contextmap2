@@ -13,19 +13,24 @@ decides the files, the manifest fields and what makes a run valid.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import shutil
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import TracebackType
-from typing import Any
+from typing import Any, BinaryIO
 from uuid import uuid4
 
 _MANIFEST_FILENAME = "manifest.json"
 _README_FILENAME = "README.md"
 _REGISTRY_FILENAME = "runs.json"
 _TEMPORARY_PREFIX = ".tmp-"
+
+# Arquivos grandes (a geometria de um mapa pode ter gigabytes) nunca são lidos por inteiro.
+_HASH_CHUNK_BYTES = 1 << 20
 
 
 class RunDirectoryError(Exception):
@@ -67,6 +72,8 @@ def file_entry(relative_path: str, data: bytes) -> FileEntry:
 def check_file_inventory(root: Path, inventory: Iterable[FileEntry]) -> list[str]:
     """Compare an inventory with what is actually on disk.
 
+    Files are hashed in chunks, so a file larger than memory can be checked.
+
     Args:
         root: The run directory.
         inventory: The entries the manifest promises.
@@ -81,15 +88,44 @@ def check_file_inventory(root: Path, inventory: Iterable[FileEntry]) -> list[str
         if not file_path.is_file():
             problems.append(f"missing file referenced by manifest: {entry.path}")
             continue
-        data = file_path.read_bytes()
-        if len(data) != entry.size_bytes:
+        size_bytes, content_hash = _hash_file(file_path)
+        if size_bytes != entry.size_bytes:
             problems.append(
-                f"size mismatch for {entry.path}: expected {entry.size_bytes}, found {len(data)}"
+                f"size mismatch for {entry.path}: expected {entry.size_bytes}, found {size_bytes}"
             )
             continue
-        if file_entry(entry.path, data).content_hash != entry.content_hash:
+        if content_hash != entry.content_hash:
             problems.append(f"content hash mismatch for {entry.path}")
     return problems
+
+
+def _hash_file(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(_HASH_CHUNK_BYTES):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    return size_bytes, f"sha256:{digest.hexdigest()}"
+
+
+class _HashingRawWriter(io.RawIOBase):
+    """Raw writer that hashes and counts exactly the bytes it hands to the file."""
+
+    def __init__(self, handle: BinaryIO) -> None:
+        self._handle = handle
+        self.digest = hashlib.sha256()
+        self.size_bytes = 0
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data: Any) -> int:
+        view = memoryview(data)
+        written = self._handle.write(view) or 0
+        self.digest.update(view[:written])
+        self.size_bytes += written
+        return written
 
 
 class AtomicRunDirectory:
@@ -118,6 +154,8 @@ class AtomicRunDirectory:
         self._tmp_dir = final_dir.parent / f"{_TEMPORARY_PREFIX}{final_dir.name}-{uuid4().hex[:8]}"
         self._entries: dict[str, FileEntry] = {}
         self._written: set[str] = set()
+        self._open_streams = 0
+        self._failed_stream = False
         self._published = False
 
     def __enter__(self) -> AtomicRunDirectory:
@@ -164,6 +202,72 @@ class AtomicRunDirectory:
         if contractual:
             self._entries[relative_path] = file_entry(relative_path, data)
 
+    @contextmanager
+    def open_binary(self, relative_path: str, *, contractual: bool = True) -> Iterator[BinaryIO]:
+        """Stream a file that may be larger than memory.
+
+        The bytes are hashed and counted as they are written, so the inventory
+        entry costs no second read. Use it like :meth:`write_bytes` for payloads
+        that are produced incrementally.
+
+        Args:
+            relative_path: Path relative to the run directory.
+            contractual: See :meth:`write_bytes`.
+
+        Yields:
+            A writable binary stream. It must be closed (leave the ``with``
+            block) before :meth:`publish`.
+
+        Raises:
+            RunDirectoryError: If the path is not a plain relative path inside
+                the run, or the same path was already written.
+        """
+        _require_relative_path(relative_path)
+        if relative_path in self._written:
+            raise RunDirectoryError(f"path already written in this run: {relative_path}")
+        target = self._tmp_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._written.add(relative_path)
+        self._open_streams += 1
+        try:
+            with target.open("wb") as handle:
+                raw = _HashingRawWriter(handle)
+                stream = io.BufferedWriter(raw, buffer_size=_HASH_CHUNK_BYTES)
+                try:
+                    yield stream
+                finally:
+                    stream.close()
+        except BaseException:
+            # Um arquivo parcial nunca pode ser publicado nem parecer inventariado.
+            self._failed_stream = True
+            raise
+        finally:
+            self._open_streams -= 1
+        if contractual:
+            self._entries[relative_path] = FileEntry(
+                path=relative_path,
+                size_bytes=raw.size_bytes,
+                content_hash=f"sha256:{raw.digest.hexdigest()}",
+            )
+
+    def written_path(self, relative_path: str) -> Path:
+        """Return where a file written in this run currently lives.
+
+        For reading back what was written before the run is published, for
+        example to open a payload and derive human-only evidence from it. Do not
+        write through it: files are only added with :meth:`write_bytes` and
+        :meth:`open_binary`, which keep the inventory honest.
+
+        Args:
+            relative_path: Path relative to the run directory.
+
+        Raises:
+            RunDirectoryError: If no such file was written in this run.
+        """
+        if relative_path not in self._written:
+            raise RunDirectoryError(f"path has not been written in this run: {relative_path}")
+        return self._tmp_dir / relative_path
+
     def publish(self, *, manifest: Mapping[str, Any], readme: str) -> None:
         """Write the manifest, verify the inventory and make the run visible.
 
@@ -175,9 +279,14 @@ class AtomicRunDirectory:
             readme: Human-readable summary of the run.
 
         Raises:
-            RunDirectoryError: If the inventory does not match the files on
-                disk, or the final path appeared in the meantime.
+            RunDirectoryError: If a stream is open or failed, the inventory does
+                not match the files on disk, or the final path appeared in the
+                meantime.
         """
+        if self._open_streams:
+            raise RunDirectoryError("a stream is still open; close it before publishing the run")
+        if self._failed_stream:
+            raise RunDirectoryError("a stream failed while writing; the run cannot be published")
         inventory = sorted(self._entries.values(), key=lambda entry: entry.path)
         record = {
             **manifest,

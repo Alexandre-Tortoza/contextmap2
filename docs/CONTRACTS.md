@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping em diante permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os demais, de Sensor Association em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
 
 ```mermaid
 flowchart LR
@@ -30,6 +30,7 @@ flowchart LR
     PR --> CTX["SceneContext"]
     SS["SemanticSupport"] --> SC
     SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
+    PE --> GR["GeometryPoint / GeometryReference / GeometricMap<br/>implementado"]
     PR -. future association .-> SP["SpatialObservation<br/>planejado"]
     SP --> FE["FusedEvidence<br/>planejado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
@@ -49,7 +50,7 @@ flowchart LR
     SUP["SemanticSupport"] --> SC
 
     SO --> PE["PoseEstimate"]
-    PE -. futuro .-> GM["GeometryReference"]
+    PE --> GM["GeometryReference"]
     PR -. futuro .-> SP["SpatialObservation"]
     GM -. futuro .-> SP
     SP -. futuro .-> FE["FusedEvidence"]
