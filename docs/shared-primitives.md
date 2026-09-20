@@ -10,7 +10,7 @@ As regras gerais de ownership e imports permanecem em [architecture.md](architec
 
 ## Estado atual de `contextmap.shared`
 
-`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `quaternion_norm`, `is_unit_quaternion`, `normalize_quaternion`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
+`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
 
 Os aliases `Vector3` e `Quaternion` e as funções sobre quaternions entraram em `shared` porque atendem aos critérios abaixo:
 
-- **quem usa:** `state_estimation` (validação de `PoseEstimate.orientation`, e nas issues seguintes interpolação e composição de transforms), com `geometric_mapping` e `sensor_association` consumindo a mesma convenção para compor `T_map_body(t)` com extrínsecos estáticos;
+- **quem usa:** `state_estimation` (validação de `PoseEstimate.orientation`, frame graph e preflight, que compõem e invertem transforms), com `geometric_mapping` e `sensor_association` consumindo a mesma álgebra para compor `T_map_body(t)` com extrínsecos estáticos;
 - **mesma semântica:** quaternion `(x, y, z, w)`, unitário, sem reordenação em relação a `RigidTransform` e `ExternalPoseMeasurement` de Ingestion;
 - **owner natural:** nenhum; a álgebra de quaternions não pertence a uma capability de domínio;
 - **API pública:** apenas tuplas, sem NumPy ou biblioteca de robótica.

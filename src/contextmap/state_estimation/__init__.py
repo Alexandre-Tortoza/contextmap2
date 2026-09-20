@@ -9,6 +9,12 @@ types, or a dataset's pose format. See
 documentation.
 """
 
+from contextmap.state_estimation.frame_graph import (
+    FrameGraphError,
+    LoopInconsistency,
+    ResolvedTransform,
+    StaticFrameGraph,
+)
 from contextmap.state_estimation.lookup import (
     ClockDomainMismatchError,
     LookupMode,
@@ -45,28 +51,64 @@ from contextmap.state_estimation.ports import (
     StateEstimationResult,
     StateEstimator,
 )
+from contextmap.state_estimation.preflight import (
+    BODY_ENDPOINT,
+    ClockCheck,
+    DownstreamReadiness,
+    FrameGraphSummary,
+    GeometryPreflightReport,
+    GeometryRequirements,
+    PreflightFinding,
+    PreflightStatus,
+    PreflightTolerances,
+    StaticRelationRequirement,
+    TransformCheck,
+    calibration_identity,
+    run_geometry_preflight,
+)
+from contextmap.state_estimation.service import (
+    GeometryPreflightError,
+    StateEstimationOutcome,
+    execute_state_estimation,
+)
 
 __all__ = [
+    "BODY_ENDPOINT",
+    "ClockCheck",
     "ClockDomainMismatchError",
     "DiagnosticSeverity",
+    "DownstreamReadiness",
     "EstimationDiagnostic",
     "EstimatorProvenance",
+    "FrameGraphError",
+    "FrameGraphSummary",
+    "GeometryPreflightError",
+    "GeometryPreflightReport",
+    "GeometryRequirements",
     "LookupMode",
     "LookupOutcome",
     "LookupPolicy",
     "LookupRejection",
+    "LoopInconsistency",
     "MissingEstimatorInputError",
     "PoseEstimate",
     "PoseEstimateId",
     "PoseLookupResult",
     "PoseProvenance",
     "PoseValidity",
+    "PreflightFinding",
+    "PreflightStatus",
+    "PreflightTolerances",
     "RejectedLookup",
     "ResolvedPose",
+    "ResolvedTransform",
     "StateEstimationError",
+    "StateEstimationOutcome",
     "StateEstimationRequest",
     "StateEstimationResult",
     "StateEstimator",
+    "StaticFrameGraph",
+    "StaticRelationRequirement",
     "TemporalAlignmentSummary",
     "TimeBounds",
     "Trajectory",
@@ -75,6 +117,10 @@ __all__ = [
     "TrajectoryLookup",
     "TrajectoryProvenance",
     "TrajectoryQualitySummary",
+    "TransformCheck",
+    "calibration_identity",
+    "execute_state_estimation",
     "pose_estimate_id_for",
+    "run_geometry_preflight",
     "summarize_lookups",
 ]
