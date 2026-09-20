@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
 
 import numpy as np
@@ -159,4 +160,59 @@ def make_request(
             else [frame_input(0, channels=channels), frame_input(1, channels=channels)]
         ),
         code_version="test",
+    )
+
+
+# Regiões em faixas diferentes de alcance, densidade e distância à borda:
+# R1 perto e denso, R1b sobreposta a R1 (mesma geometria), R2 no meio com um oculto atrás,
+# R3 longe e colada na borda, R4 sem geometria.
+STRATA_PIXELS = [
+    (100, 100, 2.0),
+    (150, 100, 2.2),
+    (200, 100, 2.4),
+    (300, 200, 5.0),
+    (350, 200, 5.0),
+    (350, 200, 9.0),
+    (20, 20, 12.0),
+    (3, 3, 15.0),
+]
+STRATA_REGIONS = {
+    "region-R1": (90, 90, 210, 110),
+    "region-R1b": (95, 95, 205, 105),
+    "region-R2": (290, 190, 410, 210),
+    "region-R3": (10, 10, 40, 40),
+    "region-R4": (500, 400, 520, 420),
+}
+
+
+def strata_frame_input(
+    index: int, *, channels: Sequence[DenseChannel] = ()
+) -> AssociationFrameInput:
+    observation_id = frame_id(index)
+    result_id = PerceptionResultId(f"run-0001--{observation_id}")
+    maps = dense_maps(index, channels)
+    result = make_result(
+        [make_region(name, rect_mask(640, 480, *box)) for name, box in STRATA_REGIONS.items()],
+        features=[dense_map.feature for dense_map in maps.values()],
+        observation_id=SourceObservationId(observation_id),
+        result_id=result_id,
+    )
+    return AssociationFrameInput(
+        observation=make_camera_observation(FRAME_TIMES_NS[index], observation_id=observation_id),
+        prepared_image=make_prepared_image(source_observation_id=observation_id),
+        perception_result=result,
+        dense_maps=maps,
+    )
+
+
+def make_strata_request(*, channels: Sequence[DenseChannel] = ()) -> SensorAssociationRequest:
+    base = make_request(channels=channels)
+    calibration = base.calibration
+    source = ArrayGeometrySource(
+        [map_point_for_pixel(u, v, z) for u, v, z in STRATA_PIXELS], calibration=calibration
+    )
+    return dataclasses.replace(
+        base,
+        geometry=source,
+        frames=tuple(strata_frame_input(i, channels=channels) for i in range(2)),
     )

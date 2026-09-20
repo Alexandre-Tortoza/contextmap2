@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import json
 
@@ -421,3 +422,28 @@ def test_the_membership_does_not_carry_labels_or_masks() -> None:
     fields = {f.name for f in dataclasses.fields(membership.regions[0])}
 
     assert not fields & {"mask", "label", "labels", "entity_id", "class_id", "claims"}
+
+
+def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
+    frame = scene_frame((100, 100, 3.0), (150, 100, 3.0), (150, 100, 8.0))
+    result = make_result(
+        [
+            make_region("region-A", rect_mask(640, 480, 90, 90, 210, 110)),
+            make_region("region-B", rect_mask(640, 480, 140, 90, 260, 110)),
+        ]
+    )
+    before = [(r, r.region_id, r.mask, r.mask.data if r.mask else None) for r in result.regions]
+    copies = [copy.deepcopy(r) for r in result.regions]
+
+    membership = associate_regions(resolve_visibility(frame, POLICY), result)
+    build_spatial_observations(membership, configuration_fingerprint=None, code_version=None)
+
+    assert list(result.regions) == copies
+    for region, region_id, mask, data in before:
+        assert (region.region_id, region.mask, region.mask.data if region.mask else None) == (
+            region_id,
+            mask,
+            data,
+        )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.regions[0].region_id = RegionId("changed")  # type: ignore[misc]
