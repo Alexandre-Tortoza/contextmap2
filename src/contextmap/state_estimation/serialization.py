@@ -50,6 +50,7 @@ def encode_pose_estimate(pose: PoseEstimate) -> dict[str, Any]:
                 str(item) for item in pose.provenance.source_observation_ids
             ],
             "conversions_applied": list(pose.provenance.conversions_applied),
+            "derived_from": [str(item) for item in pose.provenance.derived_from],
         },
     }
 
@@ -83,6 +84,7 @@ def decode_pose_estimate(record: Mapping[str, Any]) -> PoseEstimate:
                 SourceObservationId(item) for item in provenance["source_observation_ids"]
             ),
             conversions_applied=tuple(provenance["conversions_applied"]),
+            derived_from=tuple(PoseEstimateId(item) for item in provenance["derived_from"]),
         ),
         covariance=None if covariance is None else tuple(covariance),
     )

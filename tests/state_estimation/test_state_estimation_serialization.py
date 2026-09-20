@@ -1,10 +1,17 @@
+import dataclasses
 import json
 import math
 
 import pytest
 from pose_builders import make_pose, make_trajectory
 
-from contextmap.state_estimation import PoseValidity, TrajectoryGap
+from contextmap.ingestion import SourceObservationId
+from contextmap.state_estimation import (
+    PoseEstimateId,
+    PoseProvenance,
+    PoseValidity,
+    TrajectoryGap,
+)
 from contextmap.state_estimation.serialization import (
     decode_pose_estimate,
     decode_trajectory,
@@ -87,3 +94,19 @@ def test_trajectory_metadata_preserves_run_level_provenance() -> None:
         "backend_version": "0",
         "configuration_fingerprint": "sha256:cfg",
     }
+
+
+def test_derived_pose_round_trips_with_the_estimates_it_was_derived_from() -> None:
+    pose = dataclasses.replace(
+        make_pose(0),
+        provenance=PoseProvenance(
+            source_observation_ids=(SourceObservationId("pose-0000"),),
+            conversions_applied=("interpolated",),
+            derived_from=(PoseEstimateId("estimate-a"), PoseEstimateId("estimate-b")),
+        ),
+    )
+
+    record = _through_json(encode_pose_estimate(pose))
+
+    assert record["provenance"]["derived_from"] == ["estimate-a", "estimate-b"]  # type: ignore[index]
+    assert decode_pose_estimate(record) == pose

@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from contextmap.ingestion import FrameId, SequenceArtifactId, SourceObservationId
+from contextmap.ingestion import (
+    FrameId,
+    ImuObservation,
+    SensorId,
+    SequenceArtifactId,
+    SourceObservationId,
+    SourceProvenance,
+)
 from contextmap.shared import SourceTimestamp
 from contextmap.state_estimation import (
     EstimatorProvenance,
@@ -60,6 +67,19 @@ def make_pose(
             source_observation_ids=(SourceObservationId(f"pose-{index:04d}"),),
         ),
         covariance=covariance,
+    )
+
+
+def make_imu_observation(
+    observation_id: str, *, time_ns: int, clock_id: str = CLOCK_ID
+) -> ImuObservation:
+    """Build a minimal canonical observation to look a pose up for."""
+    return ImuObservation(
+        observation_id=SourceObservationId(observation_id),
+        sensor_id=SensorId("imu0"),
+        frame_id=FrameId("imu"),
+        timestamp=timestamp_ns(time_ns, clock_id=clock_id),
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/imu"),
     )
 
 

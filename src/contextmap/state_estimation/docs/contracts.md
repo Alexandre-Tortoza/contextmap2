@@ -38,7 +38,7 @@ Uma pose fornecida pelo dataset não é verdade persistente só por existir na f
 | `translation_m` | Origem de `child_frame` em `parent_frame`, em metros. |
 | `orientation` | Quaternion unitário `(x, y, z, w)`. |
 | `validity` | `VALID` ou `DEGRADED`. Uma pose degradada continua na trajetória para o consumidor decidir; o backend não a descarta silenciosamente. |
-| `provenance` | `PoseProvenance`: observações de origem (nunca vazio) e conversões aplicadas. |
+| `provenance` | `PoseProvenance`: observações de origem (nunca vazio), conversões aplicadas e `derived_from` (poses de origem de uma pose interpolada; vazio para uma pose estimada diretamente, ver [`lookup.md`](lookup.md)). |
 | `covariance` | Covariância 6×6 opcional, linha a linha, sobre `(x, y, z, rot. em x, y, z)` expressa em `parent_frame` (m² e rad², convenção do `Odometry` do ROS). `None` significa que o backend não reportou incerteza; ela nunca é fabricada. |
 
 Validação em construção: identidade e frames não vazios, frames distintos, translação finita, orientação quaternion unitário finito (tolerância absoluta `1e-6` em `|norm − 1|`) e covariância finita com 36 valores. Um backend que recebe orientação com norma fora dessa tolerância pode renormalizá-la dentro de um limite configurado, mas precisa registrar a conversão em `provenance.conversions_applied`.

@@ -82,10 +82,14 @@ class PoseProvenance:
         conversions_applied: Human-readable notes of every normalization the
             backend applied to the source values, e.g. ``"renormalized
             orientation (norm=1.0004)"``. Empty asserts none was necessary.
+        derived_from: Poses this one was computed from (interpolation at a
+            lookup). Empty for a pose the backend estimated directly, which
+            is what keeps derived poses distinguishable from estimated ones.
     """
 
     source_observation_ids: tuple[SourceObservationId, ...]
     conversions_applied: tuple[str, ...] = ()
+    derived_from: tuple[PoseEstimateId, ...] = ()
 
     def __post_init__(self) -> None:
         """Require every pose to trace back to at least one observation.
