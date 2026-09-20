@@ -22,6 +22,8 @@ from contextmap.visual_perception.backends.sam3 import (
     Sam3Strategy,
 )
 from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass, PassKind
+from contextmap.visual_perception.normalization import normalize_regions
+from contextmap.visual_perception.region_models import RejectionReason
 
 
 @dataclass(frozen=True)
@@ -229,3 +231,92 @@ def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallbac
 
     with pytest.raises(ValueError, match="supports only text_prompt"):
         runtime.predict(_input(), config)
+
+
+def _config() -> Sam3Config:
+    return Sam3Config(
+        checkpoint="facebook/sam3",
+        model_version="3.0",
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="floor",
+        score_threshold=0.5,
+    )
+
+
+def _proposal(box: tuple[float, float, float, float], mask: tuple[bool, ...]) -> Sam3NativeProposal:
+    return Sam3NativeProposal(
+        proposal_id="proposal-1",
+        box=box,
+        mask=mask,
+        score_name="concept_score",
+        score=0.9,
+        query_id="text-prompt-000000",
+    )
+
+
+class ProposalRuntime:
+    def __init__(self, *proposals: Sam3NativeProposal) -> None:
+        self._proposals = proposals
+
+    def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
+        return Sam3NativeOutput(proposals=self._proposals)
+
+
+def _mask_5x4(*, x_range: range, y_range: range) -> tuple[bool, ...]:
+    return tuple(x in x_range and y in y_range for y in range(4) for x in range(5))
+
+
+def test_sam3_derives_the_candidate_box_from_the_mask_and_keeps_the_native_box() -> None:
+    # A caixa nativa vem de um head independente e aqui não contém a máscara.
+    proposal = _proposal((1.0, 1.0, 4.0, 3.0), _mask_5x4(x_range=range(0, 5), y_range=range(0, 2)))
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(proposal))
+
+    candidate = backend.discover_candidates(_input()).candidates[0]
+
+    assert candidate.bounding_box == BoundingBox(x_min=0, y_min=0, x_max=5, y_max=2)
+    metadata = dict(candidate.native_metadata)
+    assert (
+        metadata["native_box_x_min"],
+        metadata["native_box_y_min"],
+        metadata["native_box_x_max"],
+        metadata["native_box_y_max"],
+    ) == (1.0, 1.0, 4.0, 3.0)
+    assert metadata["native_box_contains_mask"] is False
+    assert len(backend.discover(_input().prepared_image)) == 1
+
+
+def test_sam3_native_box_outside_the_image_does_not_abort_discovery() -> None:
+    proposal = _proposal((-0.4, 0.0, 5.6, 4.2), _mask_5x4(x_range=range(0, 5), y_range=range(2, 4)))
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(proposal))
+
+    candidate = backend.discover_candidates(_input()).candidates[0]
+
+    assert candidate.bounding_box == BoundingBox(x_min=0, y_min=2, x_max=5, y_max=4)
+    assert dict(candidate.native_metadata)["native_box_x_min"] == -0.4
+    assert dict(candidate.native_metadata)["native_box_contains_mask"] is True
+    regions = backend.discover(_input().prepared_image)
+    assert len(regions) == 1
+    assert regions[0].area_pixels == 10
+
+
+def test_sam3_empty_masks_are_rejected_explicitly_by_normalization() -> None:
+    empty = (False,) * 20
+    inside = _proposal((1.0, 1.0, 3.0, 3.0), empty)
+    outside = Sam3NativeProposal(
+        proposal_id="proposal-2",
+        box=(-5.0, -5.0, -1.0, -1.0),
+        mask=empty,
+        score_name="concept_score",
+        score=0.8,
+        query_id="text-prompt-000001",
+    )
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(inside, outside))
+
+    output = backend.discover_candidates(_input())
+    result = normalize_regions(
+        output.candidates, _input().prepared_image, backend.backend_provenance()
+    )
+
+    assert len(output.candidates) == 2
+    assert result.regions == ()
+    assert {item.reason for item in result.rejected} == {RejectionReason.INVALID_GEOMETRY}

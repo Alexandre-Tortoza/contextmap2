@@ -235,6 +235,20 @@ máscara são destacados dos tensors antes de sair do runtime. As demais estrat�
 distinguíveis no contrato, mas esse runtime as rejeita explicitamente até existir uma integração
 real específica; selecionar uma delas não aciona comportamento alternativo.
 
+### Geometria das propostas SAM3
+
+O SAM3 devolve `boxes` de um head independente do head de máscara. Na prática essa caixa pode
+ultrapassar a imagem em alguns pixels e frequentemente não contém a máscara binarizada. Como a
+normalização exige que a caixa contenha a máscara e que `RegionCandidate` fique dentro da imagem, o
+adapter usa como geometria a **caixa justa e semiaberta da própria máscara** (mesma escolha do
+Florence-2 para polígonos). A caixa nativa não é descartada: ela acompanha o candidato em
+`native_metadata` (`native_box_x_min`, `native_box_y_min`, `native_box_x_max`, `native_box_y_max`) e
+`native_box_contains_mask` registra se ela continha a máscara.
+
+Uma proposta sem pixel de máscara mantém a caixa nativa recortada à janela do pass, quando existe
+interseção, e é rejeitada de forma explícita pela normalização (`invalid_geometry`). Nenhum caso
+levanta exceção que interrompa o pass por causa de uma única proposta (issue #337).
+
 ## Backend Florence-2
 
 `Florence2RegionDiscovery` atende somente ao port de descoberta de regiões. Sua configuração

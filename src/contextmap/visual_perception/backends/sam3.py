@@ -259,9 +259,34 @@ class Sam3RegionDiscovery:
         width: int,
         height: int,
     ) -> RegionCandidate:
-        """Convert one scalar SAM3 proposal without semantic promotion."""
+        """Convert one scalar SAM3 proposal without semantic promotion.
+
+        A proposal with mask pixels uses the tight half-open box of its mask as
+        candidate geometry. The native box comes from a box head independent of
+        the mask head, so it may leave the image or fail to contain the mask; it is
+        kept as audit metadata instead of geometry. A proposal without mask pixels
+        keeps the native box clamped to the pass, when any part of it is inside, and
+        is rejected explicitly by normalization.
+        """
         if len(proposal.mask) != width * height:
             raise ValueError("SAM3 proposal mask length must match discovery pass dimensions")
+        mask_box = _mask_bounding_box(proposal.mask, width=width, height=height)
+        bounding_box = mask_box or _clamp_box(proposal.box, width=width, height=height)
+        native_metadata: tuple[tuple[str, JsonScalar], ...] = (
+            *proposal.metadata,
+            ("native_box_x_min", proposal.box[0]),
+            ("native_box_y_min", proposal.box[1]),
+            ("native_box_x_max", proposal.box[2]),
+            ("native_box_y_max", proposal.box[3]),
+        )
+        if mask_box is not None:
+            contains_mask = (
+                proposal.box[0] <= mask_box.x_min
+                and proposal.box[1] <= mask_box.y_min
+                and proposal.box[2] >= mask_box.x_max
+                and proposal.box[3] >= mask_box.y_max
+            )
+            native_metadata = (*native_metadata, ("native_box_contains_mask", contains_mask))
         prompt = self._config.prompt
         query_parts = [self._config.strategy.value]
         if prompt:
@@ -274,12 +299,7 @@ class Sam3RegionDiscovery:
             perception_result_id=discovery_input.perception_result_id,
             image_width=width,
             image_height=height,
-            bounding_box=BoundingBox(
-                x_min=proposal.box[0],
-                y_min=proposal.box[1],
-                x_max=proposal.box[2],
-                y_max=proposal.box[3],
-            ),
+            bounding_box=bounding_box,
             mask=InlineMask(width=width, height=height, data=proposal.mask),
             score=BackendScore(
                 name=proposal.score_name,
@@ -297,8 +317,33 @@ class Sam3RegionDiscovery:
                 native_proposal_id=proposal.proposal_id,
                 query=":".join(query_parts),
             ),
-            native_metadata=proposal.metadata,
+            native_metadata=native_metadata,
         )
+
+
+def _mask_bounding_box(mask: tuple[bool, ...], *, width: int, height: int) -> BoundingBox | None:
+    """Return the tight half-open box of the true pixels, or ``None`` for an empty mask."""
+    rows = [index for index in range(height) if any(mask[index * width : (index + 1) * width])]
+    if not rows:
+        return None
+    x_min = width
+    x_max = 0
+    for index in rows:
+        row = mask[index * width : (index + 1) * width]
+        x_min = min(x_min, row.index(True))
+        x_max = max(x_max, width - row[::-1].index(True))
+    return BoundingBox(x_min=x_min, y_min=rows[0], x_max=x_max, y_max=rows[-1] + 1)
+
+
+def _clamp_box(
+    box: tuple[float, float, float, float], *, width: int, height: int
+) -> BoundingBox | None:
+    """Clip a native box to the pass, or return ``None`` when nothing of it is inside."""
+    x_min, y_min = max(box[0], 0.0), max(box[1], 0.0)
+    x_max, y_max = min(box[2], float(width)), min(box[3], float(height))
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return BoundingBox(x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max)
 
 
 def _validate_unit_threshold(value: float, name: str) -> None:
