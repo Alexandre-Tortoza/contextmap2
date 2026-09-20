@@ -24,7 +24,7 @@ Geometria é **onde** algo está. Evidência visual, semântica e identidade de 
 
 ## Estado implementado
 
-Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)) a **transformação fonte→mapa** com traces auditáveis (ver [`transformation.md`](transformation.md)) e a **acumulação do mapa** com referências estáveis e índice de origem (ver [`accumulation.md`](accumulation.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: índice espacial e lookup, `GeometricMapArtifact` e a validação.
+Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)) a **transformação fonte→mapa** com traces auditáveis (ver [`transformation.md`](transformation.md)) a **acumulação do mapa** com referências estáveis e índice de origem (ver [`accumulation.md`](accumulation.md)) e o **acesso espacial** com índice derivado e verificável (ver [`spatial-access.md`](spatial-access.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: `GeometricMapArtifact` e a validação.
 
 ## Contratos públicos
 
@@ -58,5 +58,6 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 - [`inputs.md`](inputs.md) — seleção, montagem dos inputs, layout do payload e scans recusados.
 - [`transformation.md`](transformation.md) — cadeia `T_map_body · T_body_source`, linhagem, validação, precisão e traces.
 - [`accumulation.md`](accumulation.md) — acumulação, formato do payload, referências estáveis, índice de origem e agregação.
+- [`spatial-access.md`](spatial-access.md) — `GeometrySource`, semântica dos limites, índice `scan_bounds`, reconstrução e linha de base de desempenho.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `GeometryPoint`, `GeometryReference` e `GeometricMap` no contexto global de contratos.

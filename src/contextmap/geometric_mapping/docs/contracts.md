@@ -54,7 +54,7 @@ Identidade e metadados de um mapa persistente: `map_id`, `frame_id` (o frame glo
 
 `aggregation_rule` registra a regra explícita pela qual medições foram unidas em pontos agregados; `None` quando todo ponto é uma medição crua.
 
-O objeto **não embute os pontos**: eles vivem no storage do artifact e são alcançados por `GeometrySource`. `SpatialIndexMetadata` registra o índice quando ele afeta o comportamento de consulta e distingue um índice derivado (`is_derived`) da geometria autoritativa: um índice derivado corrompido nunca redefine coordenadas.
+O objeto **não embute os pontos**: eles vivem no storage do artifact e são alcançados por `GeometrySource`. `SpatialIndexMetadata` registra o índice quando ele afeta o comportamento de consulta e distingue um índice derivado (`is_derived`) da geometria autoritativa: um índice derivado corrompido nunca redefine coordenadas. O mapa produzido declara o índice `scan_bounds` (derivado); ver [`spatial-access.md`](spatial-access.md).
 
 ## `GeometrySource`
 

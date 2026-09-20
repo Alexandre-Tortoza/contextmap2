@@ -21,6 +21,8 @@ readable with the standard library. See
 
 from __future__ import annotations
 
+import dataclasses
+import math
 import mmap
 import struct
 from collections.abc import Iterator, Sequence
@@ -234,6 +236,11 @@ class PackedGeometry:
     def query_bounds(self, bounds: Bounds3D) -> Iterator[GeometryPoint]:
         """Iterate the geometry inside a box, boundaries included, in index order.
 
+        Scans whose recorded bounds miss the box are not read, and a scan wholly
+        inside the box is returned without testing each point. The result is
+        exactly the geometry a full filter of :meth:`iter_geometry` would return:
+        the index only decides what is read, never what the geometry is.
+
         Raises:
             ValueError: If ``bounds`` is expressed in another frame.
         """
@@ -243,13 +250,91 @@ class PackedGeometry:
                 f"{self._map.frame_id!r}; frames are never reinterpreted"
             )
         low, high = bounds.minimum_m, bounds.maximum_m
-        for index, row in self._iter_rows(0, self._map.point_count):
-            if (
-                low[0] <= row[0] <= high[0]
-                and low[1] <= row[1] <= high[1]
-                and low[2] <= row[2] <= high[2]
-            ):
-                yield self._point_from_row(index, row)
+        frame = self._map.frame_id
+        for scan in self._scans:
+            if scan.bounds is None or not scan.bounds.intersects(bounds):
+                continue
+            first, stop = scan.first_geometry_index, scan.first_geometry_index + scan.geometry_count
+            wholly_inside = bounds.contains(scan.bounds.minimum_m, frame_id=frame) and (
+                bounds.contains(scan.bounds.maximum_m, frame_id=frame)
+            )
+            for index, row in self._iter_rows(first, stop):
+                if wholly_inside or (
+                    low[0] <= row[0] <= high[0]
+                    and low[1] <= row[1] <= high[1]
+                    and low[2] <= row[2] <= high[2]
+                ):
+                    yield self._point_from_row(index, row)
+
+    def rebuild_scan_bounds(self) -> tuple[ScanRecord, ...]:
+        """Recompute every scan's bounds from the geometry payload.
+
+        The bounds in the source index are a derived index: this rebuilds them
+        without touching a geometry identity or a coordinate.
+
+        Returns:
+            The source index with ``bounds`` recomputed from the geometry.
+        """
+        return tuple(
+            dataclasses.replace(
+                scan,
+                bounds=self._bounds_of(
+                    scan.first_geometry_index, scan.first_geometry_index + scan.geometry_count
+                ),
+            )
+            for scan in self._scans
+        )
+
+    def verify_index(self) -> list[str]:
+        """Check the derived bounds against the geometry they summarize.
+
+        Returns:
+            Human-readable problems; empty when every scan's bounds and the map's
+            bounds are the tight envelope of the geometry. A problem here means
+            the derived index is stale or corrupt; the geometry stays authoritative.
+        """
+        problems: list[str] = []
+        rebuilt = self.rebuild_scan_bounds()
+        for recorded, actual in zip(self._scans, rebuilt, strict=True):
+            if recorded.bounds != actual.bounds:
+                problems.append(
+                    f"scan {recorded.ordinal} ({recorded.observation_id!r}) records bounds "
+                    f"{recorded.bounds} but its geometry spans {actual.bounds}"
+                )
+        boxes = [scan.bounds for scan in rebuilt if scan.bounds is not None]
+        envelope = Bounds3D(
+            frame_id=self._map.frame_id,
+            minimum_m=(
+                min(box.minimum_m[0] for box in boxes),
+                min(box.minimum_m[1] for box in boxes),
+                min(box.minimum_m[2] for box in boxes),
+            ),
+            maximum_m=(
+                max(box.maximum_m[0] for box in boxes),
+                max(box.maximum_m[1] for box in boxes),
+                max(box.maximum_m[2] for box in boxes),
+            ),
+        )
+        if envelope != self._map.bounds:
+            problems.append(
+                f"map bounds {self._map.bounds} differ from the envelope of the geometry {envelope}"
+            )
+        return problems
+
+    def _bounds_of(self, first: int, stop: int) -> Bounds3D | None:
+        if stop <= first:
+            return None
+        low = [math.inf] * 3
+        high = [-math.inf] * 3
+        for _, row in self._iter_rows(first, stop):
+            for axis in range(3):
+                low[axis] = min(low[axis], row[axis])
+                high[axis] = max(high[axis], row[axis])
+        return Bounds3D(
+            frame_id=self._map.frame_id,
+            minimum_m=(low[0], low[1], low[2]),
+            maximum_m=(high[0], high[1], high[2]),
+        )
 
     def _iter_rows(self, first: int, stop: int) -> Iterator[tuple[int, tuple[Any, ...]]]:
         for start in range(first, stop, _CHUNK_POINTS):
