@@ -16,6 +16,7 @@ from projection_builders import (
     make_lookup,
     make_prepared_image,
     make_trajectory,
+    map_point_for_camera_point,
     mask_with,
 )
 
@@ -25,6 +26,7 @@ from contextmap.ingestion import (
     CalibrationSet,
     FisheyeCameraModel,
     FrameId,
+    MeiCameraModel,
     PinholeCameraModel,
     SequenceArtifactId,
 )
@@ -519,3 +521,91 @@ def test_the_result_arrays_are_consistent() -> None:
         dataclasses.replace(frame, camera_range_m=np.zeros(3))
     with pytest.raises(ValueError, match="in_prepared_image"):
         dataclasses.replace(frame, in_prepared_image=np.array([True, True]))
+
+
+# --- Camera models and pose lookup edge cases through the whole chain -------
+
+
+@pytest.mark.parametrize(
+    ("model", "camera_point", "raw_pixel"),
+    [
+        # Equidistante ideal: theta = atan(0.5), u = cx + fx * theta.
+        (
+            FisheyeCameraModel(
+                width=640,
+                height=480,
+                fx=500.0,
+                fy=500.0,
+                cx=320.0,
+                cy=240.0,
+                distortion_coefficients=(0.0, 0.0, 0.0, 0.0),
+            ),
+            (0.5, 0.0, 1.0),
+            (320.0 + 500.0 * math.atan(0.5), 240.0),
+        ),
+        # MEI com xi = 1 (estereográfica): x = tan(theta / 2), aqui theta = 45 graus.
+        (
+            MeiCameraModel(
+                width=640,
+                height=480,
+                fx=500.0,
+                fy=500.0,
+                cx=320.0,
+                cy=240.0,
+                xi=1.0,
+                distortion_coefficients=(0.0, 0.0, 0.0, 0.0),
+            ),
+            (1.0, 0.0, 1.0),
+            (320.0 + 500.0 * math.tan(math.pi / 8), 240.0),
+        ),
+    ],
+    ids=["fisheye", "mei"],
+)
+def test_every_camera_model_goes_through_the_same_chain_and_image_transform(
+    model: FisheyeCameraModel | MeiCameraModel,
+    camera_point: Vector3,
+    raw_pixel: tuple[float, float],
+) -> None:
+    calibration = make_calibration(model=model)
+    projector = _projector([map_point_for_camera_point(camera_point)], calibration=calibration)
+
+    raw = _project(projector)
+    prepared = _project(projector, make_prepared_image(CROP_THEN_RESIZE))
+
+    np.testing.assert_allclose(raw.raw_pixels, [raw_pixel], atol=1e-9)
+    # Recorte a partir de (100, 50) e metade da escala, pelas bordas dos pixels.
+    expected = ((raw_pixel[0] + 0.5 - 100.0) * 0.5 - 0.5, (raw_pixel[1] + 0.5 - 50.0) * 0.5 - 0.5)
+    np.testing.assert_allclose(prepared.prepared_pixels, [expected], atol=1e-9)
+    assert prepared.calibration_ref.camera_model_kind in ("fisheye", "mei")
+
+
+def test_a_pose_beyond_the_nearest_tolerance_is_a_counted_rejection_with_its_reason() -> None:
+    poses = [(0, (0.0, 0.0, 0.0), IDENTITY), (100_000_000, (0.0, 0.0, 0.0), IDENTITY)]
+    projector = _projector(poses=poses, policy=LookupPolicy.nearest(max_time_delta_ns=10_000_000))
+
+    result = projector.project(make_camera_observation(50_000_000), make_prepared_image())
+
+    assert isinstance(result, RejectedProjection)
+    assert result.rejection is LookupRejection.TOLERANCE_EXCEEDED
+
+
+def test_interpolation_across_too_large_an_interval_is_a_counted_rejection() -> None:
+    poses = [(0, (0.0, 0.0, 0.0), IDENTITY), (100_000_000, (1.0, 0.0, 0.0), IDENTITY)]
+    projector = _projector(
+        poses=poses, policy=LookupPolicy.interpolated(max_interpolation_gap_ns=50_000_000)
+    )
+
+    result = projector.project(make_camera_observation(50_000_000), make_prepared_image())
+
+    assert isinstance(result, RejectedProjection)
+    assert result.rejection is LookupRejection.INTERPOLATION_GAP
+
+
+def test_an_exact_lookup_at_a_pose_timestamp_uses_that_pose_without_interpolation() -> None:
+    poses = [(0, (0.0, 0.0, 0.0), IDENTITY), (100_000_000, (1.0, 0.0, 0.0), IDENTITY)]
+    projector = _projector(poses=poses, policy=LookupPolicy.interpolated())
+
+    frame = _project(projector, time_ns=100_000_000)
+
+    assert frame.pose_ref.lookup_outcome is LookupOutcome.EXACT
+    assert frame.pose_ref.interpolation_fraction is None
