@@ -55,10 +55,10 @@ Separa "quantos frames" de "quantas inferências".
 | --- | --- |
 | `physical_observation_id` | O frame físico. |
 | `acquisition_timestamp` | `SourceTimestamp` da aquisição. |
-| `contribution_ids` | Contribuições deste frame. |
+| `spatial_observation_ids` | Observações espaciais deste frame, ordenadas e únicas. |
 | `perception_result_ids`, `perception_run_ids` | Os resultados e execuções correlacionados sobre o frame. |
 
-Três execuções sobre `frame-0120` formam **um** grupo com **três** resultados: `physical_observation_count == 1`, `inference_result_count == 3`.
+Três execuções sobre `frame-0120` formam **um** grupo com **três** resultados: `physical_observation_count == 1`, `inference_result_count == 3`. O grupo não depende de suporte: o agrupamento global é calculado por `group_by_physical_observation` (ver [`grouping.md`](grouping.md)) e o grupo de um `FusedEvidence` lista só as observações espaciais do seu suporte.
 
 ## `SupportSignal`
 
@@ -110,7 +110,8 @@ Conflito, ambiguidade ou falta de evidência, com a evidência exata que o produ
 
 Não há vencedor, hipótese primária nem confiança combinada. Validações de consistência entre as partes:
 
-- todo frame com contribuições tem exatamente um grupo, e o grupo lista exatamente as contribuições, resultados e execuções desse frame;
+- toda observação espacial contribui no máximo uma vez;
+- todo frame com contribuições tem exatamente um grupo, e o grupo lista exatamente as observações espaciais, resultados e execuções desse frame;
 - um resultado de inferência não pode pertencer a duas observações físicas;
 - todo frame compartilha um único domínio de relógio e `temporal_summary` é exatamente o intervalo dos grupos;
 - toda evidência de hipótese e de incerteza referencia uma contribuição e uma claim que existem;
@@ -125,4 +126,4 @@ Coleções cuja ordem não tem significado são exigidas ordenadas e únicas (po
 
 ## O que ainda não existe
 
-Serialização, o artifact de run e os serviços de agrupamento, construção de suporte e acumulação ainda não foram implementados. Nenhum contrato aqui exige compatibilidade com formatos históricos.
+Serialização, o artifact de run e os serviços de construção de suporte e acumulação ainda não foram implementados. Nenhum contrato aqui exige compatibilidade com formatos históricos.
