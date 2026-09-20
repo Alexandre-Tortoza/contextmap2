@@ -139,3 +139,23 @@ entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
 limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
+
+
+## Estado do milestone
+
+O milestone entrega os contratos #74-#76 no branch de integração:
+
+- `SemanticClaim`/`SceneContext`, request/evidence e prompt/parser possuem
+  contratos canônicos, provenance e incerteza explícita;
+- requests e executions são persistidos com views exatas content-addressed,
+  features consumidas materializadas no feature store e contexto de cena
+  resolvível;
+- Qwen e Gemini implementam o mesmo boundary `SemanticInterpreter`, usando
+  `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
+- testes determinísticos cobrem parsing, abstention, retries, materialização no
+  `PerceptionResult` e reabertura do run artifact.
+
+As issues #77 e #78 permanecem abertas porque exigem execução controlada com
+checkpoint/API reais e a respectiva evidência experimental. Essa pendência não
+altera os contratos entregues neste milestone e não deve ser registrada como se
+um teste fake fosse uma execução real.

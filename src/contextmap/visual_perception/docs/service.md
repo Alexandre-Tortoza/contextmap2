@@ -46,7 +46,19 @@ flowchart TD
 
 ## `assemble_perception_result()`
 
-Monta um `PerceptionResult` a partir de `StageOutcome`s já executados, recebendo explicitamente quais `stage_id`s produzem regiões/features/claims/scene context. Um estágio que falhou ou foi pulado simplesmente não contribui nada ao resultado — não existe placeholder ou valor sentinela.
+Monta um `PerceptionResult` a partir de `StageOutcome`s já executados,
+recebendo explicitamente quais `stage_id`s produzem regiões/features/claims,
+scene context e `SemanticInterpretationExecution`. Para
+`semantic_execution_stage_ids`, o assembly valida
+`source_observation_id`/`perception_result_id` e materializa
+`execution.parsed.claims` e `execution.parsed.scene_context` no resultado
+canônico. Mais de um contexto de cena para o mesmo resultado é rejeitado.
+
+Um estágio que falhou ou foi pulado simplesmente não contribui nada ao resultado
+— não existe placeholder ou valor sentinela. A persistência reforça essa
+invariante: `PerceptionRunWriter.finalize()` só publica uma execução semântica
+quando seus outputs e todos os inputs referenciados resolvem para evidência
+persistida no artifact.
 
 ## O que este módulo não define
 

@@ -24,8 +24,8 @@ flowchart LR
     CLIP -. adapter planejado .-> SS
     ACLIP["AlphaCLIP"] -. adapter planejado .-> FE
     ACLIP -. adapter planejado .-> SS
-    QWEN["Qwen"] -. adapter planejado .-> SI
-    GEMINI["Gemini"] -. adapter planejado .-> SI
+    QWEN["Qwen"] -->|adapter canônico implementado| SI
+    GEMINI["Gemini"] -->|adapter canônico implementado| SI
     ENH["Backend aprendido"] -. futuro e opcional .-> FRE
 ```
 
@@ -68,6 +68,11 @@ seus modes/views/evidências suportados e devolve
 `SemanticInterpretationExecution`. A execução mantém separados request, prompt
 renderizado, resposta bruta, parsing canônico, configuração efetiva e métricas.
 Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
+`QwenSemanticInterpreter` e `GeminiSemanticInterpreter` implementam esse
+boundary hoje usando seams injetáveis (`QwenRuntime`/`GeminiClient`). Isso
+valida contratos, mapping, parsing, retries/diagnostics e provenance sem afirmar
+que a execução de referência com checkpoint/API real já foi concluída; essa
+evidência permanece em #77/#78.
 
 ## `SemanticScorer` nunca muta uma claim
 
