@@ -48,6 +48,8 @@ PointRepresentationId = NewType("PointRepresentationId", str)
 SUPPORTED_DTYPES = ("float32", "float64")
 """Payload element types a representation may declare."""
 
+_ITEM_SIZE_BYTES = {"float32": 4, "float64": 8}
+
 
 def representation_id_for(*, run_id: PointRepresentationRunId, index: int) -> PointRepresentationId:
     """Compute the deterministic identity of the ``index``-th representation of a run.
@@ -422,6 +424,11 @@ class RepresentationSpace:
                 "representation space feature_names must be empty or one distinct name per "
                 "component"
             )
+
+    @property
+    def vector_bytes(self) -> int:
+        """Bytes one stored vector of this space occupies in a payload."""
+        return self.dimension * _ITEM_SIZE_BYTES[self.dtype]
 
 
 @dataclass(frozen=True, kw_only=True)

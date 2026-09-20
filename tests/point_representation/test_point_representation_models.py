@@ -336,6 +336,11 @@ def test_a_space_is_validated(overrides: dict[str, object]) -> None:
         RepresentationSpace(**values)
 
 
+def test_a_space_knows_the_size_of_one_stored_vector() -> None:
+    assert make_space(dimension=4, dtype="float32", feature_names=()).vector_bytes == 16
+    assert make_space(dimension=4, dtype="float64", feature_names=()).vector_bytes == 32
+
+
 # --- PointRepresentation ----------------------------------------------------
 
 

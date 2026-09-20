@@ -39,6 +39,7 @@ from contextmap.point_representation.run_artifact import (
     PointRepresentationRunWriter,
     RunArtifactError,
     allocate_run_index,
+    center_selection_id,
     rebuild_run_registry,
 )
 
@@ -253,6 +254,21 @@ def test_the_center_selection_identity_ignores_request_order(tmp_path: Path) -> 
 
     assert first.center_selection_id == second.center_selection_id
     assert first.center_selection_id != other.center_selection_id
+
+
+def test_the_center_selection_identity_is_a_public_rule_of_the_map_and_the_centers(
+    tmp_path: Path,
+) -> None:
+    manifest = build_run(tmp_path, centers=(5, 0, 2)).manifest
+    centers = [ref(0), ref(2), ref(5)]
+
+    assert center_selection_id(map_id=MAP_ID, centers=centers) == manifest.center_selection_id
+    assert center_selection_id(map_id=MAP_ID, centers=reversed(centers)) == (
+        manifest.center_selection_id
+    )
+    assert center_selection_id(map_id=MapId("other-map"), centers=centers) != (
+        manifest.center_selection_id
+    )
 
 
 def test_the_artifact_does_not_duplicate_geometry_or_other_evidence(tmp_path: Path) -> None:

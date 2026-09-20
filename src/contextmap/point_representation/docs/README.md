@@ -34,7 +34,7 @@ Nada é concatenado em um vetor único e opaco, e features visuais densas nunca 
 
 ## Estado implementado
 
-Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização, a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`) e a porta `PointEncoder` com o serviço de execução independente de backend; o **descritor geométrico determinístico** (`backends/geometric_descriptor.py`, o encoder de controle) implementa a porta sem nenhuma dependência de modelo. A **fronteira do backend opcional PTv3** (`backends/ptv3.py`) existe e é verificada com um runtime falso; **nenhuma execução real de PTv3 foi feita** (ver [`ptv3.md`](ptv3.md)). O **`PointRepresentationRunArtifact`** persiste os runs de forma imutável, com payload lazy e integridade (ver [`artifact.md`](artifact.md)). Está **planejado**, e será documentado aqui quando for implementado: o harness de avaliação.
+Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização, a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`) e a porta `PointEncoder` com o serviço de execução independente de backend; o **descritor geométrico determinístico** (`backends/geometric_descriptor.py`, o encoder de controle) implementa a porta sem nenhuma dependência de modelo. A **fronteira do backend opcional PTv3** (`backends/ptv3.py`) existe e é verificada com um runtime falso; **nenhuma execução real de PTv3 foi feita** (ver [`ptv3.md`](ptv3.md)). O **`PointRepresentationRunArtifact`** persiste os runs de forma imutável, com payload lazy e integridade (ver [`artifact.md`](artifact.md)). O **harness de avaliação** vive em `contextmap.evaluation` (ver [`point_representation.md`](../../evaluation/docs/point_representation.md) na documentação de `evaluation`); a ablação contra um PTv3 real e o efeito downstream continuam pendentes.
 
 ## Contratos públicos
 
@@ -46,6 +46,7 @@ Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, polític
 - `PointEncoder`, `EncodedVector`, `UnencodableSupportError` — a porta de encoders: um `PreparedSupport` entra, um vetor sai, e uma falha nunca vira vetor padrão.
 - `RepresentationService`, `EncodedRepresentation`, `RepresentationMetrics`, `FailedSupport`, `FailureReason` — a execução independente de backend e seus resultados explícitos; ver [`execution.md`](execution.md).
 - `PointRepresentationRunWriter`, `PointRepresentationRunReader`, `PointRepresentationRunManifest`, `PointRepresentationDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError`, `allocate_run_index()`, `rebuild_run_registry()` — o artifact persistido: escrita atômica, leitura lazy de representações e vetores, inventário com hash; ver [`artifact.md`](artifact.md).
+- `center_selection_id()`, `encode_support_policy()` — a identidade independente da ordem de um conjunto de centros e a codificação da política de suporte, usadas pelo manifest e pela avaliação.
 - `SupportExtractor` — seleciona o suporte (raio ou k vizinhos) de um elemento pela porta `GeometrySource` e prepara suas coordenadas; ver [`support-extraction.md`](support-extraction.md).
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.

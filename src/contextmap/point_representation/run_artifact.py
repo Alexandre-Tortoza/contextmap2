@@ -559,7 +559,13 @@ class PointRepresentationRunWriter:
                 "trajectory_id": str(provenance.trajectory_id),
             },
             "association_context_id": self._association_context_id,
-            "center_selection_id": self._center_selection_id(),
+            "center_selection_id": center_selection_id(
+                map_id=self._map.map_id,
+                centers=(
+                    GeometryReference(map_id=self._map.map_id, geometry_id=geometry_id)
+                    for geometry_id in self._centers
+                ),
+            ),
             "support_policy": encode_support_policy(self._space.support_semantics),
             "representation_space_id": self._space_id,
             "dimension": self._space.dimension,
@@ -580,11 +586,6 @@ class PointRepresentationRunWriter:
             "schema_version": SCHEMA_VERSION,
             "created_at": datetime.now(UTC).isoformat(),
         }
-
-    def _center_selection_id(self) -> str:
-        """Identity of the requested centers of this map, independent of request order."""
-        text = "\n".join([str(self._map.map_id), *sorted(str(center) for center in self._centers)])
-        return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
 
     def _render_readme(self) -> str:
         return (
@@ -775,6 +776,23 @@ def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
         The next index, starting at ``1``.
     """
     return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
+
+
+def center_selection_id(*, map_id: MapId, centers: Iterable[GeometryReference]) -> str:
+    """Identity of a set of requested centers of one map, independent of request order.
+
+    The manifest records it, so an evaluation that fixes the same centers across
+    encoders can prove it compared like with like.
+
+    Args:
+        map_id: The geometric map the centers belong to.
+        centers: The requested centers, each a reference into ``map_id``.
+
+    Returns:
+        ``"sha256:<hex digest>"`` of the map identity and the sorted center ids.
+    """
+    text = "\n".join([str(map_id), *sorted(str(center.geometry_id) for center in centers)])
+    return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
 
 
 def rebuild_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
