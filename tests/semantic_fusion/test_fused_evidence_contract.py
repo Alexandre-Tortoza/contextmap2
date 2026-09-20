@@ -17,9 +17,11 @@ from fusion_builders import (
     make_time_bounds,
     make_uncertainty,
     scorer_signal,
+    spatial_id,
 )
 
 from contextmap.semantic_fusion import (
+    EvidenceContributionId,
     EvidenceReference,
     EvidenceStance,
     FusedEvidence,
@@ -294,7 +296,7 @@ def test_a_frame_without_a_group_is_rejected() -> None:
 
 
 def test_a_group_that_omits_a_contribution_of_its_frame_is_rejected() -> None:
-    with pytest.raises(ValueError, match="lists contributions"):
+    with pytest.raises(ValueError, match="spatial observations"):
         make_fused_evidence(
             contributions=(make_contribution(run="run-a"), make_contribution(run="run-b")),
             groups=(make_group(runs=("run-a",)),),
@@ -316,14 +318,23 @@ def test_a_group_that_disagrees_about_the_inference_results_is_rejected() -> Non
         )
 
 
-def test_a_group_naming_a_contribution_of_another_frame_is_rejected() -> None:
+def test_a_group_naming_a_spatial_observation_of_another_frame_is_rejected() -> None:
     stray = dataclasses.replace(
         make_group(frame="frame-0120"),
-        contribution_ids=(contribution_id_for("run-a", "frame-0121"),),
+        spatial_observation_ids=(spatial_id("run-a", "frame-0121"),),
     )
 
-    with pytest.raises(ValueError, match="contribution"):
+    with pytest.raises(ValueError, match="spatial observations"):
         make_fused_evidence(groups=(stray,), hypotheses=())
+
+
+def test_one_spatial_observation_cannot_contribute_twice() -> None:
+    twin = dataclasses.replace(
+        make_contribution(), contribution_id=EvidenceContributionId("contribution--twin")
+    )
+
+    with pytest.raises(ValueError, match="more than one contribution"):
+        make_fused_evidence(contributions=(make_contribution(), twin), hypotheses=())
 
 
 def test_one_inference_result_cannot_belong_to_two_physical_observations() -> None:

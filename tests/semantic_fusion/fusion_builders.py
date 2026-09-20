@@ -204,7 +204,7 @@ def make_group(
     return PhysicalObservationGroup(
         physical_observation_id=SourceObservationId(frame),
         acquisition_timestamp=frame_timestamp(frame),
-        contribution_ids=tuple(sorted(contribution_id_for(run, frame, region) for run in runs)),
+        spatial_observation_ids=tuple(sorted(spatial_id(run, frame, region) for run in runs)),
         perception_result_ids=tuple(sorted(result_id(run, frame) for run in runs)),
         perception_run_ids=tuple(sorted(PerceptionRunId(run) for run in runs)),
     )

@@ -379,14 +379,14 @@ class PhysicalObservationGroup:
     Attributes:
         physical_observation_id: The physical frame.
         acquisition_timestamp: When the frame was acquired.
-        contribution_ids: Contributions from this frame, sorted and unique.
+        spatial_observation_ids: Spatial observations of this frame, sorted and unique.
         perception_result_ids: The correlated inference results over this frame.
         perception_run_ids: The runs that produced those results.
     """
 
     physical_observation_id: SourceObservationId
     acquisition_timestamp: SourceTimestamp
-    contribution_ids: tuple[EvidenceContributionId, ...]
+    spatial_observation_ids: tuple[SpatialObservationId, ...]
     perception_result_ids: tuple[PerceptionResultId, ...]
     perception_run_ids: tuple[PerceptionRunId, ...]
 
@@ -397,7 +397,7 @@ class PhysicalObservationGroup:
             ValueError: If the identity or a collection is empty or not sorted and unique.
         """
         _require_present(self, "physical_observation_id")
-        for name in ("contribution_ids", "perception_result_ids", "perception_run_ids"):
+        for name in ("spatial_observation_ids", "perception_result_ids", "perception_run_ids"):
             items: tuple[str, ...] = getattr(self, name)
             if not items:
                 raise ValueError(f"{name} must not be empty")
@@ -736,8 +736,15 @@ class FusedEvidence:
     def _require_groups_match(
         self, contributions: dict[EvidenceContributionId, EvidenceContribution]
     ) -> None:
+        contributed: set[SpatialObservationId] = set()
         observation_of_result: dict[PerceptionResultId, SourceObservationId] = {}
         for contribution in self.contributions:
+            if contribution.spatial_observation_id in contributed:
+                raise ValueError(
+                    f"spatial observation {contribution.spatial_observation_id!r} appears in "
+                    f"more than one contribution"
+                )
+            contributed.add(contribution.spatial_observation_id)
             known = observation_of_result.setdefault(
                 contribution.perception_result_id, contribution.physical_observation_id
             )
@@ -770,13 +777,17 @@ class FusedEvidence:
                     f"contribution"
                 )
             expected = (
-                tuple(item.contribution_id for item in members),
+                tuple(sorted(item.spatial_observation_id for item in members)),
                 tuple(sorted({item.perception_result_id for item in members})),
                 tuple(sorted({item.perception_run_id for item in members})),
             )
-            found = (group.contribution_ids, group.perception_result_ids, group.perception_run_ids)
+            found = (
+                group.spatial_observation_ids,
+                group.perception_result_ids,
+                group.perception_run_ids,
+            )
             for label, want, got in zip(
-                ("contributions", "perception results", "perception runs"),
+                ("spatial observations", "perception results", "perception runs"),
                 expected,
                 found,
                 strict=True,

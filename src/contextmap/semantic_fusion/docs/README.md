@@ -27,13 +27,14 @@ Fusão não é identidade. Um `FusionSupport` afirma apenas que observações es
 
 ## Estado implementado
 
-Existem os **contratos**: `FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio. Estão **planejados**, e serão documentados aqui quando forem implementados: agrupamento de evidência por observação física, construção de `FusionSupport`, política baseline de acumulação, preservação de ambiguidade e conflito, canais de evidência, política ciente de qualidade, artifact de run e a validação.
+Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio) e o **agrupamento por observação física** sobre uma seleção explícita de runs. Estão **planejados**, e serão documentados aqui quando forem implementados: construção de `FusionSupport`, política baseline de acumulação, preservação de ambiguidade e conflito, canais de evidência, política ciente de qualidade, artifact de run e a validação.
 
 ## Contratos públicos
 
 - `FusionSupport`, `FusionSupportId`, `FusionSupportProvenance` — onde a evidência é acumulada: geometria, observações espaciais, limites, centroide, intervalo temporal e política.
 - `EvidenceContribution`, `EvidenceContributionId` — uma vista: uma região de um frame físico, interpretada por uma execução de inferência.
 - `PhysicalObservationGroup` — tudo o que foi inferido de um frame físico, separado do próprio frame.
+- `group_by_physical_observation()`, `PhysicalObservationGrouping`, `PHYSICAL_OBSERVATION_GROUPING_POLICY_ID` — agrupa observações espaciais por frame físico sob uma seleção explícita de runs e reporta as contagens de frames, inferências, runs e variantes.
 - `ScoreReference`, `ObservationQualityRef` — referências ao score de um scorer e à qualidade mensurável da vista; nunca valores.
 - `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
 - `FusedHypothesis`, `FusedHypothesisId`, `HypothesisEvidence`, `EvidenceStance` — um candidato semântico e cada claim que o sustenta, contradiz ou deixa ambíguo.
@@ -45,8 +46,8 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as regras de co
 
 ## Módulos consumidos
 
-- `contextmap.sensor_association`: `SpatialObservationId`, `SemanticClaimRef`, `VisualFeatureRef`.
-- `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `FeatureScope`, `HypothesisRole`, `PerceptionResultId`, `PerceptionRunId`, `RegionId`.
+- `contextmap.sensor_association`: `SpatialObservation`, `SpatialObservationId`, `SemanticClaimRef`, `VisualFeatureRef`.
+- `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `FeatureScope`, `HypothesisRole`, `PerceptionResultId`, `PerceptionRun`, `PerceptionRunId`, `RegionId`.
 - `contextmap.point_representation`: `PointRepresentationId`, `PointRepresentationRunId`.
 - `contextmap.geometric_mapping`: `GeometryReference`, `Bounds3D`, `MapId`.
 - `contextmap.ingestion`: `SourceObservationId`.
@@ -62,5 +63,6 @@ A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe a
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, regras de correlação e invariantes.
+- [`grouping.md`](grouping.md) — agrupamento por observação física, seleção explícita de runs e contagens.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Fusion no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `FusionSupport` e `FusedEvidence` no contexto global de contratos.
