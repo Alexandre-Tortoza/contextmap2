@@ -34,7 +34,7 @@ Nada é concatenado em um vetor único e opaco, e features visuais densas nunca 
 
 ## Estado implementado
 
-Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização, a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`) e a porta `PointEncoder` com o serviço de execução independente de backend. Estão **planejados**, e serão documentados aqui quando forem implementados: o descritor geométrico determinístico, o backend opcional PTv3, o `PointRepresentationRunArtifact` e o harness de avaliação.
+Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, política e suporte espacial, coordenadas preparadas), sua serialização, a **extração de suporte** local sobre `GeometrySource` (`SupportExtractor`) e a porta `PointEncoder` com o serviço de execução independente de backend; o **descritor geométrico determinístico** (`backends/geometric_descriptor.py`, o encoder de controle) implementa a porta sem nenhuma dependência de modelo. Estão **planejados**, e serão documentados aqui quando forem implementados: o backend opcional PTv3, o `PointRepresentationRunArtifact` e o harness de avaliação.
 
 ## Contratos públicos
 
@@ -62,6 +62,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 - [`contracts.md`](contracts.md) — contratos, identidade, comparabilidade e serialização.
 - [`execution.md`](execution.md) — porta `PointEncoder`, serviço de execução, falhas explícitas e métricas.
+- [`geometric-descriptor.md`](geometric-descriptor.md) — o descritor determinístico: definição versionada das features, comportamento numérico e linha de base.
 - [`support-extraction.md`](support-extraction.md) — extração determinística do suporte local, preparação de coordenadas e linha de base de desempenho.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — contratos no contexto global.
