@@ -33,6 +33,7 @@ from contextmap.point_representation.models import (
     SupportType,
     representation_id_for,
 )
+from contextmap.point_representation.support import SupportExtractor
 
 __all__ = [
     "CenteringMode",
@@ -48,6 +49,7 @@ __all__ = [
     "RepresentationSpace",
     "RepresentationSpaceMismatchError",
     "ScaleNormalization",
+    "SupportExtractor",
     "SupportPolicy",
     "SupportStatistics",
     "SupportType",

@@ -38,7 +38,7 @@ Invariantes validadas na construção: o centro está em `geometry_refs`; não h
 
 ## `PreparedSupport`
 
-`PreparedSupport` acompanha o suporte com `local_coordinates_m`, uma coordenada finita por referência, na mesma ordem, depois do centering e da escala. As coordenadas locais **nunca substituem** as referências: o suporte continua dizendo qual geometria persistente as originou.
+`PreparedSupport` acompanha o suporte com `local_coordinates_m`, uma coordenada finita por referência, na mesma ordem, depois do centering e da escala. As coordenadas locais **nunca substituem** as referências: o suporte continua dizendo qual geometria persistente as originou. Quem produz um `PreparedSupport` é o `SupportExtractor` ([`support-extraction.md`](support-extraction.md)).
 
 ## `RepresentationSpace` e comparabilidade
 
