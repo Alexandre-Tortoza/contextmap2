@@ -20,6 +20,8 @@ from fusion_builders import (
 
 from contextmap.semantic_fusion import (
     BASELINE_ACCUMULATION_POLICY_ID,
+    BaselineAccumulationPolicy,
+    EvidenceChannel,
     EvidenceStance,
     FusedEvidence,
     FusedHypothesis,
@@ -45,8 +47,16 @@ def _accumulate(
     *,
     scores: Mapping[PerceptionResultId, Sequence[SemanticSupport]] | None = None,
     qualities: Mapping[SpatialObservationId, ObservationQualityRef] | None = None,
-    structure: Sequence[PointRepresentationRef] = (),
+    structure: Sequence[PointRepresentationRef] | None = None,
 ) -> FusedEvidence:
+    """Declare exactly the channels whose input the test offers."""
+    channels = {EvidenceChannel.SEMANTIC_CLAIMS}
+    if scores is not None:
+        channels.add(EvidenceChannel.SEMANTIC_SCORES)
+    if qualities is not None:
+        channels.add(EvidenceChannel.OBSERVATION_QUALITY)
+    if structure is not None:
+        channels.add(EvidenceChannel.POINT_REPRESENTATION)
     return accumulate_baseline_evidence(
         scenario.support,
         observations=scenario.observations,
@@ -55,6 +65,7 @@ def _accumulate(
         semantic_scores=scores,
         observation_quality_refs=qualities,
         point_representation_refs=structure,
+        policy=BaselineAccumulationPolicy(channels=frozenset(channels)),
     )
 
 

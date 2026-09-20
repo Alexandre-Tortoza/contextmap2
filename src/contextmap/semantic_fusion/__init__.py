@@ -21,6 +21,8 @@ from contextmap.semantic_fusion.grouping import (
     group_by_physical_observation,
 )
 from contextmap.semantic_fusion.models import (
+    ChannelProvenance,
+    EvidenceChannel,
     EvidenceContribution,
     EvidenceContributionId,
     EvidenceReference,
@@ -58,6 +60,8 @@ __all__ = [
     "GEOMETRY_OVERLAP_SUPPORT_POLICY_ID",
     "PHYSICAL_OBSERVATION_GROUPING_POLICY_ID",
     "BaselineAccumulationPolicy",
+    "ChannelProvenance",
+    "EvidenceChannel",
     "EvidenceContribution",
     "EvidenceContributionId",
     "EvidenceReference",

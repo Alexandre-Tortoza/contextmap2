@@ -146,6 +146,31 @@ def _require_geometry_support(name: str, references: Sequence[GeometryReference]
     )
 
 
+class EvidenceChannel(Enum):
+    """The typed evidence channels a fusion policy can declare.
+
+    Each channel keeps its own semantics, scale and provenance. None is renamed, converted
+    into or averaged with another, and a channel takes part only when the policy declares
+    it: data being available never activates it.
+
+    Attributes:
+        SEMANTIC_CLAIMS: Hypotheses, alternatives and abstentions from an interpreter.
+        SEMANTIC_SCORES: Scorer outputs, each specific to its scorer unless calibrated.
+        VISUAL_FEATURES: References to visual features, with their embedding space.
+        OBSERVATION_QUALITY: References to the measurable view quality.
+        GEOMETRY_SUPPORT: The geometry an observation sees. It is intrinsic to every
+            contribution, so it is always active and cannot be ablated.
+        POINT_REPRESENTATION: References to static 3D structure, attached to the support.
+    """
+
+    SEMANTIC_CLAIMS = "semantic_claims"
+    SEMANTIC_SCORES = "semantic_scores"
+    VISUAL_FEATURES = "visual_features"
+    OBSERVATION_QUALITY = "observation_quality"
+    GEOMETRY_SUPPORT = "geometry_support"
+    POINT_REPRESENTATION = "point_representation"
+
+
 class SupportSignalKind(Enum):
     """The typed origin of a :class:`SupportSignal`.
 
@@ -635,6 +660,34 @@ class PointRepresentationRef:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ChannelProvenance:
+    """An active evidence channel and the identities of what fed it.
+
+    A channel can be active and empty: a declared channel that found no data for a support
+    has no identities. Identities are strings whose form depends on the channel: an
+    interpreter or scorer as ``backend_id/model/version``, an embedding space, a quality
+    definitions version, a representation space, or the map and support policy.
+
+    Attributes:
+        channel: The active channel.
+        identities: What fed it, sorted and unique.
+    """
+
+    channel: EvidenceChannel
+    identities: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate the identities.
+
+        Raises:
+            ValueError: If an identity is empty or the identities are not sorted and unique.
+        """
+        if any(not identity.strip() for identity in self.identities):
+            raise ValueError("a channel identity must not be empty")
+        _require_canonical("identities", self.identities, lambda identity: (identity,))
+
+
+@dataclass(frozen=True, kw_only=True)
 class FusedEvidenceProvenance:
     """How evidence was grouped and fused.
 
@@ -678,6 +731,10 @@ class FusedEvidence:
         uncertainty: Conflicts, ambiguities and lack of evidence.
         temporal_summary: Interval spanned by the acquisition of the physical observations.
         provenance: How the evidence was grouped and fused.
+        channels: The evidence channels the policy declared, sorted by channel and unique,
+            each with the identities that fed it. Semantic claims and geometry support are
+            always present; data of any other channel exists only if that channel is here,
+            so an effect can be attributed to a channel.
     """
 
     fused_evidence_id: FusedEvidenceId
@@ -687,6 +744,7 @@ class FusedEvidence:
     hypotheses: tuple[FusedHypothesis, ...]
     temporal_summary: TimeBounds
     provenance: FusedEvidenceProvenance
+    channels: tuple[ChannelProvenance, ...]
     point_representation_refs: tuple[PointRepresentationRef, ...] = ()
     uncertainty: tuple[UncertaintyRecord, ...] = ()
 
@@ -705,6 +763,7 @@ class FusedEvidence:
         if not self.contributions:
             raise ValueError("a fused evidence needs at least one contribution")
         self._require_canonical_order()
+        self._require_channels_match()
         contributions = {item.contribution_id: item for item in self.contributions}
         self._require_groups_match(contributions)
         self._require_temporal_summary()
@@ -750,7 +809,39 @@ class FusedEvidence:
             )
         )
 
+    def _require_channels_match(self) -> None:
+        active = {item.channel for item in self.channels}
+        for required in (EvidenceChannel.SEMANTIC_CLAIMS, EvidenceChannel.GEOMETRY_SUPPORT):
+            if required not in active:
+                raise ValueError(
+                    f"channel {required.value} must be declared: it is intrinsic to every "
+                    f"fused evidence"
+                )
+        signals = [
+            signal
+            for hypothesis in self.hypotheses
+            for item in hypothesis.evidence
+            for signal in item.signals
+        ]
+        carried = {
+            EvidenceChannel.SEMANTIC_SCORES: any(item.score_refs for item in self.contributions)
+            or any(signal.kind is SupportSignalKind.SCORER_SUPPORT for signal in signals),
+            EvidenceChannel.VISUAL_FEATURES: any(
+                item.visual_feature_refs for item in self.contributions
+            ),
+            EvidenceChannel.OBSERVATION_QUALITY: any(
+                item.observation_quality is not None for item in self.contributions
+            ),
+            EvidenceChannel.POINT_REPRESENTATION: bool(self.point_representation_refs),
+        }
+        for channel, has_data in carried.items():
+            if has_data and channel not in active:
+                raise ValueError(
+                    f"data of channel {channel.value} is present, but the channel was not declared"
+                )
+
     def _require_canonical_order(self) -> None:
+        _require_canonical("channels", self.channels, lambda item: (item.channel.value,))
         _require_canonical(
             "contributions", self.contributions, lambda item: (item.contribution_id,)
         )

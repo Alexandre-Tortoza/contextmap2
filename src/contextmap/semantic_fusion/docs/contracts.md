@@ -107,6 +107,7 @@ Conflito, ambiguidade ou falta de evidência, com a evidência exata que o produ
 | `uncertainty` | Conflitos, ambiguidades e falta de evidência. |
 | `temporal_summary` | `TimeBounds` que cobre exatamente a aquisição dos grupos. |
 | `provenance` | `FusedEvidenceProvenance`: `grouping_policy_id`, `fusion_policy_id`, `configuration_fingerprint`, `code_version`. |
+| `channels` | `ChannelProvenance` por canal ativo (`EvidenceChannel`), ordenados, com as identidades que o alimentaram. `semantic_claims` e `geometry_support` sempre estão; dados de qualquer outro canal só existem se o canal está aqui. |
 
 Não há vencedor, hipótese primária nem confiança combinada. Validações de consistência entre as partes:
 
@@ -116,7 +117,8 @@ Não há vencedor, hipótese primária nem confiança combinada. Validações de
 - todo frame compartilha um único domínio de relógio e `temporal_summary` é exatamente o intervalo dos grupos;
 - toda evidência de hipótese e de incerteza referencia uma contribuição e uma claim que existem;
 - um sinal `SCORER_SUPPORT` exige a `ScoreReference` correspondente na contribuição;
-- rótulos de hipótese não se repetem.
+- rótulos de hipótese não se repetem;
+- dados de um canal (scores, features, qualidade, estrutura) só existem se o canal foi declarado em `channels`, e `semantic_claims` e `geometry_support` são obrigatórios.
 
 `FusedEvidence.supporting_physical_observations(hypothesis_id)` devolve os frames distintos cujas claims sustentam a hipótese: inferência repetida sobre um frame e uma claim sobre muita geometria contam uma vez, então o resultado é seguro como contagem de evidência independente.
 

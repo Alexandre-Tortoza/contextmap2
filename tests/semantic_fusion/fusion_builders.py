@@ -8,6 +8,8 @@ from contextmap.geometric_mapping import Bounds3D, GeometryReference, MapId, geo
 from contextmap.ingestion import FrameId, SourceObservationId
 from contextmap.point_representation import PointRepresentationId, PointRepresentationRunId
 from contextmap.semantic_fusion import (
+    ChannelProvenance,
+    EvidenceChannel,
     EvidenceContribution,
     EvidenceContributionId,
     EvidenceReference,
@@ -267,6 +269,29 @@ def make_point_representation_ref(
     )
 
 
+def channels_for(
+    contributions: Sequence[EvidenceContribution],
+    hypotheses: Sequence[FusedHypothesis],
+    point_representation_refs: Sequence[PointRepresentationRef],
+) -> tuple[ChannelProvenance, ...]:
+    """The channels a fused evidence built from this content must declare as active."""
+    signals = [s for h in hypotheses for item in h.evidence for s in item.signals]
+    active = {EvidenceChannel.SEMANTIC_CLAIMS, EvidenceChannel.GEOMETRY_SUPPORT}
+    if any(c.score_refs for c in contributions) or any(
+        s.kind is SupportSignalKind.SCORER_SUPPORT for s in signals
+    ):
+        active.add(EvidenceChannel.SEMANTIC_SCORES)
+    if any(c.visual_feature_refs for c in contributions):
+        active.add(EvidenceChannel.VISUAL_FEATURES)
+    if any(c.observation_quality is not None for c in contributions):
+        active.add(EvidenceChannel.OBSERVATION_QUALITY)
+    if point_representation_refs:
+        active.add(EvidenceChannel.POINT_REPRESENTATION)
+    return tuple(
+        ChannelProvenance(channel=channel) for channel in sorted(active, key=lambda c: c.value)
+    )
+
+
 def make_fused_evidence(
     *,
     contributions: tuple[EvidenceContribution, ...] | None = None,
@@ -275,14 +300,20 @@ def make_fused_evidence(
     point_representation_refs: tuple[PointRepresentationRef, ...] = (),
     uncertainty: tuple[UncertaintyRecord, ...] = (),
     temporal_summary: TimeBounds | None = None,
+    channels: tuple[ChannelProvenance, ...] | None = None,
 ) -> FusedEvidence:
     """One frame observed once, with one supported hypothesis, unless overridden."""
+    used_contributions = (make_contribution(),) if contributions is None else contributions
+    used_hypotheses = (make_hypothesis(),) if hypotheses is None else hypotheses
     return FusedEvidence(
         fused_evidence_id=FusedEvidenceId("fused-support-0001"),
         fusion_support_id=SUPPORT_ID,
         physical_observation_groups=(make_group(),) if groups is None else groups,
-        contributions=(make_contribution(),) if contributions is None else contributions,
-        hypotheses=(make_hypothesis(),) if hypotheses is None else hypotheses,
+        contributions=used_contributions,
+        hypotheses=used_hypotheses,
+        channels=channels
+        if channels is not None
+        else channels_for(used_contributions, used_hypotheses, point_representation_refs),
         point_representation_refs=point_representation_refs,
         uncertainty=uncertainty,
         temporal_summary=temporal_summary or make_time_bounds("frame-0120", "frame-0120"),
