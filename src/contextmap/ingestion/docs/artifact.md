@@ -64,13 +64,13 @@ Um objeto JSON por linha, um por observação, na ordem em que foi adicionada ao
 
 ```mermaid
 flowchart TD
-    O[SourceObservations] --> TMP[Diretório temporário]
-    C[CalibrationSet opcional] --> TMP
-    P[SequenceProvenance opcional] --> TMP
-    D[Diagnostics opcionais] --> TMP
+    O[SourceObservations] -->|add_observation: payload + linha do índice| TMP[Diretório temporário]
+    C[CalibrationSet opcional] --> FIN[finalize]
+    P[SequenceProvenance opcional] --> FIN
+    D[Diagnostics opcionais] --> FIN
 
-    TMP --> IDX[index.jsonl + payloads]
-    IDX --> INV[Gerar file_inventory + hashes]
+    TMP --> FIN
+    FIN --> INV[Gerar file_inventory + hashes]
     INV --> V{Consistência íntegra?}
     V -- não --> FAIL[Abortar e remover temporário]
     V -- sim --> REN[Rename atômico]
@@ -83,9 +83,20 @@ flowchart TD
 
 O artefato final só passa a existir depois que o conteúdo temporário foi escrito e verificado. Leitura e replay nunca dependem da fonte ROS/dataset original.
 
-## Escrita atômica
+## Escrita em streaming e atômica
 
-`SequenceArtifactWriter.finalize()` escreve todo o conteúdo em um diretório temporário irmão (`.tmp-<artifact-id>-<random>/`), roda uma checagem de consistência interna (todo arquivo referenciado pelo manifest existe, com tamanho e hash corretos) e só então renomeia o diretório para o path final. Qualquer falha durante a escrita remove o diretório temporário — o path final (`<artifact-id>/`) nunca chega a existir parcialmente escrito.
+`SequenceArtifactWriter.add_observation()` grava o payload (`rgb/`/`pointcloud/`) e a linha de `index.jsonl` no diretório temporário irmão (`.tmp-<artifact-id>-<random>/`) **no momento da chamada**, e calcula o hash de cada arquivo ali mesmo. O writer não retém os bytes do payload: guarda apenas contadores, o inventário parcial de arquivos e uma cópia de cada observação sem payload (`data`), usada para o resumo de diagnostics. O uso de memória do writer cresce com o número de observações, não com o tamanho dos payloads — isso permite ingerir bags maiores que a RAM (o dataset `corridor-02` tem ~24 GB de payload).
+
+Nada é escrito em disco até a primeira observação ou `finalize()`. `finalize()` grava calibração, provenance e diagnostics, gera o manifest, roda uma checagem de consistência interna (todo arquivo referenciado pelo manifest existe, com tamanho e hash corretos) e só então renomeia o diretório para o path final. O path final (`<artifact-id>/`) nunca chega a existir parcialmente escrito.
+
+Como o temporário existe desde a primeira observação, um writer que não chega ao `finalize()` deixaria lixo em disco. Por isso:
+
+- `abort()` remove o temporário e fecha o writer (idempotente; não afeta um artefato já finalizado);
+- o writer é um context manager — `with SequenceArtifactWriter(...) as writer:` chama `abort()` em qualquer saída que não tenha finalizado;
+- qualquer falha em `finalize()` (inclusive "já existe um artefato no path final") e qualquer falha de I/O em `add_observation()` abortam o writer automaticamente;
+- um `observation_id` duplicado é rejeitado sem escrever nada e o writer continua utilizável.
+
+Uma consequência do streaming: a checagem "já existe um artefato com este `artifact_id`" continua no `finalize()`, então uma colisão com `artifact_id` explícito só é detectada depois de escrever o conteúdo. Com o id aleatório padrão isso não ocorre.
 
 ## Leitura
 

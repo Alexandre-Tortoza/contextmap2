@@ -497,3 +497,138 @@ def test_read_summary_diagnostics_does_not_decode_observation_payloads(
     monkeypatch.setattr(reader, "list_observations", fail_if_called)
 
     assert reader.read_diagnostics() is not None
+
+
+def _image(index: int, data: bytes) -> ImageObservation:
+    return ImageObservation(
+        observation_id=SourceObservationId(f"frame-{index:04d}"),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=_timestamp(index),
+        provenance=_provenance(source_topic="/camera/image_raw"),
+        width=len(data),
+        height=1,
+        encoding=ImageEncoding.MONO8,
+        data=data,
+    )
+
+
+def _tmp_dirs(workspace: Path) -> list[Path]:
+    return list(workspace.glob("sequences/*/.tmp-*"))
+
+
+def _final_dirs(workspace: Path) -> list[Path]:
+    return [
+        path
+        for path in workspace.glob("sequences/*/*")
+        if path.is_dir() and not path.name.startswith(".tmp-")
+    ]
+
+
+def test_add_observation_persists_the_payload_before_finalize(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+
+    writer.add_observation(_image(1, b"\x01\x02\x03"))
+
+    (tmp_dir,) = _tmp_dirs(tmp_path)
+    assert (tmp_dir / "rgb" / "frame-0001.bin").read_bytes() == b"\x01\x02\x03"
+    assert _final_dirs(tmp_path) == []
+
+
+def test_writer_does_not_retain_payload_bytes_in_memory(tmp_path: Path) -> None:
+    import tracemalloc
+
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    payload_size = 1_000_000
+
+    tracemalloc.start()
+    try:
+        for index in range(20):
+            writer.add_observation(_image(index, bytes([index]) * payload_size))
+        retained, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert retained < 5 * payload_size  # 20 payloads queued in memory would be 20 * payload_size
+    manifest = writer.finalize()
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    assert reader.verify_integrity() == []
+    assert manifest.observation_counts["image"] == 20
+
+
+def test_streamed_artifact_exposes_summary_diagnostics_without_payloads(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    writer.set_diagnostics()
+
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    diagnostics = reader.read_diagnostics()
+    assert diagnostics is not None
+    assert diagnostics.summary.modality_summaries["image"].count == 2
+    assert list(diagnostics.summary.image_resolutions) == [(2, 1)]
+    assert list(diagnostics.summary.pointcloud_field_names) == [("x", "y", "z")]
+
+
+def test_abort_removes_the_partial_artifact_and_closes_the_writer(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+
+    writer.abort()
+
+    assert _tmp_dirs(tmp_path) == []
+    assert _final_dirs(tmp_path) == []
+    with pytest.raises(SequenceArtifactError, match="abort"):
+        writer.add_observation(_image(9, b"\x00"))
+    with pytest.raises(SequenceArtifactError, match="abort"):
+        writer.finalize()
+
+
+def test_writer_context_manager_aborts_when_the_block_raises(tmp_path: Path) -> None:
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02") as writer,
+    ):
+        _build_fixture_sequence(writer)
+        raise RuntimeError("boom")
+
+    assert _tmp_dirs(tmp_path) == []
+
+
+def test_writer_context_manager_keeps_a_finalized_artifact(tmp_path: Path) -> None:
+    with SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02") as writer:
+        _build_fixture_sequence(writer)
+        manifest = writer.finalize()
+
+    assert _tmp_dirs(tmp_path) == []
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    assert reader.verify_integrity() == []
+
+
+def test_rejected_finalize_leaves_no_temporary_directory(tmp_path: Path) -> None:
+    from contextmap.ingestion.sequence_artifact import SequenceArtifactId
+
+    artifact_id = SequenceArtifactId("fixed-id")
+    for _ in range(2):
+        writer = SequenceArtifactWriter(
+            workspace_root=tmp_path, sequence_name="corridor-02", artifact_id=artifact_id
+        )
+        _build_fixture_sequence(writer)
+        if _ == 0:
+            writer.finalize()
+
+    with pytest.raises(SequenceArtifactError, match="already exists"):
+        writer.finalize()
+
+    assert _tmp_dirs(tmp_path) == []
+
+
+def test_empty_writer_finalizes_to_an_empty_valid_artifact(tmp_path: Path) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+
+    manifest = writer.finalize()
+
+    reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    assert reader.verify_integrity() == []
+    assert reader.list_observations() == []
