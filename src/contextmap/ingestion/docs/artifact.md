@@ -91,9 +91,9 @@ Nada é escrito em disco até a primeira observação ou `finalize()`. `finalize
 
 Como o temporário existe desde a primeira observação, um writer que não chega ao `finalize()` deixaria lixo em disco. Por isso:
 
-- `abort()` remove o temporário e fecha o writer (idempotente; não afeta um artefato já finalizado);
-- o writer é um context manager — `with SequenceArtifactWriter(...) as writer:` chama `abort()` em qualquer saída que não tenha finalizado;
-- qualquer falha em `finalize()` (inclusive "já existe um artefato no path final") e qualquer falha de I/O em `add_observation()` abortam o writer automaticamente;
+- `abort()` fecha o writer e remove o temporário (idempotente; não afeta um artefato já finalizado). Erros ao descarregar o índice são ignorados, pois esses dados estão sendo descartados; uma falha ao remover o diretório é propagada como `OSError` e uma nova chamada de `abort()` tenta a remoção de novo;
+- o writer é um context manager — `with SequenceArtifactWriter(...) as writer:` chama `abort()` em qualquer saída que não tenha finalizado. Quando o bloco já está falhando, um erro de limpeza é anexado à exceção original como nota (`add_note`), sem substituí-la;
+- qualquer falha em `finalize()` (inclusive "já existe um artefato no path final") e qualquer falha de I/O em `add_observation()` abortam o writer automaticamente, com a mesma regra de nota para não mascarar a causa original;
 - um `observation_id` duplicado é rejeitado sem escrever nada e o writer continua utilizável.
 
 Uma consequência do streaming: a checagem "já existe um artefato com este `artifact_id`" continua no `finalize()`, então uma colisão com `artifact_id` explícito só é detectada depois de escrever o conteúdo. Com o id aleatório padrão isso não ocorre.

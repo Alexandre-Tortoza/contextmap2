@@ -17,6 +17,7 @@ succeeds. An interrupted write can never be mistaken for a complete artifact.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import shutil
@@ -196,6 +197,7 @@ class SequenceArtifactWriter:
         self._diagnostic_warnings: tuple[str, ...] | None = None
         self._synchronization_diagnostics: SynchronizationDiagnostics | None = None
         self._closed_by: str | None = None
+        self._tmp_dir_removed = False
 
     def __enter__(self) -> SequenceArtifactWriter:
         """Return the writer for use as a context manager."""
@@ -207,8 +209,15 @@ class SequenceArtifactWriter:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Abort the writer unless it was already finalized."""
-        self.abort()
+        """Abort the writer unless it was already finalized.
+
+        When the block is already failing, a cleanup error is attached to that
+        exception as a note instead of replacing it.
+        """
+        if exc_value is None:
+            self.abort()
+        else:
+            self._abort_after_failure(exc_value)
 
     def set_diagnostics(
         self,
@@ -298,8 +307,8 @@ class SequenceArtifactWriter:
                 self._payload_entries.append(_file_entry(relative_path, data))
             line = f"{json.dumps(record, sort_keys=True)}\n".encode()
             index_handle.write(line)
-        except BaseException:
-            self.abort()
+        except BaseException as error:
+            self._abort_after_failure(error)
             raise
 
         self._index_hash.update(line)
@@ -311,16 +320,27 @@ class SequenceArtifactWriter:
     def abort(self) -> None:
         """Discard the temporary artifact and close the writer.
 
-        Safe to call at any point and more than once; it has no effect on a
-        finalized artifact.
+        The writer is closed immediately, even if cleanup then fails. Errors
+        from flushing the index are ignored, since that data is being
+        discarded. A failure to remove the temporary directory is raised so
+        it is never silent; calling :meth:`abort` again retries the removal.
+        It has no effect on a finalized artifact and is a no-op once the
+        temporary directory is gone.
+
+        Raises:
+            OSError: If the temporary directory could not be removed.
         """
-        if self._closed_by is not None:
+        if self._closed_by == "finalize()":
             return
         self._closed_by = "abort()"
-        if self._index_handle is not None:
-            self._index_handle.close()
-            self._index_handle = None
-        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        handle, self._index_handle = self._index_handle, None
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
+        if not self._tmp_dir_removed:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(self._tmp_dir)
+            self._tmp_dir_removed = True
 
     def finalize(self) -> SequenceArtifactManifest:
         """Complete the temporary artifact and publish it atomically.
@@ -357,12 +377,22 @@ class SequenceArtifactWriter:
                     f"internal consistency check failed before finalize: {problems}"
                 )
             self._tmp_dir.rename(self._final_dir)
-        except BaseException:
-            self.abort()
+        except BaseException as error:
+            self._abort_after_failure(error)
             raise
 
         self._closed_by = "finalize()"
         return manifest
+
+    def _abort_after_failure(self, error: BaseException) -> None:
+        """Abort without letting a cleanup failure replace ``error``, the real cause."""
+        try:
+            self.abort()
+        except OSError as cleanup_error:
+            error.add_note(
+                f"could not remove temporary artifact {self._tmp_dir}: {cleanup_error}; "
+                "call abort() to retry"
+            )
 
     def _require_open(self, action: str) -> None:
         if self._closed_by is not None:

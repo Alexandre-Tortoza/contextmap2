@@ -1,5 +1,8 @@
+import errno
 import json
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -632,3 +635,99 @@ def test_empty_writer_finalizes_to_an_empty_valid_artifact(tmp_path: Path) -> No
     reader = SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
     assert reader.verify_integrity() == []
     assert reader.list_observations() == []
+
+
+class _FailingIndexHandle:
+    """Wraps the real index handle; ``write``/``close`` can be made to fail like a full disk."""
+
+    def __init__(self, real: Any, *, fail_write: bool, fail_close: bool) -> None:
+        self._real = real
+        self._fail_write = fail_write
+        self._fail_close = fail_close
+
+    def write(self, data: bytes) -> int:
+        if self._fail_write:
+            raise OSError(errno.ENOSPC, "no space left on device (write)")
+        return int(self._real.write(data))
+
+    def close(self) -> None:
+        self._real.close()  # the descriptor is released even when the flush fails
+        if self._fail_close:
+            raise OSError(errno.ENOSPC, "no space left on device (flush)")
+
+
+def _fail_index_io(
+    monkeypatch: pytest.MonkeyPatch, *, fail_write: bool = False, fail_close: bool = False
+) -> None:
+    real_open = Path.open
+
+    def open_with_failures(self: Path, *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(self, *args, **kwargs)
+        if self.name == "index.jsonl" and args[:1] == ("wb",):
+            return _FailingIndexHandle(handle, fail_write=fail_write, fail_close=fail_close)
+        return handle
+
+    monkeypatch.setattr(Path, "open", open_with_failures)
+
+
+def test_abort_removes_the_temporary_directory_even_when_closing_the_index_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_index_io(monkeypatch, fail_close=True)
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+
+    writer.abort()  # a flush error on data being discarded is irrelevant and must not escape
+
+    assert _tmp_dirs(tmp_path) == []
+    with pytest.raises(SequenceArtifactError, match="abort"):
+        writer.add_observation(_image(9, b"\x00"))
+
+
+def test_failed_write_reports_the_original_error_and_cleans_up_when_close_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_index_io(monkeypatch, fail_write=True, fail_close=True)
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+
+    with pytest.raises(OSError, match=r"\(write\)"):
+        writer.add_observation(_image(1, b"\x01"))
+
+    assert _tmp_dirs(tmp_path) == []
+
+
+def test_abort_surfaces_a_failed_removal_and_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+    real_rmtree = shutil.rmtree
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise PermissionError(errno.EACCES, "cannot remove")
+
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+    with pytest.raises(PermissionError):
+        writer.abort()
+    assert len(_tmp_dirs(tmp_path)) == 1  # still there, and the caller knows about it
+
+    monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+    writer.abort()  # retry removes it
+
+    assert _tmp_dirs(tmp_path) == []
+
+
+def test_failed_cleanup_is_attached_to_the_original_error_instead_of_replacing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    _build_fixture_sequence(writer)
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise PermissionError(errno.EACCES, "cannot remove")
+
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+    with pytest.raises(RuntimeError, match="boom") as excinfo, writer:
+        raise RuntimeError("boom")
+
+    assert any("temporary" in note for note in excinfo.value.__notes__)
