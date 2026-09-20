@@ -32,6 +32,12 @@ from contextmap.sensor_association.models import (
     VisualFeatureRef,
     spatial_observation_id_for,
 )
+from contextmap.sensor_association.quality import (
+    ObservationQuality,
+    QualityComponent,
+    ReprojectionStatistics,
+    ValueSummary,
+)
 
 __all__ = [
     "AssociationProvenance",
@@ -39,14 +45,18 @@ __all__ = [
     "CameraIdentity",
     "CameraProjection",
     "DepthMetric",
+    "ObservationQuality",
     "PixelCoordinate",
     "PixelProjection",
     "PointCorrespondence",
     "PoseRef",
     "ProjectionSummary",
+    "QualityComponent",
+    "ReprojectionStatistics",
     "SemanticClaimRef",
     "SpatialObservation",
     "SpatialObservationId",
+    "ValueSummary",
     "VisibilityDiagnostics",
     "VisibilityState",
     "VisualFeatureRef",
