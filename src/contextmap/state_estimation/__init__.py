@@ -9,6 +9,19 @@ types, or a dataset's pose format. See
 documentation.
 """
 
+from contextmap.state_estimation.lookup import (
+    ClockDomainMismatchError,
+    LookupMode,
+    LookupOutcome,
+    LookupPolicy,
+    LookupRejection,
+    PoseLookupResult,
+    RejectedLookup,
+    ResolvedPose,
+    TemporalAlignmentSummary,
+    TrajectoryLookup,
+    summarize_lookups,
+)
 from contextmap.state_estimation.models import (
     EstimatorProvenance,
     PoseEstimate,
@@ -25,16 +38,27 @@ from contextmap.state_estimation.models import (
 )
 
 __all__ = [
+    "ClockDomainMismatchError",
     "EstimatorProvenance",
+    "LookupMode",
+    "LookupOutcome",
+    "LookupPolicy",
+    "LookupRejection",
     "PoseEstimate",
     "PoseEstimateId",
+    "PoseLookupResult",
     "PoseProvenance",
     "PoseValidity",
+    "RejectedLookup",
+    "ResolvedPose",
+    "TemporalAlignmentSummary",
     "TimeBounds",
     "Trajectory",
     "TrajectoryGap",
     "TrajectoryId",
+    "TrajectoryLookup",
     "TrajectoryProvenance",
     "TrajectoryQualitySummary",
     "pose_estimate_id_for",
+    "summarize_lookups",
 ]

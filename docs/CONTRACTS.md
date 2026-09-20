@@ -259,9 +259,9 @@ gaps[]                   # intervalos onde a interpolação não é confiável
 provenance               # backend/configuração, sequência, seleção, calibração, código
 ```
 
-`time_bounds` e `quality_summary()` são derivados das poses. A política de lookup/interpolação ainda não está implementada.
+`time_bounds` e `quality_summary()` são derivados das poses.
 
-Lookup derivado deve preservar quais poses deram origem ao resultado.
+Lookup derivado preserva quais poses deram origem ao resultado: `TrajectoryLookup` resolve `T_map_body(t)` por política explícita (`EXACT`, `NEAREST`, `INTERPOLATED`), devolve `ResolvedPose` com poses de origem, delta temporal e tolerância, ou `RejectedLookup` com o motivo. Uma pose interpolada carrega `provenance.derived_from` e nunca é confundida com uma pose estimada. Ver [lookup](../src/contextmap/state_estimation/docs/lookup.md).
 
 ## 12. `GeometryPoint`
 

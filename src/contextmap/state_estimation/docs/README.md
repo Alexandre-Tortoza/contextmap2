@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Somente os contratos canônicos existem neste momento. Estão **planejados**, e serão documentados aqui quando forem implementados: port `StateEstimator` e backends (`ExternalPose`, FAST-LIO), lookup temporal/interpolação, preflight do frame graph, `StateEstimationRunArtifact` e o harness de validação.
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`) e o lookup temporal com interpolação. Estão **planejados**, e serão documentados aqui quando forem implementados: port `StateEstimator` e backends (`ExternalPose`, FAST-LIO), preflight do frame graph, `StateEstimationRunArtifact` e o harness de validação.
 
 ## Contratos públicos
 
@@ -32,8 +32,10 @@ Somente os contratos canônicos existem neste momento. Estão **planejados**, e 
 - `Trajectory`, `TrajectoryId`, `TrajectoryGap`, `TrajectoryProvenance`, `EstimatorProvenance` — sequência ordenada de poses de um corpo em um frame de referência.
 - `TimeBounds`, `TrajectoryQualitySummary` — resumos derivados de uma trajetória.
 - `pose_estimate_id_for()` — identidade determinística de uma pose dentro da trajetória.
+- `TrajectoryLookup`, `LookupPolicy`, `ResolvedPose`, `RejectedLookup`, `LookupOutcome`, `LookupRejection`, `ClockDomainMismatchError` — resolução auditável de `T_map_body(t)` no timestamp de uma observação (exata, mais próxima ou interpolada), com rejeições explícitas.
+- `TemporalAlignmentSummary`, `summarize_lookups()` — métricas de alinhamento temporal de um conjunto de lookups.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes.
+Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, e [`lookup.md`](lookup.md) para a semântica de lookup e interpolação.
 
 ## Módulos consumidos
 
@@ -47,6 +49,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, convenção de transform, invariantes e serialização.
+- [`lookup.md`](lookup.md) — alinhamento temporal, políticas de lookup, interpolação e métricas.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `PoseEstimate` e `Trajectory` no contexto global de contratos.
 - [`docs/shared-primitives.md`](../../../../docs/shared-primitives.md) — primitivas geométricas compartilhadas.
