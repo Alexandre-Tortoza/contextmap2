@@ -49,12 +49,12 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 A branch `dev` já contém quatro módulos de domínio, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
-- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e o core de Feature Extraction, incluindo `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
+- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
 - [`contextmap.state_estimation`](src/contextmap/state_estimation/docs/README.md), com `PoseEstimate`/`Trajectory`, lookup temporal auditável, frame graph estático e preflight de geometria, os backends `ExternalPose` e FAST-LIO atrás do port `StateEstimator` e o `StateEstimationRunArtifact`; a execução de referência do FAST-LIO ainda está pendente;
 - [`contextmap.geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), com `GeometryPoint`, `GeometryReference` e `GeometricMap`, estado explícito de correção de movimento, montagem de inputs, transformação fonte→mapa com traces, acumulação com referências estáveis, acesso espacial por `GeometrySource` e o `GeometricMapArtifact`;
 - [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation e Geometric Mapping.
 
-Os adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP ainda não estão integrados na `dev`; a infraestrutura de Feature Extraction não deve ser confundida com suporte a esses modelos.
+Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados; a validação numérica com pesos reais continua pendente na máquina de inferência e não é inferida desses testes.
 
 Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 

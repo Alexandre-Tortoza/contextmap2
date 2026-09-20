@@ -17,6 +17,7 @@ from contextmap.visual_perception.dense_region_association import (
     RegionPoolingDiagnostics,
     RegionPoolingProvenance,
     RegionPoolingResult,
+    box_mask_shape,
     map_box_to_grid_cells,
     pool_region_feature,
 )
@@ -336,6 +337,7 @@ __all__ = [
     "WrittenDiscoveryEvidence",
     "allocate_run_index",
     "assemble_perception_result",
+    "box_mask_shape",
     "build_discovery_passes",
     "claim_id_for",
     "decode_embedding_space",
