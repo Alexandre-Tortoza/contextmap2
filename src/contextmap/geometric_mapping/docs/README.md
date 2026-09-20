@@ -24,7 +24,7 @@ Geometria é **onde** algo está. Evidência visual, semântica e identidade de 
 
 ## Estado implementado
 
-Existem os **contratos**, a fronteira de leitura `GeometrySource` e o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: montagem dos inputs de geometria, transformação fonte→mapa, acumulação com referências estáveis, índice espacial e lookup, `GeometricMapArtifact` e a validação.
+Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) e a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: transformação fonte→mapa, acumulação com referências estáveis, índice espacial e lookup, `GeometricMapArtifact` e a validação.
 
 ## Contratos públicos
 
@@ -34,14 +34,15 @@ Existem os **contratos**, a fronteira de leitura `GeometrySource` e o **estado e
 - `GeometricMap`, `GeometricMapProvenance`, `SpatialIndexMetadata` — identidade, frame, limites, observações de origem e proveniência de um mapa.
 - `Bounds3D` — caixa alinhada aos eixos que declara o frame em que está expressa.
 - `MotionCorrectionState`, `MotionCorrectionRecord`, `MotionCorrectionEvidence`, `MotionCorrectionPolicy`, `ScanDisposition`, `MotionCorrectionVerdict` — se um scan foi corrigido para o movimento da plataforma (`RAW`/`CORRECTED`/`UNKNOWN`), com a evidência que sustenta a afirmação e a política aplicada.
+- `GeometryInputPlan`, `GeometryInput`, `GeometryInputRejection`, `InputRejectionReason`, `PointCloudLayout`, `assemble_geometry_inputs()`, `assemble_geometry_inputs_from_artifacts()` — os scans de um trecho selecionado pareados com pose, extrínseco, layout e estado de correção, com os scans recusados e o motivo.
 - `GeometrySource` — fronteira de leitura (`get`, `iter_geometry`, `query_bounds`) que Sensor Association e demais consumidores usam sem depender de como o mapa é armazenado ou indexado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
 ## Módulos consumidos
 
-- `contextmap.ingestion`: `FrameId`, `SequenceArtifactId`, `SourceObservationId`, `LidarObservation`.
-- `contextmap.state_estimation`: `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupPolicy`, `TimeBounds`.
+- `contextmap.ingestion`: `FrameId`, `SequenceArtifactId`, `SourceObservationId`, `LidarObservation`, `SequenceSelection`, `CalibrationSet`.
+- `contextmap.state_estimation`: `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupPolicy`, `TimeBounds`, `Trajectory`, `TrajectoryLookup`, `StaticFrameGraph`.
 - `contextmap.shared`: `SourceTimestamp`, `Vector3`.
 
 ## Módulos que consomem este
@@ -52,5 +53,6 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 - [`contracts.md`](contracts.md) — contratos, convenções de coordenada, identidade e serialização.
 - [`motion-correction.md`](motion-correction.md) — estado de correção de movimento, evidência e política de scans não corrigidos.
+- [`inputs.md`](inputs.md) — seleção, montagem dos inputs, layout do payload e scans recusados.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `GeometryPoint`, `GeometryReference` e `GeometricMap` no contexto global de contratos.
