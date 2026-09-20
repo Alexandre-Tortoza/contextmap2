@@ -51,6 +51,15 @@ from contextmap.geometric_mapping.motion_correction import (
     verify_motion_correction,
 )
 from contextmap.geometric_mapping.ports import GeometrySource
+from contextmap.geometric_mapping.transformation import (
+    GeometryTransformError,
+    TracedTransform,
+    TransformedScan,
+    TransformTrace,
+    transform_scan,
+    transform_scans,
+    verify_transform_trace,
+)
 
 __all__ = [
     "Bounds3D",
@@ -65,6 +74,7 @@ __all__ = [
     "GeometryPointProvenance",
     "GeometryReference",
     "GeometrySource",
+    "GeometryTransformError",
     "InputRejectionReason",
     "MapId",
     "MotionCorrectionEvidence",
@@ -77,9 +87,12 @@ __all__ = [
     "ScanDisposition",
     "SpatialIndexMetadata",
     "SpatialIndexParameter",
+    "TracedTransform",
     "TransformKind",
     "TransformLineage",
     "TransformStep",
+    "TransformTrace",
+    "TransformedScan",
     "UnsupportedPointCloudLayoutError",
     "apply_motion_correction_policy",
     "assemble_geometry_inputs",
@@ -87,6 +100,9 @@ __all__ = [
     "declared_raw_motion_correction",
     "geometry_id_for",
     "resolve_point_cloud_layout",
+    "transform_scan",
+    "transform_scans",
     "unknown_motion_correction",
     "verify_motion_correction",
+    "verify_transform_trace",
 ]

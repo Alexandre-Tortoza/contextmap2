@@ -6,6 +6,13 @@ import math
 
 from lidar_builders import CLOCK_ID, make_scan, timestamp_ns
 
+from contextmap.geometric_mapping import (
+    GeometryInputPlan,
+    MotionCorrectionPolicy,
+    MotionCorrectionRecord,
+    ScanDisposition,
+    assemble_geometry_inputs,
+)
 from contextmap.ingestion import (
     CalibrationSet,
     ExternalPoseMeasurement,
@@ -27,9 +34,11 @@ from contextmap.ingestion import (
 from contextmap.shared import Quaternion, Vector3
 from contextmap.state_estimation import (
     EstimatorProvenance,
+    LookupPolicy,
     PoseEstimate,
     PoseProvenance,
     PoseValidity,
+    StateEstimationRunId,
     Trajectory,
     TrajectoryId,
     TrajectoryProvenance,
@@ -95,8 +104,9 @@ def make_trajectory(
     declare_calibration: bool = True,
     sequence_artifact_id: SequenceArtifactId = SEQUENCE_ID,
     clock_id: str = CLOCK_ID,
+    orientation: Quaternion = IDENTITY,
 ) -> Trajectory:
-    """Build a trajectory of ``count`` poses 100 ms apart.
+    """Build a trajectory of ``count`` poses 100 ms apart, every one with ``orientation``.
 
     The trajectory declares the identity of ``calibration`` (the default one)
     unless ``declare_calibration`` is false, as a backend that needed none would.
@@ -106,7 +116,9 @@ def make_trajectory(
         trajectory_id=TRAJECTORY_ID,
         reference_frame=FrameId("map"),
         body_frame=FrameId("body"),
-        poses=tuple(make_pose(index, clock_id=clock_id) for index in range(count)),
+        poses=tuple(
+            make_pose(index, clock_id=clock_id, orientation=orientation) for index in range(count)
+        ),
         gaps=(),
         provenance=TrajectoryProvenance(
             estimator=EstimatorProvenance(backend_id="fake_estimator", backend_version="0"),
@@ -181,4 +193,34 @@ def make_selection_result(
         selection=chosen,
         selection_id=selection_identity(sequence_artifact_id, chosen),
         observations=tuple(observations),
+    )
+
+
+ACCEPT_ALL = MotionCorrectionPolicy(raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.ACCEPT)
+INTERPOLATED = LookupPolicy.interpolated()
+DEFAULT_CALIBRATION = make_calibration()
+
+
+def assemble_plan(
+    observations: list[SourceObservation] | None = None,
+    *,
+    calibration: CalibrationSet | None = DEFAULT_CALIBRATION,
+    trajectory: Trajectory | None = None,
+    pose_lookup: LookupPolicy = INTERPOLATED,
+    policy: MotionCorrectionPolicy = ACCEPT_ALL,
+    selection: SequenceSelection | None = None,
+    motion_correction: dict[SourceObservationId, MotionCorrectionRecord] | None = None,
+    run_id: StateEstimationRunId | None = None,
+) -> GeometryInputPlan:
+    """Assemble the geometry inputs of ``observations`` (the default sequence when omitted)."""
+    return assemble_geometry_inputs(
+        sequence=make_selection_result(
+            observations if observations is not None else make_sequence(), selection
+        ),
+        calibration=calibration,
+        trajectory=trajectory if trajectory is not None else make_trajectory(),
+        pose_lookup=pose_lookup,
+        motion_correction_policy=policy,
+        motion_correction=motion_correction,
+        state_estimation_run_id=run_id,
     )
