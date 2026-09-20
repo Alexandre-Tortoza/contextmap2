@@ -161,6 +161,39 @@ def test_backend_satisfies_region_feature_port_and_places_box_local_mask() -> No
     assert sink.calls[0][0] == extraction.features[0]
 
 
+@pytest.mark.parametrize(
+    ("box", "expected_mask_shape", "expected_canvas_slice"),
+    [
+        (BoundingBox2D(x=1.0, y=1.0, width=2.0, height=2.0), (2, 2), (1, 3, 1, 3)),
+        (BoundingBox2D(x=1.5, y=1.5, width=3.25, height=2.25), (3, 4), (1, 4, 1, 5)),
+    ],
+)
+def test_fractional_region_geometry_uses_the_canonical_mask_rasterization(
+    box: BoundingBox2D,
+    expected_mask_shape: tuple[int, int],
+    expected_canvas_slice: tuple[int, int, int, int],
+) -> None:
+    region = Region2D(
+        region_id=RegionId("fractional-region"),
+        bounding_box=box,
+        mask_reference="masks/fractional-region.npy",
+        provenance=_region().provenance,
+    )
+    mask = np.ones(expected_mask_shape, dtype=np.bool_)
+    backend, runtime, _ = _backend(
+        masks={region.region_id: mask},
+        array=np.array([[1.0, 0.0]], dtype=np.float32),
+    )
+
+    backend.extract_masked(_image(), (region,))
+
+    request_mask = runtime.calls[0][1][0].mask
+    top, bottom, left, right = expected_canvas_slice
+    expected = np.zeros((_image().height, _image().width), dtype=np.bool_)
+    expected[top:bottom, left:right] = mask
+    np.testing.assert_array_equal(request_mask, expected)
+
+
 def test_context_view_crops_image_and_mask_without_mutating_region() -> None:
     region = _region(x=0, y=0, width=2, height=2)
     original_box = region.bounding_box
@@ -254,7 +287,9 @@ def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
     )
     alpha_feature = alpha_backend.extract_masked(_image(), (region,)).features[0]
     result_id = PerceptionResultId("run-0001--frame-0001")
-    dense_feature_id = feature_id_for(result_id=result_id, index=0)
+    dense_feature_id = feature_id_for(
+        result_id=result_id, producer_id="dense_feature_extraction", index=0
+    )
     dense_feature = VisualFeature(
         feature_id=dense_feature_id,
         scope=FeatureScope.DENSE,

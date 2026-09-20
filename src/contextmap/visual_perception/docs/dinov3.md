@@ -32,7 +32,7 @@ Resize direto pode distorcer aspect ratio se as dimensões configuradas não for
 
 ## Identidade e falhas
 
-`DinoV3Config` registra checkpoint, revisão, device, precisão, tamanho de entrada, política local/download, normalização, caminho de payload e versão do adapter. `local_files_only=True` impede download implícito por default.
+`DinoV3Config` registra checkpoint, revisão, device, precisão, tamanho de entrada, política local/download, normalização, caminho de payload e versão do adapter. `revision` deve ser o SHA Git completo de 40 caracteres; referências móveis como `main` são rejeitadas antes do carregamento. `local_files_only=True` impede download implícito por default.
 
 Falhas são específicas e nunca acionam fallback:
 

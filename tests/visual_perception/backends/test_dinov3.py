@@ -32,6 +32,8 @@ from contextmap.visual_perception.backends.dinov3 import (
     HuggingFaceDinoV3Runtime,
 )
 
+_REVISION = "b" * 40
+
 
 class FakeDinoV3Runtime:
     def __init__(self, output: DinoV3NativeOutput) -> None:
@@ -88,7 +90,7 @@ def _backend(
     backend = DinoV3DenseFeatureBackend(
         config=DinoV3Config(
             checkpoint="facebook/dinov3-vits16-pretrain-lvd1689m",
-            revision="commit-def456",
+            revision=_REVISION,
             device="cpu",
             precision="float32",
             input_width=6,
@@ -145,7 +147,7 @@ def test_embedding_identity_distinguishes_dinov3_and_records_register_policy() -
 
     assert space.family == "dinov3"
     assert space.model == "facebook/dinov3-vits16-pretrain-lvd1689m"
-    assert space.checkpoint == "facebook/dinov3-vits16-pretrain-lvd1689m@commit-def456"
+    assert space.checkpoint == f"facebook/dinov3-vits16-pretrain-lvd1689m@{_REVISION}"
     assert space.layer == "last_hidden_state.patch_tokens_after_registers"
     assert space.dimension == 4
     assert extraction.dense_map.feature.embedding_space_id == embedding_space_fingerprint(space)
@@ -201,7 +203,9 @@ def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
     dense_backend, _, _ = _backend(feature_stage_id="dense_feature_extraction")
     dense_feature = dense_backend.extract_dense(_image()).dense_map.feature
     result_id = PerceptionResultId("run-0001--frame-0001")
-    global_feature_id = feature_id_for(result_id=result_id, index=0)
+    global_feature_id = feature_id_for(
+        result_id=result_id, producer_id="global_feature_extraction", index=0
+    )
     global_feature = VisualFeature(
         feature_id=global_feature_id,
         scope=FeatureScope.GLOBAL,
@@ -257,6 +261,7 @@ def test_native_map_uses_common_region_pooling_without_backend_branch() -> None:
     [
         ("checkpoint", ""),
         ("revision", ""),
+        ("revision", "main"),
         ("device", "tpu"),
         ("precision", "int8"),
         ("input_height", 0),
@@ -266,7 +271,7 @@ def test_native_map_uses_common_region_pooling_without_backend_branch() -> None:
 def test_invalid_config_is_rejected(field: str, value: object) -> None:
     values: dict[str, object] = {
         "checkpoint": "facebook/dinov3-vits16-pretrain-lvd1689m",
-        "revision": "commit-def456",
+        "revision": _REVISION,
         "input_width": 6,
         "input_height": 4,
     }
@@ -298,7 +303,7 @@ def test_runtime_failure_has_no_fallback() -> None:
     backend = DinoV3DenseFeatureBackend(
         config=DinoV3Config(
             checkpoint="facebook/dinov3-vits16-pretrain-lvd1689m",
-            revision="commit-def456",
+            revision=_REVISION,
             input_width=6,
             input_height=4,
         ),
@@ -326,7 +331,7 @@ def test_missing_sdk_dependencies_are_explicit(
     runtime = HuggingFaceDinoV3Runtime(
         config=DinoV3Config(
             checkpoint="facebook/dinov3-vits16-pretrain-lvd1689m",
-            revision="commit-def456",
+            revision=_REVISION,
         ),
         prepared_image_root=tmp_path,
     )

@@ -39,7 +39,7 @@ O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. A identi
 
 O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz resize bicúbico direto configurado sem center crop, chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. A interpolação é explícita e não depende do default carregado pelo processor. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
 
-`local_files_only=True` é o default; nenhuma inferência baixa pesos implicitamente. Dependência, device, checkpoint e inferência possuem erros separados e não acionam fallback.
+`local_files_only=True` é o default; nenhuma inferência baixa pesos implicitamente. `revision` exige o SHA Git completo de 40 caracteres e rejeita referências móveis como `main` antes do carregamento. Dependência, device, checkpoint e inferência possuem erros separados e não acionam fallback.
 
 O adapter rejeita valores não finitos e vetores nulos antes de declarar
 normalização L2 ou enfileirar o payload.

@@ -33,6 +33,8 @@ from contextmap.visual_perception.backends.dinov2 import (
     _patch_tokens_and_register_count,
 )
 
+_REVISION = "a" * 40
+
 
 class FakeDinoV2Runtime:
     """Runtime fake returning fixed native patch features."""
@@ -93,7 +95,7 @@ def _backend(
     backend = DinoV2DenseFeatureBackend(
         config=DinoV2Config(
             checkpoint="facebook/dinov2-small",
-            revision="commit-abc123",
+            revision=_REVISION,
             device="cpu",
             precision="float32",
             input_width=6,
@@ -168,14 +170,14 @@ def test_embedding_space_and_backend_provenance_are_exact_and_auditable() -> Non
 
     assert space.family == "dinov2"
     assert space.model == "facebook/dinov2-small"
-    assert space.checkpoint == "facebook/dinov2-small@commit-abc123"
+    assert space.checkpoint == f"facebook/dinov2-small@{_REVISION}"
     assert space.layer == "last_hidden_state.patch_tokens_after_cls_and_0_registers"
     assert space.dimension == 4
     assert space.normalization == "none"
     assert feature.embedding_space_id == embedding_space_fingerprint(space)
     assert provenance.backend_id == "dinov2_huggingface"
     assert provenance.model == "facebook/dinov2-small"
-    assert provenance.version == "commit-abc123"
+    assert provenance.version == _REVISION
     assert provenance.configuration_fingerprint is not None
 
 
@@ -195,7 +197,9 @@ def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
     dense_backend, _, _ = _backend(feature_stage_id="dense_feature_extraction")
     dense_feature = dense_backend.extract_dense(_image()).dense_map.feature
     result_id = PerceptionResultId("run-0001--frame-0001")
-    global_feature_id = feature_id_for(result_id=result_id, index=0)
+    global_feature_id = feature_id_for(
+        result_id=result_id, producer_id="global_feature_extraction", index=0
+    )
     global_feature = VisualFeature(
         feature_id=global_feature_id,
         scope=FeatureScope.GLOBAL,
@@ -331,6 +335,7 @@ def test_native_output_feeds_common_region_pooling_without_upsampling() -> None:
     [
         ({"checkpoint": ""}, "checkpoint"),
         ({"revision": ""}, "revision"),
+        ({"revision": "main"}, "revision"),
         ({"device": "tpu"}, "device"),
         ({"precision": "int8"}, "precision"),
         ({"input_width": 0}, "input_width"),
@@ -342,7 +347,7 @@ def test_config_rejects_invalid_execution_identity(
 ) -> None:
     values: dict[str, object] = {
         "checkpoint": "facebook/dinov2-small",
-        "revision": "commit-abc123",
+        "revision": _REVISION,
         "device": "cpu",
         "precision": "float32",
         "input_width": 6,
@@ -376,7 +381,7 @@ def test_runtime_failure_is_not_replaced_by_a_fallback() -> None:
     backend = DinoV2DenseFeatureBackend(
         config=DinoV2Config(
             checkpoint="facebook/dinov2-small",
-            revision="commit-abc123",
+            revision=_REVISION,
             device="cuda",
             precision="float16",
             input_width=6,
@@ -406,7 +411,7 @@ def test_missing_huggingface_dependencies_are_explicit(
     runtime = HuggingFaceDinoV2Runtime(
         config=DinoV2Config(
             checkpoint="facebook/dinov2-small",
-            revision="commit-abc123",
+            revision=_REVISION,
             device="cpu",
             precision="float32",
             input_width=224,

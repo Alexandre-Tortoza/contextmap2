@@ -19,7 +19,7 @@ todos os feature stages reunidos no mesmo `PerceptionResult`.
 
 ## Configuração e identidade
 
-`DinoV2Config` torna explícitos checkpoint, revisão, device, precisão, dimensões de entrada, política de download, normalização L2 opcional, prefixo de payload e versão do adapter. A proveniência usa um fingerprint determinístico da configuração efetiva.
+`DinoV2Config` torna explícitos checkpoint, revisão, device, precisão, dimensões de entrada, política de download, normalização L2 opcional, prefixo de payload e versão do adapter. `revision` deve ser o SHA Git completo de 40 caracteres; referências móveis como `main` são rejeitadas antes do carregamento. A proveniência usa um fingerprint determinístico da configuração efetiva.
 
 O `EmbeddingSpace` usa:
 

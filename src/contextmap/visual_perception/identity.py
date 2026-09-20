@@ -14,6 +14,8 @@ the full traceability chain this supports.
 
 from __future__ import annotations
 
+import hashlib
+
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception.models import (
     ClaimId,
@@ -57,18 +59,23 @@ def region_id_for(*, result_id: PerceptionResultId, index: int) -> RegionId:
     return RegionId(f"{result_id}--region-{index:04d}")
 
 
-def feature_id_for(*, result_id: PerceptionResultId, index: int) -> FeatureId:
-    """Compute the deterministic identity of the ``index``-th feature in a result.
+def feature_id_for(*, result_id: PerceptionResultId, producer_id: str, index: int) -> FeatureId:
+    """Compute a producer-namespaced feature identity within a result.
 
     Args:
         result_id: The owning result.
+        producer_id: Stable identity of the stage or producer that created the
+            feature.
         index: Zero-based position among the features produced for this
-            result, in the extraction backend's own deterministic order.
+            result by that producer, in its deterministic order.
 
     Returns:
         The deterministic feature identity.
     """
-    return FeatureId(f"{result_id}--feature-{index:04d}")
+    if not producer_id:
+        raise ValueError("producer_id must not be empty")
+    producer_digest = hashlib.sha256(producer_id.encode("utf-8")).hexdigest()
+    return FeatureId(f"{result_id}--feature-stage-{producer_digest}-{index:04d}")
 
 
 def claim_id_for(*, result_id: PerceptionResultId, index: int) -> ClaimId:

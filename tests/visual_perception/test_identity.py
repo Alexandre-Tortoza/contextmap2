@@ -4,9 +4,11 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     BackendProvenance,
     BoundingBox2D,
+    FeatureScope,
     PerceptionResult,
     PerceptionRunId,
     Region2D,
+    VisualFeature,
     claim_id_for,
     feature_id_for,
     perception_result_id_for,
@@ -52,12 +54,54 @@ def test_region_feature_claim_ids_are_scoped_to_their_result() -> None:
     region_b = region_id_for(result_id=result_id_b, index=0)
 
     assert region_a != region_b
-    assert feature_id_for(result_id=result_id_a, index=0) != feature_id_for(
-        result_id=result_id_b, index=0
-    )
+    assert feature_id_for(
+        result_id=result_id_a, producer_id="feature_extraction", index=0
+    ) != feature_id_for(result_id=result_id_b, producer_id="feature_extraction", index=0)
     assert claim_id_for(result_id=result_id_a, index=0) != claim_id_for(
         result_id=result_id_b, index=0
     )
+
+
+def test_canonical_feature_ids_are_namespaced_by_producer_stage() -> None:
+    result_id = perception_result_id_for(
+        run_id=PerceptionRunId("run-0001"),
+        source_observation_id=SourceObservationId("frame-0124"),
+    )
+    dense_id = feature_id_for(
+        result_id=result_id,
+        producer_id="dense_feature_extraction",
+        index=0,
+    )
+    global_id = feature_id_for(
+        result_id=result_id,
+        producer_id="global_feature_extraction",
+        index=0,
+    )
+    provenance = dataclasses.replace(_PROVENANCE, capability="feature_extractor")
+    features = tuple(
+        VisualFeature(
+            feature_id=feature_id,
+            scope=FeatureScope.GLOBAL,
+            embedding_space_id=f"space-{index}",
+            shape=(2,),
+            dtype="float32",
+            payload_reference=f"features/{feature_id}.npy",
+            provenance=provenance,
+        )
+        for index, feature_id in enumerate((dense_id, global_id))
+    )
+
+    result = PerceptionResult(
+        result_id=result_id,
+        source_observation_id=SourceObservationId("frame-0124"),
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-0001",
+        created_at="2026-09-20T00:00:00+00:00",
+        features=features,
+    )
+
+    assert dense_id != global_id
+    assert result.features == features
 
 
 def test_overlapping_selections_produce_independent_results_per_run() -> None:

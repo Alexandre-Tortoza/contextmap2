@@ -33,6 +33,8 @@ from contextmap.visual_perception.backends.clip import (
     HuggingFaceClipRuntime,
 )
 
+_REVISION = "c" * 40
+
 
 class FakeClipRuntime:
     def __init__(self, array: np.ndarray[Any, Any]) -> None:
@@ -99,7 +101,7 @@ def _backend(
     backend = ClipVisualFeatureBackend(
         config=ClipConfig(
             checkpoint="openai/clip-vit-base-patch32",
-            revision="commit-clip123",
+            revision=_REVISION,
             scope=scope,
             device="cpu",
             precision="float32",
@@ -178,7 +180,7 @@ def test_embedding_space_is_language_aligned_but_no_scoring_occurs() -> None:
     space = extraction.embedding_space
 
     assert space.family == "clip"
-    assert space.checkpoint == "openai/clip-vit-base-patch32@commit-clip123"
+    assert space.checkpoint == f"openai/clip-vit-base-patch32@{_REVISION}"
     assert space.layer == "image_projection"
     assert space.dimension == 3
     assert extraction.features[0].embedding_space_id == embedding_space_fingerprint(space)
@@ -249,7 +251,9 @@ def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
     region = _region("region-a", x=0, y=0, width=10, height=10)
     region_feature = region_backend.extract_visual(_image(), (region,)).features[0]
     result_id = PerceptionResultId("run-0001--frame-0001")
-    dense_feature_id = feature_id_for(result_id=result_id, index=0)
+    dense_feature_id = feature_id_for(
+        result_id=result_id, producer_id="dense_feature_extraction", index=0
+    )
     dense_feature = VisualFeature(
         feature_id=dense_feature_id,
         scope=FeatureScope.DENSE,
@@ -309,6 +313,7 @@ def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) 
     [
         ("checkpoint", ""),
         ("revision", ""),
+        ("revision", "main"),
         ("scope", FeatureScope.DENSE),
         ("device", "tpu"),
         ("precision", "int8"),
@@ -322,7 +327,7 @@ def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) 
 def test_invalid_config_is_rejected(field: str, value: object) -> None:
     values: dict[str, object] = {
         "checkpoint": "openai/clip-vit-base-patch32",
-        "revision": "commit-clip123",
+        "revision": _REVISION,
         "scope": FeatureScope.GLOBAL,
     }
     values[field] = value
@@ -343,7 +348,7 @@ def test_missing_sdk_dependencies_are_explicit(
     runtime = HuggingFaceClipRuntime(
         config=ClipConfig(
             checkpoint="openai/clip-vit-base-patch32",
-            revision="commit-clip123",
+            revision=_REVISION,
             scope=FeatureScope.GLOBAL,
         ),
         prepared_image_root=tmp_path,

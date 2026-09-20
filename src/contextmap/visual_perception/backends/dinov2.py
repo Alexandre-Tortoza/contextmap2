@@ -21,6 +21,9 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception.backends._feature_values import (
     validate_and_normalize_feature_values,
 )
+from contextmap.visual_perception.backends._huggingface import (
+    validate_huggingface_commit_revision,
+)
 from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
@@ -29,12 +32,10 @@ from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
 )
-from contextmap.visual_perception.identity import perception_result_id_for
+from contextmap.visual_perception.identity import feature_id_for, perception_result_id_for
 from contextmap.visual_perception.models import (
     BackendProvenance,
-    FeatureId,
     FeatureScope,
-    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -71,7 +72,7 @@ class DinoV2Config:
 
     Attributes:
         checkpoint: Hugging Face model/checkpoint identity.
-        revision: Exact model repository revision or commit.
+        revision: Immutable model repository revision as a full Git commit SHA.
         device: Requested PyTorch device: ``"cpu"``, ``"cuda"``, or ``"mps"``.
         precision: Inference and persisted payload dtype: ``"float32"`` or
             ``"float16"``.
@@ -104,8 +105,7 @@ class DinoV2Config:
         """
         if not self.checkpoint:
             raise ValueError("checkpoint must not be empty")
-        if not self.revision:
-            raise ValueError("revision must not be empty")
+        validate_huggingface_commit_revision(self.revision)
         if self.device not in {"cpu", "cuda", "mps"}:
             raise ValueError("device must be one of: cpu, cuda, mps")
         if self.precision not in {"float32", "float16"}:
@@ -317,9 +317,9 @@ class DinoV2DenseFeatureBackend:
             run_id=self._run_id,
             source_observation_id=image.source_observation_id,
         )
-        feature_id = _feature_id_for_stage(
+        feature_id = feature_id_for(
             result_id=result_id,
-            feature_stage_id=self._feature_stage_id,
+            producer_id=self._feature_stage_id,
             index=0,
         )
         feature = VisualFeature(
@@ -496,14 +496,6 @@ def _configuration_fingerprint(config: DinoV2Config) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _feature_id_for_stage(
-    *, result_id: PerceptionResultId, feature_stage_id: str, index: int
-) -> FeatureId:
-    """Namespace a feature identity by the composing pipeline stage."""
-    stage_digest = hashlib.sha256(feature_stage_id.encode("utf-8")).hexdigest()
-    return FeatureId(f"{result_id}--feature-stage-{stage_digest}-{index:04d}")
 
 
 def _patch_tokens_and_register_count(last_hidden_state: Any, model_config: Any) -> tuple[Any, int]:

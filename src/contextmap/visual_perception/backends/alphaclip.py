@@ -21,17 +21,16 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception.backends._feature_values import (
     validate_and_normalize_feature_values,
 )
+from contextmap.visual_perception.dense_region_association import box_mask_shape
 from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
 )
-from contextmap.visual_perception.identity import perception_result_id_for
+from contextmap.visual_perception.identity import feature_id_for, perception_result_id_for
 from contextmap.visual_perception.models import (
     BackendProvenance,
     BoundingBox2D,
-    FeatureId,
     FeatureScope,
-    PerceptionResultId,
     PerceptionRunId,
     PreparedImage,
     Region2D,
@@ -387,9 +386,9 @@ class AlphaClipRegionFeatureBackend:
         )
         features: list[VisualFeature] = []
         for index, request in enumerate(requests):
-            feature_id = _feature_id_for_stage(
+            feature_id = feature_id_for(
                 result_id=result_id,
-                feature_stage_id=self._feature_stage_id,
+                producer_id=self._feature_stage_id,
                 index=index,
             )
             feature = VisualFeature(
@@ -587,7 +586,7 @@ def _request_for(
     if region.mask_reference is None:
         raise AlphaClipInferenceError(f"region {region.region_id!r} has no mask_reference")
     box = region.bounding_box
-    expected_shape = (box.height, box.width)
+    expected_shape = box_mask_shape(box)
     if tuple(mask.shape) != expected_shape:
         raise AlphaClipInferenceError(
             f"mask shape {tuple(mask.shape)} does not match region box {expected_shape}"
@@ -598,12 +597,16 @@ def _request_for(
         raise AlphaClipInferenceError(f"region {region.region_id!r} mask is empty")
 
     full_mask = np.zeros((image.height, image.width), dtype=np.bool_)
-    source_left = max(0, -box.x)
-    source_top = max(0, -box.y)
-    target_left = max(0, box.x)
-    target_top = max(0, box.y)
-    copy_width = min(box.width - source_left, image.width - target_left)
-    copy_height = min(box.height - source_top, image.height - target_top)
+    raster_left = math.floor(box.x)
+    raster_top = math.floor(box.y)
+    target_left = max(0, raster_left)
+    target_top = max(0, raster_top)
+    target_right = min(image.width, raster_left + expected_shape[1])
+    target_bottom = min(image.height, raster_top + expected_shape[0])
+    source_left = target_left - raster_left
+    source_top = target_top - raster_top
+    copy_width = target_right - target_left
+    copy_height = target_bottom - target_top
     if copy_width <= 0 or copy_height <= 0:
         raise AlphaClipInferenceError(f"region {region.region_id!r} has no support inside image")
     full_mask[
@@ -713,14 +716,6 @@ def _configuration_fingerprint(config: AlphaClipConfig) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _feature_id_for_stage(
-    *, result_id: PerceptionResultId, feature_stage_id: str, index: int
-) -> FeatureId:
-    """Namespace a feature identity by the composing pipeline stage."""
-    stage_digest = hashlib.sha256(feature_stage_id.encode("utf-8")).hexdigest()
-    return FeatureId(f"{result_id}--feature-stage-{stage_digest}-{index:04d}")
 
 
 def _normalized_rgb_array(image: Any, *, expected_width: int, expected_height: int) -> NDArray[Any]:
