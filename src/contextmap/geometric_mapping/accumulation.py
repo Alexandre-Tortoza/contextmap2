@@ -55,7 +55,7 @@ PACKED_DTYPE_FIELDS = [
 ]
 """NumPy spelling of :data:`~contextmap.geometric_mapping.geometry_storage.PACKED_POINT`."""
 
-_SCAN_BOUNDS_INDEX = SpatialIndexMetadata(kind="scan_bounds", parameters={}, is_derived=True)
+SCAN_BOUNDS_INDEX = SpatialIndexMetadata(kind="scan_bounds", parameters={}, is_derived=True)
 
 
 class AccumulationError(ValueError):
@@ -295,7 +295,7 @@ class MapAccumulator:
                 scan.observation_id for scan in self._scans if scan.geometry_count > 0
             ),
             time_bounds=TimeBounds(start=self._earliest, end=self._latest),
-            spatial_index=_SCAN_BOUNDS_INDEX,
+            spatial_index=SCAN_BOUNDS_INDEX,
             provenance=provenance,
             aggregation_rule=None if self._aggregation is None else self._aggregation.rule,
         )

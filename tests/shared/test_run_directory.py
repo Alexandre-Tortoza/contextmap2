@@ -149,6 +149,114 @@ def test_the_same_path_cannot_be_written_twice(tmp_path: Path) -> None:
             run.write_text("outputs/a.txt", "b")
 
 
+def test_a_streamed_file_is_inventoried_like_one_written_at_once(tmp_path: Path) -> None:
+    final_dir = tmp_path / "run-0001"
+
+    with AtomicRunDirectory(final_dir) as run:
+        with run.open_binary("outputs/big.bin") as handle:
+            handle.write(b"abc")
+            handle.write(b"def")
+        run.publish(manifest={}, readme="# x\n")
+
+    manifest = json.loads((final_dir / "manifest.json").read_text())
+    assert manifest["file_inventory"] == [
+        {
+            "path": "outputs/big.bin",
+            "size_bytes": 6,
+            "content_hash": file_entry("outputs/big.bin", b"abcdef").content_hash,
+        }
+    ]
+    assert (final_dir / "outputs" / "big.bin").read_bytes() == b"abcdef"
+
+
+def test_a_streamed_file_larger_than_the_hashing_chunk_is_hashed_whole(tmp_path: Path) -> None:
+    payload = bytes(range(256)) * (3 * 4096)  # 3 MiB
+    final_dir = tmp_path / "run-0001"
+
+    with AtomicRunDirectory(final_dir) as run:
+        with run.open_binary("outputs/big.bin") as handle:
+            for start in range(0, len(payload), 100_000):
+                handle.write(payload[start : start + 100_000])
+        run.publish(manifest={}, readme="# x\n")
+
+    entry = FileEntry(**json.loads((final_dir / "manifest.json").read_text())["file_inventory"][0])
+    assert entry == file_entry("outputs/big.bin", payload)
+    assert check_file_inventory(final_dir, [entry]) == []
+
+
+def test_the_inventory_check_detects_a_change_in_the_last_byte_of_a_large_file(
+    tmp_path: Path,
+) -> None:
+    payload = bytes(range(256)) * (3 * 4096)
+    # O último byte original é 0xff; troca-se por 0x00.
+    (tmp_path / "big.bin").write_bytes(payload[:-1] + b"\x00")
+
+    problems = check_file_inventory(tmp_path, [file_entry("big.bin", payload)])
+
+    assert any("hash" in problem for problem in problems)
+
+
+def test_a_non_contractual_stream_stays_out_of_the_inventory(tmp_path: Path) -> None:
+    final_dir = tmp_path / "run-0001"
+
+    with AtomicRunDirectory(final_dir) as run:
+        with run.open_binary("debug/samples.bin", contractual=False) as handle:
+            handle.write(b"human only")
+        run.publish(manifest={}, readme="# x\n")
+
+    assert json.loads((final_dir / "manifest.json").read_text())["file_inventory"] == []
+    assert (final_dir / "debug" / "samples.bin").read_bytes() == b"human only"
+
+
+def test_a_written_file_can_be_read_back_before_publishing(tmp_path: Path) -> None:
+    with AtomicRunDirectory(tmp_path / "run-0001") as run:
+        with run.open_binary("outputs/big.bin") as handle:
+            handle.write(b"abc")
+
+        assert run.written_path("outputs/big.bin").read_bytes() == b"abc"
+        with pytest.raises(RunDirectoryError, match="not been written"):
+            run.written_path("outputs/other.bin")
+
+
+def test_publishing_while_a_stream_is_open_is_refused(tmp_path: Path) -> None:
+    with (
+        AtomicRunDirectory(tmp_path / "run-0001") as run,
+        run.open_binary("outputs/big.bin") as out,
+    ):
+        out.write(b"abc")
+        with pytest.raises(RunDirectoryError, match="open"):
+            run.publish(manifest={}, readme="# x\n")
+
+
+def test_a_stream_that_failed_can_never_be_published(tmp_path: Path) -> None:
+    final_dir = tmp_path / "run-0001"
+
+    with AtomicRunDirectory(final_dir) as run:
+        with (
+            pytest.raises(RuntimeError, match="boom"),
+            run.open_binary("outputs/big.bin") as handle,
+        ):
+            handle.write(b"partial")
+            raise RuntimeError("boom")
+
+        with pytest.raises(RunDirectoryError, match="failed"):
+            run.publish(manifest={}, readme="# x\n")
+
+    assert not final_dir.exists()
+
+
+def test_a_streamed_path_follows_the_same_rules_as_a_written_one(tmp_path: Path) -> None:
+    with AtomicRunDirectory(tmp_path / "run-0001") as run:
+        run.write_text("outputs/a.txt", "a")
+        with (
+            pytest.raises(RunDirectoryError, match="already written"),
+            run.open_binary("outputs/a.txt"),
+        ):
+            pass
+        with pytest.raises(RunDirectoryError, match="relative path"), run.open_binary("../x"):
+            pass
+
+
 def _index_of(run_dir: Path) -> int | None:
     manifest = run_dir / "manifest.json"
     if not manifest.is_file():

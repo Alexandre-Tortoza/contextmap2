@@ -16,11 +16,15 @@ from contextmap.geometric_mapping import (
     ScanVoxelPolicy,
     geometry_id_for,
     geometry_index_of,
+    transform_trace_residual_m,
+    verify_transform_trace,
 )
 from contextmap.geometric_mapping.geometry_storage import PACKED_POINT
 from contextmap.geometric_mapping.serialization import (
     decode_scan_record,
+    decode_transform_trace,
     encode_scan_record,
+    encode_transform_trace,
 )
 from contextmap.ingestion import FrameId, SourceObservationId
 
@@ -198,6 +202,66 @@ def test_an_aggregated_map_reopens_with_its_rule() -> None:
 
     assert point.provenance.aggregation_rule == "scan-voxel-centroid-0.5m"
     assert PACKED_POINT.size == 64
+
+
+# --- Traces of persisted points -----------------------------------------------------------------
+
+
+def test_a_persisted_point_is_traced_through_its_chain_without_the_scan() -> None:
+    scans = make_scans(2)
+    accumulated, packed = accumulate(scans)
+    geometry = open_geometry(accumulated, packed)
+
+    trace = geometry.trace(_reference(3))
+
+    assert verify_transform_trace(trace) == []
+    assert str(trace.source_observation_id) == "scan-0001"
+    assert trace.source_point_index == 1
+    assert trace.map_coordinates_m == geometry.get(_reference(3)).coordinates_m
+    assert trace.transforms == scans[1].transform_chain
+
+
+def test_an_aggregated_point_is_traced_without_a_point_index() -> None:
+    accumulated, packed = accumulate(
+        make_scans(1, points=((1.1, 0.0, 0.0), (1.2, 0.0, 0.0))),
+        aggregation=ScanVoxelPolicy(cell_m=0.5),
+    )
+    trace = open_geometry(accumulated, packed).trace(_reference(0))
+
+    assert trace.source_point_index is None
+    assert verify_transform_trace(trace, tolerance_m=1e-6) == []
+    assert decode_transform_trace(_through_json(encode_transform_trace(trace))) == trace
+
+
+def test_a_reference_that_is_not_in_the_map_cannot_be_traced() -> None:
+    geometry = open_geometry(*accumulate(make_scans(1)))
+
+    with pytest.raises(KeyError):
+        geometry.trace(_reference(9))
+
+
+def test_the_residual_of_a_sound_trace_is_zero_and_of_a_tampered_one_is_its_distance() -> None:
+    geometry = open_geometry(*accumulate(make_scans(1)))
+    trace = geometry.trace(_reference(0))
+
+    assert transform_trace_residual_m(trace) == pytest.approx(0.0, abs=1e-9)
+    moved = dataclasses.replace(trace, map_coordinates_m=(1.5 + 3.0, 0.0 + 4.0, 0.25))
+    assert transform_trace_residual_m(moved) == pytest.approx(5.0, abs=1e-9)
+
+
+def test_closing_the_geometry_releases_the_payload() -> None:
+    accumulated, packed = accumulate(make_scans(1))
+    payload = bytearray(packed)
+    geometry = PackedGeometry(
+        geometric_map=accumulated.geometric_map, scans=accumulated.scans, records=payload
+    )
+
+    with pytest.raises(BufferError):
+        payload.append(0)  # enquanto a geometria está aberta, o payload exportado não redimensiona
+    geometry.close()
+    payload.append(0)
+
+    assert len(payload) == len(packed) + 1
 
 
 # --- Serialization -----------------------------------------------------------------------------

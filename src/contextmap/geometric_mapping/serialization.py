@@ -170,6 +170,24 @@ def decode_geometry_point(record: Mapping[str, Any]) -> GeometryPoint:
     )
 
 
+def encode_lookup_policy(policy: LookupPolicy) -> dict[str, Any]:
+    """Encode the pose lookup policy a map was built under."""
+    return {
+        "mode": policy.mode.value,
+        "max_time_delta_ns": policy.max_time_delta_ns,
+        "max_interpolation_gap_ns": policy.max_interpolation_gap_ns,
+    }
+
+
+def decode_lookup_policy(record: Mapping[str, Any]) -> LookupPolicy:
+    """Decode a pose lookup policy and revalidate it."""
+    return LookupPolicy(
+        mode=LookupMode(record["mode"]),
+        max_time_delta_ns=record["max_time_delta_ns"],
+        max_interpolation_gap_ns=record["max_interpolation_gap_ns"],
+    )
+
+
 def encode_geometric_map(geometric_map: GeometricMap) -> dict[str, Any]:
     """Encode a map's metadata; the points are never embedded."""
     provenance = geometric_map.provenance
@@ -199,11 +217,7 @@ def encode_geometric_map(geometric_map: GeometricMap) -> dict[str, Any]:
             if provenance.state_estimation_run_id is None
             else str(provenance.state_estimation_run_id),
             "calibration_identity": provenance.calibration_identity,
-            "pose_lookup": {
-                "mode": provenance.pose_lookup.mode.value,
-                "max_time_delta_ns": provenance.pose_lookup.max_time_delta_ns,
-                "max_interpolation_gap_ns": provenance.pose_lookup.max_interpolation_gap_ns,
-            },
+            "pose_lookup": encode_lookup_policy(provenance.pose_lookup),
             "configuration_fingerprint": provenance.configuration_fingerprint,
             "code_version": provenance.code_version,
         },
@@ -218,7 +232,6 @@ def decode_geometric_map(record: Mapping[str, Any]) -> GeometricMap:
         ValueError: If the record is malformed or violates the map contract.
     """
     provenance = record["provenance"]
-    lookup = provenance["pose_lookup"]
     index = record["spatial_index"]
     run_id = provenance["state_estimation_run_id"]
     return GeometricMap(
@@ -246,11 +259,7 @@ def decode_geometric_map(record: Mapping[str, Any]) -> GeometricMap:
             trajectory_id=TrajectoryId(provenance["trajectory_id"]),
             state_estimation_run_id=None if run_id is None else StateEstimationRunId(run_id),
             calibration_identity=provenance["calibration_identity"],
-            pose_lookup=LookupPolicy(
-                mode=LookupMode(lookup["mode"]),
-                max_time_delta_ns=lookup["max_time_delta_ns"],
-                max_interpolation_gap_ns=lookup["max_interpolation_gap_ns"],
-            ),
+            pose_lookup=decode_lookup_policy(provenance["pose_lookup"]),
             configuration_fingerprint=provenance["configuration_fingerprint"],
             code_version=provenance["code_version"],
         ),

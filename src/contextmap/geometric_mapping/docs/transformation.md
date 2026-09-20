@@ -63,7 +63,7 @@ T_map_body(t):      <referência da pose> + números
 P_map:              [18.41, 3.82, 1.24]
 ```
 
-`verify_transform_trace(trace)` reconstrói `P_map` a partir da própria cadeia e devolve os problemas encontrados (cadeia não contígua, ou `P_map` a mais de 1e-9 m do registrado). `encode_transform_trace`/`decode_transform_trace` (em `serialization.py`) persistem uma amostra de traces em JSON puro **sem duplicar a matriz por ponto**: a cadeia aparece uma vez por trace. Escolher e gravar a amostra é responsabilidade do artefato de mapa.
+`verify_transform_trace(trace)` reconstrói `P_map` a partir da própria cadeia e devolve os problemas encontrados (cadeia não contígua, ou `P_map` a mais de 1e-9 m do registrado); `transform_trace_residual_m(trace)` devolve essa distância. Um ponto agregado tem `source_point_index = None`. `encode_transform_trace`/`decode_transform_trace` (em `serialization.py`) persistem uma amostra de traces em JSON puro **sem duplicar a matriz por ponto**: a cadeia aparece uma vez por trace. Escolher e gravar a amostra é responsabilidade do artefato de mapa.
 
 ## Limitações
 
