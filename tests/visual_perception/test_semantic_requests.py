@@ -31,7 +31,7 @@ def _view(kind: VisualViewKind = VisualViewKind.TIGHT_CROP) -> SemanticVisualVie
     return SemanticVisualView(
         view_id="view-0001",
         kind=kind,
-        payload_reference="outputs/views/region-0007-tight.jpg",
+        payload_reference="outputs/semantic-views/region-0007-tight.jpg",
         source_observation_id=SOURCE_ID,
         region_id=None if kind is VisualViewKind.FULL_FRAME else REGION_ID,
         sha256="0" * 64,
@@ -75,7 +75,7 @@ def test_request_makes_scene_context_features_and_metadata_explicit() -> None:
             ),
         ),
         scene_context_reference=SemanticEvidenceReference(
-            evidence_type="scene_context", evidence_id="scene-request-0001"
+            evidence_type="scene_context", evidence_id=str(RESULT_ID)
         ),
         supporting_metadata=(SemanticRequestMetadata(name="camera", value="front"),),
     )
@@ -103,12 +103,24 @@ def test_request_rejects_invalid_scene_region_scope_before_execution() -> None:
                 SemanticVisualView(
                     view_id="wrong-region",
                     kind=VisualViewKind.MASKED_SUBJECT,
-                    payload_reference="outputs/views/wrong.png",
+                    payload_reference="outputs/semantic-views/wrong.png",
                     source_observation_id=SOURCE_ID,
                     region_id=RegionId("region-9999"),
                     sha256="1" * 64,
                 ),
             )
+        )
+
+
+def test_visual_view_rejects_non_artifact_path_before_backend_execution() -> None:
+    with pytest.raises(ValueError, match="outputs/semantic-views"):
+        SemanticVisualView(
+            view_id="unsafe-view",
+            kind=VisualViewKind.TIGHT_CROP,
+            payload_reference="../outside.jpg",
+            source_observation_id=SOURCE_ID,
+            region_id=REGION_ID,
+            sha256="0" * 64,
         )
 
 

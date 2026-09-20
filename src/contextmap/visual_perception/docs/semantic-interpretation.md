@@ -44,6 +44,7 @@ O construtor rejeita:
 
 - modo de cena com `region_id` ou modo de região sem `region_id`;
 - requests sem view visual;
+- `payload_reference` fora do namespace seguro `outputs/semantic-views/`;
 - view de outra observação ou região;
 - feature de região incompatível;
 - ids duplicados de views/features e metadata ambígua;
@@ -61,6 +62,14 @@ ela não é descartada silenciosamente.
 contexto selecionados. Com as identidades de prompt, schema e configuração,
 isso permite reconstruir o limite exato da chamada a partir do artifact do run,
 sem persistir objetos nativos de Qwen, Gemini ou Florence-2.
+
+Na finalização, referências a features precisam resolver por identidade,
+embedding space, scope e região no `PerceptionResult`, e o payload numérico
+correspondente deixa de ser opt-in: se a feature foi consumida semanticamente,
+ela precisa estar no feature store. `region_id` precisa existir nas regiões do
+resultado mesmo em abstention. `scene_context_reference` usa o
+`PerceptionResultId` proprietário como `evidence_id` e precisa resolver para um
+`SceneContext` persistido da mesma observação.
 
 O template e o parser versionados são definidos separadamente; este contrato
 apenas torna explícita a entrada que eles recebem.

@@ -66,6 +66,13 @@ Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.
 
 Antes de publicar, o writer também exige que cada `SemanticInterpretationExecution` resolva para exatamente um `PerceptionResult` por `perception_result_id` e observação. Todas as `parsed.claims` precisam estar materializadas nesse resultado e o `parsed.scene_context`, quando presente, precisa coincidir integralmente com o contexto persistido.
 
+Essa reconciliação inclui inputs mesmo quando a execução abstém: `region_id`
+deve resolver em `regions`; cada `visual_feature` deve coincidir com uma feature
+do resultado e possuir payload no feature store; e `scene_context_reference`
+deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
+`claim_count` soma tanto `PerceptionResult.claims` quanto as claims aninhadas em
+`SceneContext`.
+
 ## Leitura isolada, sem `runs.json`
 
 `PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados e registros de execução contratuais; `debug/` não é dependência de leitura. `runs.json` nunca é necessário para abrir ou entender um run individual e pode ser reconstruído do zero a qualquer momento a partir dos manifests.

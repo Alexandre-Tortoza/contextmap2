@@ -43,7 +43,7 @@ def _request(mode: SemanticInterpretationMode) -> SemanticInterpretationRequest:
                     if region_id is not None
                     else VisualViewKind.FULL_FRAME
                 ),
-                payload_reference="outputs/views/input.jpg",
+                payload_reference="outputs/semantic-views/input.jpg",
                 source_observation_id=SourceObservationId("frame-0124"),
                 region_id=region_id,
                 sha256="0" * 64,

@@ -272,7 +272,7 @@ def test_assemble_perception_result_materializes_semantic_execution() -> None:
             SemanticVisualView(
                 view_id="view-0001",
                 kind=VisualViewKind.TIGHT_CROP,
-                payload_reference="outputs/views/region-0001.jpg",
+                payload_reference="outputs/semantic-views/region-0001.jpg",
                 source_observation_id=SourceObservationId("frame-0124"),
                 region_id=RegionId("region-0001"),
                 sha256="0" * 64,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any, NewType
 
 from contextmap.ingestion import SourceObservationId
@@ -53,6 +54,18 @@ class SemanticVisualView:
             raise ValueError("visual view id must not be empty")
         if not self.payload_reference.strip():
             raise ValueError("visual view payload_reference must not be empty")
+        payload_path = PurePosixPath(self.payload_reference)
+        if (
+            payload_path.is_absolute()
+            or ".." in payload_path.parts
+            or payload_path.as_posix() != self.payload_reference
+            or payload_path.parts[:2] != ("outputs", "semantic-views")
+            or len(payload_path.parts) < 3
+        ):
+            raise ValueError(
+                "visual view payload_reference must be a safe path below "
+                f"'outputs/semantic-views/': {self.payload_reference!r}"
+            )
         if self.kind is VisualViewKind.FULL_FRAME and self.region_id is not None:
             raise ValueError("full-frame visual view must not reference a region_id")
         if self.kind is not VisualViewKind.FULL_FRAME and self.region_id is None:
@@ -151,6 +164,11 @@ class SemanticInterpretationRequest:
         metadata_names = [item.name for item in self.supporting_metadata]
         if len(set(metadata_names)) != len(metadata_names):
             raise ValueError("semantic request metadata names must be unique")
+        if (
+            self.scene_context_reference is not None
+            and self.scene_context_reference.evidence_type != "scene_context"
+        ):
+            raise ValueError("scene_context_reference must have evidence_type='scene_context'")
 
     def evidence_references(self) -> tuple[SemanticEvidenceReference, ...]:
         """Return the complete canonical evidence identity set for this request."""
