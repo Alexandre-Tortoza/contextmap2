@@ -804,3 +804,25 @@ class SemanticScore:
             raise ValueError("calibrated_probability must be finite and in [0, 1]")
         if self.provenance.capability != "semantic_scorer":
             raise ValueError("semantic score provenance capability must be semantic_scorer")
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticSupport:
+    """Legacy normalized scorer evidence retained for downstream compatibility.
+
+    New semantic scorer adapters emit :class:`SemanticScore`, whose raw value keeps
+    its declared score semantics. This contract remains separate for existing
+    downstream evidence explicitly produced as normalized support in [0, 1];
+    raw cosine values must never be coerced into it implicitly.
+    """
+
+    claim_id: ClaimId
+    support_score: float
+    provenance: BackendProvenance
+
+    def __post_init__(self) -> None:
+        """Validate the normalized support value and scorer provenance."""
+        if not 0.0 <= self.support_score <= 1.0:
+            raise ValueError(f"support_score must be in [0, 1], got {self.support_score}")
+        if self.provenance.capability != "semantic_scorer":
+            raise ValueError("semantic support provenance capability must be semantic_scorer")
