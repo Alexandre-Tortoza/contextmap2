@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos de State Estimation em diante permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) e de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) também já existem; os demais, de Semantic Mapping em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
 
 ```mermaid
 flowchart LR
@@ -29,8 +29,10 @@ flowchart LR
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
     SS["SemanticScore"] --> SC
-    PR -. future association .-> SP["SpatialObservation<br/>planejado"]
-    SP --> FE["FusedEvidence<br/>planejado"]
+    SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
+    PE --> GR["GeometryPoint / GeometryReference / GeometricMap<br/>implementado"]
+    PR --> SP["SpatialObservation<br/>implementado"]
+    SP --> FE["FusedEvidence<br/>implementado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
 ```
 
@@ -47,11 +49,11 @@ flowchart LR
     PR --> CTX["SceneContext"]
     SUP["SemanticScore"] --> SC
 
-    SO -. futuro .-> PE["PoseEstimate"]
-    PE -. futuro .-> GM["GeometryReference"]
-    PR -. futuro .-> SP["SpatialObservation"]
-    GM -. futuro .-> SP
-    SP -. futuro .-> FE["FusedEvidence"]
+    SO --> PE["PoseEstimate"]
+    PE --> GM["GeometryReference"]
+    PR --> SP["SpatialObservation"]
+    GM --> SP
+    SP --> FE["FusedEvidence"]
     FE -. futuro .-> E["Entity"]
     E -. futuro .-> RE["ResolvedEntity"]
     RE -. futuro .-> REL["Relation"]
@@ -283,6 +285,8 @@ Representa pose dinâmica canônica em um timestamp.
 
 Deve declarar source/target frame explicitamente.
 
+Campos implementados:
+
 ```text
 PoseEstimate
 ├── estimate_id
@@ -290,10 +294,10 @@ PoseEstimate
 ├── parent_frame
 ├── child_frame
 ├── translation_m
-├── orientation
-├── uncertainty?
-├── validity
-└── provenance
+├── orientation              # quaternion unitário (x, y, z, w)
+├── validity                 # VALID | DEGRADED
+├── provenance               # source_observation_ids + conversions_applied
+└── covariance?              # 6x6; None quando o backend não reporta incerteza
 ```
 
 ### Regra de transform
@@ -306,19 +310,20 @@ Quando a notação `T_A_B` for usada, sua direção deve estar documentada no co
 
 Representa uma sequência canônica de poses.
 
-Inclui:
+Campos implementados:
 
 ```text
 trajectory_id
-reference/map frame
-body/child frame
-PoseEstimate[]
-time bounds
-lookup/interpolation policy
-quality/provenance
+reference_frame
+body_frame
+poses[]                  # timestamps estritamente crescentes, um único clock_id
+gaps[]                   # intervalos onde a interpolação não é confiável
+provenance               # backend/configuração, sequência, seleção, calibração, código
 ```
 
-Lookup derivado deve preservar quais poses deram origem ao resultado.
+`time_bounds` e `quality_summary()` são derivados das poses.
+
+Lookup derivado preserva quais poses deram origem ao resultado: `TrajectoryLookup` resolve `T_map_body(t)` por política explícita (`EXACT`, `NEAREST`, `INTERPOLATED`), devolve `ResolvedPose` com poses de origem, delta temporal e tolerância, ou `RejectedLookup` com o motivo. Uma pose interpolada carrega `provenance.derived_from` e nunca é confundida com uma pose estimada. Ver [lookup](../src/contextmap/state_estimation/docs/lookup.md).
 
 ## 12. `GeometryPoint`
 
@@ -410,6 +415,8 @@ Não representa:
 - final point label;
 - entity identity.
 
+A qualidade mensurável da observação (alcance, visibilidade, densidade de suporte, posição na imagem, alinhamento temporal e, quando há referência confiável, reprojeção) é um contrato separado, `ObservationQuality`, ligado à observação por identidade. Ela **não** é confiança semântica, similaridade de scorer nem peso de fusão, e não há um escalar combinado ([qualidade da observação](../src/contextmap/sensor_association/docs/quality.md)).
+
 ## 16. `PointRepresentation`
 
 Representa estrutura geométrica local em um `RepresentationSpace` explícito.
@@ -431,17 +438,20 @@ O suporte deve permitir reconstruir quais geometry refs participaram.
 
 `PointRepresentation` é um canal 3D, não `VisualFeature` e não `SemanticClaim`.
 
+Duas representações só são comparáveis quando o `representation_space_id` (o fingerprint do `RepresentationSpace`, que inclui checkpoint, normalização e a política de suporte) é igual; comparar espaços diferentes é um erro explícito.
+
 ## 17. `FusionSupport`
 
 Representa suporte espacial sobre o qual evidências podem ser acumuladas.
 
 ```text
 FusionSupport
-├── support_id
+├── fusion_support_id
+├── geometric_map_id
 ├── geometry_support[]
-├── bounds / centroid
-├── spatial_observation_refs[]
-├── time bounds
+├── spatial_observation_ids[]
+├── bounds / centroid_m
+├── time_bounds
 └── provenance
 ```
 
@@ -449,7 +459,9 @@ FusionSupport
 
 `FusionSupport` não implica same-object identity.
 
-Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion.
+Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion. Não há campo de label, classe, confiança nem identidade de objeto.
+
+Ver [`semantic_fusion/docs/contracts.md`](../src/contextmap/semantic_fusion/docs/contracts.md).
 
 ## 18. Evidence grouping
 
@@ -481,6 +493,8 @@ physical_observation_count = 1
 inference_result_count = 3
 ```
 
+No contrato, essa distinção é `EvidenceContribution.physical_observation_id` (chave de correlação) e `PhysicalObservationGroup`, que lista os resultados e execuções correlacionados de um frame. `FusedEvidence` expõe `physical_observation_count` e `inference_result_count` separadamente.
+
 ## 19. `FusedEvidence`
 
 Acumula evidências preservando hipóteses e conflitos.
@@ -488,17 +502,25 @@ Acumula evidências preservando hipóteses e conflitos.
 ```text
 FusedEvidence
 ├── fused_evidence_id
-├── fusion_support_ref
-├── contributing_observations[]
-├── hypotheses[]
-├── visual_feature_refs[]
+├── fusion_support_id
+├── physical_observation_groups[]
+├── contributions[]          (EvidenceContribution)
+├── hypotheses[]             (FusedHypothesis)
 ├── point_representation_refs[]
-├── ambiguity / uncertainty state
-├── temporal summary
-└── provenance
+├── uncertainty[]            (UncertaintyRecord)
+├── temporal_summary
+├── provenance
+├── channels[]               (ChannelProvenance)
+└── weighting                (QualityWeighting, só na política ciente de qualidade)
 ```
 
-Uma hypothesis fundida deve manter references para claims, scores e observações que a sustentam ou contradizem.
+Uma `EvidenceContribution` é uma vista: uma região de um frame físico interpretada por uma execução, com referências para claims, scores de scorer, features visuais, geometria e qualidade de observação. Não carrega `PointRepresentation`: estrutura estática pertence ao suporte e é listada uma vez em `point_representation_refs`, nunca por vista.
+
+Uma hypothesis fundida mantém references para claims e observações que a sustentam, contradizem ou deixam ambíguas (`HypothesisEvidence`, com `stance`, `role` e `SupportSignal` tipados). Um `SupportSignal` com `value=None` é evidência não pontuada, nunca zero.
+
+Qualidade de observação é uma dimensão de evidência separada, referenciada por `ObservationQualityRef`; ela não é confiança semântica, similaridade CLIP nem peso de fusão. `FusedEvidence` não tem vencedor, hipótese primária nem confiança combinada: ambiguidade, contradição, empate e evidência insuficiente são `UncertaintyRecord` com a evidência exata que os produziu, e uma abstenção (`unknown`) é um stance `ABSTAINING`, nunca evidência negativa.
+
+`channels` lista os canais de evidência que a política declarou, com as identidades que os alimentaram; dados de um canal só existem se o canal foi declarado. `weighting`, quando existe, traz os fatores por componente e por contribuição e, por hipótese, o suporte antes e depois da ponderação: é um peso de fusão, não uma confiança semântica nem uma probabilidade.
 
 ## 20. `Entity`
 

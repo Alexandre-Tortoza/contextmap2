@@ -111,7 +111,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion` e `visual_perception` já materializam os dois primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos/persistência/associação espacial/diagnostics/avaliação e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. Backends concretos de Feature Extraction ainda não estão integrados; as execuções reais de referência dos adapters semânticos permanecem pendentes em #77/#78. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` já materializam os sete primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação, além dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP, e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. As execuções reais de referência dos adapters semânticos permanecem pendentes em #77/#78. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
 
 ```mermaid
 flowchart LR
@@ -119,10 +119,24 @@ flowchart LR
     ING --> SA["SequenceArtifact"]
     SA --> VP["contextmap.visual_perception<br/>core + Region Discovery + Feature Extraction core +<br/>Semantic Interpretation boundary"]
     VP --> PRA["PerceptionRunArtifact"]
-    PRA -. contrato downstream futuro .-> NEXT["state_estimation / geometric_mapping /<br/>sensor_association / fusion / map"]
+    SA --> ST["contextmap.state_estimation<br/>contratos + lookup + preflight +<br/>ExternalPose / FAST-LIO"]
+    ST --> TRA["StateEstimationRunArtifact"]
+    SA --> GM["contextmap.geometric_mapping<br/>contratos + transformação + acumulação +<br/>acesso espacial"]
+    TRA --> GM
+    GM --> MAPA["GeometricMapArtifact"]
+    PRA --> SEN["contextmap.sensor_association<br/>SpatialObservation + câmera + visibilidade +<br/>máscara + features densas + qualidade"]
+    MAPA --> SEN
+    TRA --> SEN
+    SEN --> ASA["SensorAssociationRunArtifact"]
+    MAPA --> PTR["contextmap.point_representation<br/>contratos + suporte + PointEncoder +<br/>descritor determinístico + fronteira PTv3"]
+    PTR --> PTRA["PointRepresentationRunArtifact"]
+    ASA --> FUS["contextmap.semantic_fusion<br/>suporte + agrupamento + acumulação +<br/>incerteza + canais + qualidade"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact"]
+    FUSA -. contrato downstream futuro .-> NEXT["semantic_mapping / map"]
 ```
 
-A integração entre os dois módulos é feita exclusivamente pelas APIs públicas. `visual_perception` referencia identidades de observação e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`.
+A integração entre os módulos é feita exclusivamente pelas APIs públicas. `visual_perception` e `state_estimation` referenciam identidades de observação, calibração e sequência possuídas por Ingestion, sem importar adapters ROS ou detalhes de `sequence_artifact.py`. `geometric_mapping` consome `SequenceArtifact`, calibração e a trajetória de `state_estimation` pelas APIs públicas e devolve geometria por referência: nada a jusante copia XYZ. `sensor_association` consome a percepção, a trajetória e a geometria pelas APIs públicas e devolve `SpatialObservation`, que referencia geometria, features e claims por identidade em vez de copiá-los. `semantic_fusion` consome `SpatialObservation`, as claims e a estrutura 3D opcional pelas APIs públicas e devolve `FusedEvidence`, que mantém todas as hipóteses e a incerteza sem criar identidade de objeto; suas dependências diretas de `ingestion`, `geometric_mapping` e `state_estimation` são só identidades e o intervalo temporal, e estão declaradas em `tests/architecture/test_boundaries.py`.
 
 Documentação implementacional:
 
@@ -130,7 +144,12 @@ Documentação implementacional:
 - [Visual Perception](../src/contextmap/visual_perception/docs/README.md);
 - [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md);
 - [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md);
-- [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
+- [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md);
+- [State Estimation](../src/contextmap/state_estimation/docs/README.md);
+- [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md);
+- [Sensor Association](../src/contextmap/sensor_association/docs/README.md);
+- [Point Representation](../src/contextmap/point_representation/docs/README.md);
+- [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md).
 
 
 ## Ownership
@@ -228,6 +247,8 @@ entity_resolution ─────────────┼── artifact / Co
 spatial_relations ─────────────┘
 ```
 
+O grafo acima é conceitual e transitivo. O que o teste `tests/architecture/test_boundaries.py` autoriza são imports diretos da API pública do produtor. `semantic_fusion` importa, além de `sensor_association`, `point_representation` e `visual_perception`, identidades de `geometric_mapping` (`GeometryReference`, `Bounds3D`) e `ingestion` (`SourceObservationId`) e o intervalo temporal `TimeBounds` de `state_estimation`, apenas como tipos: não usa a lógica dessas capabilities.
+
 `runtime` depende das capabilities para compô-las. Capabilities nunca dependem de `runtime`.
 
 ## Data dependency não é import de backend
@@ -264,24 +285,24 @@ flowchart LR
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
 
-    D2["DINOv2"] -. planejado/integração separada .-> FE
-    D3["DINOv3"] -. planejado/integração separada .-> FE
-    CLIP["CLIP"] -. planejado/integração separada .-> FE
-    ACLIP["AlphaCLIP"] -. planejado/integração separada .-> FE
+    D2["DINOv2"] -->|implementado| FE
+    D3["DINOv3"] -->|implementado| FE
+    CLIP["CLIP"] -->|implementado| FE
+    ACLIP["AlphaCLIP"] -->|implementado| FE
     Q["Qwen"] -->|adapter canônico implementado| SI
     G["Gemini"] -->|adapter canônico implementado| SI
     F2 -. adapter semântico separado .-> SI
     CLIP -. scorer separado .-> SS
     ACLIP -. scorer separado .-> SS
-    EXT["ExternalPose"] -. planejado .-> SE
-    FL["FAST-LIO"] -. planejado .-> SE
-    DET["deterministic descriptor"] -. planejado .-> PE
-    PT["PTv3"] -. opcional .-> PE
+    EXT["ExternalPose"] -->|implementado| SE
+    FL["FAST-LIO"] -->|implementado,<br/>execução de referência pendente| SE
+    DET["deterministic descriptor"] -->|implementado| PE
+    PT["PTv3"] -->|fronteira implementada,<br/>execução real pendente| PE
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
 
-No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Semantic Interpretation possui `QwenSemanticInterpreter` e `GeminiSemanticInterpreter` implementando o mesmo boundary canônico, com runtime/client injetáveis, parsing/provenance compartilhados e testes determinísticos; a execução real controlada permanece em #77/#78. `visual_perception.pipeline` já conhece a capability `semantic_interpreter`, mas `CANONICAL_PRESET_V1` ainda usa temporariamente as operações legadas `scene_interpretation`/`region_interpretation` até existir uma política explícita de construção de request. `SemanticScorer` possui adapters CLIP/AlphaCLIP e está disponível como capability explícita do DAG, mas não integra `CANONICAL_PRESET_V1` automaticamente. Feature Extraction já possui contratos e infraestrutura backend-neutral, mas DINOv2, DINOv3, CLIP e AlphaCLIP continuam sem adapters integrados na `dev`; o enhancement também não possui backend aprendido nem faz parte do preset canônico. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) e [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction possui adapters DINOv2, DINOv3, CLIP e AlphaCLIP atrás do mesmo port; eles não são selecionados implicitamente pelo preset e o enhancement não possui backend aprendido nem faz parte do preset canônico. Semantic Interpretation possui `QwenSemanticInterpreter` e `GeminiSemanticInterpreter` implementando o mesmo boundary canônico, além do adapter Florence-2, com runtime/client injetáveis, parsing/provenance compartilhados e testes determinísticos; a execução real controlada permanece em #77/#78. `visual_perception.pipeline` conhece a capability `semantic_interpreter`, mas `CANONICAL_PRESET_V1` ainda usa temporariamente as operações legadas `scene_interpretation`/`region_interpretation` até existir uma política explícita de construção de request. `SemanticScorer` possui adapters CLIP/AlphaCLIP e está disponível como capability explícita do DAG, mas não integra `CANONICAL_PRESET_V1` automaticamente. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. `state_estimation` possui o port `StateEstimator` com os adapters `ExternalPose` e FAST-LIO, este com o processo isolado atrás de um `FastLioRunner`; a construção de ambos pertence ao `runtime`. `point_representation` possui o port `PointEncoder` com o descritor geométrico determinístico e a fronteira do PTv3, este atrás de um `PTv3Runtime` injetável que isola torch, CUDA e checkpoint; um backend aprendido nunca substitui o baseline por queda silenciosa, e a construção pertence ao `runtime`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) e [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
 
 ## Composition root
 

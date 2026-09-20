@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact`:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticFusionRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local e a Semantic Fusion acumula a evidência multi-vista sem criar identidade de objeto:
 
 ```mermaid
 flowchart LR
@@ -86,10 +86,24 @@ flowchart LR
     ING --> SEQ["SequenceArtifact"]
     SEQ --> VP["Visual Perception Core"]
     VP --> PRA["PerceptionRunArtifact"]
-    PRA -. próximo estágio ainda não integrado .-> FUT["State Estimation + Geometric Mapping +<br/>Sensor Association + downstream"]
+    SEQ --> ST["State Estimation"]
+    ST --> TRA["StateEstimationRunArtifact"]
+    SEQ --> GM["Geometric Mapping"]
+    TRA --> GM
+    GM --> MAPA["GeometricMapArtifact"]
+    PRA --> SA["Sensor Association"]
+    MAPA --> SA
+    TRA --> SA
+    SA --> ASA["SensorAssociationRunArtifact"]
+    MAPA --> PTR["Point Representation<br/>(opcional)"]
+    PTR --> PTRA["PointRepresentationRunArtifact"]
+    ASA --> FUS["Semantic Fusion"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact"]
+    FUSA -. próximo estágio ainda não integrado .-> FUT["Semantic Mapping<br/>+ downstream"]
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion e Visual Perception Core possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional) e Semantic Fusion possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -289,7 +303,7 @@ flowchart LR
 
 Region Discovery agora possui adapters concretos para SAM2, SAM3 e Florence-2, além de image preparation auditável, tiling/scale com validação da imagem materializada, remapeamento global, filtros/constraints, merge e diagnostics. O output do estágio continua sendo o `Region2D` canônico; candidatos e decisões intermediárias permanecem evidence/audit da execução. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/region-discovery.md).
 
-### Feature Extraction core implementado
+### Feature Extraction e backends implementados
 
 ```mermaid
 flowchart LR
@@ -304,9 +318,9 @@ flowchart LR
     DFM -. preset alternativo .-> ENH["FeatureResolutionEnhancement"]
 ```
 
-Feature Extraction já possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` já fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`.
+Feature Extraction possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`.
 
-Isso não equivale a declarar modelos concretos como suportados. DINOv2, DINOv3, CLIP e AlphaCLIP ainda não possuem adapters integrados na `dev`; o core e a CI usam fakes determinísticos para validar os contratos. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
+Os adapters concretos DINOv2 e DINOv3 produzem mapas densos nativos; CLIP produz features globais ou de região; AlphaCLIP produz features de região condicionadas por máscara. Todos ficam isolados em `visual_perception/backends/`, carregam runtimes de forma lazy e falham explicitamente sem fallback. A CI valida os contratos com runtimes determinísticos injetados, não a equivalência numérica de checkpoints reais. A seleção concreta ainda pertence à composition root. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
 
 Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [espaço de embedding](../src/contextmap/visual_perception/docs/embedding_space.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/feature_extraction.md).
 
@@ -327,7 +341,7 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP para `FeatureExtractor`;
+- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
 - backends reais de Semantic Interpretation;
 - semantic refinement;
@@ -369,54 +383,54 @@ Dependendo do backend:
 
 ### Backends
 
-Baseline inicial:
+Implementados atrás do port `StateEstimator`:
 
-- `ExternalPose`, normaliza uma pose externa canônica;
-- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend.
+- `ExternalPose`, valida e normaliza uma pose externa canônica; é o baseline de geometria;
+- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend, com o processo isolado atrás de um runner. Não há fallback de um backend para o outro. A execução de referência com o FAST-LIO instalado ainda está pendente.
 
 ### Contratos
 
-`PoseEstimate` deve declarar explicitamente:
+`PoseEstimate` declara explicitamente:
 
 ```text
-timestamp
+timestamp / clock_id
 parent_frame
 child_frame
-translation
-orientation
-optional uncertainty
+translation_m
+orientation (x, y, z, w)
+covariance?            # ausente quando o backend não a reporta
 validity
 provenance
 ```
 
-`Trajectory` reúne poses com frame de referência, bounds temporais e política de lookup.
+`Trajectory` reúne poses com frame de referência, frame do corpo, gaps registrados e provenance; limites de tempo e resumo de qualidade são derivados.
 
 ### Time alignment
 
 Downstream solicita pose no timestamp de uma observação através de uma política explícita:
 
 ```text
-exact
-nearest
-interpolated
-reject_if_gap_exceeds_tolerance
+EXACT
+NEAREST        (tolerância de distância ao redor da pose)
+INTERPOLATED   (tolerância opcional do intervalo entre as vizinhas)
 ```
 
-Uma pose interpolada preserva os estimates que a originaram.
+Rejeições (fora do intervalo, sem correspondência exata, tolerância excedida, interpolação através de um gap) são dados contáveis, nunca extrapolação silenciosa. Uma pose interpolada preserva os estimates que a originaram e é distinguível de uma pose estimada.
 
 ### Preflight
 
-Antes do estimator, validar:
+Antes do estimator, valida por capability:
 
-- frames;
-- extrinsics necessárias;
-- transform direction;
-- rotação válida;
-- units;
+- frames e extrínsecos necessários (frame graph estático com verificação de caminhos redundantes);
+- direção do transform e rotação válida;
 - clock domains;
-- calibration identity.
+- identidade da calibração.
+
+Uma capability posterior sem pré-requisitos (por exemplo, câmera sem modelo de intrínsecos) nunca bloqueia uma execução LiDAR-inertial: aparece como prontidão downstream. Um preflight `BLOCKED` impede que o estimador inicie e que um run seja persistido.
 
 Saída persistida: `StateEstimationRunArtifact`.
+
+Detalhes: [documentação de State Estimation](../src/contextmap/state_estimation/docs/README.md), [contratos](../src/contextmap/state_estimation/docs/contracts.md), [lookup](../src/contextmap/state_estimation/docs/lookup.md), [backends](../src/contextmap/state_estimation/docs/backends.md), [preflight](../src/contextmap/state_estimation/docs/preflight.md), [artifact](../src/contextmap/state_estimation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/state_estimation.md).
 
 ## 4. Geometric Mapping
 
@@ -496,6 +510,8 @@ A implementação concreta do índice é privada.
 
 Saída persistida: `GeometricMapArtifact`.
 
+Detalhes: [documentação de Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md), [contratos](../src/contextmap/geometric_mapping/docs/contracts.md), [correção de movimento](../src/contextmap/geometric_mapping/docs/motion-correction.md), [inputs](../src/contextmap/geometric_mapping/docs/inputs.md), [transformação](../src/contextmap/geometric_mapping/docs/transformation.md), [acumulação](../src/contextmap/geometric_mapping/docs/accumulation.md), [acesso espacial](../src/contextmap/geometric_mapping/docs/spatial-access.md), [artifact](../src/contextmap/geometric_mapping/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/geometric_mapping.md).
+
 ## 5. Sensor Association
 
 Sensor Association conecta a geometria persistente às evidências visuais de uma observação.
@@ -572,7 +588,9 @@ Region-level embeddings continuam associados à região, não são fingidos como
 
 `SpatialObservation` representa evidência visual ancorada em suporte 3D persistente.
 
-Saída persistida: `AssociationRunArtifact`.
+Saída persistida: `AssociationRunArtifact`, implementado como `SensorAssociationRunArtifact`.
+
+Detalhes: [documentação de Sensor Association](../src/contextmap/sensor_association/docs/README.md), [contratos](../src/contextmap/sensor_association/docs/contracts.md), [modelos de câmera](../src/contextmap/sensor_association/docs/camera_models.md), [cadeia de projeção](../src/contextmap/sensor_association/docs/projection_chain.md), [visibilidade](../src/contextmap/sensor_association/docs/visibility.md), [pertencimento à máscara](../src/contextmap/sensor_association/docs/membership.md), [amostragem densa](../src/contextmap/sensor_association/docs/dense_sampling.md), [qualidade da observação](../src/contextmap/sensor_association/docs/quality.md), [diagnósticos](../src/contextmap/sensor_association/docs/diagnostics.md), [artifact](../src/contextmap/sensor_association/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/sensor_association.md).
 
 ## 6. Point Representation, opcional
 
@@ -611,11 +629,15 @@ Opcional/experimental:
 
 PTv3 não é requisito automático do canonical pipeline. Seu uso deve ser justificado por avaliação/ablation.
 
+No estado atual, o descritor determinístico está implementado e o PTv3 tem apenas a **fronteira** (`PTv3PointEncoder` atrás de um `PTv3Runtime` injetável, sem torch nem pesos no ambiente de desenvolvimento): nenhuma execução real foi feita e a comparação contra `off` e contra o descritor, com custo e VRAM reais, continua pendente.
+
 ### Saída
 
 `PointRepresentation` + `RepresentationSpace`.
 
 Saída persistida: `PointRepresentationRunArtifact`.
+
+Detalhes: [documentação de Point Representation](../src/contextmap/point_representation/docs/README.md), [contratos](../src/contextmap/point_representation/docs/contracts.md), [extração de suporte](../src/contextmap/point_representation/docs/support-extraction.md), [execução](../src/contextmap/point_representation/docs/execution.md), [descritor geométrico](../src/contextmap/point_representation/docs/geometric-descriptor.md), [PTv3](../src/contextmap/point_representation/docs/ptv3.md), [artifact](../src/contextmap/point_representation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/point_representation.md).
 
 ## 7. Semantic Fusion
 
@@ -687,11 +709,22 @@ A primeira policy deve ser determinística e preservar:
 
 Não reduzir destrutivamente tudo a um único label.
 
+### Estado implementado
+
+- **Agrupamento por observação física** (`physical-observation-grouping-v1`) sobre uma seleção **explícita** de runs de percepção; a contagem de frames físicos, de resultados de inferência, de runs e de variantes de backend ficam separadas.
+- **`FusionSupport`** por sobreposição de geometria (`geometry-jaccard-support-v1`, limiares declarados e sem valores padrão); observações com pouca geometria vão para uma lista de excluídas explícita.
+- **Política baseline** (`baseline-evidence-accumulation-v1`): uma contribuição por observação espacial, hipóteses por chave de label tipográfica, stances (`SUPPORTING`, `CONFLICTING`, `AMBIGUOUS`, `ABSTAINING`) e sinais tipados, sem ranking e sem ponderar por qualidade.
+- **Incerteza reportada, nunca resolvida:** contradição, ambiguidade, empate e evidência insuficiente com a evidência exata; abstenção só para labels configurados; refinamentos (`pallet` / `wooden pallet`) **não** são reconhecidos.
+- **Canais tipados** (`semantic_claims`, `semantic_scores`, `visual_features`, `observation_quality`, `geometry_support`, `point_representation`) declarados pela política; um canal nunca é ativado só porque há dados.
+- **Política opcional ciente de qualidade** (`quality-aware-evidence-accumulation-v1`), com peso inspecionável e fator neutro registrado; **não** é o padrão e nenhuma decisão de adotá-la foi tomada.
+
 ### Saída
 
 `FusedEvidence`.
 
 Saída persistida: `SemanticFusionRunArtifact`.
+
+Detalhes: [documentação de Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [contratos](../src/contextmap/semantic_fusion/docs/contracts.md), [agrupamento](../src/contextmap/semantic_fusion/docs/grouping.md), [suporte](../src/contextmap/semantic_fusion/docs/support.md), [acumulação](../src/contextmap/semantic_fusion/docs/accumulation.md), [política ciente de qualidade](../src/contextmap/semantic_fusion/docs/quality-aware.md), [artifact](../src/contextmap/semantic_fusion/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_fusion.md).
 
 ## 8. Semantic Mapping
 

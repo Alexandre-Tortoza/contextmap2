@@ -2,10 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
-os resultados do pipeline. As implementações atuais cobrem Feature Extraction,
-Region Discovery e Semantic Interpretation por meio de relatórios
-determinísticos sobre contratos públicos de `visual_perception`.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais).
 
 ## O que este módulo explicitamente não possui
 
@@ -44,9 +41,55 @@ determinísticos sobre contratos públicos de `visual_perception`.
 - `compare_semantic_backends()` — exige exatamente os mesmos requests e
   variants para Qwen, Gemini e Florence-2.
 
+### State Estimation
+
+- `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
+- `MotionThresholds` — limiares de movimento fornecidos pelo perfil de referência; não há valores padrão.
+- `ReferenceTrajectory`/`ReferenceRole`/`ReferenceComparisonConfig`/`AlignmentMethod` — referência com papel declarado e protocolo de comparação explícito (associação, alinhamento, ATE, RPE).
+- `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
+- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
+- `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
+
+### Semantic Fusion
+
+- `evaluate_semantic_fusion()`/`SemanticFusionEvaluationReport` — relatório de um run de fusão persistido, com seções separadas: correlação, incerteza, canais, ponderação, recuperação da referência, estratos e custo, e a linhagem completa (`FusionLineage`).
+- `FusionStratificationProfile` — bordas das estratificações; não há valores padrão.
+- `ReferenceAnnotation` — rótulo de referência por observação espacial; ausência é "não aplicável".
+- `FusionArmRole`, `compare_semantic_fusion_reports()`/`SemanticFusionComparison` — comparação controlada de braços (baseline, ciente de qualidade e ablações de canais) sobre a mesma base de evidência, sem vencedor nem escore.
+- `encode_semantic_fusion_report()`/`encode_semantic_fusion_comparison()` — representação JSON com todas as identidades.
+
+### Sensor Association
+
+- `evaluate_sensor_association()`/`SensorAssociationEvaluationReport` — relatório estratificado de um run persistido, lido pelo leitor público, com a linhagem completa (`SensorAssociationLineage`).
+- `StratificationProfile` — bordas das faixas de alcance, visibilidade, densidade de suporte, distância à borda da imagem e ângulo de visada; não há valores padrão.
+- `StratificationReport`/`StratumReport` — observações particionadas por um fator mensurável, com o estrato `unavailable` explícito e contagem de **frames físicos** distintos.
+- `FeaturePathReport` — como cada canal de features densas (nativo ou melhorado) foi amostrado, com as fontes exatas do manifest.
+- `TimingReport`/`ReprojectionReport` — alinhamento temporal das poses e resíduos de reprojeção, só onde há referência confiável.
+- `compare_sensor_association_reports()`/`SensorAssociationComparison` — comparação controlada que rejeita tudo que não seja o caminho de features.
+- `encode_sensor_association_report()`/`encode_sensor_association_comparison()` — representação JSON com todas as identidades.
+
+### Geometric Mapping
+
+- `evaluate_geometric_mapping()`/`GeometricMappingEvaluationReport` — relatório de um mapa persistido, com seções independentes: `GeometricMappingStructureReport`, `GeometricMappingTraceReport`, `ExpectedPointCheck`, `MapDensityReport`, `MapRangeReport`, `MapBoundsReport`, `ScanOverlapReport`, `ReferenceGeometryReport` e `GeometricMappingCostReport`.
+- `GeometricMappingProtocol` — todas as decisões de amostragem e todos os limiares, fornecidos pelo perfil; sem valores padrão.
+- `ExpectedPoint` — ponto de origem com posição global conhecida independentemente do mapeamento.
+- `ReferenceGeometry`/`GeometryReferenceRole` — nuvem com papel declarado; um `.pcd` nunca é referência pelo nome; sem alinhamento (`alignment: "none"`).
+- `evaluate_round_trip()`/`RoundTripReport` — o mapa construído contra o reaberto do artefato.
+- `compare_contractual_inventories()`/`ReproducibilityReport` — reprodutibilidade dos arquivos contratuais de dois runs.
+- `compare_geometric_mapping_reports()`/`GeometricMappingComparison` — comparação controlada que só deixa o mapeamento variar.
+- `encode_geometric_mapping_report()` — representação JSON com todas as identidades.
+
+### Point Representation
+
+- `RepresentationArm`/`RepresentationArmRole` — um braço da ablação (`off`, descritor determinístico, 3D aprendido, pré-treinado/destilado) com o encoder já construído.
+- `evaluate_representation_arm()`/`RepresentationArmReport` — cobertura, repetibilidade, distribuição de normas, sensibilidade a variações controladas, custo e downstream em seções separadas.
+- `GeometryVariation` e `translation_variation()`/`rotation_about_z_variation()`/`noise_variation()`/`subsample_variation()` — variações reproduzíveis da geometria, sem modificar a original.
+- `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
+- `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
+
 ## Módulos consumidos
 
-`contextmap.ingestion` para a identidade da observação física e `contextmap.visual_perception` exclusivamente por sua API pública.
+`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
 
 ## Módulos que consomem este
 
@@ -59,5 +102,10 @@ Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar 
 - [`region-discovery.md`](region-discovery.md) — referência, métricas geométricas, diagnósticos, custo e comparação controlada de Region Discovery.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — convenção
   open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
+- [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
+- [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
+- [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
+- [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

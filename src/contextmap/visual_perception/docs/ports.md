@@ -18,11 +18,11 @@ flowchart LR
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
     F2 -. adapter planejado .-> SI
-    D2["DINOv2"] -. adapter planejado .-> FE
-    D3["DINOv3"] -. adapter planejado .-> FE
-    CLIP["CLIP"] -. adapter planejado .-> FE
+    D2["DINOv2"] -->|implementado| FE
+    D3["DINOv3"] -->|implementado| FE
+    CLIP["CLIP"] -->|implementado| FE
     CLIP -. adapter planejado .-> SS
-    ACLIP["AlphaCLIP"] -. adapter planejado .-> FE
+    ACLIP["AlphaCLIP"] -->|implementado| FE
     ACLIP -. adapter planejado .-> SS
     QWEN["Qwen"] -->|adapter canônico implementado| SI
     GEMINI["Gemini"] -->|adapter canônico implementado| SI

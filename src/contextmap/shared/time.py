@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 _MAX_NANOSECONDS = 999_999_999
 
@@ -61,3 +63,35 @@ class SourceTimestamp:
             precision loss.
         """
         return self.seconds * 1_000_000_000 + self.nanoseconds
+
+    def to_record(self) -> dict[str, Any]:
+        """Return a plain, JSON-serializable record of this timestamp.
+
+        Returns:
+            ``{"seconds", "nanoseconds", "clock_id"}``; the exact integers, so
+            no precision is lost and the clock domain travels with the value.
+        """
+        return {
+            "seconds": self.seconds,
+            "nanoseconds": self.nanoseconds,
+            "clock_id": self.clock_id,
+        }
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> SourceTimestamp:
+        """Rebuild a timestamp from a record produced by :meth:`to_record`.
+
+        Args:
+            record: The persisted record.
+
+        Returns:
+            The validated timestamp.
+
+        Raises:
+            ValueError: If ``nanoseconds`` is out of range.
+        """
+        return cls(
+            seconds=record["seconds"],
+            nanoseconds=record["nanoseconds"],
+            clock_id=record["clock_id"],
+        )

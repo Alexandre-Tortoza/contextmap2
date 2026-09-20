@@ -8,9 +8,10 @@ see ``docs/shared-primitives.md``. See
 conventions (transform direction, quaternion order, handedness) and worked
 examples.
 
-Pinhole and fisheye cameras are represented by two distinct, non-lossy
-types (:class:`PinholeCameraModel`, :class:`FisheyeCameraModel`) instead of
-forcing fisheye distortion into a pinhole-shaped record. Dynamic transforms
+Pinhole, fisheye and unified omnidirectional (MEI) cameras are represented
+by distinct, non-lossy types (:class:`PinholeCameraModel`,
+:class:`FisheyeCameraModel`, :class:`MeiCameraModel`) instead of forcing one
+distortion model into another's record. Dynamic transforms
 (a moving robot's pose over time) never belong here: only *static* rigid
 transforms between sensor/body frames are calibration; a moving frame's
 pose over time is an :class:`~contextmap.ingestion.models.ExternalPoseMeasurement`
@@ -108,18 +109,52 @@ class FisheyeCameraModel:
     distortion_coefficients: tuple[float, float, float, float]
 
 
-CameraModel = PinholeCameraModel | FisheyeCameraModel
-"""Either camera model kind; no lossy conversion exists between them."""
+@dataclass(frozen=True, kw_only=True)
+class MeiCameraModel:
+    """Unified omnidirectional camera intrinsics (Geyer-Daniilidis / Mei).
+
+    The model first projects a point through a unit sphere whose center is
+    shifted by ``xi`` along the optical axis, then applies radial and
+    tangential distortion on the normalized plane, then the generalized
+    projection matrix. This is the parameterization used by CamOdoCal and by
+    calibrations declared with ``model_type: MEI``.
+
+    Attributes:
+        width: Image width in pixels this calibration applies to.
+        height: Image height in pixels this calibration applies to.
+        fx: Generalized focal length along x (``gamma1``), in pixels.
+        fy: Generalized focal length along y (``gamma2``), in pixels.
+        cx: Principal point x (``u0``), in pixels.
+        cy: Principal point y (``v0``), in pixels.
+        xi: Mirror parameter, dimensionless and not negative. ``0`` degenerates
+            to a distorted pinhole; values above ``1`` describe a field of view
+            wider than a hemisphere.
+        distortion_coefficients: ``(k1, k2, p1, p2)``: two radial and two
+            tangential coefficients, applied on the normalized plane.
+    """
+
+    width: int
+    height: int
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    xi: float
+    distortion_coefficients: tuple[float, float, float, float]
+
+
+CameraModel = PinholeCameraModel | FisheyeCameraModel | MeiCameraModel
+"""Any camera model kind; no lossy conversion exists between them."""
 
 
 def camera_model_kind(model: CameraModel) -> str:
-    """Return ``"pinhole"`` or ``"fisheye"`` for a camera model.
+    """Return ``"pinhole"``, ``"fisheye"`` or ``"mei"`` for a camera model.
 
     Args:
-        model: A pinhole or fisheye camera model.
+        model: A pinhole, fisheye or unified omnidirectional camera model.
 
     Returns:
-        ``"pinhole"`` or ``"fisheye"``.
+        ``"pinhole"``, ``"fisheye"`` or ``"mei"``.
 
     Raises:
         TypeError: If ``model`` is not a recognized camera model type.
@@ -128,6 +163,8 @@ def camera_model_kind(model: CameraModel) -> str:
         return "pinhole"
     if isinstance(model, FisheyeCameraModel):
         return "fisheye"
+    if isinstance(model, MeiCameraModel):
+        return "mei"
     raise TypeError(f"unsupported camera model type: {type(model)!r}")
 
 
@@ -317,8 +354,13 @@ def _validate_camera_model(calibration_id: CalibrationReferenceId, model: Camera
     problems: list[str] = []
     if model.width <= 0 or model.height <= 0:
         problems.append(f"{calibration_id}: width and height must be positive")
+    for name in ("fx", "fy", "cx", "cy"):
+        if not math.isfinite(getattr(model, name)):
+            problems.append(f"{calibration_id}: {name} must be finite")
     if model.fx <= 0 or model.fy <= 0:
         problems.append(f"{calibration_id}: fx and fy must be positive")
+    if not all(math.isfinite(value) for value in model.distortion_coefficients):
+        problems.append(f"{calibration_id}: distortion coefficients must be finite")
 
     if isinstance(model, PinholeCameraModel):
         expected = _PLUMB_BOB_COEFFICIENT_COUNTS[model.distortion_model]
@@ -333,6 +375,17 @@ def _validate_camera_model(calibration_id: CalibrationReferenceId, model: Camera
             f"{calibration_id}: fisheye model requires exactly 4 distortion coefficients, "
             f"got {len(model.distortion_coefficients)}"
         )
+    elif isinstance(model, MeiCameraModel):
+        if len(model.distortion_coefficients) != 4:
+            problems.append(
+                f"{calibration_id}: mei model requires exactly 4 distortion coefficients "
+                f"(k1, k2, p1, p2), got {len(model.distortion_coefficients)}"
+            )
+        if not math.isfinite(model.xi) or model.xi < 0:
+            problems.append(
+                f"{calibration_id}: mei mirror parameter xi must be finite and not negative, "
+                f"got {model.xi!r}"
+            )
 
     return problems
 
@@ -352,6 +405,8 @@ def _encode_camera_model(model: CameraModel | None) -> dict[str, Any] | None:
     }
     if isinstance(model, PinholeCameraModel):
         record["distortion_model"] = model.distortion_model.value
+    if isinstance(model, MeiCameraModel):
+        record["xi"] = model.xi
     return record
 
 
@@ -379,6 +434,18 @@ def _decode_camera_model(record: dict[str, Any] | None) -> CameraModel | None:
             cx=record["cx"],
             cy=record["cy"],
             distortion_coefficients=(x, y, z, w),
+        )
+    if record["kind"] == "mei":
+        k1, k2, p1, p2 = record["distortion_coefficients"]
+        return MeiCameraModel(
+            width=record["width"],
+            height=record["height"],
+            fx=record["fx"],
+            fy=record["fy"],
+            cx=record["cx"],
+            cy=record["cy"],
+            xi=record["xi"],
+            distortion_coefficients=(k1, k2, p1, p2),
         )
     raise CalibrationError(f"unknown camera model kind: {record['kind']!r}")
 
