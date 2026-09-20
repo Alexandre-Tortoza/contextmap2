@@ -20,16 +20,17 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = []
-
-[project.optional-dependencies]
 # numpy is pinned below 2.4 because 2.4+ ships stub files using PEP 695
 # `type` aliases, which mypy cannot parse while targeting python_version
 # 3.11 (see [tool.mypy] below). Revisit once the project's floor moves to
 # 3.12+ or mypy's stub handling improves.
+dependencies = [
+  "numpy<2.4",
+]
+
+[project.optional-dependencies]
 ros1 = [
   "rosbags>=0.9,<1",
-  "numpy<2.4",
 ]
 dev = [
   "build>=1.6.1",
@@ -39,7 +40,6 @@ dev = [
   "pytest-cov>=7.1.0",
   "ruff>=0.6",
   "rosbags>=0.9,<1",
-  "numpy<2.4",
 ]
 
 [tool.setuptools]
