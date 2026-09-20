@@ -27,6 +27,7 @@ from contextmap.visual_perception import (
     SemanticBackendDiagnostics,
     SemanticClaim,
     SemanticConfidencePolicy,
+    SemanticDebugLevel,
     SemanticEvidenceReference,
     SemanticFeatureReference,
     SemanticInferenceProvenance,
@@ -45,7 +46,9 @@ from contextmap.visual_perception import (
     execute_stage_graph,
     parse_semantic_response,
     rebuild_run_registry,
+    redact_semantic_secrets,
     render_semantic_prompt,
+    write_semantic_audit,
 )
 
 _PROVENANCE = BackendProvenance(
@@ -86,7 +89,11 @@ def _result(
 
 
 def _write_run(
-    tmp_path: Path, *, run_index: int = 1, sequence_name: str = "corridor-02"
+    tmp_path: Path,
+    *,
+    run_index: int = 1,
+    sequence_name: str = "corridor-02",
+    semantic_debug_level: SemanticDebugLevel = SemanticDebugLevel.FULL,
 ) -> PerceptionRunWriter:
     writer = PerceptionRunWriter(
         workspace_root=tmp_path,
@@ -100,6 +107,7 @@ def _write_run(
         configuration_digest="sha256:test",
         selection_label="frames-0000-0010",
         profile_label="fake",
+        semantic_debug_level=semantic_debug_level,
     )
     return writer
 
@@ -348,6 +356,45 @@ def _add_semantic_outcome(
     )
 
 
+def test_semantic_debug_none_writes_no_human_diagnostics(tmp_path: Path) -> None:
+    paths = write_semantic_audit(
+        run_root=tmp_path,
+        execution=_semantic_execution(),
+        debug_level=SemanticDebugLevel.NONE,
+    )
+    assert paths == ()
+    assert not (tmp_path / "debug").exists()
+
+
+def test_semantic_full_debug_layout_is_machine_and_human_readable(tmp_path: Path) -> None:
+    execution = _semantic_execution()
+    paths = write_semantic_audit(
+        run_root=tmp_path,
+        execution=execution,
+        debug_level=SemanticDebugLevel.FULL,
+    )
+    root = tmp_path / "debug/40-semantic-interpretation/region-request-0001"
+    assert (root / "prompt.txt").read_text() == execution.rendered_prompt.text
+    assert (root / "raw-response.txt").read_text() == execution.raw_response
+    parsed = json.loads((root / "parsed-response.json").read_text())
+    assert parsed["claims"][0]["hypothesis"] == "pallet"
+    assert "debug/40-semantic-interpretation/region-request-0001/request.json" in paths
+
+
+def test_semantic_secret_redaction_is_recursive_without_redacting_usage_tokens() -> None:
+    redacted = redact_semantic_secrets(
+        {
+            "api_key": "do-not-persist",
+            "headers": {"Authorization": "Bearer secret"},
+            "output_tokens": 42,
+            "model": "gemini",
+        }
+    )
+    assert redacted["api_key"] == "[REDACTED]"
+    assert redacted["headers"]["Authorization"] == "[REDACTED]"
+    assert redacted["output_tokens"] == 42
+
+
 def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
     tmp_path: Path,
 ) -> None:
@@ -385,6 +432,22 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
     assert view_entry.content_hash == f"sha256:{request.visual_views[0].sha256}"
     reopened = PerceptionRunReader(run_dir).list_semantic_executions()
     assert reopened == [execution]
+    assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+
+def test_semantic_canonical_output_remains_reopenable_when_debug_is_disabled(
+    tmp_path: Path,
+) -> None:
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path, semantic_debug_level=SemanticDebugLevel.NONE)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    assert not (run_dir / "debug/40-semantic-interpretation").exists()
+    assert PerceptionRunReader(run_dir).list_semantic_executions() == [execution]
     assert PerceptionRunReader(run_dir).verify_integrity() == []
 
 

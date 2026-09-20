@@ -88,7 +88,7 @@ visual_perception/
 └── docs/
 ```
 
-`visual_perception/backends/` contém adapters concretos de Region Discovery (SAM2, SAM3 e Florence-2) e de Feature Extraction (DINOv2, DINOv3, CLIP e AlphaCLIP). Eles permanecem internos: a existência do diretório não torna qualquer modelo parte da API pública nem seleciona um backend automaticamente no preset canônico. Testes de backend usam runtimes determinísticos injetados; checkpoints reais continuam sujeitos a validação controlada na máquina de inferência.
+`visual_perception/backends/` contém adapters concretos de Region Discovery (SAM2, SAM3 e Florence-2), Feature Extraction (DINOv2, DINOv3, CLIP e AlphaCLIP), Semantic Interpretation (Qwen, Gemini e Florence-2) e semantic scoring (CLIP/AlphaCLIP). Eles permanecem internos: a existência do diretório não torna qualquer modelo parte da API pública nem seleciona um backend automaticamente no preset canônico. Testes de backend usam runtimes/clients determinísticos injetados; execuções reais que ainda não foram validadas continuam marcadas como pendentes na documentação da capability.
 
 Não é obrigatório criar `models.py`, `ports.py`, `service.py`, `backends/` ou `_internal/` antecipadamente. KISS e YAGNI continuam válidos.
 

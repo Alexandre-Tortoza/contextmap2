@@ -241,11 +241,52 @@ flowchart LR
 - `VisualFeature` com scopes `DENSE`, `GLOBAL` e `REGION`;
 - `SemanticClaim`, incluindo hipóteses `PRIMARY` e `ALTERNATIVE`;
 - `SceneContext`;
-- `SemanticSupport`, produzido por `SemanticScorer` sem mutar a claim;
+- `SemanticInterpretationRequest`, `SemanticVisualView` e `SemanticFeatureReference`;
+- `SemanticInterpretationExecution`, prompt renderizado, parser estruturado e policy explícita de confidence;
+- `SemanticScore`, produzido por `SemanticScorer` sem mutar a claim;
 - `PerceptionRun` e `PerceptionResult`;
 - `BackendProvenance`.
 
 `RegionId`, `FeatureId` e `ClaimId` são locais ao `PerceptionResult`. Reprocessar a mesma `SourceObservation` em outro run cria outro `PerceptionResult`; não cria uma nova observação física e não funde resultados anteriores.
+
+### Semantic Interpretation: boundary implementado
+
+O milestone de Semantic Interpretation materializa um boundary backend-neutral
+sem transformar uma classificação de frame em verdade persistente. O request
+canônico registra exatamente quais views, features, contexto e metadata foram
+selecionados; o output distingue resposta bruta, parsing e evidência canônica.
+
+```mermaid
+flowchart LR
+    E["views + optional features/context"] --> REQ["SemanticInterpretationRequest"]
+    REQ --> SI["SemanticInterpreter"]
+    SI --> EX["SemanticInterpretationExecution"]
+    EX --> CLAIM["SemanticClaim[] / SceneContext"]
+    EX --> AUDIT["request + prompt + raw response + diagnostics"]
+    CLAIM --> RESULT["PerceptionResult"]
+    AUDIT --> PRA["PerceptionRunArtifact"]
+    RESULT --> PRA
+```
+
+`SemanticVisualView` é content-addressed e precisa estar materializada no run
+artifact. Se uma `VisualFeature` for consumida semanticamente, seu payload
+também deixa de ser opcional para aquele run. `scene_context_reference`,
+`region_id` e outputs parseados são reconciliados com evidência persistida
+antes da finalização.
+
+Qwen e Gemini implementam o mesmo port `SemanticInterpreter` e usam o parser
+compartilhado com policy `UNSCORED_ONLY`, portanto confidence auto-relatada
+pelo VLM não vira score canônico. As execuções reais controladas de
+checkpoint/API continuam pendentes em #77/#78.
+
+A capability executável `semantic_interpreter` já existe em
+`visual_perception.pipeline`, recebendo um estágio-fonte `semantic_request`.
+Entretanto, `CANONICAL_PRESET_V1` ainda conserva temporariamente
+`scene_interpretation`/`region_interpretation`; migrar o preset exige definir
+explicitamente a política que constrói os requests, em vez de esconder essa
+seleção dentro de um backend.
+
+Detalhes: [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
 
 ### Region Discovery implementado
 
@@ -302,8 +343,8 @@ Os seguintes elementos aparecem na arquitetura alvo ou como variation points já
 
 - seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- backends reais de Semantic Interpretation;
-- integração de `SemanticScorer` como estágio do DAG;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; as execuções reais controladas de Qwen/Gemini continuam pendentes em #77/#78;
+- integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
 - conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
 
@@ -647,7 +688,7 @@ Agrupa `SpatialObservation` com suporte 3D suficientemente compatível para acum
 Podem participar, conforme policy/configuração:
 
 - `SemanticClaim`;
-- `SemanticSupport`;
+- `SemanticScore`;
 - visual feature references;
 - visibility/coverage;
 - optional `PointRepresentation`;

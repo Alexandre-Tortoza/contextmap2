@@ -26,7 +26,7 @@ from contextmap.visual_perception.models import (
     PreparedImage,
     Region2D,
     SemanticClaim,
-    SemanticSupport,
+    SemanticScore,
     VisualFeature,
 )
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
@@ -162,7 +162,7 @@ class SemanticScorer(Protocol):
     """Capability port: score semantic claims against compatible visual evidence.
 
     Scoring never mutates a claim; it produces separate
-    :class:`~contextmap.visual_perception.models.SemanticSupport` records.
+    :class:`~contextmap.visual_perception.models.SemanticScore` records.
     """
 
     def backend_provenance(self) -> BackendProvenance:
@@ -177,18 +177,17 @@ class SemanticScorer(Protocol):
     def score(
         self,
         claims: Sequence[SemanticClaim],
-        image: PreparedImage,
-        regions: Sequence[Region2D] = (),
-    ) -> Sequence[SemanticSupport]:
+        features: Sequence[VisualFeature],
+    ) -> Sequence[SemanticScore]:
         """Score claims against visual evidence.
 
         Args:
             claims: Claims to score.
-            image: The prepared image the claims were made about.
-            regions: Regions the claims may reference, when applicable.
+            features: Canonical global or region features to compare with the
+                claim hypotheses. Numerical payloads remain backend-internal.
 
         Returns:
-            One :class:`~contextmap.visual_perception.models.SemanticSupport`
-            per scored claim.
+            Zero or more explicit semantic scores. A claim with no compatible
+            feature remains unscored; no zero-valued placeholder is created.
         """
         ...
