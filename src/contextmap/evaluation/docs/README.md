@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery (relatórios determinísticos sobre contratos públicos de `visual_perception`) e State Estimation (relatórios sobre `Trajectory` e seus artifacts).
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery (relatórios determinísticos sobre contratos públicos de `visual_perception`), State Estimation (relatórios sobre `Trajectory` e seus artifacts) e Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos).
 
 ## O que este módulo explicitamente não possui
 
@@ -40,9 +40,17 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
 - `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
 
+### Point Representation
+
+- `RepresentationArm`/`RepresentationArmRole` — um braço da ablação (`off`, descritor determinístico, 3D aprendido, pré-treinado/destilado) com o encoder já construído.
+- `evaluate_representation_arm()`/`RepresentationArmReport` — cobertura, repetibilidade, distribuição de normas, sensibilidade a variações controladas, custo e downstream em seções separadas.
+- `GeometryVariation` e `translation_variation()`/`rotation_about_z_variation()`/`noise_variation()`/`subsample_variation()` — variações reproduzíveis da geometria, sem modificar a original.
+- `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
+- `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
+
 ## Módulos consumidos
 
-`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception` e `contextmap.state_estimation`, exclusivamente por suas APIs públicas.
+`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping` e `contextmap.point_representation`, exclusivamente por suas APIs públicas.
 
 ## Módulos que consomem este
 
@@ -53,6 +61,7 @@ Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar 
 - [`feature_extraction.md`](feature_extraction.md) — protocolo, invariantes, fixtures determinísticas e trade-offs da avaliação de features.
 - [`../../visual_perception/docs/feature-extraction.md`](../../visual_perception/docs/feature-extraction.md) — visão do core produtor que esta avaliação mede.
 - [`region-discovery.md`](region-discovery.md) — referência, métricas geométricas, diagnósticos, custo e comparação controlada de Region Discovery.
+- [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.
