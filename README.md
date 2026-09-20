@@ -14,7 +14,10 @@ flowchart LR
     B --> C["SequenceArtifact<br/>implementado"]
     C --> D["Visual Perception Core<br/>implementado"]
     D --> E["PerceptionRunArtifact<br/>implementado"]
-    E -. próximo boundary .-> F["State Estimation + Geometric Mapping +<br/>Sensor Association + Fusion<br/>planejados"]
+    C --> S["State Estimation<br/>implementado"]
+    S --> T["StateEstimationRunArtifact<br/>implementado"]
+    E -. próximo boundary .-> F["Geometric Mapping +<br/>Sensor Association + Fusion<br/>planejados"]
+    T -.-> F
     F --> G["ContextMapArtifact<br/>alvo"]
 ```
 

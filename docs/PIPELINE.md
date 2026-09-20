@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact`:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `PerceptionRunArtifact` e `StateEstimationRunArtifact`, os dois branches que saem da Ingestion:
 
 ```mermaid
 flowchart LR
@@ -86,10 +86,13 @@ flowchart LR
     ING --> SEQ["SequenceArtifact"]
     SEQ --> VP["Visual Perception Core"]
     VP --> PRA["PerceptionRunArtifact"]
-    PRA -. próximo estágio ainda não integrado .-> FUT["State Estimation + Geometric Mapping +<br/>Sensor Association + downstream"]
+    SEQ --> ST["State Estimation"]
+    ST --> TRA["StateEstimationRunArtifact"]
+    PRA -. próximo estágio ainda não integrado .-> FUT["Geometric Mapping + Sensor Association<br/>+ downstream"]
+    TRA -.-> FUT
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion e Visual Perception Core possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core e State Estimation possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -329,54 +332,54 @@ Dependendo do backend:
 
 ### Backends
 
-Baseline inicial:
+Implementados atrás do port `StateEstimator`:
 
-- `ExternalPose`, normaliza uma pose externa canônica;
-- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend.
+- `ExternalPose`, valida e normaliza uma pose externa canônica; é o baseline de geometria;
+- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend, com o processo isolado atrás de um runner. Não há fallback de um backend para o outro. A execução de referência com o FAST-LIO instalado ainda está pendente.
 
 ### Contratos
 
-`PoseEstimate` deve declarar explicitamente:
+`PoseEstimate` declara explicitamente:
 
 ```text
-timestamp
+timestamp / clock_id
 parent_frame
 child_frame
-translation
-orientation
-optional uncertainty
+translation_m
+orientation (x, y, z, w)
+covariance?            # ausente quando o backend não a reporta
 validity
 provenance
 ```
 
-`Trajectory` reúne poses com frame de referência, bounds temporais e política de lookup.
+`Trajectory` reúne poses com frame de referência, frame do corpo, gaps registrados e provenance; limites de tempo e resumo de qualidade são derivados.
 
 ### Time alignment
 
 Downstream solicita pose no timestamp de uma observação através de uma política explícita:
 
 ```text
-exact
-nearest
-interpolated
-reject_if_gap_exceeds_tolerance
+EXACT
+NEAREST        (tolerância de distância ao redor da pose)
+INTERPOLATED   (tolerância opcional do intervalo entre as vizinhas)
 ```
 
-Uma pose interpolada preserva os estimates que a originaram.
+Rejeições (fora do intervalo, sem correspondência exata, tolerância excedida, interpolação através de um gap) são dados contáveis, nunca extrapolação silenciosa. Uma pose interpolada preserva os estimates que a originaram e é distinguível de uma pose estimada.
 
 ### Preflight
 
-Antes do estimator, validar:
+Antes do estimator, valida por capability:
 
-- frames;
-- extrinsics necessárias;
-- transform direction;
-- rotação válida;
-- units;
+- frames e extrínsecos necessários (frame graph estático com verificação de caminhos redundantes);
+- direção do transform e rotação válida;
 - clock domains;
-- calibration identity.
+- identidade da calibração.
+
+Uma capability posterior sem pré-requisitos (por exemplo, câmera sem modelo de intrínsecos) nunca bloqueia uma execução LiDAR-inertial: aparece como prontidão downstream. Um preflight `BLOCKED` impede que o estimador inicie e que um run seja persistido.
 
 Saída persistida: `StateEstimationRunArtifact`.
+
+Detalhes: [documentação de State Estimation](../src/contextmap/state_estimation/docs/README.md), [contratos](../src/contextmap/state_estimation/docs/contracts.md), [lookup](../src/contextmap/state_estimation/docs/lookup.md), [backends](../src/contextmap/state_estimation/docs/backends.md), [preflight](../src/contextmap/state_estimation/docs/preflight.md), [artifact](../src/contextmap/state_estimation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/state_estimation.md).
 
 ## 4. Geometric Mapping
 

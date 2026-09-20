@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos de State Estimation em diante permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping em diante permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
 
 ```mermaid
 flowchart LR
@@ -29,6 +29,7 @@ flowchart LR
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
     SS["SemanticSupport"] --> SC
+    SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
     PR -. future association .-> SP["SpatialObservation<br/>planejado"]
     SP --> FE["FusedEvidence<br/>planejado"]
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
@@ -47,7 +48,7 @@ flowchart LR
     PR --> CTX["SceneContext"]
     SUP["SemanticSupport"] --> SC
 
-    SO -. futuro .-> PE["PoseEstimate"]
+    SO --> PE["PoseEstimate"]
     PE -. futuro .-> GM["GeometryReference"]
     PR -. futuro .-> SP["SpatialObservation"]
     GM -. futuro .-> SP
@@ -223,6 +224,8 @@ Representa pose dinâmica canônica em um timestamp.
 
 Deve declarar source/target frame explicitamente.
 
+Campos implementados:
+
 ```text
 PoseEstimate
 ├── estimate_id
@@ -230,10 +233,10 @@ PoseEstimate
 ├── parent_frame
 ├── child_frame
 ├── translation_m
-├── orientation
-├── uncertainty?
-├── validity
-└── provenance
+├── orientation              # quaternion unitário (x, y, z, w)
+├── validity                 # VALID | DEGRADED
+├── provenance               # source_observation_ids + conversions_applied
+└── covariance?              # 6x6; None quando o backend não reporta incerteza
 ```
 
 ### Regra de transform
@@ -246,19 +249,20 @@ Quando a notação `T_A_B` for usada, sua direção deve estar documentada no co
 
 Representa uma sequência canônica de poses.
 
-Inclui:
+Campos implementados:
 
 ```text
 trajectory_id
-reference/map frame
-body/child frame
-PoseEstimate[]
-time bounds
-lookup/interpolation policy
-quality/provenance
+reference_frame
+body_frame
+poses[]                  # timestamps estritamente crescentes, um único clock_id
+gaps[]                   # intervalos onde a interpolação não é confiável
+provenance               # backend/configuração, sequência, seleção, calibração, código
 ```
 
-Lookup derivado deve preservar quais poses deram origem ao resultado.
+`time_bounds` e `quality_summary()` são derivados das poses.
+
+Lookup derivado preserva quais poses deram origem ao resultado: `TrajectoryLookup` resolve `T_map_body(t)` por política explícita (`EXACT`, `NEAREST`, `INTERPOLATED`), devolve `ResolvedPose` com poses de origem, delta temporal e tolerância, ou `RejectedLookup` com o motivo. Uma pose interpolada carrega `provenance.derived_from` e nunca é confundida com uma pose estimada. Ver [lookup](../src/contextmap/state_estimation/docs/lookup.md).
 
 ## 12. `GeometryPoint`
 

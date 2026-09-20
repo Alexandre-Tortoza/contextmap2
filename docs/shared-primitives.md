@@ -10,11 +10,12 @@ As regras gerais de ownership e imports permanecem em [architecture.md](architec
 
 ## Estado atual de `contextmap.shared`
 
-Na `dev`, `shared` continua deliberadamente mínimo. A primitive transversal já materializada é `SourceTimestamp`; os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
+`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
 
 ```mermaid
 flowchart LR
-    SH["contextmap.shared<br/>SourceTimestamp"] --> ING["contextmap.ingestion"]
+    SH["contextmap.shared<br/>SourceTimestamp + geometry"] --> ING["contextmap.ingestion"]
+    SH --> SE["contextmap.state_estimation"]
     ING --> SO["SourceObservation"]
     SO --> VP["contextmap.visual_perception"]
     VP --> E["Region2D / VisualFeature /<br/>SemanticClaim / SemanticSupport"]
@@ -22,6 +23,28 @@ flowchart LR
 ```
 
 `FrameId`, `RigidTransform`, calibração e IDs de observação continuam hoje sob ownership de Ingestion. O fato de futuros módulos também precisarem de frames ou transforms não autoriza mover esses tipos para `shared` antes de existir um contrato transversal real.
+
+### Primitivas geométricas em `shared.geometry`
+
+Os aliases `Vector3` e `Quaternion` e as funções sobre quaternions entraram em `shared` porque atendem aos critérios abaixo:
+
+- **quem usa:** `state_estimation` (validação de `PoseEstimate.orientation`, frame graph e preflight, que compõem e invertem transforms), com `geometric_mapping` e `sensor_association` consumindo a mesma álgebra para compor `T_map_body(t)` com extrínsecos estáticos;
+- **mesma semântica:** quaternion `(x, y, z, w)`, unitário, sem reordenação em relação a `RigidTransform` e `ExternalPoseMeasurement` de Ingestion;
+- **owner natural:** nenhum; a álgebra de quaternions não pertence a uma capability de domínio;
+- **API pública:** apenas tuplas, sem NumPy ou biblioteca de robótica.
+
+`shared.geometry` cresce apenas quando uma issue tem consumidor real da nova função; tipos de domínio (`PoseEstimate`, `GeometryPoint`, `RigidTransform`) permanecem com seus owners.
+
+### Mecânica de run directory em `shared.run_directory`
+
+`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash, e o índice de run é monotônico por capability e sequência calculado a partir dos runs válidos no disco. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index` e `write_run_registry` implementam essas regras uma vez, sem conhecer o conteúdo de um run.
+
+- **quem usa:** `state_estimation` agora; `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` nas milestones seguintes, todos com a mesma regra de `ARTIFACTS.md`;
+- **owner natural:** nenhuma capability de domínio; a regra é global;
+- **API pública:** apenas `pathlib` e tipos primitivos, sem NumPy nem SDK;
+- **o que continua com cada capability:** quais arquivos existem, os campos do manifest e o que torna um run válido.
+
+Os writers de Ingestion e Visual Perception mantêm suas implementações próprias; unificá-los é uma refatoração posterior, separada, sem mudança de comportamento.
 
 ## Critérios para entrar em `shared`
 
