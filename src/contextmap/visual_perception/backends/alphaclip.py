@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.backends._feature_values import (
+    validate_and_normalize_feature_values,
+)
 from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
@@ -125,14 +128,16 @@ class AlphaClipConfig:
             raise ValueError("input_width and input_height must be positive")
         if self.view_policy not in {"full_image", "context_box"}:
             raise ValueError("view_policy must be full_image or context_box")
-        if self.context_padding_fraction < 0.0:
-            raise ValueError("context_padding_fraction must be non-negative")
+        if not math.isfinite(self.context_padding_fraction) or self.context_padding_fraction < 0.0:
+            raise ValueError("context_padding_fraction must be finite and non-negative")
         if self.view_policy == "full_image" and self.context_padding_fraction != 0.0:
             raise ValueError("context_padding_fraction must be zero for full_image")
         if self.image_interpolation != "bicubic":
             raise ValueError("image_interpolation must be bicubic")
         if self.mask_interpolation != "nearest":
             raise ValueError("mask_interpolation must be nearest")
+        if not self.payload_prefix:
+            raise ValueError("payload_prefix must not be empty")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -201,8 +206,8 @@ class AlphaClipNativeOutput:
         """Validate output rank and diagnostics."""
         if self.array.ndim != 2 or any(dimension <= 0 for dimension in self.array.shape):
             raise ValueError("array must have shape (request_count, projection_dimension)")
-        if self.elapsed_seconds < 0.0:
-            raise ValueError("elapsed_seconds must be non-negative")
+        if not math.isfinite(self.elapsed_seconds) or self.elapsed_seconds < 0.0:
+            raise ValueError("elapsed_seconds must be finite and non-negative")
         if self.peak_memory_bytes is not None and self.peak_memory_bytes < 0:
             raise ValueError("peak_memory_bytes must be non-negative")
 
@@ -334,8 +339,6 @@ class AlphaClipRegionFeatureBackend:
         self, image: PreparedImage, regions: Sequence[Region2D]
     ) -> AlphaClipExtraction:
         """Decode frozen masks, build views, run AlphaCLIP, and queue payloads."""
-        import numpy as np
-
         if not regions:
             raise AlphaClipInferenceError("AlphaCLIP requires at least one region")
         if any(not region.is_accepted for region in regions):
@@ -363,12 +366,11 @@ class AlphaClipRegionFeatureBackend:
                 f"runtime dtype {native.array.dtype!s} does not match "
                 f"precision {self._config.precision!r}"
             )
-        array = native.array
-        normalization = "none"
-        if self._config.l2_normalize:
-            norms = np.linalg.norm(array, axis=-1, keepdims=True)
-            array = np.divide(array, norms, out=np.zeros_like(array), where=norms != 0)
-            normalization = "l2"
+        array, normalization = validate_and_normalize_feature_values(
+            native.array,
+            l2_normalize=self._config.l2_normalize,
+            error_type=AlphaClipInferenceError,
+        )
 
         embedding_space = EmbeddingSpace(
             family="alphaclip",

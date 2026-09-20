@@ -207,6 +207,28 @@ def test_alphaclip_has_distinct_embedding_space_from_ordinary_clip() -> None:
     assert not hasattr(backend, "score")
 
 
+@pytest.mark.parametrize(
+    ("array", "message"),
+    [
+        (np.array([[1.0, np.inf]], dtype=np.float32), "finite"),
+        (np.zeros((1, 2), dtype=np.float32), "zero-norm"),
+    ],
+)
+def test_invalid_numerical_payload_is_rejected_before_persistence(
+    array: np.ndarray[Any, Any], message: str
+) -> None:
+    region = _region()
+    backend, _, sink = _backend(
+        masks={region.region_id: np.ones((2, 2), dtype=np.bool_)},
+        array=array,
+    )
+
+    with pytest.raises(AlphaClipInferenceError, match=message):
+        backend.extract_masked(_image(), (region,))
+
+    assert sink.calls == []
+
+
 def test_extract_port_returns_same_persisted_features_and_diagnostics() -> None:
     region = _region()
     backend, _, sink = _backend(
@@ -343,6 +365,16 @@ def test_region_count_must_match_runtime_output() -> None:
         backend.extract_masked(_image(), (region,))
 
 
+@pytest.mark.parametrize("elapsed_seconds", [float("nan"), float("inf")])
+def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) -> None:
+    with pytest.raises(ValueError, match="elapsed_seconds"):
+        AlphaClipNativeOutput(
+            array=np.ones((1, 2), dtype=np.float32),
+            elapsed_seconds=elapsed_seconds,
+            peak_memory_bytes=None,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -352,6 +384,9 @@ def test_region_count_must_match_runtime_output() -> None:
         ("precision", "int8"),
         ("view_policy", "mask_only"),
         ("mask_interpolation", "bilinear"),
+        ("context_padding_fraction", float("nan")),
+        ("context_padding_fraction", float("inf")),
+        ("payload_prefix", ""),
     ],
 )
 def test_invalid_config_is_rejected(field: str, value: object) -> None:

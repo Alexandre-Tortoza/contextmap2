@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.backends._feature_values import (
+    validate_and_normalize_feature_values,
+)
 from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
@@ -111,6 +114,8 @@ class DinoV2Config:
             raise ValueError("input_width must be positive")
         if self.input_height <= 0:
             raise ValueError("input_height must be positive")
+        if not self.payload_prefix:
+            raise ValueError("payload_prefix must not be empty")
         prefix = Path(self.payload_prefix)
         if prefix.is_absolute() or ".." in prefix.parts:
             raise ValueError("payload_prefix must be an artifact-relative path")
@@ -287,16 +292,13 @@ class DinoV2DenseFeatureBackend:
             DinoV2BackendError: For explicit dependency, device, model, or
                 inference failures from the runtime.
         """
-        import numpy as np
-
         native = self._runtime.infer(image)
         _validate_native_output(native, self._config)
-        array = native.array
-        normalization = "none"
-        if self._config.l2_normalize:
-            norms = np.linalg.norm(array, axis=-1, keepdims=True)
-            array = np.divide(array, norms, out=np.zeros_like(array), where=norms != 0)
-            normalization = "l2"
+        array, normalization = validate_and_normalize_feature_values(
+            native.array,
+            l2_normalize=self._config.l2_normalize,
+            error_type=DinoV2InferenceError,
+        )
 
         channels = int(array.shape[2])
         embedding_space = EmbeddingSpace(
@@ -383,6 +385,7 @@ class HuggingFaceDinoV2Runtime:
                     return_tensors="pt",
                     do_resize=True,
                     size={"height": self._config.input_height, "width": self._config.input_width},
+                    resample=self._image_module.Resampling.BICUBIC,
                     do_center_crop=False,
                 )
             pixel_values = inputs["pixel_values"].to(
@@ -488,7 +491,7 @@ def _configuration_fingerprint(config: DinoV2Config) -> str:
         "local_files_only": config.local_files_only,
         "l2_normalize": config.l2_normalize,
         "payload_prefix": config.payload_prefix,
-        "preprocessing": "huggingface_direct_resize_no_crop_v1",
+        "preprocessing": "huggingface_direct_bicubic_resize_no_crop_v1",
         "code_version": config.code_version,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -554,7 +557,7 @@ def _sampling_for(
         "model_input": {
             "width": native.model_input_width,
             "height": native.model_input_height,
-            "resize": "direct_bilinear_by_huggingface_processor",
+            "resize": "direct_bicubic_by_huggingface_processor",
             "center_crop": False,
         },
         "patch": {"width": native.patch_width, "height": native.patch_height},

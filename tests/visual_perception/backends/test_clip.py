@@ -185,6 +185,24 @@ def test_embedding_space_is_language_aligned_but_no_scoring_occurs() -> None:
     assert not hasattr(backend, "score")
 
 
+@pytest.mark.parametrize(
+    ("array", "message"),
+    [
+        (np.array([[np.nan, 1.0]], dtype=np.float32), "finite"),
+        (np.zeros((1, 2), dtype=np.float32), "zero-norm"),
+    ],
+)
+def test_invalid_numerical_payload_is_rejected_before_persistence(
+    array: np.ndarray[Any, Any], message: str
+) -> None:
+    backend, _, sink = _backend(scope=FeatureScope.GLOBAL, array=array)
+
+    with pytest.raises(ClipInferenceError, match=message):
+        backend.extract_visual(_image())
+
+    assert sink.calls == []
+
+
 def test_extract_port_returns_persisted_metadata_for_configured_scope() -> None:
     backend, _, sink = _backend(
         scope=FeatureScope.REGION,
@@ -277,6 +295,15 @@ def test_region_mode_requires_accepted_regions_and_matching_output_count() -> No
         wrong_count.extract_visual(_image(), (_region("region-a", x=0, y=0, width=2, height=2),))
 
 
+@pytest.mark.parametrize("elapsed_seconds", [float("nan"), float("inf")])
+def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) -> None:
+    with pytest.raises(ValueError, match="elapsed_seconds"):
+        ClipNativeOutput(
+            array=np.ones((1, 2), dtype=np.float32),
+            elapsed_seconds=elapsed_seconds,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -287,6 +314,9 @@ def test_region_mode_requires_accepted_regions_and_matching_output_count() -> No
         ("precision", "int8"),
         ("crop_policy", "mask"),
         ("context_padding_fraction", -0.1),
+        ("context_padding_fraction", float("nan")),
+        ("context_padding_fraction", float("inf")),
+        ("payload_prefix", ""),
     ],
 )
 def test_invalid_config_is_rejected(field: str, value: object) -> None:

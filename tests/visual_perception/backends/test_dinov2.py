@@ -275,6 +275,36 @@ def test_l2_normalization_is_explicit_and_deterministic() -> None:
     np.testing.assert_allclose(norms, np.ones((2, 3)), rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize(
+    ("array", "message"),
+    [
+        (np.full((2, 3, 4), np.nan, dtype=np.float32), "finite"),
+        (np.zeros((2, 3, 4), dtype=np.float32), "zero-norm"),
+    ],
+)
+def test_invalid_numerical_payload_is_rejected_before_persistence(
+    array: np.ndarray[Any, Any], message: str
+) -> None:
+    native = _native_output()
+    backend, _, sink = _backend(
+        runtime=FakeDinoV2Runtime(
+            DinoV2NativeOutput(
+                array=array,
+                model_input_width=native.model_input_width,
+                model_input_height=native.model_input_height,
+                patch_width=native.patch_width,
+                patch_height=native.patch_height,
+            )
+        ),
+        l2_normalize=message == "zero-norm",
+    )
+
+    with pytest.raises(DinoV2InferenceError, match=message):
+        backend.extract_dense(_image())
+
+    assert sink.calls == []
+
+
 def test_native_output_feeds_common_region_pooling_without_upsampling() -> None:
     backend, _, _ = _backend()
     extraction = backend.extract_dense(_image())
@@ -304,6 +334,7 @@ def test_native_output_feeds_common_region_pooling_without_upsampling() -> None:
         ({"device": "tpu"}, "device"),
         ({"precision": "int8"}, "precision"),
         ({"input_width": 0}, "input_width"),
+        ({"payload_prefix": ""}, "payload_prefix"),
     ],
 )
 def test_config_rejects_invalid_execution_identity(

@@ -36,7 +36,7 @@ Mesmo dimensionamento não torna este espaço compatível com DINOv3, CLIP ou ou
 
 ## Preprocessamento e transformação espacial
 
-O runtime Hugging Face faz resize direto e determinístico para `input_width × input_height`, sem center crop. O processor continua responsável pela conversão RGB, rescale e normalização esperados pelo checkpoint. O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`. O runtime remove CLS e a quantidade de register tokens declarada em `model.config.num_register_tokens` (zero quando o campo não existe). Essa contagem entra no `EmbeddingSpace.layer` e na identidade da transformação.
+O runtime Hugging Face faz resize bicúbico direto e determinístico para `input_width × input_height`, sem center crop. A interpolação é passada explicitamente ao processor e entra na identidade da transformação; não depende do default variável do checkpoint/SDK. O processor continua responsável pela conversão RGB, rescale e normalização esperados pelo checkpoint. O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`. O runtime remove CLS e a quantidade de register tokens declarada em `model.config.num_register_tokens` (zero quando o campo não existe). Essa contagem entra no `EmbeddingSpace.layer` e na identidade da transformação.
 
 Cada patch é mapeado de volta à imagem preparada por escala independente nos eixos X/Y. Origem, stride e suporte são persistidos em pixels da imagem preparada. A identidade da transformação inclui dimensões e transformações da `PreparedImage`, dimensões da entrada do modelo, política de resize, patch size e fingerprint da configuração.
 
@@ -54,6 +54,9 @@ Falhas não acionam fallback:
 - `DinoV2DeviceError` — device/precisão indisponível;
 - `DinoV2ModelLoadError` — checkpoint/revision não carregável;
 - `DinoV2InferenceError` — payload, preprocessamento, inferência ou shape nativo inválido.
+
+Valores não finitos e vetores de norma zero quando `l2_normalize=True` são
+rejeitados antes que qualquer payload seja entregue ao artifact writer.
 
 ## Validação desta implementação
 

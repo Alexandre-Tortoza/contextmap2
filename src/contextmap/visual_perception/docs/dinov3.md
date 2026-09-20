@@ -26,7 +26,7 @@ O `EmbeddingSpace.layer` é `last_hidden_state.patch_tokens_after_registers`, di
 
 ## Preprocessamento e sampling
 
-Como no adapter DINOv2, o processor faz resize direto configurado para `input_width × input_height`, sem center crop. O patch size vem da configuração real do modelo. Origem, stride e suporte de cada célula são mapeados por escala aos pixels da `PreparedImage`; dimensões, transformações anteriores, patch size, register count e fingerprint efetivo entram no `coordinate_transform_id`.
+O processor faz resize bilinear direto, passado explicitamente, para `input_width × input_height`, sem center crop. O patch size vem da configuração real do modelo. Origem, stride e suporte de cada célula são mapeados por escala aos pixels da `PreparedImage`; dimensões, transformações anteriores, patch size, register count e fingerprint efetivo entram no `coordinate_transform_id`.
 
 Resize direto pode distorcer aspect ratio se as dimensões configuradas não forem coerentes com a imagem preparada. Essa escolha é explícita, reproduzível e deve ser controlada pelo experimento.
 
@@ -40,6 +40,9 @@ Falhas são específicas e nunca acionam fallback:
 - `DinoV3DeviceError` — device/precisão indisponível;
 - `DinoV3ModelLoadError` — checkpoint/revision não carregável;
 - `DinoV3InferenceError` — erro de payload, preprocessamento, token count, shape ou inferência.
+
+Valores não finitos e vetores de norma zero quando `l2_normalize=True` falham
+antes da persistência.
 
 O espaço `family="dinov3"` não é compatível automaticamente com DINOv2, CLIP, AlphaCLIP ou outro checkpoint DINOv3, mesmo quando a dimensão coincide.
 

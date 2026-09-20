@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.backends._feature_values import (
+    validate_and_normalize_feature_values,
+)
 from contextmap.visual_perception.embedding_space import (
     EmbeddingSpace,
     embedding_space_fingerprint,
@@ -111,10 +114,12 @@ class ClipConfig:
             raise ValueError("input_width and input_height must be positive")
         if self.crop_policy not in {"tight_box", "context_box"}:
             raise ValueError("crop_policy must be tight_box or context_box")
-        if self.context_padding_fraction < 0.0:
-            raise ValueError("context_padding_fraction must be non-negative")
+        if not math.isfinite(self.context_padding_fraction) or self.context_padding_fraction < 0.0:
+            raise ValueError("context_padding_fraction must be finite and non-negative")
         if self.crop_policy == "tight_box" and self.context_padding_fraction != 0.0:
             raise ValueError("context_padding_fraction must be zero for tight_box")
+        if not self.payload_prefix:
+            raise ValueError("payload_prefix must not be empty")
         prefix = Path(self.payload_prefix)
         if prefix.is_absolute() or ".." in prefix.parts:
             raise ValueError("payload_prefix must be an artifact-relative path")
@@ -165,8 +170,8 @@ class ClipNativeOutput:
         """Validate output rank, dimensions, and timing."""
         if self.array.ndim != 2 or any(dimension <= 0 for dimension in self.array.shape):
             raise ValueError("array must have shape (view_count, projection_dimension)")
-        if self.elapsed_seconds < 0.0:
-            raise ValueError("elapsed_seconds must be non-negative")
+        if not math.isfinite(self.elapsed_seconds) or self.elapsed_seconds < 0.0:
+            raise ValueError("elapsed_seconds must be finite and non-negative")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -278,8 +283,6 @@ class ClipVisualFeatureBackend:
         self, image: PreparedImage, regions: Sequence[Region2D] = ()
     ) -> ClipExtraction:
         """Build explicit views, encode them, and queue canonical payloads."""
-        import numpy as np
-
         views, view_warnings = _build_views(image=image, regions=regions, config=self._config)
         native = self._runtime.encode(image, views)
         if native.array.shape[0] != len(views):
@@ -292,12 +295,11 @@ class ClipVisualFeatureBackend:
                 f"precision {self._config.precision!r}"
             )
 
-        array = native.array
-        normalization = "none"
-        if self._config.l2_normalize:
-            norms = np.linalg.norm(array, axis=-1, keepdims=True)
-            array = np.divide(array, norms, out=np.zeros_like(array), where=norms != 0)
-            normalization = "l2"
+        array, normalization = validate_and_normalize_feature_values(
+            native.array,
+            l2_normalize=self._config.l2_normalize,
+            error_type=ClipInferenceError,
+        )
         embedding_space = EmbeddingSpace(
             family="clip",
             model=self._config.checkpoint,
@@ -395,6 +397,7 @@ class HuggingFaceClipRuntime:
                     return_tensors="pt",
                     do_resize=True,
                     size={"height": self._config.input_height, "width": self._config.input_width},
+                    resample=self._image_module.Resampling.BICUBIC,
                     do_center_crop=False,
                 )
             pixel_values = inputs["pixel_values"].to(
@@ -560,6 +563,7 @@ def _configuration_fingerprint(config: ClipConfig) -> str:
         "l2_normalize": config.l2_normalize,
         "crop_policy": config.crop_policy,
         "context_padding_fraction": config.context_padding_fraction,
+        "preprocessing": "huggingface_direct_bicubic_resize_no_crop_v1",
         "payload_prefix": config.payload_prefix,
         "code_version": config.code_version,
     }

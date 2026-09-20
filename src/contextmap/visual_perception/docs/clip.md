@@ -37,9 +37,12 @@ O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. A identi
 
 ## Runtime Hugging Face
 
-O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz resize direto configurado sem center crop, chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
+O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz resize bicúbico direto configurado sem center crop, chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. A interpolação é explícita e não depende do default carregado pelo processor. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
 
 `local_files_only=True` é o default; nenhuma inferência baixa pesos implicitamente. Dependência, device, checkpoint e inferência possuem erros separados e não acionam fallback.
+
+O adapter rejeita valores não finitos e vetores nulos antes de declarar
+normalização L2 ou enfileirar o payload.
 
 ## Diagnósticos
 

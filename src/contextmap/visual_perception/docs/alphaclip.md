@@ -50,6 +50,9 @@ Antes de carregar, o runtime calcula SHA-256 combinado e compara com `checkpoint
 
 Cada vetor é enfileirado pelo sink compatível com `PerceptionRunWriter.add_feature_payload()` e reabre pelo `FeatureStoreReader` normal. `AlphaClipDiagnostics` preserva tempo, pico de memória quando disponível e warnings. A persistência consolidada de diagnóstico é escopo da issue #72.
 
+Valores não finitos e vetores de norma zero sob normalização L2 são rejeitados
+antes do sink. Durações não finitas também não são aceitas como diagnóstico.
+
 O composition root fornece `feature_stage_id`; seu SHA-256 participa do
 `FeatureId` e da referência de payload para impedir colisões com CLIP, DINO
 ou outro feature stage no mesmo `PerceptionResult`.

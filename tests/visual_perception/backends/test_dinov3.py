@@ -168,6 +168,35 @@ def test_same_input_and_config_are_deterministic_and_l2_is_explicit() -> None:
     assert first.dense_map.feature.normalization == "l2"
 
 
+@pytest.mark.parametrize(
+    ("array", "message"),
+    [
+        (np.full((2, 3, 4), np.inf, dtype=np.float32), "finite"),
+        (np.zeros((2, 3, 4), dtype=np.float32), "zero-norm"),
+    ],
+)
+def test_invalid_numerical_payload_is_rejected_before_persistence(
+    array: np.ndarray[Any, Any], message: str
+) -> None:
+    native = _native_output()
+    backend, _, sink = _backend(
+        output=DinoV3NativeOutput(
+            array=array,
+            model_input_width=native.model_input_width,
+            model_input_height=native.model_input_height,
+            patch_width=native.patch_width,
+            patch_height=native.patch_height,
+            register_token_count=native.register_token_count,
+        ),
+        l2_normalize=message == "zero-norm",
+    )
+
+    with pytest.raises(DinoV3InferenceError, match=message):
+        backend.extract_dense(_image())
+
+    assert sink.calls == []
+
+
 def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
     dense_backend, _, _ = _backend(feature_stage_id="dense_feature_extraction")
     dense_feature = dense_backend.extract_dense(_image()).dense_map.feature
@@ -231,6 +260,7 @@ def test_native_map_uses_common_region_pooling_without_backend_branch() -> None:
         ("device", "tpu"),
         ("precision", "int8"),
         ("input_height", 0),
+        ("payload_prefix", ""),
     ],
 )
 def test_invalid_config_is_rejected(field: str, value: object) -> None:
