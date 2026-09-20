@@ -32,7 +32,7 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 
 ## Estado materializado na `dev`
 
-A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os dois primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os três primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
 
 ```mermaid
 flowchart LR
@@ -40,10 +40,15 @@ flowchart LR
     ING --> SEQ["SequenceArtifact<br/>sequência canônica imutável"]
     SEQ --> VP["Visual Perception Core<br/>implementado"]
     VP --> PR["PerceptionRunArtifact"]
-    PR -. próximo boundary .-> SA["State Estimation / Geometric Mapping /<br/>Sensor Association e downstream<br/>planejados"]
+    SEQ --> ST["State Estimation<br/>implementado"]
+    ST --> TR["StateEstimationRunArtifact"]
+    PR -. próximo boundary .-> SA["Geometric Mapping / Sensor Association<br/>e downstream planejados"]
+    TR -.-> SA
 ```
 
 Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto e o core de Feature Extraction, incluindo compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Backends concretos de Feature Extraction ainda não estão integrados.
+
+State Estimation possui os contratos `PoseEstimate`/`Trajectory`, lookup temporal com interpolação auditável, frame graph estático e preflight de geometria, o port `StateEstimator` com os backends `ExternalPose` e FAST-LIO, o `StateEstimationRunArtifact` e o harness de avaliação em `evaluation`. A execução de referência com o FAST-LIO instalado ainda está pendente: o backend foi testado com um processo substituto, não com o binário real.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
