@@ -78,7 +78,7 @@ Um candidato semântico e a evidência exata por trás dele.
 
 - `label`: o texto proposto, verbatim (vocabulário aberto). Equivalência entre labels é decisão de política, nunca suposta.
 - `evidence`: `HypothesisEvidence` ordenadas por contribuição e claim, cada uma com `stance`, `role` e `signals`.
-- `EvidenceStance`: `SUPPORTING` (a claim propõe a hipótese), `CONFLICTING` (propõe uma hipótese incompatível para o mesmo suporte), `AMBIGUOUS` (mantida, com relação indecidida).
+- `EvidenceStance`: `SUPPORTING` (a claim propõe a hipótese), `CONFLICTING` (propõe uma hipótese incompatível para o mesmo suporte), `AMBIGUOUS` (mantida, com relação indecidida), `ABSTAINING` (uma abstenção, `unknown`: nem suporte nem evidência contra).
 - `role`: se o interpretador propôs a claim como `PRIMARY` ou `ALTERNATIVE`.
 - Toda hipótese tem ao menos uma evidência `SUPPORTING`. Não há probabilidade nem confiança única.
 

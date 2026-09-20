@@ -113,6 +113,15 @@ def _time_bounds_of(stamps: Sequence[SourceTimestamp], *, owner: str) -> TimeBou
     )
 
 
+def _uncertainty_key(record: UncertaintyRecord) -> tuple[str, ...]:
+    return (
+        record.kind.value,
+        record.rule_id,
+        "|".join(record.hypothesis_ids),
+        "|".join(f"{ref.contribution_id}/{ref.claim_id or ''}" for ref in record.evidence),
+    )
+
+
 def _producer_key(producer: BackendProvenance) -> tuple[str, ...]:
     return (
         producer.backend_id,
@@ -159,11 +168,14 @@ class EvidenceStance(Enum):
         SUPPORTING: The claim proposes this hypothesis.
         CONFLICTING: The claim proposes an incompatible hypothesis for the same support.
         AMBIGUOUS: The claim is retained but its relation to this hypothesis is undecided.
+        ABSTAINING: The claim is an abstention (``unknown``): it is neither support for the
+            hypothesis nor evidence against it.
     """
 
     SUPPORTING = "supporting"
     CONFLICTING = "conflicting"
     AMBIGUOUS = "ambiguous"
+    ABSTAINING = "abstaining"
 
 
 class UncertaintyKind(Enum):
@@ -753,16 +765,7 @@ class FusedEvidence:
             self.point_representation_refs,
             lambda ref: (ref.run_id, ref.representation_id),
         )
-        _require_canonical(
-            "uncertainty",
-            self.uncertainty,
-            lambda record: (
-                record.kind.value,
-                record.rule_id,
-                "|".join(record.hypothesis_ids),
-                "|".join(f"{ref.contribution_id}/{ref.claim_id or ''}" for ref in record.evidence),
-            ),
-        )
+        _require_canonical("uncertainty", self.uncertainty, _uncertainty_key)
 
     def _require_groups_match(
         self, contributions: dict[EvidenceContributionId, EvidenceContribution]

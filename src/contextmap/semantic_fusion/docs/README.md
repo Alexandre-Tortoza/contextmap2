@@ -27,7 +27,7 @@ Fusão não é identidade. Um `FusionSupport` afirma apenas que observações es
 
 ## Estado implementado
 
-Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista. Estão **planejados**, e serão documentados aqui quando forem implementados: preservação de ambiguidade e conflito, canais de evidência, política ciente de qualidade, artifact de run e a validação.
+Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los. Estão **planejados**, e serão documentados aqui quando forem implementados: canais de evidência, política ciente de qualidade, artifact de run e a validação.
 
 ## Contratos públicos
 
@@ -35,7 +35,7 @@ Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObse
 - `EvidenceContribution`, `EvidenceContributionId` — uma vista: uma região de um frame físico, interpretada por uma execução de inferência.
 - `PhysicalObservationGroup` — tudo o que foi inferido de um frame físico, separado do próprio frame.
 - `group_by_physical_observation()`, `PhysicalObservationGrouping`, `PHYSICAL_OBSERVATION_GROUPING_POLICY_ID` — agrupa observações espaciais por frame físico sob uma seleção explícita de runs e reporta as contagens de frames, inferências, runs e variantes.
-- `accumulate_baseline_evidence()`, `BASELINE_ACCUMULATION_POLICY_ID`, `label_key()`, `evidence_contribution_id_for()`, `fused_evidence_id_for()` — a política baseline: uma contribuição por observação, hipóteses por chave de label, stances e sinais tipados, sem ranking e sem ponderar por qualidade.
+- `accumulate_baseline_evidence()`, `BaselineAccumulationPolicy`, `BASELINE_ACCUMULATION_POLICY_ID`, `label_key()`, `evidence_contribution_id_for()`, `fused_evidence_id_for()` — a política baseline: uma contribuição por observação, hipóteses por chave de label, stances e sinais tipados, abstenção configurável, registros de incerteza, sem ranking e sem ponderar por qualidade.
 - `build_fusion_supports()`, `FusionSupportBuild`, `ExcludedObservation`, `GeometryOverlapSupportPolicy`, `GEOMETRY_OVERLAP_SUPPORT_POLICY_ID` — constrói suportes por sobreposição de geometria (Jaccard), com os limiares declarados e as observações excluídas explícitas.
 - `ScoreReference`, `ObservationQualityRef` — referências ao score de um scorer e à qualidade mensurável da vista; nunca valores.
 - `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
