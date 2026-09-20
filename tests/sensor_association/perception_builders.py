@@ -89,11 +89,17 @@ def make_feature(
     )
 
 
-def make_claim(claim_id: str, *, region_id: str | None = None) -> SemanticClaim:
+def make_claim(
+    claim_id: str,
+    *,
+    region_id: str | None = None,
+    observation_id: SourceObservationId = OBSERVATION_ID,
+    result_id: PerceptionResultId = RESULT_ID,
+) -> SemanticClaim:
     return SemanticClaim(
         claim_id=ClaimId(claim_id),
-        source_observation_id=OBSERVATION_ID,
-        perception_result_id=RESULT_ID,
+        source_observation_id=observation_id,
+        perception_result_id=result_id,
         hypothesis="a hypothesis, not a label",
         role=HypothesisRole.PRIMARY,
         provenance=SemanticInferenceProvenance(
@@ -118,9 +124,10 @@ def make_result(
     features: Sequence[VisualFeature] = (),
     claims: Sequence[SemanticClaim] = (),
     observation_id: SourceObservationId = OBSERVATION_ID,
+    result_id: PerceptionResultId = RESULT_ID,
 ) -> PerceptionResult:
     return PerceptionResult(
-        result_id=RESULT_ID,
+        result_id=result_id,
         source_observation_id=observation_id,
         run_id=RUN_ID,
         sequence_artifact_id=SEQUENCE_ID,

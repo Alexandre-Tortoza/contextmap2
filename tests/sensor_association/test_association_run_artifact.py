@@ -1,0 +1,536 @@
+import dataclasses
+import json
+import shutil
+import struct
+import subprocess
+import sys
+import zlib
+from pathlib import Path
+
+import pytest
+from projection_builders import SEQUENCE_ID
+from run_builders import ENHANCED, NATIVE, OCCLUSION, frame_id, frame_input, make_request
+
+import contextmap.sensor_association as sensor_association
+from contextmap.geometric_mapping import MapId, geometry_id_for
+from contextmap.sensor_association import (
+    IncompleteRunArtifactError,
+    RunArtifactError,
+    SensorAssociationDebugLevel,
+    SensorAssociationRunId,
+    SensorAssociationRunReader,
+    SensorAssociationRunWriter,
+    VisibilityDiagnostics,
+    allocate_run_index,
+)
+from contextmap.sensor_association.service import (
+    SensorAssociationOutcome,
+    SensorAssociationService,
+)
+from contextmap.visual_perception import RegionId
+
+SEQUENCE_NAME = "corridor-fixture"
+A, B = RegionId("region-A"), RegionId("region-B")
+
+
+def _outcome(*channels: object) -> SensorAssociationOutcome:
+    return SensorAssociationService().run(make_request(channels=list(channels)))  # type: ignore[arg-type]
+
+
+def _write(
+    root: Path,
+    outcome: SensorAssociationOutcome,
+    *,
+    run_index: int = 1,
+    channel_label: str = "native-and-enhanced",
+    debug_level: SensorAssociationDebugLevel = SensorAssociationDebugLevel.NONE,
+    runtime_s: float | None = None,
+) -> tuple[SensorAssociationRunReader, Path]:
+    writer = SensorAssociationRunWriter(
+        workspace_root=root,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId(f"assoc-run-{run_index:04d}"),
+        run_index=run_index,
+        selection_label="full-sequence",
+        channel_label=channel_label,
+        debug_level=debug_level,
+    )
+    writer.finalize(outcome, runtime_s=runtime_s)
+    run_dir = (
+        root
+        / "runs"
+        / "sensor-association"
+        / SEQUENCE_NAME
+        / f"run-{run_index:04d}__full-sequence__{channel_label}"
+    )
+    return SensorAssociationRunReader(run_dir), run_dir
+
+
+def _all_observations(outcome: SensorAssociationOutcome):  # type: ignore[no-untyped-def]
+    return [o for frame in outcome.frames for o in frame.observations]
+
+
+# --- Layout and lineage -----------------------------------------------------
+
+
+def test_the_run_has_the_documented_layout(tmp_path: Path) -> None:
+    _, run_dir = _write(tmp_path, _outcome(NATIVE, ENHANCED), runtime_s=1.5)
+
+    for relative in (
+        "README.md",
+        "manifest.json",
+        "outputs/spatial-observations.jsonl",
+        "outputs/observation-index.jsonl",
+        "outputs/geometry-support.u32",
+        "outputs/observation-quality.jsonl",
+        "outputs/projection-records.jsonl",
+        "outputs/visibility-records.jsonl",
+        "outputs/dense-feature-associations.jsonl",
+        "outputs/dense-feature-cells.bin",
+        "metrics/frame-diagnostics.jsonl",
+        "metrics/summary.json",
+        "metrics/runtime.json",
+    ):
+        assert (run_dir / relative).is_file(), relative
+    assert not (run_dir / "debug").exists()
+    assert (run_dir.parent / "runs.json").is_file()
+
+
+def test_a_run_without_dense_channels_writes_no_dense_files(tmp_path: Path) -> None:
+    _, run_dir = _write(tmp_path, _outcome(), channel_label="geometry-only")
+
+    assert not (run_dir / "outputs/dense-feature-associations.jsonl").exists()
+    assert not (run_dir / "outputs/dense-feature-cells.bin").exists()
+    assert not (run_dir / "metrics/runtime.json").exists()
+
+
+def test_the_manifest_names_the_upstream_artifacts_and_the_configuration(tmp_path: Path) -> None:
+    outcome = _outcome(NATIVE, ENHANCED)
+    reader, _ = _write(tmp_path, outcome)
+    manifest = reader.manifest
+
+    assert manifest.run_id == "assoc-run-0001"
+    assert manifest.sequence_artifact_id == SEQUENCE_ID
+    assert manifest.selection_id == "full-sequence"
+    assert manifest.geometric_map_id == MapId("map-0001")
+    assert manifest.trajectory_id == outcome.trajectory_id
+    assert manifest.perception_run_ids == ("run-0001",)
+    assert manifest.calibration_identity == outcome.calibration_identity
+    assert manifest.visibility_policy["policy_id"] == OCCLUSION.policy_id
+    assert manifest.visibility_policy["fingerprint"] == OCCLUSION.fingerprint()
+    assert manifest.membership_policy_id == "mask-membership-v1"
+    assert manifest.configuration_fingerprint == outcome.configuration_fingerprint
+    assert manifest.code_version == "test"
+    assert (manifest.frame_count, manifest.rejected_frame_count) == (2, 0)
+    assert manifest.observation_count == 4
+    assert manifest.schema_version == "0.1.0"
+    assert manifest.debug_level == "none"
+
+
+def test_the_manifest_reveals_exactly_which_feature_maps_the_run_consumed(tmp_path: Path) -> None:
+    reader, _ = _write(tmp_path, _outcome(NATIVE, ENHANCED))
+
+    channels = {channel["channel_id"]: channel for channel in reader.manifest.dense_channels}
+    native, enhanced = channels["dino-native"], channels["dino-enhanced"]
+    assert native["interpolation"] == "nearest"
+    assert enhanced["interpolation"] == "bilinear"
+    (native_source,) = native["feature_sources"]
+    (enhanced_source,) = enhanced["feature_sources"]
+    assert native_source["source_artifact_id"] == "perception-artifact-0001"
+    assert native_source["embedding_space_id"] == "dinov2:b14"
+    assert native_source["enhancement"] is None
+    assert enhanced_source["enhancement"] is not None
+    assert native_source["sampling_fingerprint"] != enhanced_source["sampling_fingerprint"]
+    assert native_source["frame_count"] == enhanced_source["frame_count"] == 2
+
+
+def test_native_and_enhanced_runs_share_upstream_artifacts_yet_stay_identifiable(
+    tmp_path: Path,
+) -> None:
+    native, _ = _write(tmp_path, _outcome(NATIVE), run_index=1, channel_label="native")
+    enhanced, _ = _write(tmp_path, _outcome(ENHANCED), run_index=2, channel_label="enhanced")
+
+    assert native.manifest.run_id != enhanced.manifest.run_id
+    assert native.manifest.configuration_fingerprint != enhanced.manifest.configuration_fingerprint
+    assert native.manifest.dense_channels != enhanced.manifest.dense_channels
+    for shared in (
+        "geometric_map_id",
+        "sequence_artifact_id",
+        "calibration_identity",
+        "trajectory_id",
+    ):
+        assert getattr(native.manifest, shared) == getattr(enhanced.manifest, shared)
+    assert native.manifest.perception_run_ids == enhanced.manifest.perception_run_ids
+
+
+# --- Reading back -----------------------------------------------------------
+
+
+def test_the_spatial_observations_round_trip_with_their_geometry_support(tmp_path: Path) -> None:
+    outcome = _outcome(NATIVE)
+    reader, _ = _write(tmp_path, outcome)
+
+    assert list(reader.observations()) == _all_observations(outcome)
+
+
+def test_one_observation_is_read_by_identity_without_loading_the_others(tmp_path: Path) -> None:
+    outcome = _outcome()
+    reader, _ = _write(tmp_path, outcome)
+    wanted = outcome.frames[1].observations[1]
+
+    assert reader.observation(wanted.spatial_observation_id) == wanted
+    assert reader.observations_of_frame(frame_id(0)) == outcome.frames[0].observations
+    with pytest.raises(RunArtifactError, match="unknown"):
+        reader.observation(wanted.spatial_observation_id + "-missing")  # type: ignore[operator]
+
+
+def test_the_region_geometry_index_is_a_compact_columnar_table(tmp_path: Path) -> None:
+    outcome = _outcome()
+    reader, run_dir = _write(tmp_path, outcome)
+    total = sum(len(o.geometry_support) for o in _all_observations(outcome))
+
+    assert (run_dir / "outputs/geometry-support.u32").stat().st_size == 4 * total
+    observation = outcome.frames[0].observations[0]
+    assert (
+        reader.geometry_support(observation.spatial_observation_id) == observation.geometry_support
+    )
+    first = observation.geometry_support[0]
+    assert first.geometry_id == geometry_id_for(map_id=MapId("map-0001"), index=0)
+
+
+def test_an_observation_that_disagrees_with_its_membership_is_never_persisted(
+    tmp_path: Path,
+) -> None:
+    outcome = _outcome()
+    first = outcome.frames[0]
+    tampered = dataclasses.replace(
+        first.observations[0],
+        geometry_support=(),
+        visibility=VisibilityDiagnostics(counts={}),
+    )
+    forged_frame = dataclasses.replace(first, observations=(tampered, *first.observations[1:]))
+    forged = dataclasses.replace(outcome, frames=(forged_frame, *outcome.frames[1:]))
+    writer = SensorAssociationRunWriter(
+        workspace_root=tmp_path,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId("assoc-run-0001"),
+        run_index=1,
+        selection_label="full-sequence",
+        channel_label="geometry-only",
+    )
+
+    with pytest.raises(RunArtifactError, match="geometry support"):
+        writer.finalize(forged)
+
+    assert list((tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME).iterdir()) == []
+
+
+def test_the_geometry_to_region_index_keeps_every_overlapping_region(tmp_path: Path) -> None:
+    outcome = _outcome()
+    reader, _ = _write(tmp_path, outcome)
+    frame = outcome.frames[0]
+
+    assert reader.regions_of(frame_id(0), frame.resolution.frame.map_reference(1)) == (A, B)
+    assert reader.regions_of(frame_id(0), frame.resolution.frame.map_reference(0)) == (A,)
+    assert reader.regions_of(frame_id(0), frame.resolution.frame.map_reference(4)) == ()
+
+
+def test_the_quality_is_read_back_by_observation(tmp_path: Path) -> None:
+    outcome = _outcome()
+    reader, _ = _write(tmp_path, outcome)
+    first = outcome.frames[0]
+
+    assert reader.quality(first.observations[0].spatial_observation_id) == first.qualities[0]
+
+
+def test_the_dense_associations_round_trip_as_indices_and_weights(tmp_path: Path) -> None:
+    outcome = _outcome(NATIVE, ENHANCED)
+    reader, run_dir = _write(tmp_path, outcome)
+
+    for channel_id in ("dino-native", "dino-enhanced"):
+        samples = outcome.frames[0].dense_samples[channel_id]
+        record = reader.dense_association(frame_id(0), channel_id)
+        assert record.channel_id == channel_id
+        assert list(record.eligible_indices) == samples.eligible_indices.tolist()
+        assert list(record.sampled) == samples.sampled.tolist()
+        assert list(record.cell_rows) == samples.cell_rows.ravel().tolist()
+        assert list(record.cell_cols) == samples.cell_cols.ravel().tolist()
+        assert list(record.weights) == pytest.approx(samples.weights.ravel().tolist())
+        assert record.terms == samples.cell_rows.shape[1]
+        assert record.provenance["feature_id"] == str(samples.provenance.feature_id)
+        assert record.provenance["payload_reference"] == samples.provenance.payload_reference
+    native = reader.dense_association(frame_id(0), "dino-native")
+    enhanced = reader.dense_association(frame_id(0), "dino-enhanced")
+    assert native.provenance["enhancement"] is None
+    assert enhanced.provenance["enhancement"]["source_feature_id"] == "dense-native-0"
+    # Nenhum vetor de feature é persistido: só índices e pesos.
+    assert not list((run_dir / "outputs").glob("*.npy"))
+
+
+def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_path: Path) -> None:
+    outcome = _outcome(NATIVE)
+    reader, _ = _write(tmp_path, outcome)
+
+    projection = reader.read_records("outputs/projection-records.jsonl")
+    visibility = reader.read_records("outputs/visibility-records.jsonl")
+    diagnostics = reader.read_records("metrics/frame-diagnostics.jsonl")
+
+    assert [r["source_observation_id"] for r in projection] == [frame_id(0), frame_id(1)]
+    assert projection[0]["image_transform"]["transform_id"].startswith("sha256:")
+    assert projection[0]["pose_ref"]["lookup_outcome"] == "exact"
+    assert projection[0]["calibration_ref"]["camera_model_kind"] == "pinhole"
+    assert visibility[0]["state_counts"]["occluded"] == 1
+    assert visibility[0]["membership"]["associated_count"] == 3
+    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v1"
+    assert diagnostics[0]["findings"] == []
+
+
+def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: Path) -> None:
+    request = make_request(frames=[frame_input(0), frame_input(1, time_ns=10_000_000_000)])
+    outcome = SensorAssociationService().run(request)
+    reader, _ = _write(tmp_path, outcome, channel_label="one-rejected")
+
+    summary = reader.read_record("metrics/summary.json")
+    assert summary["frame_count"] == 1
+    assert summary["rejected_frames"] == [
+        {"source_observation_id": frame_id(1), "rejection": "out_of_range"}
+    ]
+    assert reader.manifest.rejected_frame_count == 1
+    assert summary["observation_count"] == 2
+    assert summary["state_counts"]["occluded"] == 1
+
+
+# --- Immutability, atomicity and integrity ----------------------------------
+
+
+def test_a_finalized_run_is_never_overwritten(tmp_path: Path) -> None:
+    outcome = _outcome()
+    writer = SensorAssociationRunWriter(
+        workspace_root=tmp_path,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId("assoc-run-0001"),
+        run_index=1,
+        selection_label="full-sequence",
+        channel_label="geometry-only",
+    )
+    writer.finalize(outcome)
+
+    with pytest.raises(RunArtifactError, match="finalized"):
+        writer.finalize(outcome)
+    again = SensorAssociationRunWriter(
+        workspace_root=tmp_path,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId("assoc-run-0001"),
+        run_index=1,
+        selection_label="full-sequence",
+        channel_label="geometry-only",
+    )
+    with pytest.raises(RunArtifactError, match="exists"):
+        again.finalize(outcome)
+
+
+def test_a_rerun_gets_a_new_index_and_identity(tmp_path: Path) -> None:
+    _write(tmp_path, _outcome(), run_index=1, channel_label="geometry-only")
+    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 2
+    _write(tmp_path, _outcome(), run_index=2, channel_label="geometry-only-again")
+
+    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 3
+    registry = json.loads(
+        (tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME / "runs.json").read_text()
+    )
+    assert [run["run_index"] for run in registry["runs"]] == [1, 2]
+
+
+def test_an_interrupted_write_never_looks_like_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(
+        "contextmap.sensor_association.run_artifact.encode_observation_quality", explode
+    )
+    writer = SensorAssociationRunWriter(
+        workspace_root=tmp_path,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId("assoc-run-0001"),
+        run_index=1,
+        selection_label="full-sequence",
+        channel_label="geometry-only",
+    )
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        writer.finalize(_outcome())
+
+    sequence_dir = tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME
+    assert list(sequence_dir.iterdir()) == []
+    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 1
+
+
+def test_integrity_detects_a_missing_a_resized_and_a_corrupted_file(tmp_path: Path) -> None:
+    reader, run_dir = _write(tmp_path, _outcome(NATIVE))
+    assert reader.verify_integrity() == []
+
+    support = run_dir / "outputs/geometry-support.u32"
+    original = support.read_bytes()
+    support.write_bytes(original[:-4])
+    assert any("size mismatch" in p for p in reader.verify_integrity())
+    support.write_bytes(b"\x00" * len(original))
+    assert any("hash mismatch" in p for p in reader.verify_integrity())
+    support.unlink()
+    assert any("missing file" in p for p in reader.verify_integrity())
+
+
+def test_an_unknown_schema_or_a_missing_manifest_is_refused(tmp_path: Path) -> None:
+    _, run_dir = _write(tmp_path, _outcome())
+    manifest_path = run_dir / "manifest.json"
+    record = json.loads(manifest_path.read_text())
+    record["schema_version"] = "9.9.9"
+    manifest_path.write_text(json.dumps(record))
+
+    with pytest.raises(RunArtifactError, match="schema"):
+        SensorAssociationRunReader(run_dir)
+    manifest_path.unlink()
+    with pytest.raises(IncompleteRunArtifactError):
+        SensorAssociationRunReader(run_dir)
+
+
+def test_a_downstream_stage_can_only_read_contractual_records(tmp_path: Path) -> None:
+    reader, _ = _write(tmp_path, _outcome(), debug_level=SensorAssociationDebugLevel.STANDARD)
+
+    with pytest.raises(RunArtifactError, match="contractual"):
+        reader.read_record("debug/frames/frame-0000/distributions.json")
+    with pytest.raises(RunArtifactError, match="contractual"):
+        reader.read_records("debug/frames/frame-0000/samples.csv")
+    with pytest.raises(RunArtifactError, match="contractual"):
+        reader.read_record("manifest.json")
+
+
+# --- Debug evidence ---------------------------------------------------------
+
+
+def test_standard_debug_explains_the_samples_and_their_distributions(tmp_path: Path) -> None:
+    reader, run_dir = _write(tmp_path, _outcome(), debug_level=SensorAssociationDebugLevel.STANDARD)
+    frame_dir = run_dir / "debug" / "frames" / frame_id(0)
+
+    lines = (frame_dir / "samples.csv").read_text().splitlines()
+    assert lines[0] == "geometry_index,state,prepared_u,prepared_v,depth_m,support_depth_m,regions"
+    rows = {line.split(",")[0]: line.split(",") for line in lines[1:]}
+    assert rows["1"][1] == "associated" and rows["1"][6] == "region-A;region-B"
+    assert rows["2"][1] == "occluded"
+    assert rows["4"][1] == "visible_unassigned" and rows["4"][6] == ""
+    distributions = json.loads((frame_dir / "distributions.json").read_text())
+    assert distributions["state_counts"]["occluded"] == 1
+    assert distributions["associated_depth_m"]["count"] == 3
+    assert sum(distributions["associated_depth_histogram"]["counts"]) == 3
+    assert sum(sum(row) for row in distributions["associated_by_image_region"]) == 3
+    assert {r["region_id"] for r in distributions["support_density_by_region"]} == {
+        "region-A",
+        "region-B",
+    }
+    assert not (frame_dir / "overlay.png").exists()
+    assert reader.manifest.debug_level == "standard"
+
+
+def test_full_debug_adds_the_overlay_the_sampling_coordinates_and_the_feature_sources(
+    tmp_path: Path,
+) -> None:
+    _, run_dir = _write(
+        tmp_path, _outcome(NATIVE, ENHANCED), debug_level=SensorAssociationDebugLevel.FULL
+    )
+    frame_dir = run_dir / "debug" / "frames" / frame_id(0)
+
+    width, height, pixels = _decode_png((frame_dir / "overlay.png").read_bytes())
+    assert (width, height) == (640, 480)
+    assert pixels[100][100] == (40, 180, 60)  # associado
+    assert pixels[300][400] == (230, 200, 40)  # visível, sem região
+    native_csv = (frame_dir / "dense-sampling-dino-native.csv").read_text().splitlines()
+    assert native_csv[0] == "geometry_index,sampled,cell0_row,cell0_col,cell0_weight"
+    enhanced_csv = (frame_dir / "dense-sampling-dino-enhanced.csv").read_text().splitlines()
+    assert enhanced_csv[0].endswith("cell3_weight")
+    sources = json.loads((run_dir / "debug" / "feature-sources.json").read_text())
+    assert {entry["channel_id"] for entry in sources} == {"dino-native", "dino-enhanced"}
+    assert {entry["source_observation_id"] for entry in sources} == {frame_id(0), frame_id(1)}
+
+
+def test_debug_files_are_never_inventoried_so_removing_them_keeps_the_run_valid(
+    tmp_path: Path,
+) -> None:
+    reader, run_dir = _write(
+        tmp_path, _outcome(NATIVE), debug_level=SensorAssociationDebugLevel.FULL
+    )
+
+    assert all(not entry.path.startswith("debug/") for entry in reader.manifest.file_inventory)
+    assert all(
+        entry.path not in ("manifest.json", "README.md") for entry in reader.manifest.file_inventory
+    )
+    shutil.rmtree(run_dir / "debug")
+    assert reader.verify_integrity() == []
+    assert list(reader.observations())
+
+
+def test_no_debug_writes_nothing_beyond_the_contractual_files(tmp_path: Path) -> None:
+    _, run_dir = _write(tmp_path, _outcome(NATIVE))
+
+    assert not (run_dir / "debug").exists()
+
+
+# --- Independence of heavy dependencies -------------------------------------
+
+
+def test_the_artifact_opens_without_numpy_ros_or_model_libraries(tmp_path: Path) -> None:
+    _, run_dir = _write(tmp_path, _outcome(NATIVE, ENHANCED))
+    code = (
+        "import sys;"
+        "from contextmap.sensor_association import SensorAssociationRunReader;"
+        f"r = SensorAssociationRunReader(__import__('pathlib').Path({str(run_dir)!r}));"
+        "assert len(list(r.observations())) == 4;"
+        "assert r.dense_association('frame-0000', 'dino-native').terms == 1;"
+        "assert r.verify_integrity() == [];"
+        "bad = [m for m in ('numpy', 'rosbags', 'torch', 'open3d') if m in sys.modules];"
+        "assert not bad, bad"
+    )
+
+    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_the_run_is_reachable_from_the_public_api() -> None:
+    public = set(sensor_association.__all__)
+
+    assert {
+        "SensorAssociationRunReader",
+        "SensorAssociationRunWriter",
+        "SensorAssociationRunManifest",
+        "SensorAssociationRunId",
+        "SensorAssociationDebugLevel",
+        "SensorAssociationService",
+        "SensorAssociationRequest",
+        "SensorAssociationOutcome",
+        "allocate_run_index",
+        "rebuild_run_registry",
+    } <= public
+
+
+def _decode_png(data: bytes) -> tuple[int, int, list[list[tuple[int, int, int]]]]:
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    cursor = 8
+    width = height = 0
+    idat = b""
+    while cursor < len(data):
+        (length,) = struct.unpack(">I", data[cursor : cursor + 4])
+        kind = data[cursor + 4 : cursor + 8]
+        body = data[cursor + 8 : cursor + 8 + length]
+        if kind == b"IHDR":
+            width, height = struct.unpack(">II", body[:8])
+        elif kind == b"IDAT":
+            idat += body
+        cursor += 12 + length
+    raw = zlib.decompress(idat)
+    stride = 1 + 3 * width
+    rows = []
+    for y in range(height):
+        line = raw[y * stride + 1 : (y + 1) * stride]
+        rows.append([(line[3 * x], line[3 * x + 1], line[3 * x + 2]) for x in range(width)])
+    return width, height, rows
