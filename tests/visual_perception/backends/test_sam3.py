@@ -1,7 +1,9 @@
 import json
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,7 @@ from contextmap.visual_perception import (
     Region2D,
     RegionDiscovery,
 )
+from contextmap.visual_perception.backends import sam3 as sam3_module
 from contextmap.visual_perception.backends.sam3 import (
     Sam3Config,
     Sam3ImageProcessorRuntime,
@@ -320,3 +323,106 @@ def test_sam3_empty_masks_are_rejected_explicitly_by_normalization() -> None:
     assert len(output.candidates) == 2
     assert result.regions == ()
     assert {item.reason for item in result.rejected} == {RejectionReason.INVALID_GEOMETRY}
+
+
+class RecordingProcessor:
+    """Official-processor stand-in that records call order into a shared event list."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def set_image(self, image: object) -> object:
+        self._events.append("image")
+        return {}
+
+    def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+        self._events.append("threshold")
+        return state
+
+    def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+        self._events.append("prompt")
+        return {"boxes": [], "scores": [], "masks": []}
+
+
+class RecordingContext:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def __enter__(self) -> None:
+        self._events.append("enter")
+
+    def __exit__(self, *exc_info: object) -> None:
+        self._events.append("exit")
+
+
+def _text_prompt_config(precision: str) -> Sam3Config:
+    return Sam3Config(
+        checkpoint="facebook/sam3",
+        device="cuda:0",
+        precision=precision,
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="floor",
+    )
+
+
+def test_sam3_precision_must_be_a_supported_inference_precision() -> None:
+    with pytest.raises(ValueError, match="precision"):
+        Sam3Config(checkpoint="sam3", precision="int8")
+    for precision in ("float32", "float16", "bfloat16"):
+        assert Sam3Config(checkpoint="sam3", precision=precision).precision == precision
+
+
+def test_official_sam3_runtime_runs_the_sdk_inside_the_configured_inference_context() -> None:
+    events: list[str] = []
+    received: list[Sam3Config] = []
+
+    def autocast(config: Sam3Config) -> RecordingContext:
+        received.append(config)
+        return RecordingContext(events)
+
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events),
+        image_loader=_materialized_image,
+        autocast=autocast,
+    )
+    config = _text_prompt_config("bfloat16")
+
+    runtime.predict(_input(), config)
+
+    assert received == [config]
+    assert events == ["enter", "image", "threshold", "prompt", "exit"]
+
+
+def test_official_sam3_runtime_float32_needs_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(name: str) -> object:
+        raise AssertionError(f"float32 inference must not import {name}")
+
+    monkeypatch.setattr(sam3_module, "import_module", unavailable)
+    events: list[str] = []
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events), image_loader=_materialized_image
+    )
+
+    runtime.predict(_input(), _text_prompt_config("float32"))
+
+    assert events == ["image", "threshold", "prompt"]
+
+
+def test_official_sam3_runtime_default_context_is_torch_autocast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def autocast(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return nullcontext()
+
+    fake_torch = SimpleNamespace(autocast=autocast, bfloat16="torch.bfloat16")
+    monkeypatch.setattr(sam3_module, "import_module", lambda name: fake_torch)
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor([]), image_loader=_materialized_image
+    )
+
+    runtime.predict(_input(), _text_prompt_config("bfloat16"))
+
+    assert calls == [{"device_type": "cuda", "dtype": "torch.bfloat16"}]

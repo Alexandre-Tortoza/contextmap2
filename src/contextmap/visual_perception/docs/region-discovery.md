@@ -235,6 +235,13 @@ máscara são destacados dos tensors antes de sair do runtime. As demais estrat�
 distinguíveis no contrato, mas esse runtime as rejeita explicitamente até existir uma integração
 real específica; selecionar uma delas não aciona comportamento alternativo.
 
+A `precision` de `Sam3Config` (`float32`, `float16` ou `bfloat16`; qualquer outro valor é rejeitado
+na configuração) é a precisão com que a inferência realmente roda: o runtime executa as chamadas do
+SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem contexto para `float32`. O modelo de
+imagem oficial do SAM3 só executa sob autocast `bfloat16`; com `float32` o SDK falha com
+`mat1 and mat2 must have the same dtype`. O contexto é injetável (`autocast=`), então os testes não
+precisam de torch, e `float32` nunca importa torch (issue #338).
+
 ### Geometria das propostas SAM3
 
 O SAM3 devolve `boxes` de um head independente do head de máscara. Na prática essa caixa pode

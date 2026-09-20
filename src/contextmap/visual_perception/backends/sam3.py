@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
+from importlib import import_module
 from math import isfinite
 from time import perf_counter
 from typing import Protocol, cast
@@ -30,6 +32,8 @@ from ..region_models import (
     RegionProvenance,
 )
 
+_SUPPORTED_PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
+
 
 class Sam3Strategy(StrEnum):
     """Explicit SAM3 discovery/query strategies supported by the adapter."""
@@ -43,7 +47,12 @@ class Sam3Strategy(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Sam3Config:
-    """Effective configuration for one SAM3 Region Discovery adapter."""
+    """Effective configuration for one SAM3 Region Discovery adapter.
+
+    ``precision`` is the inference precision the official runtime applies: ``float32``
+    runs the SDK as loaded, while ``float16`` and ``bfloat16`` run it under
+    ``torch.autocast``. The official SAM3 image model requires ``bfloat16``.
+    """
 
     checkpoint: str
     model_version: str = "unknown"
@@ -59,6 +68,9 @@ class Sam3Config:
         """Validate strategy-specific configuration without hidden defaults."""
         if not self.checkpoint or not self.model_version or not self.device or not self.precision:
             raise ValueError("SAM3 checkpoint, version, device, and precision must not be empty")
+        if self.precision not in _SUPPORTED_PRECISIONS:
+            supported = ", ".join(sorted(_SUPPORTED_PRECISIONS))
+            raise ValueError(f"SAM3 precision must be one of: {supported}")
         _validate_unit_threshold(self.score_threshold, "score_threshold")
         _validate_unit_threshold(self.mask_threshold, "mask_threshold")
         if self.strategy is Sam3Strategy.TEXT_PROMPT and not self.prompt:
@@ -148,10 +160,20 @@ class Sam3ImageProcessorRuntime:
         *,
         processor: _Sam3ImageProcessor,
         image_loader: Callable[[DiscoveryInput], object],
+        autocast: Callable[[Sam3Config], AbstractContextManager[object]] | None = None,
     ) -> None:
-        """Bind a loaded processor to a pass-aware image loader."""
+        """Bind a loaded processor to a pass-aware image loader.
+
+        Args:
+            processor: Official image processor already built around the model.
+            image_loader: Materializes the exact image of one discovery pass.
+            autocast: Builds the context the SDK runs in for one configuration.
+                Defaults to ``torch.autocast`` for ``float16`` and ``bfloat16`` and to
+                no context for ``float32``; tests inject a recording context.
+        """
         self._processor = processor
         self._image_loader = image_loader
+        self._autocast = autocast or _torch_autocast
 
     def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
         """Run supported official image inference without a strategy fallback."""
@@ -162,11 +184,12 @@ class Sam3ImageProcessorRuntime:
 
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
-        state = self._processor.set_image(image)
-        state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
-        if state is None:
-            raise ValueError("SAM3 processor returned no inference state")
-        output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
+        with self._autocast(config):
+            state = self._processor.set_image(image)
+            state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
+            if state is None:
+                raise ValueError("SAM3 processor returned no inference state")
+            output = self._processor.set_text_prompt(state=state, prompt=config.prompt)
         width = discovery_input.discovery_pass.input_width
         height = discovery_input.discovery_pass.input_height
         proposals = _parse_image_processor_output(
@@ -319,6 +342,25 @@ class Sam3RegionDiscovery:
             ),
             native_metadata=native_metadata,
         )
+
+
+def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:
+    """Return the ``torch.autocast`` context that realizes the configured precision."""
+    if config.precision == "float32":
+        return nullcontext()
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            f"SAM3 {config.precision} inference requires torch autocast; install torch"
+        ) from error
+    return cast(
+        AbstractContextManager[object],
+        torch.autocast(
+            device_type=config.device.split(":", 1)[0],
+            dtype=getattr(torch, config.precision),
+        ),
+    )
 
 
 def _mask_bounding_box(mask: tuple[bool, ...], *, width: int, height: int) -> BoundingBox | None:
