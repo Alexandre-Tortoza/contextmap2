@@ -332,7 +332,7 @@ flowchart LR
     W --> ART["PerceptionRunArtifact"]
     ART --> R["PerceptionRunReader"]
     R --> SET["PerceptionEvidenceSet"]
-    SET -. preserva resultados por run .-> FUT["Semantic Fusion futura"]
+    SET -. evidência reutilizável por run .-> DOWN["downstream implementado<br/>via associação e fusão"]
 ```
 
 `PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
@@ -343,9 +343,10 @@ Os seguintes elementos aparecem na arquitetura alvo ou como variation points já
 
 - seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- backends reais de Semantic Interpretation;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; as execuções reais controladas de Qwen/Gemini continuam pendentes em #77/#78;
+- integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
-- integração end-to-end com State Estimation, geometria e Sensor Association.
+- conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
 
 Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 
