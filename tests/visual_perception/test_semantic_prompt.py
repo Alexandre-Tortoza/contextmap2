@@ -15,6 +15,7 @@ from contextmap.visual_perception import (
     SemanticInterpretationRequest,
     SemanticPromptTemplate,
     SemanticRequestId,
+    SemanticRequestMetadata,
     SemanticResponseParseError,
     SemanticVisualView,
     VisualViewKind,
@@ -90,6 +91,31 @@ def test_prompt_rendering_is_deterministic_and_version_distinguishable() -> None
     assert "semantic-response/1" in first.text
 
 
+def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
+    region_request = SemanticInterpretationRequest(
+        **{
+            **_request(SemanticInterpretationMode.REGION).__dict__,
+            "supporting_metadata": (SemanticRequestMetadata(name="camera_height_m", value=1.2),),
+        }
+    )
+    region_prompt = render_semantic_prompt(
+        region_request, SemanticPromptTemplate.default_for(region_request.mode)
+    )
+
+    assert '"supporting_metadata":[{"name":"camera_height_m","value":1.2}]' in region_prompt.text
+    assert '"scene_context":{"type":"null"}' in region_prompt.text
+    assert '"minItems":1' in region_prompt.text
+    assert '"confidence":{"type":"null"}' in region_prompt.text
+
+    scene_request = _request(SemanticInterpretationMode.SCENE)
+    scene_prompt = render_semantic_prompt(
+        scene_request, SemanticPromptTemplate.default_for(scene_request.mode)
+    )
+
+    assert '"scene_context":{"additionalProperties":false' in scene_prompt.text
+    assert '"minItems":0' in scene_prompt.text
+
+
 def test_region_parser_preserves_primary_alternative_and_unscored_claim() -> None:
     request = _request(SemanticInterpretationMode.REGION)
     raw = json.dumps(
@@ -110,7 +136,7 @@ def test_region_parser_preserves_primary_alternative_and_unscored_claim() -> Non
                     "category": None,
                     "region_kind": "thing",
                     "attributes": {},
-                    "confidence": 0.4,
+                    "confidence": None,
                 },
             ],
             "scene_context": None,
@@ -162,6 +188,46 @@ def test_scene_parser_produces_structured_context() -> None:
     assert parsed.scene_context is not None
     assert parsed.scene_context.scene_type == "warehouse"
     assert parsed.scene_context.claims[0].region_id is None
+
+
+def test_scene_parser_accepts_structured_context_without_redundant_claim() -> None:
+    request = _request(SemanticInterpretationMode.SCENE)
+    raw = json.dumps(
+        {
+            "abstained": False,
+            "claims": [],
+            "scene_context": {"scene_type": "warehouse", "layout": "aisles"},
+        }
+    )
+
+    parsed = parse_semantic_response(raw, request, _provenance(request.mode))
+
+    assert parsed.scene_context is not None
+    assert parsed.scene_context.scene_type == "warehouse"
+    assert parsed.scene_context.claims == ()
+
+
+def test_parser_rejects_model_reported_confidence() -> None:
+    request = _request(SemanticInterpretationMode.REGION)
+    raw = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "pallet",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": "thing",
+                    "attributes": {},
+                    "confidence": 0.93,
+                }
+            ],
+            "scene_context": None,
+        }
+    )
+
+    with pytest.raises(SemanticResponseParseError, match="confidence must be null"):
+        parse_semantic_response(raw, request, _provenance(request.mode))
 
 
 def test_parser_records_safe_code_fence_repair_but_rejects_semantic_repairs() -> None:

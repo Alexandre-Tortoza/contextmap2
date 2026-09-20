@@ -23,7 +23,7 @@ from contextmap.visual_perception.backends.gemini import (
 )
 
 
-def _response() -> GeminiProviderResponse:
+def _response(confidence: float | None = None) -> GeminiProviderResponse:
     return GeminiProviderResponse(
         text=json.dumps(
             {
@@ -35,7 +35,7 @@ def _response() -> GeminiProviderResponse:
                         "category": None,
                         "region_kind": None,
                         "attributes": {},
-                        "confidence": None,
+                        "confidence": confidence,
                     }
                 ],
                 "scene_context": {"scene_type": "warehouse"},
@@ -47,15 +47,16 @@ def _response() -> GeminiProviderResponse:
 
 
 class _Client:
-    def __init__(self, failures: int = 0) -> None:
+    def __init__(self, failures: int = 0, confidence: float | None = None) -> None:
         self.failures = failures
+        self.confidence = confidence
         self.calls = 0
 
     def generate(self, **kwargs: object) -> GeminiProviderResponse:
         self.calls += 1
         if self.calls <= self.failures:
             raise GeminiTransientError("rate limited")
-        return _response()
+        return _response(self.confidence)
 
 
 def _adapter(client: _Client, *, retries: int = 2) -> GeminiSemanticInterpreter:
@@ -118,3 +119,10 @@ def test_gemini_exhausted_retries_are_explicit_without_fallback() -> None:
         adapter.interpret(_request(adapter))
 
     assert client.calls == 2
+
+
+def test_gemini_rejects_model_reported_confidence() -> None:
+    adapter = _adapter(_Client(confidence=0.93))
+
+    with pytest.raises(ValueError, match="confidence must be null"):
+        adapter.interpret(_request(adapter))

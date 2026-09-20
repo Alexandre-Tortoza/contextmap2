@@ -1,13 +1,20 @@
 """Contract tests for the Qwen semantic interpreter adapter."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    BackendProvenance,
+    BoundingBox2D,
     PerceptionResultId,
+    PerceptionRunId,
+    PerceptionRunReader,
+    PerceptionRunWriter,
     PipelinePreset,
+    Region2D,
     RegionId,
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
@@ -17,6 +24,7 @@ from contextmap.visual_perception import (
     SemanticVisualView,
     StageSpec,
     VisualViewKind,
+    assemble_perception_result,
     execute_stage_graph,
     resolve_pipeline,
 )
@@ -28,8 +36,9 @@ from contextmap.visual_perception.backends.qwen import (
 
 
 class _FakeQwenRuntime:
-    def __init__(self) -> None:
+    def __init__(self, confidence: float | None = None) -> None:
         self.calls: list[tuple[tuple[str, ...], str, QwenSemanticConfig]] = []
+        self.confidence = confidence
 
     def generate(
         self,
@@ -50,7 +59,7 @@ class _FakeQwenRuntime:
                             "category": None,
                             "region_kind": "thing",
                             "attributes": {},
-                            "confidence": None,
+                            "confidence": self.confidence,
                         }
                     ],
                     "scene_context": None,
@@ -152,7 +161,23 @@ def test_qwen_rejects_request_for_another_effective_configuration() -> None:
         adapter.interpret(mismatched)
 
 
-def test_qwen_is_selected_through_pipeline_configuration() -> None:
+def test_qwen_rejects_model_reported_confidence() -> None:
+    adapter = QwenSemanticInterpreter(
+        config=QwenSemanticConfig(
+            model="Qwen/Qwen2.5-VL-3B-Instruct",
+            device="cpu",
+            precision="float32",
+            max_new_tokens=32,
+            temperature=0.0,
+        ),
+        runtime=_FakeQwenRuntime(confidence=0.93),
+    )
+
+    with pytest.raises(ValueError, match="confidence must be null"):
+        adapter.interpret(_request(adapter))
+
+
+def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -> None:
     adapter = QwenSemanticInterpreter(
         config=QwenSemanticConfig(
             model="Qwen/Qwen2.5-VL-3B-Instruct",
@@ -166,6 +191,7 @@ def test_qwen_is_selected_through_pipeline_configuration() -> None:
     preset = PipelinePreset(
         preset_id="qwen-semantic/1",
         stages=(
+            StageSpec(stage_id="regions", capability="region_source"),
             StageSpec(stage_id="request", capability="semantic_request"),
             StageSpec(
                 stage_id="interpret",
@@ -177,8 +203,54 @@ def test_qwen_is_selected_through_pipeline_configuration() -> None:
     )
 
     resolved = resolve_pipeline(preset, backend_factories={"interpret": lambda parameters: adapter})
-    outcomes = execute_stage_graph(resolved.build_stage_graph({"request": _request(adapter)}))
+    region = Region2D(
+        region_id=RegionId("region-0007"),
+        bounding_box=BoundingBox2D(x=0, y=0, width=10, height=10),
+        provenance=BackendProvenance(
+            backend_id="fixture",
+            capability="region_discovery",
+            provider="test",
+            model="fixture",
+            version="1",
+        ),
+    )
+    outcomes = execute_stage_graph(
+        resolved.build_stage_graph({"request": _request(adapter), "regions": (region,)})
+    )
 
     execution = outcomes[-1].output
     assert isinstance(execution, SemanticInterpretationExecution)
     assert execution.parsed.claims[0].hypothesis == "wooden pallet"
+    result = assemble_perception_result(
+        result_id=PerceptionResultId("run-0001--frame-0124"),
+        source_observation_id=SourceObservationId("frame-0124"),
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="sequence-artifact-0001",
+        created_at="2026-01-01T00:00:00+00:00",
+        outcomes=outcomes,
+        region_stage_id="regions",
+        semantic_execution_stage_ids=("interpret",),
+    )
+    writer = PerceptionRunWriter(
+        workspace_root=tmp_path,
+        sequence_name="sequence",
+        run_id=PerceptionRunId("run-0001"),
+        run_index=1,
+        sequence_artifact_id="sequence-artifact-0001",
+        selection_id="sha256:selection",
+        enabled_capabilities=frozenset({"semantic_interpreter"}),
+        pipeline_preset=preset,
+        configuration_digest=resolved.configuration_digest(),
+        selection_label="frame-0124",
+        profile_label="qwen",
+    )
+    writer.add_result(result)
+    writer.add_stage_outcomes(outcomes)
+    writer.finalize()
+
+    reader = PerceptionRunReader(
+        tmp_path / "runs" / "visual-perception" / "sequence" / "run-0001__frame-0124__qwen"
+    )
+    assert reader.list_results()[0].claims[0].hypothesis == "wooden pallet"
+    assert reader.list_semantic_executions()[0].request == _request(adapter)
+    assert reader.verify_integrity() == []

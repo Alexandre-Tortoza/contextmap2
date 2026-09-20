@@ -21,12 +21,24 @@ from contextmap.visual_perception import (
     Region2D,
     RegionId,
     RunArtifactError,
+    SemanticBackendDiagnostics,
+    SemanticInferenceProvenance,
+    SemanticInterpretationExecution,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticPromptTemplate,
+    SemanticRequestId,
+    SemanticVisualView,
     StageDefinition,
+    StageOutcome,
     StageStatus,
     VisualFeature,
+    VisualViewKind,
     allocate_run_index,
     execute_stage_graph,
+    parse_semantic_response,
     rebuild_run_registry,
+    render_semantic_prompt,
 )
 
 _PROVENANCE = BackendProvenance(
@@ -178,6 +190,93 @@ def test_stage_outcomes_are_persisted_as_metrics(tmp_path: Path) -> None:
     assert record["status"] == StageStatus.SUCCEEDED.value
 
 
+def test_semantic_execution_and_raw_response_are_persisted_and_reopened(
+    tmp_path: Path,
+) -> None:
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("region-request-0001"),
+        source_observation_id=SourceObservationId("frame-0001"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0001"),
+        mode=SemanticInterpretationMode.REGION,
+        region_id=RegionId("region-0001"),
+        visual_views=(
+            SemanticVisualView(
+                view_id="crop-0001",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference="outputs/views/crop-0001.jpg",
+                source_observation_id=SourceObservationId("frame-0001"),
+                region_id=RegionId("region-0001"),
+            ),
+        ),
+        prompt_template_id="region/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint="sha256:config",
+    )
+    raw_response = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "pallet",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": "thing",
+                    "attributes": {},
+                    "confidence": None,
+                }
+            ],
+            "scene_context": None,
+        }
+    )
+    provenance = SemanticInferenceProvenance(
+        backend=replace(
+            _PROVENANCE,
+            backend_id="fake-semantic",
+            capability="semantic_interpreter",
+            configuration_fingerprint="sha256:config",
+        ),
+        task_identity="fake-region",
+        prompt_template_id="region/v1",
+        output_schema_version="semantic-response/1",
+        raw_response_reference=(
+            "debug/40-semantic-interpretation/region-request-0001/raw-response.txt"
+        ),
+    )
+    execution = SemanticInterpretationExecution(
+        request=request,
+        rendered_prompt=render_semantic_prompt(
+            request, SemanticPromptTemplate.default_for(request.mode)
+        ),
+        raw_response=raw_response,
+        parsed=parse_semantic_response(raw_response, request, provenance),
+        diagnostics=SemanticBackendDiagnostics(latency_ms=3.5, input_tokens=10),
+        effective_configuration={"temperature": 0.0},
+    )
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+    manifest = writer.finalize()
+
+    assert manifest.schema_version == "0.4.0"
+    run_dir = _run_dir(tmp_path)
+    assert provenance.raw_response_reference is not None
+    raw_path = run_dir / provenance.raw_response_reference
+    assert raw_path.read_text(encoding="utf-8") == raw_response
+    reopened = PerceptionRunReader(run_dir).list_semantic_executions()
+    assert reopened == [execution]
+    assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+
 def test_readme_summarizes_the_run(tmp_path: Path) -> None:
     writer = _write_run(tmp_path)
     writer.add_result(_result("frame-0001", "run-0001"))
@@ -274,6 +373,21 @@ def test_opening_a_directory_without_a_manifest_fails(tmp_path: Path) -> None:
 
     with pytest.raises(IncompleteRunArtifactError):
         PerceptionRunReader(empty_dir)
+
+
+def test_reader_rejects_pre_semantic_contract_schema_before_reading_results(
+    tmp_path: Path,
+) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+    manifest_path = _run_dir(tmp_path) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = "0.3.0"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RunArtifactError, match=r"unsupported.*0\.3\.0"):
+        PerceptionRunReader(_run_dir(tmp_path))
 
 
 def test_verify_integrity_detects_a_missing_output_file(tmp_path: Path) -> None:

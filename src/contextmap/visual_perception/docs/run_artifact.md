@@ -15,6 +15,7 @@ workspace/
             │   ├── manifest.json                                      # ponto autoritativo
             │   ├── outputs/
             │   │   ├── results.jsonl                                   # um PerceptionResult por linha
+            │   │   ├── semantic-interpretations.jsonl                   # execução semântica auditável
             │   │   └── features/                                       # quando payloads são persistidos
             │   │       ├── feature-index.jsonl
             │   │       └── <observation-scope>/*.npy
@@ -22,7 +23,9 @@ workspace/
             │   │   ├── stage-timings.jsonl                             # um StageOutcome por linha
             │   │   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
             │   └── debug/
-            │       └── 30-feature-extraction/                          # somente standard/full
+            │       ├── 30-feature-extraction/                           # somente standard/full
+            │       └── 40-semantic-interpretation/<request-id>/
+            │           └── raw-response.txt                             # resposta exata do backend
             └── run-0002__frames-0120-0260__sam3-dinov2-qwen/
                 └── ...
 ```
@@ -33,7 +36,7 @@ workspace/
 flowchart LR
     INPUT["PerceptionResult[] + StageOutcome[]"] --> WRITER["PerceptionRunWriter"]
     WRITER --> TMP["diretório temporário irmão"]
-    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
+    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>outputs/semantic-interpretations.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
     FILES --> CHECK["checagem interna de consistência<br/>tamanho + hash + ownership"]
     CHECK -->|válido| FINAL["run-XXXX__selection__profile/"]
     FINAL --> READER["PerceptionRunReader"]
@@ -49,7 +52,7 @@ Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestam
 
 - **`outputs/results.jsonl`, não `outputs/results.parquet`.** Mesma decisão e mesmo motivo da issue #39 de Ingestion: nenhuma dependência de runtime nova (`pyarrow`/`pandas`) se justifica ainda; JSON Lines é inspecionável com ferramentas de texto padrão. Revisitar se o volume de resultados tornar leitura linha-a-linha um gargalo real.
 - **`outputs/results.jsonl` continua canônico para metadata; `outputs/features/feature-index.jsonl` indexa apenas payloads numéricos opt-in.** Cada `PerceptionResult` carrega suas `regions`/`features`/`claims`; o feature index não duplica esse contrato, apenas liga a chave `(source_observation_id, feature_id)` ao arquivo `.npy`, hash e metadata necessária para leitura lazy. `finalize()` valida essa referência cruzada antes de publicar o artifact.
-- **`debug/` só existe quando há conteúdo e nível `standard`/`full`.** Feature Extraction possui produtores concretos de metadata, suporte e previews (#72), então `PerceptionRunWriter` integra `FeatureExtractionDiagnostic` e `FeatureDiagnosticPreview` em `debug/30-feature-extraction/`. Nível `none` mantém apenas métricas obrigatórias; nenhum diretório vazio é materializado. Ver [`feature_diagnostics.md`](feature_diagnostics.md).
+- **`debug/` só existe quando há conteúdo real.** Feature Extraction materializa previews conforme o nível configurado. Semantic Interpretation materializa a resposta bruta exata em `debug/40-semantic-interpretation/<request-id>/raw-response.txt`; o path é referenciado tanto pelo registro contratual em `outputs/semantic-interpretations.jsonl` quanto pela proveniência da evidência canônica.
 - **`config.yaml`, `lineage.json`, `environment.json`, `events.jsonl` não são escritos no v0.** Nenhum destes tem produtor real ainda (configuração efetiva de backend, lineage de artefatos upstream, ambiente de execução, eventos granulares) — `manifest.json` já cobre a metadata mínima autoritativa (run_id, índice, sequência, seleção, capabilities, contagens). Adicionar esses arquivos vazios/parciais agora seria estrutura sem conteúdo real.
 
 ## Escrita atômica
@@ -60,14 +63,14 @@ Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.
 
 ## Leitura isolada, sem `runs.json`
 
-`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório** — `manifest.json` + `outputs/results.jsonl` bastam. `runs.json` nunca é necessário para abrir ou entender um run individual; `rebuild_run_registry()` pode reconstruí-lo do zero a qualquer momento a partir dos manifests.
+`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados e registros de execução contratuais; `debug/` não é dependência de leitura. `runs.json` nunca é necessário para abrir ou entender um run individual e pode ser reconstruído do zero a qualquer momento a partir dos manifests.
 
 ## `serialization.py`
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
 
-## Reprodutibilidade do pipeline resolvido (issue #55, `schema_version` 0.3.0)
+## Reprodutibilidade do pipeline resolvido (`schema_version` 0.4.0)
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
 
-O schema `0.3.0` registra também o `feature_scope` de cada estágio de extração no preset embutido. Esta é uma quebra pré-1.0; nenhum leitor para manifests históricos é mantido, seguindo a postura do milestone de não preservar compatibilidade sem consumidor real.
+O schema `0.4.0` incorpora a nova forma de `SemanticClaim` e os registros completos de execução semântica. Cada registro preserva request, prompt renderizado, resultado do parsing, diagnósticos e configuração efetiva; a resposta bruta é inventariada separadamente no path declarado. Esta é uma quebra pré-1.0: artifacts `0.3.0` são rejeitados na abertura, em vez de serem aceitos e falharem tardiamente durante `list_results()`.

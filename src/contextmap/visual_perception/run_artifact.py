@@ -25,7 +25,7 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -49,29 +49,36 @@ from contextmap.visual_perception.models import (
     VisualFeature,
 )
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
+from contextmap.visual_perception.semantic_backend import (
+    SemanticInterpretationExecution,
+    decode_semantic_execution,
+    encode_semantic_execution,
+)
 from contextmap.visual_perception.serialization import (
     decode_perception_result,
     encode_perception_result,
 )
-from contextmap.visual_perception.service import StageOutcome
+from contextmap.visual_perception.service import StageOutcome, StageStatus
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from contextmap.visual_perception.pipeline import PipelinePreset
 
-SCHEMA_VERSION = "0.3.0"
+SCHEMA_VERSION = "0.4.0"
 """Perception run artifact schema version written and understood by this module.
 
-Bumped to ``0.3.0`` when the embedded pipeline preset began recording
-the selected feature scope. This is a pre-1.0 schema, so no compatibility
-reader for historical manifests is kept.
+Bumped to ``0.4.0`` when canonical semantic evidence and execution audit
+records changed the persisted result and output contracts. This is a pre-1.0
+schema, so no compatibility reader for historical manifests is kept.
 """
 
 _MANIFEST_FILENAME = "manifest.json"
 _README_FILENAME = "README.md"
 _RESULTS_FILENAME = "outputs/results.jsonl"
 _METRICS_FILENAME = "metrics/stage-timings.jsonl"
+_SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
+_SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
 _REGISTRY_FILENAME = "runs.json"
 
@@ -214,6 +221,8 @@ class PerceptionRunWriter:
         self._results: list[PerceptionResult] = []
         self._source_observation_ids: set[SourceObservationId] = set()
         self._stage_outcomes: list[StageOutcome] = []
+        self._semantic_executions: list[SemanticInterpretationExecution] = []
+        self._semantic_request_ids: set[str] = set()
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
@@ -265,6 +274,17 @@ class PerceptionRunWriter:
         if self._finalized:
             raise RunArtifactError("cannot add stage outcomes after finalize()")
         self._stage_outcomes.extend(outcomes)
+        for outcome in outcomes:
+            if outcome.status is StageStatus.SUCCEEDED and isinstance(
+                outcome.output, SemanticInterpretationExecution
+            ):
+                request_id = str(outcome.output.request.request_id)
+                if request_id in self._semantic_request_ids:
+                    raise RunArtifactError(
+                        f"duplicate semantic request_id in perception run: {request_id!r}"
+                    )
+                self._semantic_executions.append(outcome.output)
+                self._semantic_request_ids.add(request_id)
 
     def add_feature_payload(
         self,
@@ -409,6 +429,33 @@ class PerceptionRunWriter:
         metrics_path.write_text(metrics_content, encoding="utf-8")
         file_entries.append(_file_entry(_METRICS_FILENAME, metrics_content.encode("utf-8")))
 
+        if self._semantic_executions:
+            semantic_records: list[dict[str, Any]] = []
+            for execution in self._semantic_executions:
+                raw_reference = _semantic_raw_response_reference(execution)
+                _validate_semantic_raw_response_reference(execution, raw_reference)
+                raw_path = self._tmp_dir / raw_reference
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                raw_path.write_text(execution.raw_response, encoding="utf-8")
+                file_entries.append(
+                    _file_entry(raw_reference, execution.raw_response.encode("utf-8"))
+                )
+                semantic_records.append(
+                    encode_semantic_execution(
+                        execution,
+                        raw_response_reference=raw_reference,
+                    )
+                )
+            semantic_content = "".join(
+                f"{json.dumps(record, sort_keys=True)}\n" for record in semantic_records
+            )
+            semantic_path = self._tmp_dir / _SEMANTIC_EXECUTIONS_FILENAME
+            semantic_path.parent.mkdir(parents=True, exist_ok=True)
+            semantic_path.write_text(semantic_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
+            )
+
         if self._feature_payloads:
             feature_store_root = self._tmp_dir / _FEATURES_DIRNAME
             feature_store = FeatureStoreWriter(feature_store_root)
@@ -517,6 +564,27 @@ class PerceptionRunReader:
                 if stripped:
                     results.append(decode_perception_result(json.loads(stripped)))
         return results
+
+    def list_semantic_executions(self) -> list[SemanticInterpretationExecution]:
+        """Return persisted semantic requests, prompts, responses, and diagnostics."""
+        executions_path = self._root / _SEMANTIC_EXECUTIONS_FILENAME
+        if not executions_path.is_file():
+            return []
+        executions: list[SemanticInterpretationExecution] = []
+        with executions_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                record = json.loads(stripped)
+                raw_reference = record["raw_response_reference"]
+                try:
+                    executions.append(decode_semantic_execution(record))
+                except (ValueError, KeyError, TypeError) as error:
+                    raise RunArtifactError(
+                        f"invalid semantic execution record for {raw_reference!r}: {error}"
+                    ) from error
+        return executions
 
     def result(self, source_observation_id: SourceObservationId) -> PerceptionResult:
         """Return this run's result for one physical observation.
@@ -650,6 +718,34 @@ def _encode_stage_outcome(outcome: StageOutcome) -> dict[str, Any]:
         "duration_ms": outcome.duration_ms,
         "error": outcome.error,
     }
+
+
+def _semantic_raw_response_reference(execution: SemanticInterpretationExecution) -> str:
+    request_id = str(execution.request.request_id)
+    request_path = PurePosixPath(request_id)
+    if request_path.name != request_id or request_id in {".", ".."}:
+        raise RunArtifactError(f"semantic request_id is not a safe path segment: {request_id!r}")
+    return f"{_SEMANTIC_DEBUG_ROOT}/{request_id}/raw-response.txt"
+
+
+def _validate_semantic_raw_response_reference(
+    execution: SemanticInterpretationExecution,
+    expected_reference: str,
+) -> None:
+    provenances = [claim.provenance for claim in execution.parsed.claims]
+    if execution.parsed.scene_context is not None:
+        provenances.append(execution.parsed.scene_context.provenance)
+        provenances.extend(claim.provenance for claim in execution.parsed.scene_context.claims)
+    mismatches = {
+        provenance.raw_response_reference
+        for provenance in provenances
+        if provenance.raw_response_reference != expected_reference
+    }
+    if mismatches:
+        raise RunArtifactError(
+            "semantic provenance raw_response_reference does not match the materialized path: "
+            f"expected {expected_reference!r}, found {sorted(mismatches, key=str)!r}"
+        )
 
 
 def _file_entry(relative_path: str, data: bytes) -> RunArtifactFileEntry:

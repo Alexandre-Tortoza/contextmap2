@@ -29,6 +29,9 @@ contextual crop. Cada view referencia o payload materializado, a observação de
 origem e, quando aplicável, a região congelada. `SemanticFeatureReference`
 registra `feature_id`, scope e `embedding_space_id`; o vetor não é embutido no
 request. `SceneContext` e metadata são opcionais e permanecem explícitos.
+`supporting_metadata` integra o request serializado e o prompt renderizado;
+portanto, o registro auditável coincide com o conteúdo textual efetivamente
+entregue ao modelo.
 
 Uma requisição de região pode usar apenas pixels/views. Features DINO/CLIP ou
 contexto de cena nunca são dependências ocultas nem obrigatórias do contrato.
@@ -69,17 +72,31 @@ fingerprint SHA-256 do texto efetivo. Template, modo e schema devem coincidir
 com o request antes da renderização.
 
 `parse_semantic_response()` aceita somente o objeto JSON do schema
-`semantic-response/1`. Ele preserva `PRIMARY`/`ALTERNATIVE`, ausência real de
-confidence, atributos escalares e campos estruturados de cena. Uma resposta de
-região precisa conter exatamente uma hipótese primária; abstention é explícita
-e não pode carregar claims escondidas.
+`semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
+`scene_context=null` e ao menos uma claim com exatamente uma primária; SCENE
+exige um objeto `scene_context` e permite `claims=[]` quando os campos
+estruturados já expressam a evidência sem redundância. Abstention é explícita e
+não pode carregar saída semântica escondida.
 
-Campos inesperados, tipos inválidos, JSON malformado, confidence não finita ou
-fora de `[0, 1]` e conteúdo obrigatório ausente causam
+Campos inesperados, tipos inválidos, JSON malformado, confidence diferente de
+`null` e conteúdo obrigatório ausente causam
 `SemanticResponseParseError`. A única reparação v1 é remover uma code fence JSON
 externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
-nunca completa labels, confidence ou atributos ausentes e registra o hash da
-resposta bruta separadamente dos outputs canônicos.
+nunca promove confiança auto-relatada pelo VLM: `SemanticClaim.confidence`
+permanece `None` até existir uma fonte medida ou calibrada fora da resposta do
+modelo. O hash da resposta bruta é registrado separadamente dos outputs
+canônicos.
+
+## Materialização e persistência
+
+`assemble_perception_result()` recebe explicitamente os ids dos stages que
+produziram `SemanticInterpretationExecution` e materializa
+`execution.parsed.claims`/`scene_context` no `PerceptionResult`, validando as
+identidades da observação e do resultado. Ao receber os mesmos outcomes,
+`PerceptionRunWriter` persiste a execução em
+`outputs/semantic-interpretations.jsonl` e materializa a resposta bruta no path
+de debug declarado pela proveniência. Assim, execução, evidência canônica e
+artifact permanecem ligados pelo mesmo request id.
 
 ## Adapter Qwen
 

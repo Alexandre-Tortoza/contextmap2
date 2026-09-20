@@ -134,22 +134,80 @@ def render_semantic_prompt(
             if request.scene_context_reference is None
             else request.scene_context_reference.evidence_id
         ),
-    }
-    schema = {
-        "abstained": "boolean",
-        "claims": [
-            {
-                "hypothesis": "string",
-                "role": "primary | alternative",
-                "category": "string | null",
-                "region_kind": "thing | stuff | null",
-                "attributes": "object with scalar values",
-                "confidence": "number in [0,1] | null",
-            }
+        "supporting_metadata": [
+            {"name": item.name, "value": item.value} for item in request.supporting_metadata
         ],
-        "scene_context": (
-            "object with scene_type/environment/layout/lighting/visibility/navigability | null"
-        ),
+    }
+    claim_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "hypothesis",
+            "role",
+            "category",
+            "region_kind",
+            "attributes",
+            "confidence",
+        ],
+        "properties": {
+            "hypothesis": {"type": "string"},
+            "role": {"enum": ["primary", "alternative"]},
+            "category": {"type": ["string", "null"]},
+            "region_kind": {"enum": ["thing", "stuff", None]},
+            "attributes": {
+                "type": "object",
+                "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
+            },
+            "confidence": {"type": "null"},
+        },
+    }
+    scene_context_schema: dict[str, object]
+    minimum_claims: int
+    if request.mode is SemanticInterpretationMode.REGION:
+        minimum_claims = 1
+        scene_context_schema = {"type": "null"}
+    else:
+        minimum_claims = 0
+        scene_fields = (
+            "scene_type",
+            "environment",
+            "layout",
+            "lighting",
+            "visibility",
+            "navigability",
+        )
+        scene_context_schema = {
+            "additionalProperties": False,
+            "properties": {name: {"type": ["string", "null"]} for name in scene_fields},
+            "type": "object",
+        }
+    claims_schema: dict[str, object] = {
+        "type": "array",
+        "minItems": minimum_claims,
+        "items": claim_schema,
+    }
+    if request.mode is SemanticInterpretationMode.REGION:
+        claims_schema["description"] = "Exactly one item must have role=primary."
+    schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["abstained", "claims", "scene_context"],
+        "oneOf": [
+            {
+                "properties": {
+                    "abstained": {"const": True},
+                    "claims": {"type": "array", "maxItems": 0},
+                    "scene_context": {"type": "null"},
+                },
+            },
+            {
+                "properties": {
+                    "abstained": {"const": False},
+                    "claims": claims_schema,
+                    "scene_context": scene_context_schema,
+                },
+            },
+        ],
     }
     text = "\n\n".join(
         (
@@ -205,14 +263,13 @@ def parse_semantic_response(
             abstained=True,
             diagnostics=diagnostics,
         )
-    if not raw_claims:
-        raise SemanticResponseParseError("non-abstained response requires at least one claim")
-
     claims = tuple(
         _parse_claim(item, request=request, provenance=provenance, index=index)
         for index, item in enumerate(raw_claims)
     )
     if request.mode is SemanticInterpretationMode.REGION:
+        if not claims:
+            raise SemanticResponseParseError("non-abstained region response requires a claim")
         if data["scene_context"] is not None:
             raise SemanticResponseParseError("region response scene_context must be null")
         if sum(claim.role is HypothesisRole.PRIMARY for claim in claims) != 1:
@@ -308,11 +365,7 @@ def _parse_claim(
 ) -> SemanticClaim:
     data = _mapping(value, f"claim[{index}]")
     allowed = {"hypothesis", "role", "category", "region_kind", "attributes", "confidence"}
-    unexpected = set(data) - allowed
-    if unexpected:
-        raise SemanticResponseParseError(
-            f"claim[{index}] contains unexpected fields: {sorted(unexpected)}"
-        )
+    _require_exact_keys(data, allowed, f"claim[{index}]")
     hypothesis = data.get("hypothesis")
     if not isinstance(hypothesis, str) or not hypothesis.strip():
         raise SemanticResponseParseError(f"claim[{index}].hypothesis must be a non-empty string")
@@ -344,13 +397,10 @@ def _parse_claim(
             SemanticAttribute(name=name, value=cast(JsonScalar, attribute_value))
         )
     confidence = data.get("confidence")
-    if confidence is not None and (
-        isinstance(confidence, bool)
-        or not isinstance(confidence, (int, float))
-        or not isfinite(confidence)
-        or not 0.0 <= confidence <= 1.0
-    ):
-        raise SemanticResponseParseError(f"claim[{index}].confidence must be in [0, 1] or null")
+    if confidence is not None:
+        raise SemanticResponseParseError(
+            f"claim[{index}].confidence must be null; model-reported confidence is uncalibrated"
+        )
     return SemanticClaim(
         claim_id=ClaimId(
             f"{request.perception_result_id}--semantic-{request.request_id}-{index:04d}"
@@ -363,7 +413,7 @@ def _parse_claim(
         category=category,
         region_kind=region_kind,
         attributes=tuple(parsed_attributes),
-        confidence=None if confidence is None else float(confidence),
+        confidence=None,
         region_id=request.region_id,
         evidence_references=request.evidence_references(),
     )
