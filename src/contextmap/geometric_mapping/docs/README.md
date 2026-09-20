@@ -24,7 +24,7 @@ Geometria é **onde** algo está. Evidência visual, semântica e identidade de 
 
 ## Estado implementado
 
-Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)) e a **transformação fonte→mapa** com traces auditáveis (ver [`transformation.md`](transformation.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: acumulação com referências estáveis, índice espacial e lookup, `GeometricMapArtifact` e a validação.
+Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)) a **transformação fonte→mapa** com traces auditáveis (ver [`transformation.md`](transformation.md)) e a **acumulação do mapa** com referências estáveis e índice de origem (ver [`accumulation.md`](accumulation.md)). Estão **planejados**, e serão documentados aqui quando forem implementados: índice espacial e lookup, `GeometricMapArtifact` e a validação.
 
 ## Contratos públicos
 
@@ -36,6 +36,7 @@ Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado ex
 - `MotionCorrectionState`, `MotionCorrectionRecord`, `MotionCorrectionEvidence`, `MotionCorrectionPolicy`, `ScanDisposition`, `MotionCorrectionVerdict` — se um scan foi corrigido para o movimento da plataforma (`RAW`/`CORRECTED`/`UNKNOWN`), com a evidência que sustenta a afirmação e a política aplicada.
 - `GeometryInputPlan`, `GeometryInput`, `GeometryInputRejection`, `InputRejectionReason`, `PointCloudLayout`, `assemble_geometry_inputs()`, `assemble_geometry_inputs_from_artifacts()` — os scans de um trecho selecionado pareados com pose, extrínseco, layout e estado de correção, com os scans recusados e o motivo.
 - `TransformedScan`, `TracedTransform`, `TransformTrace`, `transform_scan()`, `transform_scans()`, `verify_transform_trace()`, `GeometryTransformError` — os pontos de um scan no frame do mapa junto das coordenadas originais, a cadeia aplicada e o trace de auditoria de um ponto.
+- `MapAccumulator`, `accumulate_plan()`, `AccumulatedMap`, `ScanVoxelPolicy`, `ScanRecord`, `PackedGeometry`, `geometry_index_of()`, `AccumulationError` — acumulação em fluxo dos scans transformados em um mapa, com agregação opcional explícita, índice de origem e a leitura do payload por referência.
 - `GeometrySource` — fronteira de leitura (`get`, `iter_geometry`, `query_bounds`) que Sensor Association e demais consumidores usam sem depender de como o mapa é armazenado ou indexado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
@@ -56,5 +57,6 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 - [`motion-correction.md`](motion-correction.md) — estado de correção de movimento, evidência e política de scans não corrigidos.
 - [`inputs.md`](inputs.md) — seleção, montagem dos inputs, layout do payload e scans recusados.
 - [`transformation.md`](transformation.md) — cadeia `T_map_body · T_body_source`, linhagem, validação, precisão e traces.
+- [`accumulation.md`](accumulation.md) — acumulação, formato do payload, referências estáveis, índice de origem e agregação.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `GeometryPoint`, `GeometryReference` e `GeometricMap` no contexto global de contratos.
