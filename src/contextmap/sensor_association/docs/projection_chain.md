@@ -47,7 +47,7 @@ O índice de máscara de um pixel preparado de centro `c` é `floor(c + 0.5)`, o
 
 ### Suporte
 
-O `FrameProjection` classifica cada ponto em quatro estágios exclusivos (`stage_counts()` os particiona):
+O `FrameProjection` guarda, por ponto, a profundidade óptica `z` e o alcance, os pixels crus e preparados e os estágios. Ele classifica cada ponto em quatro estágios exclusivos (`stage_counts()` os particiona):
 
 | Estágio | Significado |
 | --- | --- |

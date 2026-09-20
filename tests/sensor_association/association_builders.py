@@ -14,6 +14,7 @@ from contextmap.ingestion import (
 from contextmap.sensor_association import (
     AssociationProvenance,
     CalibrationRef,
+    DepthMetric,
     PoseRef,
     ProjectionSummary,
     SemanticClaimRef,
@@ -86,7 +87,7 @@ def make_provenance(*, map_id: MapId = MAP_ID) -> AssociationProvenance:
         geometric_map_id=map_id,
         perception_run_id=PerceptionRunId("run-0001"),
         sequence_artifact_id=SequenceArtifactId("sequence-0001"),
-        visibility_policy_id="conservative-range-support-v1",
+        visibility_policy_id="conservative-depth-support-v1",
         membership_policy_id="mask-membership-v1",
         configuration_fingerprint="sha256:association-config",
         code_version="test",
@@ -96,6 +97,7 @@ def make_provenance(*, map_id: MapId = MAP_ID) -> AssociationProvenance:
 def make_summary(*, considered: int = 100, visible: int = 60) -> ProjectionSummary:
     return ProjectionSummary(
         camera_model_kind="mei",
+        depth_metric=DepthMetric.RAY_RANGE,
         image_transform_id="sha256:raw-to-prepared",
         prepared_image_size=(640, 480),
         considered_count=considered,

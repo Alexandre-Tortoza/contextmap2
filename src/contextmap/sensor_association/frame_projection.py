@@ -161,6 +161,7 @@ class FrameProjection:
         pose_ref: The pose that placed the camera.
         extrinsic: The static body-to-camera extrinsic used.
         image_transform: The raw-to-prepared chain used.
+        camera_depth_m: ``(N,)`` signed ``z`` in the camera optical frame, in meters.
         camera_range_m: ``(N,)`` distance from the optical center, in meters.
         raw_pixels: ``(N, 2)`` raw-image pixels; ``NaN`` where the model cannot project.
         prepared_pixels: ``(N, 2)`` prepared-image pixels; ``NaN`` where not projected.
@@ -177,6 +178,7 @@ class FrameProjection:
     pose_ref: PoseRef
     extrinsic: ExtrinsicRef
     image_transform: RawToPreparedTransform
+    camera_depth_m: NDArray[Any]
     camera_range_m: NDArray[Any]
     raw_pixels: NDArray[Any]
     prepared_pixels: NDArray[Any]
@@ -198,7 +200,8 @@ class FrameProjection:
         vector_shape = (count,)
         pixel_shape = (count, 2)
         if (
-            self.camera_range_m.shape != vector_shape
+            self.camera_depth_m.shape != vector_shape
+            or self.camera_range_m.shape != vector_shape
             or self.in_prepared_image.shape != vector_shape
             or self.in_valid_support.shape != vector_shape
         ):
@@ -425,6 +428,7 @@ class FrameProjector:
                 child_frame=entry.frame_id,
             ),
             image_transform=transform,
+            camera_depth_m=projected.depth_m,
             camera_range_m=projected.range_m,
             raw_pixels=projected.pixels,
             prepared_pixels=prepared_pixels,

@@ -345,3 +345,27 @@ def full_mask(width: int, height: int, *, hole: tuple[int, int] | None = None) -
         height=height,
         data=tuple((x, y) != hole for y in range(height) for x in range(width)),
     )
+
+
+def map_point_for_pixel(
+    u: float,
+    v: float,
+    depth_z: float,
+    *,
+    focal_px: float = FOCAL_PX,
+    principal: tuple[float, float] = (PRINCIPAL_X, PRINCIPAL_Y),
+) -> Vector3:
+    """The map-frame point a pinhole camera sees at raw pixel ``(u, v)`` and depth ``depth_z``.
+
+    Assumes the body sits at the map origin with identity orientation and the camera
+    at the body origin, so body ``x`` is camera ``z``, body ``y`` is camera ``-x`` and
+    body ``z`` is camera ``-y``.
+    """
+    x_camera = (u - principal[0]) / focal_px * depth_z
+    y_camera = (v - principal[1]) / focal_px * depth_z
+    return (depth_z, -x_camera, -y_camera)
+
+
+def map_point_for_camera_point(camera_point: Vector3) -> Vector3:
+    """The map-frame point at a camera-frame position, under the same placement."""
+    return (camera_point[2], -camera_point[0], -camera_point[1])
