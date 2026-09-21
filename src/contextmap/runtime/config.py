@@ -394,37 +394,71 @@ def check_availability(
     Returns:
         One problem per missing module or secret; empty when everything is present.
     """
+    problems: list[ConfigProblem] = []
+    for component_id, component in config.components.items():
+        problems.extend(
+            check_component_availability(
+                component_id, component, environ=environ, module_available=module_available
+            )
+        )
+    return tuple(problems)
+
+
+def check_component_availability(
+    component_id: str,
+    component: ComponentConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+    module_available: Callable[[str], bool] | None = None,
+    check_modules: bool = True,
+) -> tuple[ConfigProblem, ...]:
+    """Report what one selected backend is missing, without loading anything.
+
+    Args:
+        component_id: Identity of the variation point, ``"<capability>.<slot>"``.
+        component: Its resolved configuration.
+        environ: Environment to look secrets up in; defaults to ``os.environ``.
+        module_available: Predicate telling whether a top-level module can be
+            imported; defaults to an :mod:`importlib` lookup.
+        check_modules: Whether the backend's optional modules are required. A caller
+            that supplies the model runtime itself passes ``False``: the modules are
+            then the supplied runtime's concern, not the bundled code's.
+
+    Returns:
+        One problem per missing module or secret; empty when nothing is missing or no
+        backend is selected.
+    """
+    if component.backend is None:
+        return ()
     environment = os.environ if environ is None else environ
     available = module_available or _module_available
+    spec = COMPONENTS[component_id].backends[component.backend]
+    path = f"components.{component_id}"
     problems = []
-    for component_id, component in config.components.items():
-        if component.backend is None:
-            continue
-        spec = COMPONENTS[component_id].backends[component.backend]
-        for module in spec.requires:
-            if not available(module):
-                hint = f" ({spec.install_hint})" if spec.install_hint else ""
-                problems.append(
-                    ConfigProblem(
-                        path=f"components.{component_id}",
-                        message=(
-                            f"backend {component.backend!r} needs the optional module "
-                            f"{module!r}, which is not installed{hint}"
-                        ),
-                    )
+    for module in spec.requires if check_modules else ():
+        if not available(module):
+            hint = f" ({spec.install_hint})" if spec.install_hint else ""
+            problems.append(
+                ConfigProblem(
+                    path=path,
+                    message=(
+                        f"backend {component.backend!r} needs the optional module "
+                        f"{module!r}, which is not installed{hint}"
+                    ),
                 )
-        for name in spec.secrets:
-            if not environment.get(name):
-                problems.append(
-                    ConfigProblem(
-                        path=f"components.{component_id}",
-                        message=(
-                            f"backend {component.backend!r} needs the environment secret "
-                            f"{name}; set it in the environment, it is never stored in "
-                            "configuration"
-                        ),
-                    )
+            )
+    for name in spec.secrets:
+        if not environment.get(name):
+            problems.append(
+                ConfigProblem(
+                    path=path,
+                    message=(
+                        f"backend {component.backend!r} needs the environment secret "
+                        f"{name}; set it in the environment, it is never stored in "
+                        "configuration"
+                    ),
                 )
+            )
     return tuple(problems)
 
 
@@ -925,13 +959,26 @@ def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesCon
     return PoliciesConfig(debug_level=str(level))
 
 
+def _declared_channels(parameters: Mapping[str, ConfigValue]) -> tuple[ConfigValue, ...]:
+    """Read the evidence channels a fusion policy declares, baseline or quality-aware."""
+    baseline = parameters.get("baseline")
+    scopes = [parameters]
+    if isinstance(baseline, Mapping):
+        scopes.append(baseline)  # a política ciente de qualidade guarda os canais em `baseline`.
+    channels: list[ConfigValue] = []
+    for scope in scopes:
+        declared = scope.get("channels")
+        if isinstance(declared, tuple):
+            channels.extend(declared)
+    return tuple(channels)
+
+
 def _incompatibilities(config: RuntimeConfig) -> list[ConfigProblem]:
     """Find selections that contradict each other, independent of what is installed."""
     problems = []
     accumulation = config.components.get("semantic_fusion.accumulation")
     if accumulation is not None and accumulation.backend is not None:
-        channels = accumulation.parameters.get("channels", ())
-        uses_3d = isinstance(channels, tuple) and "point_representation" in channels
+        uses_3d = "point_representation" in _declared_channels(accumulation.parameters)
         if uses_3d and not config.pipeline.stages.get("point_representation", False):
             problems.append(
                 ConfigProblem(

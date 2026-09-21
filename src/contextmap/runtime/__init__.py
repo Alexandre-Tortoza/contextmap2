@@ -13,6 +13,12 @@ from contextmap.runtime.catalog import (
     RuntimePreset,
     StageDeclaration,
 )
+from contextmap.runtime.composition import (
+    ComposedRuntime,
+    FeatureBuildScope,
+    RuntimeProvider,
+    compose,
+)
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
     DEBUG_LEVELS,
@@ -29,6 +35,7 @@ from contextmap.runtime.config import (
     ResourcesConfig,
     RuntimeConfig,
     check_availability,
+    check_component_availability,
     check_selection,
     parse_override,
     read_effective_config,
@@ -36,19 +43,32 @@ from contextmap.runtime.config import (
     resolve_secrets,
     write_effective_config,
 )
+from contextmap.runtime.errors import (
+    BackendConfigurationError,
+    BackendRuntimeMissingError,
+    BackendUnavailableError,
+    CompositionError,
+    StageUnavailableError,
+)
 
 __all__ = [
     "CANONICAL_PROFILE_ID",
     "CONFIG_SCHEMA_VERSION",
     "DEBUG_LEVELS",
     "EFFECTIVE_CONFIG_FILENAME",
+    "BackendConfigurationError",
+    "BackendRuntimeMissingError",
     "BackendSpec",
+    "BackendUnavailableError",
     "ComponentConfig",
     "ComponentSpec",
+    "ComposedRuntime",
+    "CompositionError",
     "ConfigProblem",
     "ConfigurationError",
     "ConfigurationSource",
     "EffectiveConfig",
+    "FeatureBuildScope",
     "InputsConfig",
     "PipelineConfig",
     "PoliciesConfig",
@@ -56,9 +76,13 @@ __all__ = [
     "ResourcesConfig",
     "RuntimeConfig",
     "RuntimePreset",
+    "RuntimeProvider",
     "StageDeclaration",
+    "StageUnavailableError",
     "check_availability",
+    "check_component_availability",
     "check_selection",
+    "compose",
     "parse_override",
     "read_effective_config",
     "resolve_effective_config",

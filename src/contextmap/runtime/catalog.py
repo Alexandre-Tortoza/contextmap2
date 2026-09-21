@@ -29,8 +29,10 @@ class BackendSpec:
     Attributes:
         backend_id: Identity used in configuration. For a policy it is the policy
             identity the owning capability already versions.
-        requires: Top-level optional modules that must be importable when the backend
-            is constructed. They are only looked up, never imported, by discovery.
+        requires: Top-level optional modules the backend's *bundled* code imports when
+            it is constructed. A backend whose model runtime the caller supplies lists
+            none: that runtime's modules are the caller's concern. They are only looked
+            up, never imported, by discovery.
         secrets: Names of the environment variables that carry credentials this
             backend needs. Values are never part of configuration.
         device_parameter: Name of the backend parameter that receives
@@ -147,11 +149,9 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
     _component(
         "visual_perception",
         "region_discovery",
-        BackendSpec(backend_id="sam2", requires=("torch", "sam2"), device_parameter="device"),
-        BackendSpec(backend_id="sam3", requires=("torch", "sam3"), device_parameter="device"),
-        BackendSpec(
-            backend_id="florence2", requires=("torch", "transformers"), device_parameter="device"
-        ),
+        BackendSpec(backend_id="sam2", device_parameter="device"),
+        BackendSpec(backend_id="sam3", device_parameter="device"),
+        BackendSpec(backend_id="florence2", device_parameter="device"),
     ),
     _component(
         "visual_perception",
@@ -198,7 +198,7 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         "point_representation",
         "encoder",
         BackendSpec(backend_id="geometric_descriptor"),
-        BackendSpec(backend_id="ptv3", requires=("torch",), device_parameter="device"),
+        BackendSpec(backend_id="ptv3", device_parameter="device"),
     ),
     _component(
         "semantic_fusion",

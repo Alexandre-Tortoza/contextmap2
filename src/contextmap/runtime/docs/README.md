@@ -12,8 +12,9 @@ flowchart LR
     RES --> EFF["EffectiveConfig<br/>config + digest + sources"]
     EFF --> CHK["check_selection()<br/>check_availability()"]
     ENV["Ambiente"] -. só segredos .-> SEC["resolve_secrets()"]
-    EFF -. planejado .-> COMP["Composition root"]
-    COMP -. planejado .-> DAG["DAG, reuse, lifecycle, CLI"]
+    EFF --> COMP["compose()<br/>composition root"]
+    COMP --> IMPL["ComposedRuntime<br/>ports das capabilities"]
+    IMPL -. planejado .-> DAG["DAG, reuse, lifecycle, CLI"]
 ```
 
 ## O que este módulo explicitamente não possui
@@ -26,7 +27,9 @@ flowchart LR
 
 Existe a **configuração versionada e a resolução da configuração efetiva** (issue #161): o catálogo estático de stages, pontos de variação e backends; o perfil `canonical/1`; a precedência perfil < arquivos < overrides; o digest determinístico; a persistência atômica de `effective_config.json`; a resolução de segredos somente a partir do ambiente; e as verificações de completude e de disponibilidade que rodam antes de qualquer execução pesada.
 
-A composition root, o DAG, o reuse, a seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Detalhes em [`configuration.md`](configuration.md).
+Existe também a **composition root** (issue #162): `compose()` constrói, a partir da configuração efetiva, as implementações de ingestion, percepção visual, state estimation, point representation e semantic fusion atrás dos ports das capabilities, com falha explícita para backend indisponível ou sem runtime e sem qualquer fallback. Detalhes em [`composition.md`](composition.md).
+
+O DAG, o reuse, a seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -38,7 +41,10 @@ A composition root, o DAG, o reuse, a seleção de runs, a CLI e o lifecycle sã
 - `write_effective_config()`, `read_effective_config()`, `EFFECTIVE_CONFIG_FILENAME` — persistência e verificação do documento.
 - `CANONICAL_PROFILE_ID`, `CONFIG_SCHEMA_VERSION`, `DEBUG_LEVELS` — identidades e constantes.
 - `BackendSpec`, `ComponentSpec`, `StageDeclaration`, `RuntimePreset` — o catálogo estático.
+- `compose()`, `ComposedRuntime`, `FeatureBuildScope`, `RuntimeProvider` — a composition root e o estado de execução de que os extratores de features precisam.
+- `CompositionError`, `BackendConfigurationError`, `BackendUnavailableError`, `BackendRuntimeMissingError`, `StageUnavailableError` — falhas de composição, todas explícitas.
+- `check_component_availability()` — a checagem de disponibilidade de um único ponto de variação.
 
 ## Módulos consumidos
 
-Nenhum em produção: o catálogo é dado puro e não importa backend algum. Os testes verificam que as identidades de política e o canal de evidência que ele nomeia ainda existem em `contextmap.semantic_fusion`.
+A configuração e o catálogo não importam capability alguma. A composition root importa, **dentro da factory que os usa**, os backends concretos e as configurações das capabilities que compõe (`ingestion`, `visual_perception`, `state_estimation`, `point_representation`, `semantic_fusion`); é a única exceção permitida à regra de não importar backends. Os testes verificam que as identidades de política e o canal de evidência que o catálogo nomeia ainda existem em `contextmap.semantic_fusion`, e que o catálogo e a tabela de factories concordam.
