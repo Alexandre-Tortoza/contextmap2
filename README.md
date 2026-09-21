@@ -157,4 +157,4 @@ Consulte [docs/versioning.md](docs/versioning.md) para a política completa.
 
 ## Licença
 
-GNU Affero General Public License v3.0. Consulte [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 (`AGPL-3.0-only`). Consulte [LICENSE](LICENSE). Modelos, pesos e runtimes de terceiros não são redistribuídos e mantêm as licenças de seus fornecedores: veja [docs/third-party-licenses.md](docs/third-party-licenses.md).
