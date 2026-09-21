@@ -169,10 +169,46 @@ Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito
 Métricas de tokens, latência, memória e warnings são registradas quando o
 runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
 diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
-registrada para `scene_context` omitido (#340), mas não usou um reference set
-versionado nem o protocolo completo de avaliação. Uma execução de referência
-continua exigindo ambiente compatível e deve ser registrada pelo protocolo de
-avaliação.
+registrada para `scene_context` omitido (#340).
+
+### Runtime Transformers (`HuggingFaceQwenRuntime`)
+
+`HuggingFaceQwenRuntime` implementa `QwenRuntime` com `AutoProcessor` e
+`AutoModelForImageTextToText`, de modo que a mesma classe carrega Qwen2.5-VL e
+Qwen3-VL. As importações de `torch`, `transformers` e `PIL` são lazy: sem elas o
+runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
+
+- **Identidade imutável.** O runtime exige `QwenSemanticConfig.revision`, um SHA
+  de commit completo do Hugging Face. O campo é opcional no seam (fakes e
+  gateways não precisam dele), mas entra no fingerprint quando presente, e o
+  runtime recusa `revision=None`. Por padrão só lê o cache local
+  (`local_files_only=True`).
+- **Quantização realmente aplicada.** `quantization="4bit"` carrega com
+  `BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+  bnb_4bit_compute_dtype=<precision>)` e `"8bit"` com `load_in_8bit=True`
+  (LLM.int8). Depois do load, o runtime confere que o modelo reporta
+  `quantization_config`; um modelo que ignorou o pedido causa
+  `QwenModelLoadError` em vez de rodar silenciosamente em precisão plena.
+  Quantização exige device CUDA. Como ela altera saída e custo, faz parte da
+  configuração efetiva e do fingerprint.
+- **Decoding explícito.** `temperature=0` usa decoding guloso e anula
+  `top_p`/`top_k` herdados do `generation_config` do checkpoint; um valor
+  positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
+  pela revisão).
+- **Evidência e prompt.** As views chegam como imagens, na ordem do request,
+  seguidas do prompt canônico renderizado (`region/v1` ou `scene/v1`). O runtime
+  não acrescenta instrução própria. As referências são resolvidas dentro de
+  `view_root` e não podem escapar dele.
+- **Diagnóstico.** Cada resposta traz tokens de entrada/saída e
+  `peak_memory_bytes`, o pico de memória alocada na GPU pelo processo (pesos
+  mais ativações, não a memória de outras sessões). Atingir `max_new_tokens`
+  gera um warning, porque o JSON provavelmente foi truncado e essa falha de
+  parsing não é falha semântica do modelo. `load()` permite carregar antes de
+  medir latência, para que o load único não seja atribuído à primeira request.
+
+O runtime não corrige nem reinterpreta a resposta: o texto gerado segue para o
+parser canônico, e uma resposta fora do schema continua sendo falha explícita de
+parsing.
 
 ## Adapter Gemini
 
