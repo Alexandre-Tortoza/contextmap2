@@ -23,7 +23,7 @@ Desabilitar debug não remove `VisualFeature`, payload, índice nem métricas de
 - preprocessing ordenado;
 - timing, memória, warnings, falha ou abstention.
 
-`DenseFeatureDiagnostic` acrescenta artifact de origem, grid, stride, suporte e transformação espacial. `RegionFeatureDiagnostic` acrescenta região/box, view de suporte, mask reference/hash, transformação e estatísticas de pooling quando aplicáveis.
+`DenseFeatureDiagnostic` acrescenta artifact de origem, grid, origem (`origin_x`, `origin_y`), stride, suporte e transformação espacial. Essa geometria é contratual: ela vai em `metrics/feature-extraction.jsonl` (chave `dense`, com o tamanho da imagem preparada) em qualquer nível de debug, e reconstrói exatamente o `DenseFeatureSampling` do mapa. Sem ela o payload denso não vira mapa espacial reaberto de um run; uma execução real com DINOv3 mostrou que antes a geometria só existia em `debug/` e sem a origem, obrigando o leitor a supor `(0, 0)`. `RegionFeatureDiagnostic` acrescenta região/box, view de suporte, mask reference/hash, transformação e estatísticas de pooling quando aplicáveis.
 
 Falha ou abstention pode existir sem inventar `feature_id`/payload. Eventos bem-sucedidos ou com warning exigem metadata completa. Estatísticas de pooling são um grupo coerente: todas presentes ou todas ausentes.
 
@@ -31,7 +31,7 @@ Falha ou abstention pode existir sem inventar `feature_id`/payload. Eventos bem-
 
 ### `none`
 
-Persiste apenas `metrics/feature-extraction.jsonl`, além dos outputs contratuais normais. Nenhum diretório `debug/` é criado.
+Persiste apenas `metrics/feature-extraction.jsonl` (que inclui a geometria densa), além dos outputs contratuais normais. Nenhum diretório `debug/` é criado.
 
 ### `standard`
 
