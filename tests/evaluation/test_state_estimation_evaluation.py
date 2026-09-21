@@ -19,6 +19,7 @@ from contextmap.evaluation import (
     ReferenceRole,
     ReferenceTrajectory,
     StateEstimationEvaluationError,
+    StateEstimationEvaluationReport,
     compare_state_estimation_reports,
     encode_state_estimation_report,
     evaluate_state_estimation,
@@ -251,16 +252,116 @@ def test_relative_pose_error_exposes_drift_that_alignment_hides() -> None:
     report = evaluate_state_estimation(
         trajectory=drifting,
         reference=_reference(reference),
-        reference_config=_config(alignment=AlignmentMethod.SE3, relative_pair_offset=1),
+        reference_config=_config(
+            alignment=AlignmentMethod.SE3,
+            relative_interval_ns=100 * MS,
+            relative_interval_tolerance_ns=1 * MS,
+        ),
     )
 
     accuracy = report.accuracy
     assert accuracy is not None
     assert accuracy.rpe is not None
-    assert accuracy.rpe.pair_offset == 1
+    assert accuracy.rpe.interval_ns == 100 * MS
     assert accuracy.rpe.translation_m.rmse == pytest.approx(0.1)
     assert accuracy.rpe.rotation_rad.maximum == pytest.approx(0.0, abs=1e-12)
     assert accuracy.rpe.pair_count == 5
+
+
+def test_relative_pose_error_is_anchored_on_time_so_missing_reference_poses_do_not_stretch_it() -> (
+    None
+):
+    # A referência perde toda terceira pose (como o GT real perde ~25% delas): pareando por
+    # índice, alguns pares cobririam 300 ms em vez de 200 ms e o erro relativo cresceria.
+    estimated = straight_line(13, step_m=1.1)
+    reference_poses = straight_line(13, step_m=1.0)
+    kept = [pose for index, pose in enumerate(reference_poses.poses) if index % 3 != 2]
+    reference = trajectory_from(
+        [
+            (pose.timestamp.total_nanoseconds(), pose.translation_m, pose.orientation)
+            for pose in kept
+        ]
+    )
+
+    report = evaluate_state_estimation(
+        trajectory=estimated,
+        reference=_reference(reference),
+        reference_config=_config(
+            alignment=AlignmentMethod.SE3,
+            relative_interval_ns=200 * MS,
+            relative_interval_tolerance_ns=5 * MS,
+        ),
+    )
+
+    accuracy = report.accuracy
+    assert accuracy is not None and accuracy.rpe is not None
+    assert accuracy.rpe.interval_ns == 200 * MS
+    # 0,1 m de deriva por 100 ms: exatamente 0,2 m por 200 ms, sem par de 300 ms.
+    assert accuracy.rpe.translation_m.median == pytest.approx(0.2)
+    assert accuracy.rpe.translation_m.maximum == pytest.approx(0.2)
+    assert accuracy.rpe.pair_count == accuracy.rpe.translation_m.count > 0
+
+
+def test_no_pair_at_the_interval_means_no_relative_error_instead_of_a_wrong_one() -> None:
+    report = evaluate_state_estimation(
+        trajectory=straight_line(6),
+        reference=_reference(straight_line(6)),
+        reference_config=_config(
+            relative_interval_ns=10_000 * MS, relative_interval_tolerance_ns=5 * MS
+        ),
+    )
+
+    assert report.accuracy is not None and report.accuracy.rpe is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"relative_interval_ns": 100 * MS},
+        {"relative_interval_tolerance_ns": 1 * MS},
+        {"relative_interval_ns": 0, "relative_interval_tolerance_ns": 1 * MS},
+        {"relative_interval_ns": 100 * MS, "relative_interval_tolerance_ns": -1},
+    ],
+)
+def test_the_relative_error_protocol_must_state_interval_and_tolerance_together(
+    overrides: dict[str, int],
+) -> None:
+    with pytest.raises(ValueError, match="relative_interval"):
+        _config(**overrides)
+
+
+def test_the_report_traces_the_reference_to_the_file_it_came_from() -> None:
+    reference = ReferenceTrajectory(
+        trajectory=straight_line(6),
+        reference_id="reference-profile:fixture@1",
+        role=ReferenceRole.EVALUATION_REFERENCE,
+        source="datasets/fixture/poses.txt",
+        source_sha256="sha256:abc",
+    )
+
+    report = evaluate_state_estimation(
+        trajectory=straight_line(6), reference=reference, reference_config=_config()
+    )
+
+    record = json.loads(json.dumps(encode_state_estimation_report(report)))
+    assert record["reference"]["source"] == "datasets/fixture/poses.txt"
+    assert record["reference"]["source_sha256"] == "sha256:abc"
+
+
+def test_a_comparison_rejects_reports_measured_against_different_reference_files() -> None:
+    def against(digest: str) -> StateEstimationEvaluationReport:
+        reference = ReferenceTrajectory(
+            trajectory=straight_line(6),
+            reference_id="reference-profile:fixture@1",
+            role=ReferenceRole.EVALUATION_REFERENCE,
+            source_sha256=digest,
+        )
+        return evaluate_state_estimation(
+            trajectory=straight_line(6), reference=reference, reference_config=_config()
+        )
+
+    with pytest.raises(StateEstimationEvaluationError, match="reference"):
+        compare_state_estimation_reports([against("sha256:a"), against("sha256:b")])
 
 
 def test_a_comparison_with_no_associable_pose_is_an_error_not_an_empty_result() -> None:
@@ -373,6 +474,29 @@ def test_backends_are_compared_under_one_schema_preserving_their_identities() ->
         "sha256:a",
         "sha256:b",
     ]
+
+
+def test_a_backend_that_consumes_no_calibration_is_compared_with_one_that_does() -> None:
+    # ExternalPose não consome calibração (identidade None) e o FAST-LIO consome: a comparação
+    # entre eles é o caso de uso, então só duas identidades *diferentes* a impedem.
+    common = {"reference": _reference(straight_line(6)), "reference_config": _config()}
+    external = evaluate_state_estimation(
+        trajectory=straight_line(
+            6, backend_id="external_pose", configuration="a", calibration_identity=None
+        ),
+        **common,
+    )
+    lidar_inertial = evaluate_state_estimation(
+        trajectory=straight_line(
+            6, backend_id="fast_lio", configuration="b", calibration_identity="sha256:cal"
+        ),
+        **common,
+    )
+
+    comparison = compare_state_estimation_reports([external, lidar_inertial])
+
+    assert comparison.calibration_identity == "sha256:cal"
+    assert [entry.calibration_identity for entry in comparison.entries] == [None, "sha256:cal"]
 
 
 def test_a_comparison_rejects_reports_that_changed_more_than_the_backend() -> None:

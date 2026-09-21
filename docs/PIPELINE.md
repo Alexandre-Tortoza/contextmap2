@@ -700,7 +700,7 @@ Dependendo do backend:
 Implementados atrás do port `StateEstimator`:
 
 - `ExternalPose`, valida e normaliza uma pose externa canônica; é o baseline de geometria;
-- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend, com o processo isolado atrás de um runner. Não há fallback de um backend para o outro. A execução de referência com o FAST-LIO instalado ainda está pendente.
+- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend, com o processo isolado atrás de um runner e de um wrapper de implantação que roda no container do FAST-LIO. Não há fallback de um backend para o outro. Foi executado de verdade sobre uma janela de 90 s do `corridor-02` (888 poses); a covariância do FAST-LIO não é exportada e as varreduras de entrada permanecem cruas (sem deskew).
 
 ### Contratos
 
