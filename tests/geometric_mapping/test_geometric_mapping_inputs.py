@@ -508,8 +508,9 @@ def _write_artifacts(workspace: Path) -> tuple[SequenceArtifactReader, StateEsti
         [*make_sequence(), *(make_external_pose(index) for index in range(5))],
         key=lambda observation: observation.timestamp.total_nanoseconds(),
     )
+    sequence_dir = workspace / "ingestion"
     with SequenceArtifactWriter(
-        workspace_root=workspace, sequence_name="corridor-02", artifact_id=SEQUENCE_ID
+        output_dir=sequence_dir, sequence_name="corridor-02", artifact_id=SEQUENCE_ID
     ) as writer:
         writer.set_calibration(calibration)
         for observation in observations:
@@ -532,7 +533,7 @@ def _write_artifacts(workspace: Path) -> tuple[SequenceArtifactReader, StateEsti
     ).finalize(outcome)
 
     return (
-        SequenceArtifactReader(workspace / "sequences" / "corridor-02" / str(SEQUENCE_ID)),
+        SequenceArtifactReader(sequence_dir),
         StateEstimationRunReader(run_dir),
     )
 
