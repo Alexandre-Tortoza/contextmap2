@@ -30,7 +30,7 @@ O escritor recebe **`output_dir`**, o diretório final do artifact. Não existe 
 | Campo | Significado |
 | --- | --- |
 | `run_id`, `schema_version`, `created_at`, `code_version` | Identidade, versão do schema, instante UTC e revisão do código. |
-| `lineage` | `RelationsRunLineage`: run de Entity Resolution selecionado (`entity_resolution_run_id`, `_schema_version`, `_artifact_digest`) e o mapa geométrico (`geometric_map_id`). O digest é calculado por Entity Resolution, para que uma mudança posterior do artifact upstream seja detectável. |
+| `lineage` | `RelationsRunLineage`: run de Entity Resolution selecionado (`entity_resolution_run_id`, `_schema_version`, `_artifact_digest`) e o mapa geométrico (`geometric_map_id`). É **derivada do manifest de Entity Resolution** por `lineage_from_resolution_manifest`, e o digest (`resolution_artifact_digest`: identidade, versão do schema e caminho e hash de cada arquivo contratual, como nos artifacts irmãos) torna detectável uma mudança posterior do artifact upstream. |
 | `taxonomy_version` | Versão do vocabulário de predicados. |
 | `policies` | A política de cada etapa com id, fingerprint e parâmetros: `candidate`, `geometric`, `contact` (quando há esse canal), `frame_conventions` (eixos declarados), `observation` e `decision`. |
 | `counts` | Resumo: relações, evidência, candidatos e relações por estado. |
@@ -59,9 +59,13 @@ O manifest não tem caminho absoluto nem segredo, então o run é **portável**:
 - `candidate_set()` reconstrói os candidatos, as exclusões com a razão e os predicados pulados;
 - `read_table` e `read_record` só aceitam `outputs/` e `metrics/`: `debug/` nunca é uma fonte válida;
 - `verify_integrity()` compara o inventário com o disco e detecta arquivo ausente, tamanho ou hash diferente;
-- `validate_references(entidades)` devolve as entidades citadas pelas relações que **não** estão no conjunto de entidades resolvidas do run de resolução (vazio significa que tudo resolve).
+- `validate_resolution(leitor_de_resolução)` confere a linhagem contra o `EntityResolutionRunReader` do run de resolução (identidade, versão do schema e digest) e que **toda entidade resolvida** que as relações citam existe nele (`resolved_entity`, sem carregar as demais); devolve os problemas, e vazio significa que tudo bate. Um run que não é o nomeado é reportado sozinho.
 
 Toda decodificação reconstrói os contratos pelos construtores, então uma linha adulterada é recusada em vez de aceita.
+
+## Entidades resolvidas de um run de Entity Resolution
+
+`resolved_entity_geometries(resolvidas, source=..., policy=...)` produz, para cada entidade resolvida, o `EntityGeometry` que candidatos e avaliadores leem: o resumo espacial (estatísticas, diagnósticos e orientação opcional) do suporte **união** dos membros, com o mesmo algoritmo de Semantic Mapping. Ele confere o resultado com o que a resolução persistiu: as referências de geometria são as que Entity Resolution nomeou e os limites e o frame recalculados a partir do mapa são **exatamente** os que ela registrou; senão levanta `ValueError`, porque o mapa não é aquele em que a entidade foi resolvida. Uma relação nunca é medida sobre uma aproximação da geometria da entidade resolvida.
 
 ## Estados e rastro
 
@@ -73,5 +77,4 @@ Toda decodificação reconstrói os contratos pelos construtores, então uma lin
 
 ## Limites conhecidos
 
-- **Linhagem de Entity Resolution como entrada.** `RelationsRunLineage` recebe a versão de schema e o digest do artifact de resolução como valores; derivá-los do manifest de Entity Resolution e checar as referências contra o seu leitor precisa dos contratos `ResolvedEntity` e do leitor daquela milestone, ainda não disponíveis nesta branch. `validate_references` já aceita o conjunto de entidades resolvidas e serve de costura.
 - Uma única escrita em memória: as relações de um mapa cabem em memória, ao contrário das entidades de Semantic Mapping (não há escrita em fluxo).
