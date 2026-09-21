@@ -6,14 +6,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from evidence_builders import ClaimSpec, View, build_scenario
+from evidence_builders import ClaimSpec, View, build_scenario, build_scenario_parts
 from fusion_builders import MAP_ID
 from fusion_run_fixtures import LINEAGE, make_run_fixture
-from mapping_builders import SEMANTIC_MAP_ID, SUMMARY_POLICY, make_provenance
+from mapping_builders import SEMANTIC_MAP_ID, SUMMARY_POLICY
 from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.semantic_fusion import (
     BaselineAccumulationPolicy,
+    ExcludedObservation,
     FusedEvidence,
     FusionOutcome,
     FusionSupport,
@@ -25,15 +26,21 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.semantic_mapping import (
     Entity,
-    EntityId,
+    EntityMaterializationPolicy,
     SemanticMapId,
-    evidence_links_from_fused_evidence,
-    semantic_state_from_fused_evidence,
-    summarize_geometry,
-    summarize_temporal_state,
+    materialize_entities,
 )
 
-__all__ = ["ClaimSpec", "FusionRun", "View", "entity_from_outcome", "fuse", "write_fusion_run"]
+__all__ = [
+    "ClaimSpec",
+    "FusionRun",
+    "View",
+    "entity_from_outcome",
+    "fuse",
+    "outcomes_for",
+    "write_fusion_run",
+    "write_run",
+]
 
 
 def fuse(
@@ -63,9 +70,13 @@ class FusionRun:
     geometry: InMemoryGeometrySource
 
 
-def write_fusion_run(workspace: Path) -> FusionRun:
-    """Write the three-support fusion run of the fusion fixtures and reopen it from disk."""
-    fixture = make_run_fixture()
+def write_run(
+    workspace: Path,
+    outcomes: Sequence[FusionOutcome],
+    *,
+    excluded: Sequence[ExcludedObservation] = (),
+) -> FusionRun:
+    """Persist fusion outcomes as a real run artifact and reopen it from disk."""
     manifest = SemanticFusionRunWriter(
         workspace_root=workspace,
         sequence_name="sequence-0001",
@@ -75,7 +86,7 @@ def write_fusion_run(workspace: Path) -> FusionRun:
         policy_label="quality-aware",
         lineage=LINEAGE,
         code_version="test",
-    ).write(fixture.outcomes, excluded=fixture.excluded)
+    ).write(outcomes, excluded=excluded)
     run_dir = (
         workspace
         / "runs"
@@ -87,10 +98,37 @@ def write_fusion_run(workspace: Path) -> FusionRun:
         run_dir=run_dir,
         reader=SemanticFusionRunReader(run_dir),
         manifest=manifest,
-        outcomes=fixture.outcomes,
+        outcomes=tuple(outcomes),
         geometry=InMemoryGeometrySource(
             MAP_ID, {index: (index * 0.1, 0.0, 0.0) for index in range(1_000)}
         ),
+    )
+
+
+def write_fusion_run(workspace: Path) -> FusionRun:
+    """Write the three-support fusion run of the fusion fixtures and reopen it from disk."""
+    fixture = make_run_fixture()
+    return write_run(workspace, fixture.outcomes, excluded=fixture.excluded)
+
+
+def outcomes_for(
+    views: Sequence[View], *, policy: BaselineAccumulationPolicy | None = None
+) -> tuple[FusionOutcome, ...]:
+    """Fuse views into as many supports as their geometry produces, one outcome per support."""
+    parts = build_scenario_parts(views, geometry_points=1_000)
+    return tuple(
+        FusionOutcome(
+            support=support,
+            evidence=accumulate_baseline_evidence(
+                support,
+                observations=parts.observations,
+                grouping=parts.grouping,
+                perception_results=parts.results,
+                policy=policy,
+                code_version="test",
+            ),
+        )
+        for support in parts.supports
     )
 
 
@@ -100,16 +138,14 @@ def entity_from_outcome(
     *,
     semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
 ) -> Entity:
-    """Assemble the entity of one fusion outcome from the parts each issue defines."""
-    evidence = outcome.evidence
-    return Entity(
-        entity_id=EntityId(f"entity--{outcome.support.fusion_support_id}"),
+    """Materialize the entity of one fusion outcome through the real service."""
+    result = materialize_entities(
+        [outcome],
+        fusion_manifest=run.manifest,
+        geometry=run.geometry,
         semantic_map_id=semantic_map_id,
-        geometry=summarize_geometry(
-            outcome.support.geometry_support, source=run.geometry, policy=SUMMARY_POLICY
-        ),
-        semantic_state=semantic_state_from_fused_evidence(evidence),
-        evidence=evidence_links_from_fused_evidence(evidence, manifest=run.manifest),
-        temporal_state=summarize_temporal_state(evidence.physical_observation_groups),
-        provenance=make_provenance(),
+        policy=EntityMaterializationPolicy(geometry=SUMMARY_POLICY),
+        code_version="test",
     )
+    (entity,) = result.entities
+    return entity
