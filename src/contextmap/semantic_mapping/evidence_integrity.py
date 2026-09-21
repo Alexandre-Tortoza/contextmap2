@@ -20,7 +20,7 @@ Nothing is copied and nothing is re-run: perception and fusion are never invoked
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
@@ -160,6 +160,52 @@ def validate_entity_evidence(
     if geometry is not None:
         checker.check_geometry(geometry)
     return tuple(checker.issues)
+
+
+class _VerifiedOnce:
+    """Runs the integrity check of a run once, however many entities reference it."""
+
+    def __init__(self, source: FusedEvidenceSource) -> None:
+        self._source = source
+        self._problems: list[str] | None = None
+
+    @property
+    def manifest(self) -> SemanticFusionRunManifest:
+        """The manifest of the run."""
+        return self._source.manifest
+
+    def fused_evidence(self, support_id: FusionSupportId) -> FusedEvidence:
+        """Read the evidence fused over one support."""
+        return self._source.fused_evidence(support_id)
+
+    def verify_integrity(self) -> list[str]:
+        """Check the run's files once and remember the result."""
+        if self._problems is None:
+            self._problems = self._source.verify_integrity()
+        return self._problems
+
+
+def validate_evidence_of_entities(
+    entities: Iterable[Entity],
+    *,
+    fusion_runs: Mapping[SemanticFusionRunId, FusedEvidenceSource],
+    geometry: GeometrySource | None = None,
+) -> tuple[EvidenceIntegrityIssue, ...]:
+    """Check the evidence references of many entities, verifying each run's files only once.
+
+    Args:
+        entities: The entities to check.
+        fusion_runs: The persisted fusion runs to check against, by run identity.
+        geometry: The read boundary of the geometric map, to also check the geometry.
+
+    Returns:
+        The issues found for every entity, in the order the entities were given.
+    """
+    verified = {run_id: _VerifiedOnce(source) for run_id, source in fusion_runs.items()}
+    issues: list[EvidenceIntegrityIssue] = []
+    for entity in entities:
+        issues.extend(validate_entity_evidence(entity, fusion_runs=verified, geometry=geometry))
+    return tuple(issues)
 
 
 class _Checker:
