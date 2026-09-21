@@ -149,6 +149,10 @@ Os snapshots JSON em [`scenarios/`](scenarios/) são a forma revisável do cená
 
 - **1.0.0** — versão inicial: sujeito real `corridor-02-sample` sem reference set anotado, sujeito de CI sintético e matriz de 25 gates (16 invariantes e 9 de relatório) sem limiares de aprovação.
 
+## Validação real registrada
+
+- [`validation/e2e-real-sample-20260921.md`](validation/e2e-real-sample-20260921.md) — primeira execução **real e parcial** sobre o `corridor-02` (geometria, associação, fusão e as checagens entre estágios, em CPU): 3 gates cumpridos com evidência real, 1 reprovado (`cross_stage.lineage_closure`, porque o `SequenceArtifact` pinado não carrega modelo de câmera), 12 bloqueados e 9 não avaliados, cada um com o motivo. O relatório de aceitação está em [`validation/e2e-real-sample-20260921.acceptance-report.json`](validation/e2e-real-sample-20260921.acceptance-report.json) e um teste o mantém coerente com o cenário congelado.
+
 ## O que ainda não é avaliável
 
 O estado real de cada gate é decidido pelo relatório de cada run. Nesta versão do repositório:
