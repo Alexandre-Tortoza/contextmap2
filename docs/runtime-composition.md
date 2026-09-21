@@ -455,8 +455,9 @@ A divisão arquitetural materializada na `dev` é:
 - **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;
 - **Point Representation**, opcional, publica representações 3D locais e persiste `PointRepresentationRunArtifact`;
 - **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
+- **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, e persiste `SemanticMappingRunArtifact`;
 - **Runtime & Configuration**, compõe esse conjunto: configuração efetiva, composition root, DAG com preflight, reuse/recompute, seleção explícita de runs, lifecycle, CLI e a API pública `Runtime`. Só a Ingestion possui um executor de estágio real; a orquestração end-to-end com dados reais e executores das demais capabilities ainda não foi validada.
 
-Semantic Mapping e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
+Entity Resolution e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
 
 O runtime reutiliza as APIs públicas e artifacts dessas capabilities e não reimplementa seus pipelines internos.
