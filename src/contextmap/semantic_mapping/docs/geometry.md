@@ -35,8 +35,12 @@ Configurado por `GeometrySummaryPolicy`, **sem defaults**: os limiares são esco
 - **Centroide:** média aritmética somada de forma exata (`math.fsum`). Ela está matematicamente dentro da caixa; um clamp só corrige o erro de arredondamento.
 - **Limites e extensão:** a caixa alinhada aos eixos e seus lados.
 - **Estatísticas:** número de pontos, volume dos limites e densidade (pontos por m³); a densidade é `None` quando a caixa é plana.
-- **Conectividade:** pontos a uma distância de até `connectivity_radius_m` (inclusive) são ligados, e os componentes conexos são contados. Os pontos são agrupados numa grade de célula igual ao raio, então só as 27 células vizinhas são consultadas. É Python puro, sem NumPy: o custo cresce com o número de vizinhos por ponto, adequado ao tamanho de suportes de entidade.
+- **Conectividade:** pontos a uma distância de até `connectivity_radius_m` (inclusive) são ligados, e os componentes conexos são contados. Os pontos são agrupados numa grade de célula igual ao raio, então só as 27 células vizinhas são consultadas. É Python puro, sem NumPy, e o custo cresce com o número de pontos por vizinhança (ver o limite abaixo).
 - **Orientação (opcional):** eixos principais da covariância do suporte (Jacobi para matrizes simétricas 3×3), ordenados por variância decrescente, com o sinal fixado para que a maior componente seja positiva e o terceiro eixo dado pelo produto vetorial dos dois primeiros (referencial destro).
+
+### Limite conhecido: custo da conectividade
+
+A comparação de pares dentro de cada vizinhança de 27 células é **aproximadamente quadrática na densidade local de pontos**, e o custo **não foi validado em suportes reais**. Uma medição sintética (pontos aleatórios numa caixa de 2 × 2 × 1 m, raio de 0,3 m, uma única execução em Python puro) deu cerca de 0,2 s com 2 mil pontos, 4,5 s com 10 mil e 42 s com 30 mil. Um suporte denso e grande pode, portanto, dominar o tempo de materialização de uma entidade. Otimizações que preservam o resultado (por exemplo, pular pares que já estão no mesmo componente ou vetorizar com NumPy) **não foram feitas nem medidas**. Trocar por uma conectividade de ocupação de voxels mudaria o resultado e exigiria uma nova versão do algoritmo (`entity-geometry-summary-v2`); essa decisão fica para quando houver suportes reais para medir.
 
 ### Quando a orientação é justificada
 
