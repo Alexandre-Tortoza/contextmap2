@@ -40,24 +40,18 @@ PROFILE = StratificationProfile(
 
 
 def _run(
-    root: Path, request: SensorAssociationRequest, *, index: int = 1, label: str = "run"
+    root: Path, request: SensorAssociationRequest, *, index: int = 1
 ) -> SensorAssociationRunReader:
+    """Grava em ``root/run-NNNN``: o chamador decide o diretório final, o writer não calcula."""
     outcome = SensorAssociationService().run(request)
+    run_dir = root / f"run-{index:04d}"
     SensorAssociationRunWriter(
-        workspace_root=root,
+        output_dir=run_dir,
         sequence_name="fixture",
         run_id=SensorAssociationRunId(f"assoc-run-{index:04d}"),
         run_index=index,
-        selection_label="full-sequence",
-        channel_label=label,
     ).finalize(outcome)
-    return SensorAssociationRunReader(
-        root
-        / "runs"
-        / "sensor-association"
-        / "fixture"
-        / f"run-{index:04d}__full-sequence__{label}"
-    )
+    return SensorAssociationRunReader(run_dir)
 
 
 def _report(root: Path, *channels: object) -> SensorAssociationEvaluationReport:
@@ -232,13 +226,9 @@ def test_the_timing_and_the_state_counts_are_reported(tmp_path: Path) -> None:
 
 
 def test_the_reprojection_is_reported_only_where_a_trusted_reference_exists(tmp_path: Path) -> None:
-    without = evaluate_sensor_association(
-        _run(tmp_path, make_request(), index=1, label="plain"), profile=PROFILE
-    )
+    without = evaluate_sensor_association(_run(tmp_path, make_request(), index=1), profile=PROFILE)
     request = make_request(frames=[frame_input(0, with_reference=True), frame_input(1)])
-    with_reference = evaluate_sensor_association(
-        _run(tmp_path, request, index=2, label="reference"), profile=PROFILE
-    )
+    with_reference = evaluate_sensor_association(_run(tmp_path, request, index=2), profile=PROFILE)
 
     assert (without.reprojection.frames_with_reference, without.reprojection.frame_median_px) == (
         0,
@@ -301,7 +291,7 @@ def test_evaluating_a_run_never_modifies_it(tmp_path: Path) -> None:
 
 def test_a_corrupted_run_is_not_evaluated(tmp_path: Path) -> None:
     reader = _run(tmp_path, make_strata_request())
-    run_dir = tmp_path / "runs/sensor-association/fixture/run-0001__full-sequence__run"
+    run_dir = tmp_path / "run-0001"
     (run_dir / "outputs/geometry-support.u32").write_bytes(b"")
 
     with pytest.raises(SensorAssociationEvaluationError, match="not intact"):
@@ -315,11 +305,11 @@ def test_native_and_enhanced_runs_compare_while_geometry_and_calibration_stay_co
     tmp_path: Path,
 ) -> None:
     native = evaluate_sensor_association(
-        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=1, label="native"),
+        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=1),
         profile=PROFILE,
     )
     enhanced = evaluate_sensor_association(
-        _run(tmp_path, make_strata_request(channels=[ENHANCED]), index=2, label="enhanced"),
+        _run(tmp_path, make_strata_request(channels=[ENHANCED]), index=2),
         profile=PROFILE,
     )
 
@@ -337,7 +327,7 @@ def test_native_and_enhanced_runs_compare_while_geometry_and_calibration_stay_co
 
 def test_a_comparison_rejects_anything_but_the_feature_path_changing(tmp_path: Path) -> None:
     base = evaluate_sensor_association(
-        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=1, label="base"),
+        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=1),
         profile=PROFILE,
     )
     wider = dataclasses.replace(OCCLUSION, neighborhood_radius_cells=3)
@@ -346,15 +336,14 @@ def test_a_comparison_rejects_anything_but_the_feature_path_changing(tmp_path: P
             tmp_path,
             dataclasses.replace(make_strata_request(channels=[NATIVE]), occlusion_policy=wider),
             index=2,
-            label="policy",
         ),
         profile=PROFILE,
     )
     other_scene = evaluate_sensor_association(
-        _run(tmp_path, make_request(channels=[NATIVE]), index=3, label="scene"), profile=PROFILE
+        _run(tmp_path, make_request(channels=[NATIVE]), index=3), profile=PROFILE
     )
     other_profile = evaluate_sensor_association(
-        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=4, label="profile"),
+        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=4),
         profile=dataclasses.replace(PROFILE, range_edges_m=(4.0,)),
     )
 
