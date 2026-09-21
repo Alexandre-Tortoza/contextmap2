@@ -11,11 +11,16 @@ from contextmap.entity_resolution import (
 )
 from contextmap.geometric_mapping import MapId
 from contextmap.spatial_relations import (
+    CANDIDATE_POLICY_ID,
     TAXONOMY_VERSION,
+    CandidateProvenance,
+    CandidateReason,
     EvidenceCaveat,
     MeasuredGeometry,
     Quantity,
     Relation,
+    RelationCandidate,
+    RelationCandidateSet,
     RelationEvidence,
     RelationEvidenceChannel,
     RelationEvidenceId,
@@ -163,4 +168,44 @@ def make_uncertainty(
         kind=kind,
         detail=detail,
         evidence_refs=tuple(RelationEvidenceId(item) for item in evidence_refs),
+    )
+
+
+CONVENTIONS_FINGERPRINT = "sha256:conventions"
+
+
+def make_candidate_set(*keys: tuple[int, RelationPredicate, int]) -> RelationCandidateSet:
+    """A candidate set of directed ``(subject, predicate, object)`` triples of entity numbers."""
+    candidates = sorted(
+        (
+            RelationCandidate(
+                subject_entity_ref=entity_ref(subject),
+                predicate=predicate,
+                object_entity_ref=entity_ref(obj),
+                reasons=(CandidateReason.WITHIN_PROXIMITY_RADIUS,),
+                bounds_gap_m=0.0,
+            )
+            for subject, predicate, obj in keys
+        ),
+        key=lambda item: (
+            item.subject_entity_ref.resolved_entity_id,
+            item.predicate.value,
+            item.object_entity_ref.resolved_entity_id,
+        ),
+    )
+    entities = {number for subject, _, obj in keys for number in (subject, obj)}
+    return RelationCandidateSet(
+        candidates=tuple(candidates),
+        exclusions=(),
+        skipped_predicates=(),
+        entity_count=len(entities),
+        pairs_not_enumerated=0,
+        provenance=CandidateProvenance(
+            policy_id=CANDIDATE_POLICY_ID,
+            configuration_fingerprint="sha256:candidates",
+            taxonomy_version=TAXONOMY_VERSION,
+            map_frame="map",
+            geometric_map_id=MAP_ID,
+            frame_conventions_fingerprint=CONVENTIONS_FINGERPRINT,
+        ),
     )

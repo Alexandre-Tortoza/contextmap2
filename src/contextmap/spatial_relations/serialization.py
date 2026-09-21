@@ -16,6 +16,7 @@ from contextmap.entity_resolution import (
     encode_resolved_entity_reference,
 )
 from contextmap.geometric_mapping import GeometryId, GeometryReference, MapId
+from contextmap.spatial_relations.decision import DecisionRule, EvidenceUse, RelationDecision
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
     EvidenceCaveatKind,
@@ -220,4 +221,47 @@ def _decode_quantity(record: Mapping[str, Any]) -> Quantity:
         name=_field(record, "name"),
         value=float(_field(record, "value")),
         unit=_field(record, "unit"),
+    )
+
+
+def encode_relation_decision(decision: RelationDecision) -> dict[str, Any]:
+    """Encode the decision behind a relation: the rule, the evidence that decided and the rest."""
+    return {
+        "relation_id": str(decision.relation_id),
+        "rule": decision.rule.value,
+        "deciding_evidence_refs": [str(item) for item in decision.deciding_evidence_refs],
+        "ignored": [
+            {"evidence_id": str(item.evidence_id), "status": item.status.value}
+            for item in decision.ignored
+        ],
+        "detail": decision.detail,
+    }
+
+
+def decode_relation_decision(record: Mapping[str, Any]) -> RelationDecision:
+    """Decode a decision and revalidate every invariant of its contract.
+
+    Args:
+        record: The output of :func:`encode_relation_decision`.
+
+    Returns:
+        The decision.
+
+    Raises:
+        ValueError: If a field is missing or the record violates the contract.
+    """
+    return RelationDecision(
+        relation_id=RelationId(_field(record, "relation_id")),
+        rule=DecisionRule(_field(record, "rule")),
+        deciding_evidence_refs=tuple(
+            RelationEvidenceId(item) for item in _field(record, "deciding_evidence_refs")
+        ),
+        ignored=tuple(
+            EvidenceUse(
+                evidence_id=RelationEvidenceId(_field(item, "evidence_id")),
+                status=RelationEvidenceStatus(_field(item, "status")),
+            )
+            for item in _field(record, "ignored")
+        ),
+        detail=_field(record, "detail"),
     )
