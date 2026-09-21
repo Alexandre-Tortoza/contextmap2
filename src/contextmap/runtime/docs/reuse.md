@@ -18,7 +18,7 @@ O reuso **nunca** usa nome de diretório nem nome legível de run como chave, e 
 
 `ReuseKey.digest` é o SHA-256 da forma canônica. Como a chave usa o **conteúdo** das entradas, dois artifacts com o mesmo hash de conteúdo são intercambiáveis, e um estágio recomputado que reproduz o mesmo conteúdo não invalida seus dependentes.
 
-O `content_hash` é declarado pelo executor que produz o artifact (por exemplo, o digest do inventário do manifest). Um artifact sem ele pode ser consumido, mas nunca reutilizado nem indexado: sem identidade de conteúdo, a chave dos dependentes não pode ser construída e eles são recomputados, com o motivo registrado.
+O `content_hash` é declarado pelo executor que produz o artifact (por exemplo, o digest do inventário do manifest). Um artifact sem ele pode ser consumido, mas nunca reutilizado nem indexado: sem identidade de conteúdo, a chave dos dependentes não pode ser construída e eles são recomputados, com o motivo registrado. O `ArtifactRef` também carrega o `location` do artifact (relativo ao workspace): quando um estágio é reutilizado, o run novo guarda a **referência** ao diretório do run que o gravou, nunca uma cópia, e um estágio a jusante o abre por `StageRequest.directory_of`.
 
 ## Índice
 

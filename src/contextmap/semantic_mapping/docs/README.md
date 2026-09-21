@@ -67,7 +67,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 - `contextmap.point_representation`: `PointRepresentationId`, `PointRepresentationRunId`.
 - `contextmap.state_estimation`: `TimeBounds`, o intervalo fechado de aquisição.
 - `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `HypothesisRole`, `FeatureId`, `FeatureScope`, `PerceptionResultId`, `PerceptionRunId`, `RegionId`, presentes nos sinais, nas claims e nas features preservadas.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index`, `write_run_registry`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
 
 As dependências de `ingestion`, `visual_perception`, `sensor_association`, `point_representation` e `state_estimation` existem apenas para identidades e tipos que a evidência fundida já traz, sempre pela API pública, e estão declaradas em `tests/architecture/test_boundaries.py`.
 
