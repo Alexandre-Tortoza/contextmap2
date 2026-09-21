@@ -44,7 +44,7 @@ Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (c
 - `schema_fingerprint()`, `describe_schema()` — a impressão digital estrutural do schema, que impede uma mudança estrutural sem uma decisão de versão.
 - `context_map_to_record()`, `context_map_from_record()`, `ContextMapRecordError` — a visão canônica em registros, estrita e independente de formato.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades, [`composition.md`](composition.md) para geometria, entidades e relações, [`lineage.md`](lineage.md) para linhagem, origens e o fechamento de proveniência e [`versioning.md`](versioning.md) para versão, compatibilidade e evolução.
+Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades, [`composition.md`](composition.md) para geometria, entidades e relações, [`lineage.md`](lineage.md) para linhagem, origens e o fechamento de proveniência , [`versioning.md`](versioning.md) para versão, compatibilidade e evolução e [`validation.md`](validation.md) para invariantes e a fixture representativa.
 
 ## Módulos consumidos
 
@@ -64,6 +64,7 @@ Nenhum dentro do Solution 1 hoje. O serializador (Context Map Serialization) e a
 - [`composition.md`](composition.md) — geometria, entidades e relações: escopos de identidade, referências e índices.
 - [`lineage.md`](lineage.md) — linhagem, referências de evidência, categorias de derivação e fechamento de proveniência.
 - [`versioning.md`](versioning.md) — versão do schema, compatibilidade, evolução, descontinuação, migração e impressão digital.
+- [`validation.md`](validation.md) — invariantes do schema, integridade de referências e a fixture representativa.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `ContextMap` no contexto global de contratos.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — o `ContextMapArtifact` no fluxo de artifacts.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — a etapa de Context Map Assembly.
