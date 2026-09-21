@@ -19,6 +19,7 @@ from contextmap.evaluation.ci_fixtures import (
     build_synthetic_sequence,
     project_landmark,
 )
+from contextmap.evaluation.cross_stage import CrossStageInputs
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometricMapArtifactWriter,
@@ -498,3 +499,19 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
                 for item in frame.observations
             },
         )
+
+
+def cross_stage_inputs(chain: SyntheticChain) -> CrossStageInputs:
+    """The manifests and objects the cross-stage evaluator reads, taken from the readers."""
+    return CrossStageInputs(
+        sequence=chain.sequence.manifest,
+        trajectory=chain.trajectory.manifest,
+        geometry=chain.geometry.manifest,
+        geometry_source=chain.geometry.geometry(),
+        perception_runs=chain.perception_runs,
+        perception_results=chain.perception_results,
+        associations=tuple(reader.manifest for _, reader in chain.associations),
+        spatial_observations=chain.spatial_observations,
+        fusion=chain.fusion.manifest,
+        fusion_outcomes=chain.fusion_outcomes,
+    )

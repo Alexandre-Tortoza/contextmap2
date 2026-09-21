@@ -101,6 +101,11 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `GateResult`/`GateStatus`/`EvidenceClass` — resultado por gate: `passed`, `failed`, `blocked` ou `not_evaluated`, com evidência `real` ou `fake_contract` e a capability que responde por falha ou bloqueio.
 - `assemble_acceptance_report()`/`AcceptanceReport`/`unmet_required_gates()`/`encode_acceptance_report()`/`write_acceptance_report()` — o relatório de aceitação: exatamente um resultado por gate, evidência de contrato nunca cumpre um gate, escrita imutável.
 
+### Invariantes entre estágios
+
+- `check_cross_stage()`/`CrossStageInputs`/`CrossStageReport`/`CrossStageFinding` — lineage, frames, rastreabilidade e identidade física entre os artifacts persistidos; cada achado nomeia a capability responsável e o avaliador nunca repara um artifact.
+- `cross_stage_gate_results()` — converte o relatório nos quatro gates `cross_stage.*`: falha com achado, `blocked` quando restam fronteiras não verificáveis, aprovado só com todas verificadas.
+
 ### Reference set
 
 - `ReferenceSetManifest`/`ReferenceSetIdentity` — manifesto versionado e hasheado do reference set: fontes, calibrações, amostras ligadas a `SourceObservationId`, estratos, anotações, proveniência e splits.
