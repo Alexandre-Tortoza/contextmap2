@@ -343,7 +343,7 @@ Os seguintes elementos aparecem na arquitetura alvo ou como variation points já
 
 - seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global; DINOv2/CLIP já foram validados com pesos reais, mas DINOv3/AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; execuções controladas de Qwen/Gemini/Florence-2 com checkpoints ou serviços reais continuam pendentes;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; a execução real do Gemini (sem credencial nem consentimento para enviar frames) e a avaliação de Qwen/Gemini/Florence-2 com anotações semânticas humanas continuam pendentes;
 - integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
 - conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
