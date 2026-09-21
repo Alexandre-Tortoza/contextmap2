@@ -23,6 +23,7 @@ from contextmap.runtime import (
 )
 
 REGION = "visual_perception.region_discovery"
+DENSE = "visual_perception.dense_features"
 ESTIMATOR = "state_estimation.estimator"
 INTERPRETER = "visual_perception.semantic_interpretation"
 ENCODER = "point_representation.encoder"
@@ -357,6 +358,28 @@ class TestIncompatibleCombinations:
         assert enabled.config.pipeline.stages["point_representation"] is True
 
 
+class TestQualityAwareChannels:
+    def test_the_quality_aware_policy_declares_its_channels_under_baseline(
+        self, tmp_path: Path
+    ) -> None:
+        document = {
+            "components": {
+                "semantic_fusion": {
+                    "accumulation": {
+                        "backend": "quality-aware-evidence-accumulation-v1",
+                        "quality-aware-evidence-accumulation-v1": {
+                            "baseline": {"channels": ["semantic_claims", "point_representation"]}
+                        },
+                    }
+                }
+            }
+        }
+        file = _write(tmp_path / "a.json", document)
+
+        with pytest.raises(ConfigurationError, match="point_representation"):
+            resolve_effective_config(files=[file])
+
+
 class TestSelectionCompleteness:
     def test_canonical_profile_is_incomplete_until_backends_are_selected(self) -> None:
         problems = check_selection(resolve_effective_config().config)
@@ -395,10 +418,8 @@ def _all_selected() -> dict[str, object]:
 
 
 class TestAvailability:
-    def _effective(self, tmp_path: Path, backend: str = "sam3") -> EffectiveConfig:
-        document = _all_selected()
-        document["components"]["visual_perception"]["region_discovery"]["backend"] = backend  # type: ignore[index]
-        return resolve_effective_config(files=[_write(tmp_path / "a.json", document)])
+    def _effective(self, tmp_path: Path) -> EffectiveConfig:
+        return resolve_effective_config(files=[_write(tmp_path / "a.json", _all_selected())])
 
     def test_reports_missing_optional_modules_with_an_install_hint(self, tmp_path: Path) -> None:
         effective = self._effective(tmp_path)
@@ -409,7 +430,7 @@ class TestAvailability:
 
         message = " ".join(problem.message for problem in problems)
         assert "torch" in message
-        assert any(problem.path == f"components.{REGION}" for problem in problems)
+        assert any(problem.path == f"components.{DENSE}" for problem in problems)
 
     def test_passes_when_every_module_and_secret_is_present(self, tmp_path: Path) -> None:
         effective = self._effective(tmp_path)
