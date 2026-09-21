@@ -144,7 +144,7 @@ O workflow `Commit policy` valida todos os commits de um pull request e exige:
 - subject compatível com Conventional Commits;
 - corpo não vazio com contexto da alteração.
 
-O workflow `CI` executa quality gates em pull requests e pushes de `main`, `dev` e `milestone/*`.
+O workflow `CI` executa em pull requests e pushes de `main`, `dev` e `milestone/*` e também é reutilizado pelo workflow de release. Seus jobs são `quality` (lint, formatação, mypy e testes em Python 3.11), `python-compatibility` (testes em 3.12 a 3.14), `package` (sdist e wheel, `twine check` e smoke de instalação em ambientes novos) e `lightweight-install` (suíte contra a wheel instalada só com NumPy e os extras `ros1`/`ros2`). Nenhum job novo altera o nome de `quality`.
 
 ## Checks obrigatórios
 
