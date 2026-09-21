@@ -371,10 +371,27 @@ O branch de integração materializa:
 - testes determinísticos cobrem parsing, abstention, retries, materialização no
   `PerceptionResult` e reabertura do run artifact.
 
-Uma execução diagnóstica real limitada de Qwen3-VL-4B já ocorreu para o fix
-#340: três respostas REGION omitiram a chave nula, duas passaram a ser aceitas
-após a normalização e a terceira permaneceu corretamente rejeitada por atributo
-não escalar. Ainda não existe execução controlada sobre reference set versionado
-para Qwen, Gemini ou Florence-2. O ambiente de CI valida seams, contratos,
-parsing, provenance, falhas e report schema com doubles determinísticos; isso não
-é registrado como comparação científica dos backends.
+### Validação real e fake/contract
+
+- **Real.** Qwen3-VL-4B (nf4 e int8, aplicados e verificados) e Florence-2
+  (`florence-community/Florence-2-large`, tasks `<DETAILED_CAPTION>`,
+  `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>`) foram executados com os
+  runtimes transformers do repositório sobre os 20 frames de corridor-02 (uma
+  request de cena por frame e as 5 maiores regiões SAM2), com repetições. Os
+  números estão em
+  [Avaliação de Semantic Interpretation](../../evaluation/docs/semantic-interpretation.md):
+  por exemplo, o Qwen3-VL-4B nf4 interpretou 17 de 20 cenas e 53 de 100 regiões
+  (as demais falharam no parser, principalmente por omitir `confidence`), e o
+  Florence-2 interpretou todas, com decoding determinístico e repetições
+  idênticas.
+- **Fake/contract.** O Gemini tem cliente `google-genai` validado apenas com
+  transporte simulado; não há credencial nem consentimento para enviar frames.
+  Runtime e adapters também têm testes com módulos SDK falsos, e o harness de
+  avaliação usa execuções canônicas construídas em teste. Isso valida contratos,
+  mapeamentos, falhas, redação de segredos e a aritmética do avaliador, não a
+  qualidade de um backend.
+
+Não há anotações semânticas humanas para a amostra, então correção,
+alucinação, abstenção esperada, campos de cena e visibilidade são N/A e nenhum
+resultado sustenta que um backend é melhor que outro. A execução de referência
+do Gemini e a avaliação com anotações continuam pendentes.
