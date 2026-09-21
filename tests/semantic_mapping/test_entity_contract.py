@@ -13,7 +13,6 @@ from mapping_builders import (
     make_geometry,
     make_hypothesis,
     make_semantic_state,
-    make_temporal_state,
     scorer_signal,
     timestamp,
 )
@@ -28,7 +27,6 @@ from contextmap.semantic_mapping import (
     EntityProvenance,
     EntityReference,
     EntitySet,
-    EntityTemporalState,
     ForeignEntityReferenceError,
     SemanticMapId,
     UnknownEntityError,
@@ -231,39 +229,6 @@ class TestEntitySemanticState:
                 label="pallet",
                 evidence=(later, earlier),
             )
-
-
-class TestEntityTemporalState:
-    def test_first_and_last_seen_are_ordered(self) -> None:
-        with pytest.raises(ValueError, match="must not precede"):
-            EntityTemporalState(
-                first_seen=timestamp(12),
-                last_seen=timestamp(10),
-                physical_observation_count=1,
-                inference_result_count=1,
-            )
-
-    def test_the_interval_stays_in_one_clock_domain(self) -> None:
-        with pytest.raises(ValueError, match="clock domain"):
-            EntityTemporalState(
-                first_seen=timestamp(10),
-                last_seen=timestamp(12, clock_id="other:clock"),
-                physical_observation_count=1,
-                inference_result_count=1,
-            )
-
-    def test_physical_observations_and_inference_results_are_counted_apart(self) -> None:
-        state = make_temporal_state(physical=1, inference=3)
-
-        assert (state.physical_observation_count, state.inference_result_count) == (1, 3)
-
-    def test_inference_cannot_be_counted_below_the_frames_it_interpreted(self) -> None:
-        with pytest.raises(ValueError, match="cannot be lower"):
-            make_temporal_state(physical=3, inference=2)
-
-    def test_an_entity_was_observed_at_least_once(self) -> None:
-        with pytest.raises(ValueError, match="at least 1"):
-            make_temporal_state(physical=0, inference=0)
 
 
 class TestProvenance:

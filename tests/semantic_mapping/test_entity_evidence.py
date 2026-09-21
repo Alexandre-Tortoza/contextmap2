@@ -34,6 +34,7 @@ from contextmap.semantic_mapping import (
     EvidenceTraceError,
     FusedEvidenceRef,
     FusedEvidenceSource,
+    ObservationRef,
     fusion_artifact_digest,
     summarize_geometry,
     trace_entity_evidence,
@@ -42,6 +43,7 @@ from contextmap.semantic_mapping import (
 )
 from contextmap.semantic_mapping.serialization import decode_entity, encode_entity
 from contextmap.sensor_association import SpatialObservationId
+from contextmap.shared import SourceTimestamp
 from contextmap.visual_perception import (
     FeatureId,
     FeatureScope,
@@ -348,14 +350,31 @@ class TestReferenceIntegrity:
                 links, spatial_observation_ids=links.spatial_observation_ids[:-1]
             ),
         )
+        temporal = entity.temporal_state
+        extra = ObservationRef(
+            physical_observation_id=SourceObservationId("frame-9999"),
+            acquisition_timestamp=SourceTimestamp(
+                seconds=temporal.last_seen.seconds + 100,
+                nanoseconds=0,
+                clock_id=temporal.last_seen.clock_id,
+            ),
+            inference_result_count=1,
+        )
         stranger = dataclasses.replace(
             entity,
             evidence=dataclasses.replace(
                 links,
                 physical_observation_ids=(
                     *links.physical_observation_ids,
-                    SourceObservationId("frame-9999"),
+                    extra.physical_observation_id,
                 ),
+            ),
+            temporal_state=dataclasses.replace(
+                temporal,
+                last_seen=extra.acquisition_timestamp,
+                physical_observation_count=temporal.physical_observation_count + 1,
+                inference_result_count=temporal.inference_result_count + 1,
+                observation_refs=(*temporal.observation_refs, extra),
             ),
         )
 
