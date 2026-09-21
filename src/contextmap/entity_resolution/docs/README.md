@@ -39,7 +39,7 @@ Existem os **contratos** de identidade e de comparação:
 - a **comparação geométrica** (`compare_geometry`, `GeometryComparisonPolicy`): o canal de geometria, com sinais próprios e regras versionadas, sem semântica e sem decisão ([`geometry-comparison.md`](geometry-comparison.md));
 - a **recuperação de candidatos** (`retrieve_candidate_sets`, `EntitySpatialIndex`): para cada entidade, os alvos plausíveis de comparação, de forma permissiva e determinística, sem all-pairs e sem decidir nada ([`candidate-retrieval.md`](candidate-retrieval.md)).
 
-Um canal é sempre **medido ou indisponível**: a falta de evidência nunca vira zero nem voto por `DISTINCT`. O codec é estrito e reflexivo (`_codec.py`). Os demais contratos (política, entidade resolvida, artifact e avaliação) chegam nas issues seguintes da milestone.
+Um canal é sempre **medido ou indisponível**: a falta de evidência nunca vira zero nem voto por `DISTINCT`. O codec é estrito e reflexivo (`_codec.py`). A avaliação de identidade (fusão falsa, duplicata, recuperação e ablação de canais) mora em `contextmap.evaluation`, contra uma referência anotada explícita ([`entity_resolution.md`](../../evaluation/docs/entity_resolution.md)).
 
 ## Escopo de identidade
 
@@ -59,7 +59,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `GeometryComparisonPolicy`, `SupportDistancePolicy`, `GEOMETRY_COMPARISON_POLICY_ID`, `compare_geometry` — o canal de geometria.
 - `AppearanceComparisonPolicy`, `APPEARANCE_COMPARISON_POLICY_ID`, `APPEARANCE_AGGREGATION_ID`, `AppearanceComparator`, `FeatureVectorSource`, `LoadedFeature`, `FeatureStoreVectorSource` — o canal de aparência e a fronteira de carregamento de vetores.
 - `RepresentationComparisonPolicy`, `REPRESENTATION_COMPARISON_POLICY_ID`, `REPRESENTATION_AGGREGATION_ID`, `RepresentationComparator`, `RepresentationVectorSource`, `LoadedRepresentation`, `RunReaderRepresentationSource` — o canal opcional de representação 3D e sua fronteira de carregamento.
-- `EntityResolutionRunWriter`, `EntityResolutionRunReader`, `EntityResolutionRunManifest`, `ResolutionRunLineage`, `PolicyRecord`, `Count`, `UnresolvedEntity`, `ResolutionDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError`, `lineage_from_mapping_manifest`, `mapping_artifact_digest` — o artifact persistido.
+- `EntityResolutionRunWriter`, `EntityResolutionRunReader`, `EntityResolutionRunManifest`, `ResolutionRunLineage`, `PolicyRecord`, `Count`, `UnresolvedEntity`, `ResolutionDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError`, `lineage_from_mapping_manifest`, `mapping_artifact_digest`, `resolution_artifact_digest` — o artifact persistido e o digest que um artifact posterior fixa.
 - `SplitDetectionPolicy`, `SPLIT_DETECTION_POLICY_ID`, `detect_split_candidates`, `SplitCandidate`, `SplitPartition`, `SplitStatus` — a detecção opcional de candidatos a divisão.
 - `materialize_resolved_entities`, `ResolvedEntityMaterialization`, `ResolvedEntitySet`, `ResolvedEntity`, `ResolvedMember`, `ResolvedGeometry`, `ResolvedSemanticState`, `MemberAmbiguity`, `ResolvedEntityProvenance`, `TransitivityContradiction`, `MaterializationError`, `materialization_policy`, `resolved_entity_id_for`, `contradiction_id_for`, `derive_resolved_ambiguity`, `ForeignResolvedEntityReferenceError`, `UnknownResolvedEntityError` e as constantes de regra — a entidade resolvida e sua materialização.
 - `ConservativeResolutionPolicy`, `CONSERVATIVE_RESOLUTION_POLICY_ID`, `decide`, `ComparisonChannels`, `MatchEvidenceBuilder`, `PairResolution`, `resolve_candidate_pairs` — a política baseline, a coleta de evidência e o serviço de execução.
@@ -82,7 +82,7 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
-- [`artifact.md`](artifact.md) — layout, manifest, linhagem, leitura, métricas e debug.
+- [`artifact.md`](artifact.md) — layout, manifest, linhagem, leitura, o que quem consome fixa e segue (digest, elo por observação espacial), métricas e debug.
 - [`split-detection.md`](split-detection.md) — sinais, estados e o que a detecção não faz.
 - [`resolved-entities.md`](resolved-entities.md) — agrupamento, identidade, contradições, agregação exata e linhagem.
 - [`resolution-policy.md`](resolution-policy.md) — estágios, regras de decisão, configuração e execução.

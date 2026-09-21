@@ -86,7 +86,9 @@ def resolution_of(
 def build_inputs() -> RunInputs:
     """Six entities; a~b~c is contradicted by a!=c; e~f merge; a-d unresolved; b!=d distinct."""
     entities = {
-        name: entity_at(name, (index * 1.0, 0.0, 0.0), support_number=index + 1)
+        name: entity_at(
+            name, (index * 1.0, 0.0, 0.0), support_number=index + 1, spatial=(f"spatial--{name}",)
+        )
         for index, name in enumerate("abcdef")
     }
     sets = retrieve_candidate_sets(

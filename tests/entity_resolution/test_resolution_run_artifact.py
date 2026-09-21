@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from resolution_builders import channel_policy, geometry_evidence, match_evidence
+from resolution_entity_builders import entity_at
 from resolution_run_fixtures import (
     LINEAGE,
     RUN,
@@ -22,7 +23,9 @@ from resolution_run_fixtures import (
 )
 
 from contextmap.entity_resolution import (
+    CandidateRetrievalPolicy,
     ComparisonId,
+    EntityResolutionRunId,
     EntityResolutionRunManifest,
     EntityResolutionRunReader,
     EntityResolutionRunWriter,
@@ -40,6 +43,8 @@ from contextmap.entity_resolution import (
     lineage_from_mapping_manifest,
     mapping_artifact_digest,
     materialize_resolved_entities,
+    resolution_artifact_digest,
+    retrieve_candidate_sets,
 )
 from contextmap.entity_resolution.channels import GeometryEvidence
 from contextmap.geometric_mapping import MapId
@@ -631,3 +636,80 @@ def test_an_empty_run_is_valid_and_reads_back_empty(tmp_path: Path) -> None:
     assert reader.manifest.count("resolved_entities") == 0
     assert reader.read_record("metrics/distributions.json")["candidates_per_entity"]["count"] == 0
     assert reader.verify_integrity() == []
+
+
+# --- what a downstream consumer pins and follows -------------------------------------------------
+
+
+def test_the_run_digest_pins_the_identity_and_the_inventory_of_the_written_artifact(
+    tmp_path: Path,
+) -> None:
+    write_run(tmp_path / "artifact")
+    write_run(tmp_path / "with-debug", debug_level=ResolutionDebugLevel.FULL)
+    manifest = EntityResolutionRunReader(tmp_path / "artifact").manifest
+    first_file, *other_files = manifest.file_inventory
+    changed = dataclasses.replace(
+        manifest,
+        file_inventory=(dataclasses.replace(first_file, content_hash="sha256:other"), *other_files),
+    )
+
+    digest = resolution_artifact_digest(manifest)
+
+    assert digest.startswith("sha256:") and len(digest) == len("sha256:") + 64
+    assert digest == resolution_artifact_digest(
+        EntityResolutionRunReader(tmp_path / "artifact").manifest
+    )
+    # O debug e o instante da escrita não fazem parte do contrato: o mesmo conteúdo, o mesmo digest.
+    assert digest == resolution_artifact_digest(
+        EntityResolutionRunReader(tmp_path / "with-debug").manifest
+    )
+    assert digest != resolution_artifact_digest(changed)
+    assert digest != resolution_artifact_digest(
+        dataclasses.replace(manifest, run_id=EntityResolutionRunId("resolution-run-0002"))
+    )
+    assert digest != resolution_artifact_digest(dataclasses.replace(manifest, schema_version="9.9"))
+
+
+def test_a_resolved_entity_is_found_from_the_spatial_observation_that_supports_it(
+    tmp_path: Path,
+) -> None:
+    inputs, _ = write_run(tmp_path / "artifact")
+    reader = EntityResolutionRunReader(tmp_path / "artifact")
+
+    merged = reader.resolved_of(inputs.entities["e"].reference)
+
+    assert reader.resolved_of_spatial_observation("spatial--e") == (merged,)
+    # e e f foram fundidos: as duas observações espaciais levam à mesma entidade resolvida.
+    assert reader.resolved_of_spatial_observation("spatial--f") == (merged,)
+    assert reader.resolved_of_spatial_observation("spatial--never-seen") == ()
+
+
+def test_a_spatial_observation_shared_by_two_resolved_entities_is_not_resolved_silently(
+    tmp_path: Path,
+) -> None:
+    x = entity_at("x", (0.0, 0.0, 0.0), support_number=1, spatial=("spatial--shared",))
+    y = entity_at("y", (1.0, 0.0, 0.0), support_number=2, spatial=("spatial--shared",))
+    resolutions = (resolution_of(x, y, ResolutionOutcome.DISTINCT),)
+    inputs = RunInputs(
+        {"x": x, "y": y},
+        retrieve_candidate_sets(
+            [x, y], CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+        ),
+        resolutions,
+        materialize_resolved_entities(
+            [x, y], [item.decision for item in resolutions], resolution_run_id=RUN
+        ),
+    )
+    write_run(tmp_path / "artifact", inputs)
+    reader = EntityResolutionRunReader(tmp_path / "artifact")
+
+    found = reader.resolved_of_spatial_observation("spatial--shared")
+
+    # Ambiguidade é devolvida, não escolhida: quem consome recusa ou decide de forma explícita.
+    assert found == tuple(
+        sorted(
+            (reader.resolved_of(x.reference), reader.resolved_of(y.reference)),
+            key=lambda reference: reference.resolved_entity_id,
+        )
+    )
+    assert len(found) == 2
