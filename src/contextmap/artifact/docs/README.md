@@ -23,7 +23,7 @@ A capability é **somente schema**. Ela não depende do layout em disco, de um s
 
 ## Estado implementado
 
-Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (criação, sequências de origem, frame, unidades, âncora, extensão espacial e temporal e capacidades declaradas), a referência à geometria (`GeometricMapLink`), a composição de **entidades e relações** por referência (`ContextEntity`, `ContextRelation`) com integridade de referências validada em construção, a versão do schema com a regra de leitura, e a **visão canônica em registros** (`context_map_to_record` / `context_map_from_record`), que é a forma serializável do contrato sem escolher um formato de arquivo.
+Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (criação, sequências de origem, frame, unidades, âncora, extensão espacial e temporal e capacidades declaradas), a referência à geometria (`GeometricMapLink`), a composição de **entidades e relações** por referência (`ContextEntity`, `ContextRelation`) com integridade de referências validada em construção, a **linhagem** e a proveniência (`EvidenceOrigin`, `UpstreamArtifact`), a versão do schema com a regra de leitura, e a **visão canônica em registros** (`context_map_to_record` / `context_map_from_record`), que é a forma serializável do contrato sem escolher um formato de arquivo.
 
 ## Contratos públicos
 
@@ -37,11 +37,13 @@ Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (c
 - `ContextSemanticState`, `LabelHypothesis`, `AmbiguityStatus` — o estado semântico, que nunca colapsa incerteza.
 - `ContextRelation`, `ContextRelationId`, `RelationState` — a relação direcionada entre entidades e seu estado (`SUPPORTED`, `UNRESOLVED`, `CONFLICTING`).
 - `UpstreamRecordRef` — o registro exato, no artifact exato, a que algo do mapa corresponde.
+- `EvidenceOrigin`, `DerivationKind` — como um resultado foi produzido (sensor, modelo, geometria, fusão, humano, conhecimento prévio) e **toda** a evidência de que deriva; proveniência, nunca confiança.
+- `UpstreamArtifact`, `ArtifactKind`, `ProvenanceError` — a linhagem: cada artifact citado, com identidade de conteúdo, configuração, código e modelos.
 - `ReferenceIntegrityError`, `ForeignContextEntityReferenceError`, `UnknownContextEntityError` — referências que não resolvem, referência a outro mapa e entidade inexistente.
 - `CONTEXT_MAP_SCHEMA_VERSION`, `SchemaVersion`, `require_supported_schema_version()`, `UnsupportedSchemaVersionError` — a versão do schema e a rejeição explícita de uma versão ilegível.
 - `context_map_to_record()`, `context_map_from_record()`, `ContextMapRecordError` — a visão canônica em registros, estrita e independente de formato.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades e [`composition.md`](composition.md) para geometria, entidades e relações.
+Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades , [`composition.md`](composition.md) para geometria, entidades e relações e [`lineage.md`](lineage.md) para linhagem, origens e o fechamento de proveniência.
 
 ## Módulos consumidos
 
@@ -59,6 +61,7 @@ Nenhum dentro do Solution 1 hoje. O serializador (Context Map Serialization) e a
 - [`contracts.md`](contracts.md) — campos, identidades e invariantes.
 - [`metadata.md`](metadata.md) — frame, unidades, âncora, extensão e capacidades declaradas.
 - [`composition.md`](composition.md) — geometria, entidades e relações: escopos de identidade, referências e índices.
+- [`lineage.md`](lineage.md) — linhagem, referências de evidência, categorias de derivação e fechamento de proveniência.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `ContextMap` no contexto global de contratos.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — o `ContextMapArtifact` no fluxo de artifacts.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — a etapa de Context Map Assembly.

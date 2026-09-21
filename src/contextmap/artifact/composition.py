@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from contextmap.artifact._checks import require_canonical, require_present
+from contextmap.artifact.provenance import EvidenceOrigin
 from contextmap.artifact.references import (
     ContextEntityId,
     ContextEntityReference,
@@ -47,18 +48,20 @@ class AmbiguityStatus(Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
-@dataclass(frozen=True, kw_only=True, order=True)
+@dataclass(frozen=True, kw_only=True)
 class LabelHypothesis:
     """One thing an entity may be, as an open-vocabulary label.
 
     A label is a semantic hypothesis, not the identity of an object in the world. There is no
-    score: the numbers that support it stay in the upstream artifact.
+    score: the numbers that support it stay in the upstream artifact, which the origin cites.
 
     Attributes:
         label: The label text, verbatim.
+        origin: How the hypothesis was produced and the evidence it rests on.
     """
 
     label: str
+    origin: EvidenceOrigin
 
     def __post_init__(self) -> None:
         """Require the label.
@@ -112,24 +115,39 @@ class ContextEntity:
         entity_id: Identity of the entity, unique inside the map.
         source: The upstream record this entity maps to; the identity mapping is explicit and
             two entities never map to the same record.
+        member_entities: The source entities this entity was resolved from, sorted and unique;
+            at least one. An entity that merged several keeps all of them.
+        resolution_decisions: The resolution decisions behind the entity, sorted and unique;
+            empty when no decision was needed.
         geometry_refs: The authoritative geometry support, by reference: at least one element,
             sorted and unique. Never coordinates.
         semantic_state: What the entity may be, with every hypothesis kept.
+        origin: How the entity was produced and the evidence it rests on.
     """
 
     entity_id: ContextEntityId
     source: UpstreamRecordRef
+    member_entities: tuple[UpstreamRecordRef, ...]
+    resolution_decisions: tuple[UpstreamRecordRef, ...]
     geometry_refs: tuple[GeometryReference, ...]
     semantic_state: ContextSemanticState
+    origin: EvidenceOrigin
 
     def __post_init__(self) -> None:
-        """Validate the identity and the geometry support.
+        """Validate the identity, the resolution lineage and the geometry support.
 
         Raises:
-            ValueError: If the identity is blank, the entity has no geometry support, or the
-                references are not sorted and unique.
+            ValueError: If the identity is blank, the entity has no member entity or no
+                geometry support, or a list is not sorted and unique.
         """
         require_present(self, "entity_id")
+        if not self.member_entities:
+            raise ValueError("member_entities must list the source entities of the entity")
+        for name, records in (
+            ("member_entities", self.member_entities),
+            ("resolution_decisions", self.resolution_decisions),
+        ):
+            require_canonical(name, records, lambda item: (item.artifact_id, item.record_id))
         if not self.geometry_refs:
             raise ValueError("geometry_refs must list the geometry that supports the entity")
         require_canonical(
@@ -169,6 +187,7 @@ class ContextRelation:
         object: The entity the predicate points to. ``subject predicate object`` is directed:
             the relation does not hold in the other direction unless it is stated.
         state: Whether the evidence supports the relation.
+        origin: How the relation was derived and the evidence it rests on.
     """
 
     relation_id: ContextRelationId
@@ -177,6 +196,7 @@ class ContextRelation:
     predicate: str
     object: ContextEntityReference
     state: RelationState
+    origin: EvidenceOrigin
 
     def __post_init__(self) -> None:
         """Validate the identity, the predicate and that the endpoints differ.

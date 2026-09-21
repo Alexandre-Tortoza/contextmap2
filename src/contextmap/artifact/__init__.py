@@ -27,6 +27,13 @@ from contextmap.artifact.metadata import (
     SourceSequence,
 )
 from contextmap.artifact.models import ContextMap, GeometricMapLink
+from contextmap.artifact.provenance import (
+    ArtifactKind,
+    DerivationKind,
+    EvidenceOrigin,
+    ProvenanceError,
+    UpstreamArtifact,
+)
 from contextmap.artifact.records import (
     ContextMapRecordError,
     context_map_from_record,
@@ -53,6 +60,7 @@ __all__ = [
     "CONTEXT_MAP_SCHEMA_VERSION",
     "AmbiguityStatus",
     "AnchorKind",
+    "ArtifactKind",
     "ContextEntity",
     "ContextEntityId",
     "ContextEntityReference",
@@ -64,6 +72,8 @@ __all__ = [
     "ContextRelationId",
     "ContextSemanticState",
     "DeclaredCapabilities",
+    "DerivationKind",
+    "EvidenceOrigin",
     "ForeignContextEntityReferenceError",
     "GeometricMapLink",
     "Handedness",
@@ -75,12 +85,14 @@ __all__ = [
     "MapFrame",
     "ObservationWindow",
     "PolicyRef",
+    "ProvenanceError",
     "ReferenceIntegrityError",
     "RelationState",
     "SchemaVersion",
     "SourceSequence",
     "UnknownContextEntityError",
     "UnsupportedSchemaVersionError",
+    "UpstreamArtifact",
     "UpstreamRecordRef",
     "context_map_from_record",
     "context_map_to_record",

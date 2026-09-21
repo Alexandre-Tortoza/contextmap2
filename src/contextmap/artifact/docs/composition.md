@@ -1,6 +1,6 @@
 # Composição: geometria, entidades e relações
 
-Este documento descreve `src/contextmap/artifact/composition.py`, `references.py` e `_invariants.py`. O `ContextMap` conecta geometria autoritativa, entidades resolvidas e relações espaciais **sem duplicar os artifacts a montante e sem criar propriedade ambígua**.
+Este documento descreve `src/contextmap/artifact/composition.py`, `references.py` e `_invariants.py`. A proveniência (`origin`) e a linhagem estão em [`lineage.md`](lineage.md). O `ContextMap` conecta geometria autoritativa, entidades resolvidas e relações espaciais **sem duplicar os artifacts a montante e sem criar propriedade ambígua**.
 
 ```text
 ContextMap
@@ -28,7 +28,7 @@ ContextMap
 
 ## Entidade
 
-`ContextEntity` guarda `entity_id`, `source`, `geometry_refs` e `semantic_state`.
+`ContextEntity` guarda `entity_id`, `source`, `member_entities`, `resolution_decisions`, `geometry_refs`, `semantic_state` e `origin`. `member_entities` (pelo menos uma) e `resolution_decisions` preservam de quais entidades de origem e de quais decisões a entidade resolvida veio; `origin` e a proveniência estão em [`lineage.md`](lineage.md).
 
 - **Suporte de geometria autoritativo**: pelo menos um `GeometryReference`, ordenado e único, **nunca coordenadas**. O mapa valida que cada referência pertence ao mapa geométrico referenciado, usa a identidade canônica (`geometry_index_of`) e está dentro do intervalo `[0, point_count)`. Assim toda entidade resolve a suporte existente sem abrir a geometria; a verificação contra o `GeometricMap` real é do validador do artifact;
 - várias entidades podem compartilhar elementos de geometria; o mapa não decide se isso é ou não um problema de resolução;
@@ -36,7 +36,7 @@ ContextMap
 
 ### Estado semântico sem colapso de incerteza
 
-`ContextSemanticState(status, hypotheses)`; `LabelHypothesis` guarda só o `label` verbatim (vocabulário aberto, sem score: os números que sustentam uma hipótese continuam no artifact a montante).
+`ContextSemanticState(status, hypotheses)`; `LabelHypothesis` guarda o `label` verbatim (vocabulário aberto) e sua `origin` (como foi produzida e em que evidência se apoia). Não há score: os números que sustentam uma hipótese continuam no artifact a montante, que a origem cita.
 
 | `AmbiguityStatus` | Hipóteses exigidas |
 | --- | --- |
@@ -49,7 +49,7 @@ O status precisa concordar com as hipóteses: um estado competitivo **não pode*
 
 ## Relação
 
-`ContextRelation` guarda `relation_id`, `source`, `subject`, `predicate`, `object` e `state`.
+`ContextRelation` guarda `relation_id`, `source`, `subject`, `predicate`, `object`, `state` e `origin` (a evidência e a política que a derivaram).
 
 - sujeito e objeto resolvem a entidades **do mesmo mapa** (`ReferenceIntegrityError` caso contrário) e são distintos: uma relação de uma entidade consigo mesma não existe no schema;
 - `RelationState`: `SUPPORTED`, `UNRESOLVED`, `CONFLICTING`. Uma relação candidata nunca é uma relação confirmada; relações não resolvidas ou conflitantes **permanecem no mapa com seu estado**, e um consumidor que quer só as confirmadas filtra por `SUPPORTED`;
@@ -65,7 +65,8 @@ O status precisa concordar com as hipóteses: um estado competitivo **não pode*
 
 - entidades existentes exigem `ENTITIES` declarada; relações existentes exigem `RELATIONS`;
 - com `RELATIONS` declarada, `relation_predicates` é **exatamente** o conjunto de predicados presentes;
-- uma capacidade declarada com conteúdo vazio é válida (o estágio rodou e nada encontrou), e é diferente de uma capacidade ausente.
+- uma capacidade declarada com conteúdo vazio é válida (o estágio rodou e nada encontrou), e é diferente de uma capacidade ausente;
+- cada capacidade também precisa do artifact que a produz na linhagem ([`lineage.md`](lineage.md)).
 
 ## Ordenação canônica
 
