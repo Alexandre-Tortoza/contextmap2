@@ -53,6 +53,12 @@ Escolher os backends canônicos é uma decisão científica que pertence a esta 
 
 Nenhum componente canônico chama serviço externo. O `Qwen/Qwen3-VL-4B-Instruct` é o candidato local que coube em uma GPU de 8 GB na auditoria anterior (com quantização); a taxa de respostas interpretáveis foi parcial e a validação real do runtime pertence à milestone de Semantic Interpretation. O run canônico só é aceito se a revisão e a quantização efetivas ficarem gravadas na proveniência, e uma troca de modelo é uma nova versão do cenário.
 
+### O perfil como configuração do runtime
+
+O cenário é a **única fonte** do perfil canônico. `scenario_runtime_document()` devolve o documento de configuração do runtime que o expressa: o preset `canonical/1`, os estágios opcionais desligados (`point_representation: false`) e **só a seleção de backend** de cada ponto de variação. Checkpoint, revisão e limiares pertencem a quem os possui e ao run que os grava; o documento não os fixa.
+
+Gravado como `.json` e passado ao runtime, o documento resolve a configuração efetiva sem problema de seleção (`check_selection()` vazio). Os testes de `tests/end_to_end/test_canonical_runtime_profile.py` verificam que todo estágio exigido pertence à topologia do runtime, que todo backend citado existe no catálogo e que o digest da configuração efetiva não depende do caminho do arquivo. Os estágios `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` estão habilitados no documento e continuam **indisponíveis** no runtime até as capabilities existirem: a execução os reporta, não os ignora.
+
 ### Opcionais: só por ablação
 
 Capabilities implementadas que **não** fazem parte do run canônico. Uma opção só sai desta lista por uma ablação end-to-end controlada que mostre benefício relativo ao custo, uma nova versão do cenário e um run canônico aprovado; nunca pelo resultado de um paper ou por uma métrica de estágio isolada.
