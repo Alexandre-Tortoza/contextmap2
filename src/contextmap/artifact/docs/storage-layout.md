@@ -18,11 +18,11 @@ O nome do diretório é escolhido por quem chama (a runtime o coloca em `workspa
 ├── README.md                        # resumo humano; não contratual e fora do inventário
 ├── map-metadata.json                # ContextMapMetadata: frame, unidades, âncora, limites, capabilities
 ├── geometry/
-│   └── geometry-reference.json      # referência exata ao GeometricMapArtifact; nunca uma cópia
+│   └── geometry-reference.json      # GeometricMapLink: identidade e tamanho do GeometricMapArtifact; nunca uma cópia
 ├── entities/
-│   └── entities.jsonl               # uma entidade resolvida por linha, ordenadas por identidade
+│   └── entities.jsonl               # uma ContextEntity por linha, ordenadas por id
 ├── relations/
-│   └── relations.jsonl              # uma relação por linha, ordenadas por identidade
+│   └── relations.jsonl              # uma ContextRelation por linha, ordenadas por id
 ├── indexes/                         # tudo aqui é derivado e reconstruível
 │   ├── entity-index.jsonl           # identidade → deslocamento e tamanho em entities.jsonl
 │   ├── relation-index.jsonl         # identidade → deslocamento e tamanho em relations.jsonl
@@ -94,14 +94,18 @@ Estes campos respondem a perguntas diferentes e nunca se confundem:
 
 `format_version` e `schema_version` andam separados: mudar como o mapa é gravado não muda o que ele significa, e vice-versa. O leitor aceita um conjunto **explícito** de `format_version` (`layout.SUPPORTED_FORMAT_VERSIONS`); qualquer outro é recusado com uma mensagem que lista as versões aceitas, nunca lido parcialmente. As regras de compatibilidade do `schema_version` pertencem ao schema.
 
+## Registros
+
+Cada linha de `entities.jsonl` é `{"key", "record"}` (a chave é o id da entidade e `record` é o registro canônico do schema); cada linha de `relations.jsonl` é `{"key", "subject", "object", "record"}` (o sujeito e o objeto são ids de entidade). Esse envelope existe para que os índices e a integridade entre registros sejam verificáveis sem interpretar o registro. Os documentos `map-metadata.json`, `geometry/geometry-reference.json` e `lineage/lineage.json` são partes do `context_map_to_record` do schema; juntos, os documentos e as duas tabelas reconstroem exatamente o registro do mapa.
+
 ## Dependências
 
-`dependencies` lista os artifacts a montante que o mapa **referencia em vez de copiar**. Cada um tem `artifact_type`, `artifact_id`, `content_identity`, `requirement` e um `locator` opcional.
+`dependencies` lista os artifacts a montante que o mapa **referencia em vez de copiar**, e é derivada da linhagem do schema (`ContextMap.lineage`): um por artifact citado, com `artifact_type` (o `kind` da linhagem), `artifact_id`, `content_identity` (a da linhagem), `requirement` e um `locator` opcional.
 
-- `requirement = required`: necessário para resolver o próprio mapa (a geometria em que as entidades apontam). Ausente ou divergente, o artifact é inutilizável.
-- `requirement = optional`: necessário só para inspecionar evidência em profundidade. Ausente, é um aviso: o núcleo do mapa continua totalmente legível.
-- `content_identity` é o `inventory_digest` do inventário contratual do artifact a montante (SHA-256 dos `(caminho, tamanho, hash)` ordenados). Ele torna a referência **exata**: um artifact encontrado por qualquer caminho só é a dependência se o digest bater. Sem um caminho absoluto em lugar nenhum, a referência sobrevive a mover o workspace.
-- `locator` é uma **dica**, relativa ao diretório do artifact (por exemplo `../geometric_mapping`). Nunca é confiada nem entra na identidade, e é a única coisa que a exportação reescreve. Quem abre o artifact pode informar o caminho de cada dependência explicitamente; o `locator` só serve quando o workspace foi movido inteiro.
+- `requirement = required` para os tipos **estruturais** do schema (`ArtifactKind.is_structural`: o mapa geométrico, o run de Entity Resolution e o de Spatial Relations): necessários para resolver o mapa. Ausente ou divergente, o artifact é inutilizável.
+- `requirement = optional` para os demais (sequência, percepção, fusão…): necessários só para inspecionar evidência em profundidade. Ausente, é um aviso: o núcleo do mapa continua totalmente legível.
+- `content_identity` de um artifact a montante é, por convenção, o `inventory_digest` do inventário do seu manifest (SHA-256 dos `(caminho, tamanho, hash)` ordenados). Ele torna a referência **exata**: um artifact achado por qualquer caminho só é a dependência se o digest bater. O writer confere essa igualdade para todo artifact localizado, e nenhum caminho absoluto é gravado.
+- `locator` é uma **dica**, relativa ao diretório do artifact (por exemplo `../geometric_mapping`). Nunca é confiada nem entra na identidade, e é a única coisa que a exportação reescreve. Quem abre o artifact pode informar o caminho de cada dependência explicitamente; o `locator` só serve quando o workspace foi movido inteiro. Uma dependência sem localização na escrita não tem dica.
 
 A geometria é resolvida pelo `GeometricMapArtifactReader` existente (o `GeometrySource` que ele devolve continua sendo o único dono das coordenadas); o `ContextMapArtifact` guarda só a referência e a verificação.
 

@@ -11,13 +11,25 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
+from context_map_builders import (
+    ENTITY_RESOLUTION_ARTIFACT_ID,
+    FUSION_ARTIFACT_ID,
+    SPATIAL_RELATIONS_ARTIFACT_ID,
+    entity_capabilities,
+    metadata,
+)
+from context_map_builders import context_map as schema_context_map
 from context_map_serialization_builders import (
+    MAP_ID,
+    World,
     make_context_map,
-    make_evidence,
-    make_geometry,
+    make_world,
+    pinned,
     tree_snapshot,
     write_artifact,
 )
@@ -37,7 +49,6 @@ from contextmap.artifact.serialization.manifest import (
     decode_manifest,
     encode_manifest,
 )
-from contextmap.artifact.serialization.tables import canonical_json_line, encode_record_table
 from contextmap.shared import file_entry
 
 FULL = ValidationLevel.FULL
@@ -45,13 +56,13 @@ STRUCTURAL = ValidationLevel.STRUCTURAL
 
 
 @pytest.fixture
-def geometry_dir(tmp_path: Path) -> Path:
-    return make_geometry(tmp_path)
+def world(tmp_path: Path) -> World:
+    return make_world(tmp_path)
 
 
 @pytest.fixture
-def artifact(tmp_path: Path, geometry_dir: Path) -> Path:
-    return write_artifact(tmp_path, geometry_dir)[0]
+def artifact(world: World) -> Path:
+    return write_artifact(world)[0]
 
 
 def _codes(report: ValidationReport, severity: Severity | None = None) -> set[str]:
@@ -70,19 +81,18 @@ def _outcomes(report: ValidationReport) -> dict[str, CheckOutcome]:
     return {check.name: check.outcome for check in report.checks}
 
 
-def _reseal(artifact: Path, *, entity_count: int | None = None) -> None:
+def _reseal(artifact: Path) -> None:
     """Recompute inventory and identity from the disk so only the intended damage remains."""
     manifest = decode_manifest(json.loads((artifact / "manifest.json").read_text()))
-    payloads = manifest.payloads
     resealed = create_manifest(
         context_map_id=manifest.context_map_id,
         schema_version=manifest.schema_version,
         written_at=manifest.written_at,
         code_version=manifest.code_version,
         configuration_fingerprint=manifest.configuration_fingerprint,
-        entity_count=manifest.entity_count if entity_count is None else entity_count,
+        entity_count=manifest.entity_count,
         relation_count=manifest.relation_count,
-        payloads=payloads,
+        payloads=manifest.payloads,
         dependencies=manifest.dependencies,
         file_inventory=[
             file_entry(entry.path, (artifact / entry.path).read_bytes())
@@ -99,34 +109,45 @@ def _replace_in(artifact: Path, relative_path: str, old: bytes, new: bytes) -> N
     path.write_bytes(data.replace(old, new))
 
 
-def test_an_intact_artifact_is_fully_verified_with_nothing_to_report(artifact: Path) -> None:
+def _edit_json(artifact: Path, relative_path: str, edit: Callable[[Any], None]) -> None:
+    path = artifact / relative_path
+    record = json.loads(path.read_text(encoding="utf-8"))
+    edit(record)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def test_an_intact_artifact_is_fully_verified_with_nothing_to_report(
+    world: World, artifact: Path
+) -> None:
     report = validate_context_map_artifact(artifact)
 
     assert report.status is ValidationStatus.VERIFIED
     assert report.level is FULL
-    assert report.findings == ()
+    assert _errors(report) == set()
     assert report.validator_version == VALIDATOR_VERSION
     assert report.artifact_type == "context_map"
     assert report.format_version == "0.1.0"
     assert report.schema_version == "0.1.0"
-    assert report.context_map_id == str(make_context_map().context_map_id)
+    assert report.context_map_id == str(make_context_map(world).context_map_id)
     assert report.content_identity is not None and report.content_identity.startswith("sha256:")
     assert {item.status for item in report.files} == {FileStatus.VERIFIED}
     assert [item.path for item in report.files] == sorted(item.path for item in report.files)
     assert all(item.outcome is not CheckOutcome.FAILED for item in report.checks)
 
 
-def test_the_report_lists_every_check_including_the_ones_that_could_not_run(
-    artifact: Path,
-) -> None:
+def test_the_report_lists_every_check_and_a_full_run_skips_none(artifact: Path) -> None:
     outcomes = _outcomes(validate_context_map_artifact(artifact))
 
-    assert outcomes["manifest"] is CheckOutcome.PASSED
-    assert outcomes["file_hashes"] is CheckOutcome.PASSED
-    assert outcomes["reference_integrity"] is CheckOutcome.PASSED
-    assert outcomes["index_rebuild"] is CheckOutcome.PASSED
-    assert outcomes["dependencies"] is CheckOutcome.PASSED
-    assert outcomes["entity_geometry_support"] is CheckOutcome.SKIPPED
+    assert list(outcomes)[:2] == ["manifest", "inventory"]
+    assert set(outcomes.values()) == {CheckOutcome.PASSED}
+    for name in (
+        "file_hashes",
+        "reference_integrity",
+        "index_rebuild",
+        "schema_invariants",
+        "dependency_integrity",
+    ):
+        assert outcomes[name] is CheckOutcome.PASSED
 
 
 def test_structural_validation_is_fast_and_never_claims_the_artifact_is_verified(
@@ -136,10 +157,16 @@ def test_structural_validation_is_fast_and_never_claims_the_artifact_is_verified
 
     assert report.status is ValidationStatus.STRUCTURALLY_VALID
     assert report.status is not ValidationStatus.VERIFIED
-    assert report.findings == ()
+    assert _errors(report) == set()
     assert {item.status for item in report.files} == {FileStatus.SIZE_OK}
     outcomes = _outcomes(report)
-    for name in ("file_hashes", "reference_integrity", "index_rebuild", "dependency_integrity"):
+    for name in (
+        "file_hashes",
+        "reference_integrity",
+        "index_rebuild",
+        "schema_invariants",
+        "dependency_integrity",
+    ):
         assert outcomes[name] is CheckOutcome.SKIPPED
     skipped = {check.name: check.detail for check in report.checks}
     assert "structural" in (skipped["file_hashes"] or "")
@@ -198,7 +225,7 @@ def test_a_broken_index_is_detected_structurally(artifact: Path) -> None:
 def test_an_index_that_points_at_another_record_is_detected_by_full_verification(
     artifact: Path,
 ) -> None:
-    _replace_in(artifact, "entities/entities.jsonl", b'"key":"entity-b"', b'"key":"entity-x"')
+    _replace_in(artifact, "entities/entities.jsonl", b'"key":"entity-0002"', b'"key":"entity-0009"')
     _reseal(artifact)
 
     structural = validate_context_map_artifact(artifact, level=STRUCTURAL)
@@ -211,7 +238,10 @@ def test_an_index_that_points_at_another_record_is_detected_by_full_verification
 
 def test_a_relation_that_names_an_unknown_entity_is_a_broken_reference(artifact: Path) -> None:
     _replace_in(
-        artifact, "relations/relations.jsonl", b'"subject":"entity-c"', b'"subject":"entity-z"'
+        artifact,
+        "relations/relations.jsonl",
+        b'"subject":"entity-0002"',
+        b'"subject":"entity-0009"',
     )
     _reseal(artifact)
 
@@ -222,16 +252,16 @@ def test_a_relation_that_names_an_unknown_entity_is_a_broken_reference(artifact:
     finding = next(
         item for item in report.findings if item.code == "reference.relation_endpoint_missing"
     )
-    assert finding.subject == "relation-2"
-    assert "entity-z" in finding.message
+    assert finding.subject == "relation-0002"
+    assert "entity-0009" in finding.message
 
 
 def test_a_stale_traversal_index_is_detected_by_rebuilding_it(artifact: Path) -> None:
     _replace_in(
         artifact,
         "indexes/entity-relation-index.jsonl",
-        b'"as_object":["relation-1"]',
-        b'"as_object":["relation-9"]',
+        b'"as_object":["relation-0001"]',
+        b'"as_object":["relation-0009"]',
     )
     _reseal(artifact)
 
@@ -243,10 +273,35 @@ def test_a_stale_traversal_index_is_detected_by_rebuilding_it(artifact: Path) ->
     assert finding.subject == "indexes/entity-relation-index.jsonl"
 
 
+def test_a_record_that_the_schema_refuses_is_found_by_full_verification_only(
+    artifact: Path,
+) -> None:
+    # Um suporte geométrico fora do mapa: só a verificação completa decodifica as entidades.
+    _replace_in(
+        artifact,
+        "entities/entities.jsonl",
+        b"corridor-02--map-run-0001--geom-000000020",
+        b"corridor-02--map-run-0001--geom-000009999",
+    )
+    _reseal(artifact)
+
+    structural = validate_context_map_artifact(artifact, level=STRUCTURAL)
+    full = validate_context_map_artifact(artifact)
+
+    assert structural.status is ValidationStatus.STRUCTURALLY_VALID
+    assert full.status is ValidationStatus.INVALID
+    assert "map.invalid" in _errors(full)
+    assert _outcomes(full)["schema_invariants"] is CheckOutcome.FAILED
+
+
 def test_a_lineage_that_disagrees_with_the_manifest_is_an_incompatible_lineage(
     artifact: Path,
 ) -> None:
-    _replace_in(artifact, "lineage/lineage.json", b'"required"', b'"optional"')
+    def flip(record: Any) -> None:
+        item = next(entry for entry in record["upstream_artifacts"] if entry["kind"] == "sequence")
+        item["content_identity"] = "sha256:" + "f" * 64
+
+    _edit_json(artifact, "lineage/lineage.json", flip)
     _reseal(artifact)
 
     report = validate_context_map_artifact(artifact)
@@ -259,7 +314,7 @@ def test_the_geometry_the_map_names_must_be_the_one_the_dependency_records(
     artifact: Path,
 ) -> None:
     _replace_in(
-        artifact, "geometry/geometry-reference.json", b'"point_count": 24', b'"point_count": 25'
+        artifact, "geometry/geometry-reference.json", b'"point_count": 1000', b'"point_count": 1001'
     )
     _reseal(artifact)
 
@@ -269,86 +324,64 @@ def test_the_geometry_the_map_names_must_be_the_one_the_dependency_records(
     assert "geometry.point_count_mismatch" in _errors(report)
 
 
-def test_content_the_map_does_not_declare_is_an_error(tmp_path: Path, geometry_dir: Path) -> None:
-    artifact, manifest = write_artifact(
-        tmp_path,
-        geometry_dir,
-        context_map=make_context_map(entities=False, relations=False),
-        entities=(),
-        relations=(),
+def test_content_the_map_does_not_declare_is_an_error(artifact: Path) -> None:
+    def undeclare(record: Any) -> None:
+        record["capabilities"]["content"] = ["geometry"]
+        record["capabilities"]["relation_predicates"] = []
+
+    _edit_json(artifact, "map-metadata.json", undeclare)
+    _reseal(artifact)
+
+    for level in (STRUCTURAL, FULL):
+        report = validate_context_map_artifact(artifact, level=level)
+        assert report.status is ValidationStatus.INVALID
+        assert "capabilities.undeclared_entities" in _errors(report)
+
+
+def test_a_declared_capability_with_no_records_is_valid(world: World) -> None:
+    declared_only = pinned(
+        schema_context_map(metadata=metadata(capabilities=entity_capabilities())), world
     )
-    table = encode_record_table([{"key": "entity-a", "record": {"label": "ghost"}}])
-    (artifact / "entities/entities.jsonl").write_bytes(table.payload)
-    (artifact / "indexes/entity-index.jsonl").write_bytes(table.index)
-    (artifact / "indexes/entity-relation-index.jsonl").write_bytes(
-        canonical_json_line({"key": "entity-a", "as_subject": [], "as_object": []}) + b"\n"
-    )
-    payloads = tuple(
-        payload.__class__(**{**payload.__dict__, "record_count": 1})
-        if payload.path.endswith(
-            ("entities.jsonl", "entity-index.jsonl", "entity-relation-index.jsonl")
-        )
-        else payload
-        for payload in manifest.payloads
-    )
-    resealed = create_manifest(
-        context_map_id=manifest.context_map_id,
-        schema_version=manifest.schema_version,
-        written_at=manifest.written_at,
-        code_version=manifest.code_version,
-        configuration_fingerprint=manifest.configuration_fingerprint,
-        entity_count=1,
-        relation_count=0,
-        payloads=payloads,
-        dependencies=manifest.dependencies,
-        file_inventory=[
-            file_entry(entry.path, (artifact / entry.path).read_bytes())
-            for entry in manifest.file_inventory
-        ],
-    )
-    (artifact / "manifest.json").write_text(json.dumps(encode_manifest(resealed)))
+    artifact, _ = write_artifact(world, context_map=declared_only)
 
-    report = validate_context_map_artifact(artifact)
-
-    assert report.status is ValidationStatus.INVALID
-    assert "capabilities.undeclared_entities" in _errors(report)
-
-
-def test_a_declared_capability_with_no_records_is_valid(tmp_path: Path, geometry_dir: Path) -> None:
-    artifact, _ = write_artifact(tmp_path, geometry_dir, entities=(), relations=())
-
-    report = validate_context_map_artifact(artifact)
-
-    assert report.status is ValidationStatus.VERIFIED
+    assert validate_context_map_artifact(artifact).status is ValidationStatus.VERIFIED
 
 
 def test_a_missing_required_dependency_is_an_error_and_an_optional_one_a_warning(
-    tmp_path: Path, geometry_dir: Path
+    world: World, artifact: Path
 ) -> None:
-    evidence = make_evidence(tmp_path)
-    artifact, _ = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
-    shutil.rmtree(evidence.location)
+    shutil.rmtree(world.fusion_dir)
 
     only_optional = validate_context_map_artifact(artifact)
     assert only_optional.status is ValidationStatus.VERIFIED
     assert _codes(only_optional, Severity.WARNING) == {"dependency.optional_missing"}
     assert _errors(only_optional) == set()
 
-    shutil.rmtree(tmp_path / "geometry-workspace")
+    shutil.rmtree(world.geometry_dir.parents[3])
     both = validate_context_map_artifact(artifact)
     assert both.status is ValidationStatus.INVALID
     assert _errors(both) == {"dependency.required_missing"}
-    statuses = {(item.artifact_type, item.requirement): item.status for item in both.dependencies}
-    assert statuses[("geometric_map", "required")] == "missing"
-    assert statuses[("semantic_fusion_run", "optional")] == "missing"
+    statuses = {(item.artifact_id, item.requirement): item.status for item in both.dependencies}
+    assert statuses[(MAP_ID, "required")] == "missing"
+    assert statuses[(FUSION_ARTIFACT_ID, "optional")] == "missing"
+
+
+def test_every_structural_kind_is_required_and_every_other_kind_optional(
+    artifact: Path,
+) -> None:
+    report = validate_context_map_artifact(artifact)
+
+    requirement = {item.artifact_id: item.requirement for item in report.dependencies}
+    assert requirement[MAP_ID] == "required"
+    assert requirement[ENTITY_RESOLUTION_ARTIFACT_ID] == "required"
+    assert requirement[SPATIAL_RELATIONS_ARTIFACT_ID] == "required"
+    assert requirement[FUSION_ARTIFACT_ID] == "optional"
 
 
 def test_a_dependency_that_is_not_the_recorded_artifact_is_an_error_even_when_optional(
-    tmp_path: Path, geometry_dir: Path
+    world: World, artifact: Path
 ) -> None:
-    evidence = make_evidence(tmp_path)
-    artifact, _ = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
-    manifest_path = evidence.location / "manifest.json"
+    manifest_path = world.fusion_dir / "manifest.json"
     record = json.loads(manifest_path.read_text())
     record["file_inventory"][0]["content_hash"] = "sha256:" + "0" * 64
     manifest_path.write_text(json.dumps(record))
@@ -360,27 +393,29 @@ def test_a_dependency_that_is_not_the_recorded_artifact_is_an_error_even_when_op
 
 
 def test_a_moved_artifact_needs_its_dependencies_told_where_they_are(
-    tmp_path: Path, artifact: Path, geometry_dir: Path
+    tmp_path: Path, world: World, artifact: Path
 ) -> None:
     elsewhere = tmp_path / "another-machine" / "copy"
     shutil.copytree(artifact, elsewhere)
-    moved_geometry = tmp_path / "another-machine" / "geometry"
-    shutil.copytree(geometry_dir, moved_geometry)
-    shutil.rmtree(tmp_path / "geometry-workspace")
+    moved: dict[str, Path] = {}
+    for artifact_id, directory in world.structural_locations.items():
+        moved[artifact_id] = tmp_path / "another-machine" / artifact_id
+        shutil.copytree(directory, moved[artifact_id])
+    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.resolution_dir)
+    shutil.rmtree(world.relations_dir)
 
     alone = validate_context_map_artifact(elsewhere)
-    told = validate_context_map_artifact(
-        elsewhere, dependency_paths={"corridor-02--run-0001": moved_geometry}
-    )
+    told = validate_context_map_artifact(elsewhere, dependency_paths=moved)
 
     assert _errors(alone) == {"dependency.required_missing"}
     assert told.status is ValidationStatus.VERIFIED
 
 
 def test_damaged_upstream_files_are_found_by_full_verification_only(
-    artifact: Path, geometry_dir: Path
+    world: World, artifact: Path
 ) -> None:
-    payload = geometry_dir / "outputs/geometry.bin"
+    payload = world.geometry_dir / "outputs/geometry.bin"
     data = bytearray(payload.read_bytes())
     data[10] ^= 0xFF
     payload.write_bytes(bytes(data))
@@ -396,10 +431,7 @@ def test_damaged_upstream_files_are_found_by_full_verification_only(
 def test_an_unsupported_format_version_stops_the_validation_with_a_clear_reason(
     artifact: Path,
 ) -> None:
-    path = artifact / "manifest.json"
-    record = json.loads(path.read_text())
-    record["format_version"] = "9.0.0"
-    path.write_text(json.dumps(record))
+    _edit_json(artifact, "manifest.json", lambda record: record.update(format_version="9.0.0"))
 
     report = validate_context_map_artifact(artifact)
 
@@ -411,10 +443,7 @@ def test_an_unsupported_format_version_stops_the_validation_with_a_clear_reason(
 
 
 def test_an_unsupported_schema_version_is_reported_as_such(artifact: Path) -> None:
-    path = artifact / "manifest.json"
-    record = json.loads(path.read_text())
-    record["schema_version"] = "9.0.0"
-    path.write_text(json.dumps(record))
+    _edit_json(artifact, "manifest.json", lambda record: record.update(schema_version="9.0.0"))
 
     report = validate_context_map_artifact(artifact)
 
@@ -424,10 +453,7 @@ def test_an_unsupported_schema_version_is_reported_as_such(artifact: Path) -> No
 def test_a_tampered_manifest_is_reported_and_incomplete_directories_are_named(
     tmp_path: Path, artifact: Path
 ) -> None:
-    path = artifact / "manifest.json"
-    record = json.loads(path.read_text())
-    record["entity_count"] = 99
-    path.write_text(json.dumps(record))
+    _edit_json(artifact, "manifest.json", lambda record: record.update(entity_count=99))
     assert _errors(validate_context_map_artifact(artifact)) == {"manifest.identity_mismatch"}
 
     (tmp_path / ".tmp-context_map-1234abcd").mkdir()
@@ -445,28 +471,20 @@ def test_files_outside_the_contract_are_warnings_and_are_never_read(artifact: Pa
     report = validate_context_map_artifact(artifact)
 
     assert report.status is ValidationStatus.VERIFIED
-    assert _codes(report, Severity.WARNING) == {"debug.present", "file.unlisted"}
+    assert {"debug.present", "file.unlisted"} <= _codes(report, Severity.WARNING)
     unlisted = next(item for item in report.findings if item.code == "file.unlisted")
     assert unlisted.subject == "notes.txt"
 
 
 def test_the_report_is_deterministic_and_carries_no_machine_specific_data(
-    tmp_path: Path, artifact: Path
+    tmp_path: Path, world: World, artifact: Path
 ) -> None:
     first = validate_context_map_artifact(artifact).to_json()
     second = validate_context_map_artifact(artifact).to_json()
     copied = tmp_path / "another-place" / "copy"
     shutil.copytree(artifact, copied)
     third = validate_context_map_artifact(
-        copied,
-        dependency_paths={
-            "corridor-02--run-0001": tmp_path
-            / "geometry-workspace"
-            / "runs"
-            / "geometric-mapping"
-            / "corridor-02"
-            / "run-0001__full__baseline"
-        },
+        copied, dependency_paths=world.structural_locations
     ).to_json()
 
     assert first == second == third

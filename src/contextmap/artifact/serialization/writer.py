@@ -1,35 +1,36 @@
 """Deterministic, atomic writer of a ContextMapArtifact directory.
 
-The writer turns a :class:`~contextmap.artifact.ContextMap` and its entity and relation records
-into the directory described in ``src/contextmap/artifact/docs/storage-layout.md``. It validates
-everything it can before touching the disk, writes into a hidden temporary sibling and publishes
-with one rename (:class:`~contextmap.shared.AtomicRunDirectory`), so an interrupted write never
-looks like a finished artifact and a finished artifact is never overwritten.
+The writer turns a :class:`~contextmap.artifact.ContextMap` into the directory described in
+``src/contextmap/artifact/docs/storage-layout.md``. It validates everything it can before
+touching the disk, writes into a hidden temporary sibling and publishes with one rename
+(:class:`~contextmap.shared.AtomicRunDirectory`), so an interrupted write never looks like a
+finished artifact and a finished artifact is never overwritten.
 
-The output is a function of the content: records are ordered by key, every line is canonical and
-the manifest carries a content identity that ignores the write time. Nothing invalid is dropped
-silently: an inconsistent map is refused whole with the reason. No model, ROS or runtime object
-ever reaches the files; the writer accepts only plain records.
+The output is a function of the map: records are ordered by key, every line is canonical and the
+manifest carries a content identity that ignores the write time. Nothing invalid is dropped
+silently: an inconsistent map is refused whole with the reason. The schema already refuses an
+invalid map when it is built (references, provenance, declared capabilities), so the writer adds
+only what the schema cannot know: that the upstream artifacts the map cites are on disk, are
+intact and are exactly the ones its lineage names. No model, ROS or runtime object ever reaches
+the files.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
-from contextmap.artifact.metadata import MapCapability
 from contextmap.artifact.models import ContextMap
+from contextmap.artifact.provenance import ArtifactKind
 from contextmap.artifact.records import context_map_to_record
+from contextmap.artifact.serialization.decoding import entity_lines, relation_lines
 from contextmap.artifact.serialization.dependencies import (
-    GEOMETRIC_MAP_ARTIFACT_TYPE,
-    EvidenceArtifact,
     read_inventory,
     relative_locator,
     verify_inventory,
 )
-from contextmap.artifact.serialization.entries import EntityEntry, RelationEntry
 from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     ContextMapArtifactError,
@@ -88,24 +89,18 @@ class ContextMapArtifactWriter:
         self._written_at = written_at if written_at is not None else datetime.now(UTC)
 
     def write(
-        self,
-        context_map: ContextMap,
-        *,
-        geometry_dir: Path,
-        entities: Iterable[EntityEntry] = (),
-        relations: Iterable[RelationEntry] = (),
-        evidence: Iterable[EvidenceArtifact] = (),
+        self, context_map: ContextMap, *, upstream_locations: Mapping[str, Path]
     ) -> ContextMapArtifactManifest:
-        """Validate the map and publish it atomically.
+        """Validate the map against the upstream artifacts it cites and publish it atomically.
 
         Args:
             context_map: The map to persist.
-            geometry_dir: The GeometricMapArtifact that owns the geometry ``context_map``
-                refers to. It is referenced and verified, never copied.
-            entities: The entity records, in any order.
-            relations: The relation records, in any order.
-            evidence: Further upstream artifacts the map refers to, required or optional. A
-                geometric map is not evidence: it is ``geometry_dir``.
+            upstream_locations: Where the upstream artifacts the map cites are now, keyed by
+                artifact id. The location of every *structural* dependency (the geometric map,
+                the entity-resolution and spatial-relations runs) is required; the location of
+                optional evidence is not, but when given it is verified. A location is used to
+                read and verify the artifact and to compute a relative hint; it is never
+                recorded as an identity.
 
         Returns:
             The manifest of the published artifact.
@@ -113,54 +108,33 @@ class ContextMapArtifactWriter:
         Raises:
             ArtifactExistsError: If ``output_dir`` already exists; a finished artifact is never
                 overwritten.
-            InvalidContentError: If the content is inconsistent: a relation names an unknown
-                entity, content is present that the map does not declare, the geometry is not
-                the one the map names, or an upstream artifact is repeated.
-            RecordTableError: If a key is duplicated or a record is not plain JSON.
+            InvalidContentError: If a location names an artifact the map does not cite, a
+                structural dependency has no location, an upstream artifact is not the one the
+                lineage names, or the geometric map is not the one the map declares (identity,
+                point count or frame).
+            RecordTableError: If a record is not plain JSON.
             UpstreamArtifactError: If an upstream artifact is missing or does not match its own
                 inventory.
             ContextMapArtifactError: If the directory cannot be published.
         """
         if self._output_dir.exists():
             raise ArtifactExistsError(f"the artifact already exists: {self._output_dir}")
-        entity_entries, relation_entries = tuple(entities), tuple(relations)
-        _check_declared_content(context_map, entity_entries, relation_entries)
-        _check_endpoints(entity_entries, relation_entries)
-        dependencies = self._dependencies(context_map, geometry_dir, tuple(evidence))
+        dependencies = self._dependencies(context_map, upstream_locations)
 
         record = context_map_to_record(context_map)
-        entity_table = encode_record_table(
-            {"key": entry.key, "record": entry.record} for entry in entity_entries
-        )
-        relation_table = encode_record_table(
-            {
-                "key": entry.key,
-                "subject": entry.subject_key,
-                "object": entry.object_key,
-                "record": entry.record,
-            }
-            for entry in relation_entries
-        )
+        entity_table = encode_record_table(entity_lines(context_map))
+        relation_table = encode_record_table(relation_lines(context_map))
         traversal_index = encode_entity_relation_index(
-            (entry.key for entry in entity_entries),
-            ((rel.key, rel.subject_key, rel.object_key) for rel in relation_entries),
+            (str(entity.entity_id) for entity in context_map.entities),
+            (
+                (str(item.relation_id), str(item.subject.entity_id), str(item.object.entity_id))
+                for item in context_map.relations
+            ),
         )
         files: dict[str, bytes] = {
             MAP_METADATA: document_json(record["metadata"]),
             GEOMETRY_REFERENCE: document_json(record["geometry_ref"]),
-            LINEAGE: document_json(
-                {
-                    "upstream_artifacts": [
-                        {
-                            "artifact_type": dependency.artifact_type,
-                            "artifact_id": dependency.artifact_id,
-                            "content_identity": dependency.content_identity,
-                            "requirement": dependency.requirement.value,
-                        }
-                        for dependency in dependencies
-                    ]
-                }
-            ),
+            LINEAGE: document_json({"upstream_artifacts": record["lineage"]}),
             ENTITIES: entity_table.payload,
             ENTITY_INDEX: entity_table.index,
             RELATIONS: relation_table.payload,
@@ -199,107 +173,80 @@ class ContextMapArtifactWriter:
         return published
 
     def _dependencies(
-        self, context_map: ContextMap, geometry_dir: Path, evidence: tuple[EvidenceArtifact, ...]
+        self, context_map: ContextMap, locations: Mapping[str, Path]
     ) -> tuple[DependencyRecord, ...]:
-        """Verify every upstream artifact and pin it by the digest of its inventory."""
-        seen: set[tuple[str, str]] = set()
-        for upstream in evidence:
-            if upstream.artifact_type == GEOMETRIC_MAP_ARTIFACT_TYPE:
-                raise InvalidContentError(
-                    f"a {GEOMETRIC_MAP_ARTIFACT_TYPE} is not evidence: pass it as geometry_dir"
-                )
-            key = (upstream.artifact_type, upstream.artifact_id)
-            if key in seen:
-                raise InvalidContentError(f"duplicate upstream artifact {key!r}")
-            seen.add(key)
-
-        geometry = self._geometry_dependency(context_map, geometry_dir)
-        records = [geometry]
-        for upstream in evidence:
-            inventory = read_inventory(upstream.location)
-            verify_inventory(upstream.location, inventory)
+        """Verify every upstream artifact that has a location and pin each one by its digest."""
+        cited = {item.artifact_id for item in context_map.lineage}
+        for artifact_id in sorted(set(locations) - cited):
+            raise InvalidContentError(
+                f"a location was given for {artifact_id!r}, which the map does not cite"
+            )
+        records: list[DependencyRecord] = []
+        for upstream in context_map.lineage:
+            requirement = (
+                Requirement.REQUIRED if upstream.kind.is_structural else Requirement.OPTIONAL
+            )
+            location = locations.get(upstream.artifact_id)
+            if location is None:
+                if requirement is Requirement.REQUIRED:
+                    raise InvalidContentError(
+                        f"the structural dependency {upstream.kind.value} "
+                        f"{upstream.artifact_id!r} has no location: pass it in upstream_locations"
+                    )
+            else:
+                self._verify_upstream(context_map, upstream.artifact_id, upstream.kind, location)
+                inventory = read_inventory(location)
+                found = inventory_digest(inventory)
+                if found != upstream.content_identity:
+                    raise InvalidContentError(
+                        f"the lineage names {upstream.kind.value} {upstream.artifact_id!r} with "
+                        f"content identity {upstream.content_identity} but the artifact at "
+                        f"{location.name!r} has {found}"
+                    )
             records.append(
                 DependencyRecord(
-                    artifact_type=upstream.artifact_type,
+                    artifact_type=upstream.kind.value,
                     artifact_id=upstream.artifact_id,
-                    content_identity=inventory_digest(inventory),
-                    requirement=upstream.requirement,
-                    locator=relative_locator(self._output_dir, upstream.location),
+                    content_identity=upstream.content_identity,
+                    requirement=requirement,
+                    locator=None
+                    if location is None
+                    else relative_locator(self._output_dir, location),
                 )
             )
         return tuple(records)
 
-    def _geometry_dependency(self, context_map: ContextMap, geometry_dir: Path) -> DependencyRecord:
+    def _verify_upstream(
+        self, context_map: ContextMap, artifact_id: str, kind: ArtifactKind, location: Path
+    ) -> None:
+        """Check the files of one upstream artifact and, for the geometry, what the map declares."""
+        verify_inventory(location, read_inventory(location))
+        if kind is not ArtifactKind.GEOMETRIC_MAP:
+            return
         link = context_map.geometry_ref
         try:
-            with GeometricMapArtifactReader(geometry_dir) as reader:
-                manifest = reader.manifest
-                problems = reader.verify_integrity(check_index=False)
+            with GeometricMapArtifactReader(location) as reader:
+                upstream = reader.manifest
         except MapArtifactError as error:
             raise UpstreamArtifactError(
-                f"the geometric map at {geometry_dir.name!r} cannot be opened: {error}"
+                f"the geometric map at {location.name!r} cannot be opened: {error}"
             ) from error
-        if problems:
-            raise UpstreamArtifactError(
-                f"the geometric map {manifest.map_id!r} does not match its inventory: "
-                + "; ".join(problems)
-            )
-        if manifest.map_id != link.map_id:
+        if upstream.map_id != link.map_id or artifact_id != str(link.map_id):
             raise InvalidContentError(
-                f"the map refers to the geometric map {link.map_id!r} but geometry_dir holds "
-                f"{manifest.map_id!r}"
+                f"the map refers to the geometric map {link.map_id!r} but {location.name!r} "
+                f"holds {upstream.map_id!r}"
             )
-        if manifest.point_count != link.point_count:
+        if upstream.point_count != link.point_count:
             raise InvalidContentError(
                 f"the map declares {link.point_count} geometry elements but the geometric map "
-                f"{manifest.map_id!r} has {manifest.point_count}"
+                f"{upstream.map_id!r} has {upstream.point_count}"
             )
-        map_frame = context_map.metadata.frame.frame_id
-        if manifest.map_frame != map_frame:
+        frame = context_map.metadata.frame.frame_id
+        if upstream.map_frame != frame:
             raise InvalidContentError(
-                f"the map is expressed in frame {map_frame!r} but the geometric map "
-                f"{manifest.map_id!r} is in frame {manifest.map_frame!r}"
+                f"the map is expressed in frame {frame!r} but the geometric map "
+                f"{upstream.map_id!r} is in frame {upstream.map_frame!r}"
             )
-        return DependencyRecord(
-            artifact_type=GEOMETRIC_MAP_ARTIFACT_TYPE,
-            artifact_id=str(manifest.map_id),
-            content_identity=inventory_digest(manifest.file_inventory),
-            requirement=Requirement.REQUIRED,
-            locator=relative_locator(self._output_dir, geometry_dir),
-        )
-
-
-def _check_declared_content(
-    context_map: ContextMap,
-    entities: tuple[EntityEntry, ...],
-    relations: tuple[RelationEntry, ...],
-) -> None:
-    """Refuse content that the map does not declare: a capability is never implied by content."""
-    declared = context_map.metadata.capabilities.content
-    if entities and MapCapability.ENTITIES not in declared:
-        raise InvalidContentError(
-            f"{len(entities)} entities were given but the map does not declare the entities "
-            "capability"
-        )
-    if relations and MapCapability.RELATIONS not in declared:
-        raise InvalidContentError(
-            f"{len(relations)} relations were given but the map does not declare the relations "
-            "capability"
-        )
-
-
-def _check_endpoints(
-    entities: tuple[EntityEntry, ...], relations: tuple[RelationEntry, ...]
-) -> None:
-    """Refuse a relation whose subject or object is not an entity of the map."""
-    keys = {entry.key for entry in entities}
-    for relation in relations:
-        for role, key in (("subject", relation.subject_key), ("object", relation.object_key)):
-            if key not in keys:
-                raise InvalidContentError(
-                    f"relation {relation.key!r} has the {role} {key!r}, which is not an entity "
-                    "of the map"
-                )
 
 
 def _payloads(entity_count: int, relation_count: int) -> tuple[Payload, ...]:
@@ -308,8 +255,8 @@ def _payloads(entity_count: int, relation_count: int) -> tuple[Payload, ...]:
             path=ENTITIES,
             role=PayloadRole.AUTHORITATIVE,
             semantics=(
-                "One entity per line as {key, record}, ordered by key; record is the canonical "
-                "entity record."
+                "One entity per line as {key, record}, ordered by key; record is the schema's "
+                "canonical entity record."
             ),
             record_count=entity_count,
         ),
@@ -318,7 +265,8 @@ def _payloads(entity_count: int, relation_count: int) -> tuple[Payload, ...]:
             role=PayloadRole.AUTHORITATIVE,
             semantics=(
                 "One relation per line as {key, subject, object, record}, ordered by key; "
-                "subject and object are entity keys."
+                "subject and object are entity ids and record is the schema's canonical "
+                "relation record."
             ),
             record_count=relation_count,
         ),
@@ -359,7 +307,7 @@ def _render_readme(manifest: ContextMapArtifactManifest) -> str:
         f"- Schema version: `{manifest.schema_version}`",
         f"- Entities: {manifest.entity_count}; relations: {manifest.relation_count}",
         "",
-        "Upstream artifacts referred to, never copied:",
+        "Upstream artifacts the map cites, referred to and never copied:",
         "",
     ]
     lines += [

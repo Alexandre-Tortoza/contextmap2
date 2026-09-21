@@ -17,7 +17,7 @@ O validador **não levanta exceção** para um artifact danificado: todo dano vi
 | `STRUCTURAL` | manifest e versões, um `stat` por arquivo, descritores de payload, estrutura dos índices, documentos pequenos e onde estão as dependências | `structurally_valid` |
 | `FULL` | tudo acima, mais o hash de cada arquivo, cada registro, as referências entre registros, os índices reconstruídos e os arquivos das dependências | `verified` |
 
-Um artifact **nunca é chamado de válido sem ter sido verificado**: com o nível estrutural a resposta é `structurally_valid`, que diz explicitamente que conteúdo, referências e arquivos a montante não foram lidos, e o relatório lista cada verificação pulada com o motivo. `verified` significa que toda verificação que este validador implementa rodou e passou; as que ele ainda não sabe fazer aparecem como `skipped` (hoje só `entity_geometry_support`: o suporte geométrico de cada entidade só pode ser conferido quando o schema tipar as entidades, #150).
+Um artifact **nunca é chamado de válido sem ter sido verificado**: com o nível estrutural a resposta é `structurally_valid`, que diz explicitamente que conteúdo, referências e arquivos a montante não foram lidos, e o relatório lista cada verificação pulada com o motivo. `verified` significa que toda verificação que este validador implementa rodou e passou; as que ele não pôde executar aparecem como `skipped`, com o motivo (no nível completo, nenhuma é pulada num artifact íntegro).
 
 ## Verificações
 
@@ -30,15 +30,15 @@ Em ordem fixa; cada uma termina `passed`, `failed` ou `skipped` (com `detail`).
 | `file_hashes` (FULL) | SHA-256 de cada arquivo | `file.hash_mismatch` |
 | `payload_descriptors` | os cinco payloads descritos, com papel, origem e contagem esperados | `payload.descriptor_missing`, `payload.descriptor_mismatch`, `payload.count_mismatch` |
 | `index_structure` | os índices abrem: ordenados, contíguos, contagem certa, cobrindo exatamente o payload | `index.broken` |
-| `map_record` | metadados e referência de geometria formam um mapa válido pelo schema | `map.invalid` |
-| `capabilities` | conteúdo presente só se declarado (uma capability declarada pode estar vazia) | `capabilities.undeclared_entities`, `capabilities.undeclared_relations` |
-| `lineage` | `lineage.json` lista exatamente as dependências do manifest | `lineage.malformed`, `lineage.mismatch` |
+| `documents` | os metadados e a referência de geometria são válidos pelo schema | `map.invalid` |
+| `capabilities` | contagens de entidades e relações só com a capability declarada (uma declarada pode estar vazia) | `capabilities.undeclared_entities`, `capabilities.undeclared_relations` |
+| `lineage` | a linhagem do schema em `lineage.json` concorda com as dependências do manifest (tipo, id, identidade de conteúdo e exigência pela `ArtifactKind.is_structural`) | `lineage.malformed`, `lineage.mismatch` |
 | `dependencies` | cada dependência é achada e é a registrada | `dependency.required_missing`, `dependency.mismatch` (avisos: `dependency.optional_missing`) |
 | `geometry_consistency` | o mapa geométrico é o que o mapa nomeia: identidade, número de pontos e frame | `geometry.reference_mismatch`, `geometry.map_id_mismatch`, `geometry.point_count_mismatch`, `geometry.frame_mismatch` |
-| `reference_integrity` (FULL) | lê cada entidade e relação; toda relação aponta para entidades existentes | `reference.relation_endpoint_missing`, `index.broken` |
+| `reference_integrity` (FULL) | lê cada entidade e relação; a chave de cada linha é o id do seu registro; toda relação aponta para entidades existentes | `reference.relation_endpoint_missing`, `reference.key_mismatch`, `index.broken` |
 | `index_rebuild` (FULL) | cada índice é byte a byte o que os registros produzem (identidade do índice reconstruível, chaves únicas e ordenadas) | `index.mismatch`, `records.invalid` |
+| `schema_invariants` (FULL) | os registros guardados formam um `ContextMap` válido pelo schema: referências de geometria dentro do mapa, fechamento de proveniência, capabilities e linhagem coerentes | `map.invalid` |
 | `dependency_integrity` (FULL) | os arquivos de cada dependência batem com o próprio inventário | `dependency.upstream_damaged` |
-| `entity_geometry_support` | (pulada; ver acima) | |
 | `unlisted_files` | arquivos fora do inventário | avisos `file.unlisted`, `debug.present` |
 
 Se o manifest não pode ser lido, as demais verificações ficam `skipped` ("o manifest não pôde ser lido"). Uma verificação que só falha porque outra já reportou o dano (por exemplo, tabelas de registro quando o arquivo sumiu) fica `skipped`, sem erro em cascata.

@@ -51,10 +51,10 @@ from contextmap.state_estimation import (
 
 CLOCK_ID = "fixture:header"
 SEQUENCE_NAME = "corridor-02"
-RUN_ID = GeometricMapRunId("run-0001")
+RUN_ID = GeometricMapRunId("map-run-0001")
 MAP_ID = f"{SEQUENCE_NAME}--{RUN_ID}"
-SCAN_COUNT = 4
-POINTS_PER_SCAN = 6
+SCAN_COUNT = 10
+POINTS_PER_SCAN = 100
 POINT_COUNT = SCAN_COUNT * POINTS_PER_SCAN
 _SEQUENCE_ID = SequenceArtifactId("sequence-0001")
 _TRAJECTORY_ID = TrajectoryId("run-0001--trajectory")

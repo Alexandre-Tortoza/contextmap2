@@ -22,7 +22,7 @@ problems = verify_bundle(output_dir)  # () quando íntegro
 | Política | Leva | Deixa de fora (registrado, com o motivo) |
 | --- | --- | --- |
 | `CORE_ONLY` (`core-only`) | só o artifact | toda dependência, obrigatória ou não: "left out by the core-only policy". O bundle não resolve geometria sozinho. |
-| `REQUIRED` (`core+required`) | o artifact e toda dependência **obrigatória** (a geometria) | evidência opcional: "optional evidence was not selected" |
+| `REQUIRED` (`core+required`) | o artifact e toda dependência **obrigatória** (as estruturais do schema: o mapa geométrico e os runs de Entity Resolution e de Spatial Relations) | evidência opcional: "optional evidence was not selected" |
 | `SELECTED_EVIDENCE` (`core+selected-evidence`) | o fechamento obrigatório e a evidência opcional escolhida (`evidence=[(tipo, id)]`) | a evidência opcional não escolhida |
 
 Escolher evidência com outra política, ou uma dependência que o artifact não registra, é `BundleError`. Nada é omitido em silêncio: o manifest do bundle lista `embedded` e `omitted`.
@@ -34,7 +34,7 @@ O artifact de origem é **verificado por inteiro** (`ValidationLevel.FULL`) ante
 ## O que é copiado
 
 - **O artifact**: todos os arquivos do inventário byte a byte, mais o `README.md`, em `artifact/`. A identidade de conteúdo, o inventário, `written_at`, `context_map_id` e todos os digests das dependências ficam **idênticos**. A única coisa reescrita é a dica `locator` de cada dependência (transporte, fora da identidade): `../dependencies/<tipo>/<id>` para a que foi levada, `null` para a que não foi (a dica antiga apontaria para o workspace de origem). O exportador confere que a identidade recalculada continua igual.
-- **Cada dependência levada**, em `dependencies/<tipo>/<id>/`: o `manifest.json` e os arquivos do **seu** inventário. Nunca `debug/`, nunca arquivo fora do inventário (rosbag, checkpoint, sobra), então não há como levar dados de debug ou pesos por acidente.
+- **Cada dependência levada**, em `dependencies/<tipo>/<id>/` (o tipo é o `kind` da linhagem, por exemplo `geometric_map`): o `manifest.json` e os arquivos do **seu** inventário. Nunca `debug/`, nunca arquivo fora do inventário (rosbag, checkpoint, sobra), então não há como levar dados de debug ou pesos por acidente.
 - Cada arquivo é copiado em blocos, com SHA-256 calculado durante a leitura e **conferido contra o inventário de onde veio**; se a origem mudar durante a exportação, ela é recusada e nada é publicado.
 
 A publicação é atômica (`AtomicRunDirectory`): um diretório de bundle nunca aparece pela metade, e um bundle existente nunca é sobrescrito (`ArtifactExistsError`).

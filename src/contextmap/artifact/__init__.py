@@ -60,8 +60,6 @@ from contextmap.artifact.serialization.bundle import (
     export_bundle,
     verify_bundle,
 )
-from contextmap.artifact.serialization.dependencies import EvidenceArtifact
-from contextmap.artifact.serialization.entries import EntityEntry, RelationEntry
 from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     ArtifactIntegrityError,
@@ -137,8 +135,6 @@ __all__ = [
     "DependencyRecord",
     "DerivationKind",
     "EmbeddedDependency",
-    "EntityEntry",
-    "EvidenceArtifact",
     "EvidenceOrigin",
     "FileStatus",
     "ForeignContextEntityReferenceError",
@@ -160,7 +156,6 @@ __all__ = [
     "ProvenanceError",
     "RecordTableError",
     "ReferenceIntegrityError",
-    "RelationEntry",
     "RelationState",
     "Requirement",
     "SchemaVersion",
