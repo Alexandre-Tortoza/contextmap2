@@ -38,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -61,8 +61,8 @@ from contextmap.evaluation.report_schema import (
 )
 from contextmap.spatial_relations import (
     PREDICATE_SPECS,
-    CandidateExclusionReason,
     Relation,
+    RelationCandidateSet,
     RelationPredicate,
     RelationState,
     SpatialRelationsRunReader,
@@ -84,7 +84,7 @@ class SpatialRelationsEvaluationError(ValueError):
 
 
 @dataclass(frozen=True, kw_only=True)
-class PredicateEvaluation:
+class RelationPredicateEvaluation:
     """The outcomes of one canonical predicate; every figure is a count until a rate is asked.
 
     Attributes:
@@ -164,7 +164,7 @@ class PredicateEvaluation:
 
 
 @dataclass(frozen=True, kw_only=True)
-class ConsistencyViolation:
+class RelationConsistencyViolation:
     """A structural contradiction in the persisted relations, found without any annotation.
 
     Attributes:
@@ -179,7 +179,7 @@ class ConsistencyViolation:
 
 
 @dataclass(frozen=True, kw_only=True)
-class UnmatchedReport:
+class RelationUnmatchedReport:
     """What could not be compared, and whose failure it is.
 
     Attributes:
@@ -238,13 +238,13 @@ class SpatialRelationsEvaluationReport:
     policies: dict[str, dict[str, str]]
     reference_normalization: str
     reference_relation_count: int
-    predicates: tuple[PredicateEvaluation, ...]
+    predicates: tuple[RelationPredicateEvaluation, ...]
     retrieval_misses: tuple[tuple[str, int], ...]
-    consistency_violations: tuple[ConsistencyViolation, ...]
-    unmatched: UnmatchedReport
+    consistency_violations: tuple[RelationConsistencyViolation, ...]
+    unmatched: RelationUnmatchedReport
     code_version: str | None
 
-    def predicate(self, predicate: RelationPredicate) -> PredicateEvaluation:
+    def predicate(self, predicate: RelationPredicate) -> RelationPredicateEvaluation:
         """The evaluation of one canonical predicate."""
         return next(item for item in self.predicates if item.predicate is predicate)
 
@@ -320,6 +320,7 @@ def evaluate_spatial_relations(
     }
     entity_of_identity, shared = _invert(identity_of_entity)
     truth, unmapped, ambiguous, unknown, conflicting = _expand_reference(reference)
+    exclusions = _exclusion_reasons(reader.candidate_set())
     counters = {predicate: Counter[str]() for predicate in PREDICATE_SPECS}
     misses: Counter[str] = Counter()
     without_entity = 0
@@ -335,7 +336,7 @@ def evaluate_spatial_relations(
             continue
         key = (subject, predicate, obj)
         scored.add(key)
-        _score(counters[predicate], status, relations.get(key), key, reader, misses)
+        _score(counters[predicate], status, relations.get(key), key, exclusions, misses)
     supported_unmatched = 0
     for key, relation in relations.items():
         subject, predicate, obj = key
@@ -364,7 +365,7 @@ def evaluate_spatial_relations(
         ),
         retrieval_misses=tuple(sorted(misses.items())),
         consistency_violations=_consistency(relations),
-        unmatched=UnmatchedReport(
+        unmatched=RelationUnmatchedReport(
             reference_without_entity=without_entity,
             identities_with_several_entities=tuple(sorted(shared)),
             supported_on_unmatched_entities=supported_unmatched,
@@ -399,12 +400,19 @@ def spatial_relations_evaluation_report(
     """
     quality: list[MetricResult] = []
     populated = [item for item in report.predicates if item.decided_population > 0]
-    for item in populated or [None]:
-        strata = () if item is None else (("predicate", item.predicate.value),)
-        count = 0 if item is None else item.decided_population
+    rows: list[tuple[tuple[tuple[str, str], ...], int, float | None, float | None]] = [
+        (
+            (("predicate", item.predicate.value),),
+            item.decided_population,
+            item.f1,
+            item.false_relation_rate,
+        )
+        for item in populated
+    ] or [((), 0, None, None)]
+    for strata, count, f1, violation_rate in rows:
         for name, value in (
-            ("relations.f1", None if item is None else item.f1),
-            ("relations.negative_violation.rate", None if item is None else item.false_relation_rate),
+            ("relations.f1", f1),
+            ("relations.negative_violation.rate", violation_rate),
         ):
             quality.append(
                 MetricResult(
@@ -424,7 +432,10 @@ def spatial_relations_evaluation_report(
                 evaluator_id=report.evaluator_id, evaluator_version=report.evaluator_version
             ),
             reference_set=reference_set,
-            annotation_schemas=(AnnotationFamily.RELATIONS.schema, AnnotationFamily.IDENTITY.schema),
+            annotation_schemas=(
+                AnnotationFamily.RELATIONS.schema,
+                AnnotationFamily.IDENTITY.schema,
+            ),
             input_artifacts=(
                 ArtifactIdentity(
                     kind="spatial_relations_run",
@@ -479,7 +490,9 @@ def _expand_reference(
         predicate = canonical_predicate(key(rule.predicate))
         if predicate is not None:
             canonical[key(rule.predicate)] = predicate
-            _require_rule_matches_taxonomy(rule.predicate, rule.symmetric, rule.inverse, predicate, key)
+            _require_rule_matches_taxonomy(
+                rule.predicate, rule.symmetric, rule.inverse, predicate, key
+            )
     entries: dict[tuple[str, RelationPredicate, str], set[RelationStatus]] = {}
     unmapped: set[str] = set()
     for relation in reference.relations:
@@ -487,7 +500,9 @@ def _expand_reference(
         if predicate is None:
             unmapped.add(relation.predicate)
             continue
-        for triple in _implied(relation.subject_identity_id, predicate, relation.object_identity_id):
+        for triple in _implied(
+            relation.subject_identity_id, predicate, relation.object_identity_id
+        ):
             entries.setdefault(triple, set()).add(relation.status)
     truth: dict[tuple[str, RelationPredicate, str], RelationStatus] = {}
     ambiguous = unknown = conflicting = 0
@@ -521,22 +536,29 @@ def _require_rule_matches_taxonomy(
     symmetric: bool,
     inverse: str | None,
     predicate: RelationPredicate,
-    key: Any,
+    key: Callable[[str], str],
 ) -> None:
+    """Refuse a reference vocabulary that contradicts the taxonomy for a canonical predicate.
+
+    Omitting a property is fine, since the taxonomy supplies it. Declaring one the taxonomy
+    contradicts is not: a symmetric ``above`` or an inverse that is another canonical predicate.
+    An inverse that is not canonical (the reference's own ``supports``) is left unmapped.
+    """
     spec = predicate_spec(predicate)
-    if symmetric != spec.symmetric:
+    if symmetric and not spec.symmetric:
         raise SpatialRelationsEvaluationError(
-            f"the reference declares {wording!r} symmetric={symmetric}, but the taxonomy says "
-            f"{predicate.name} is symmetric={spec.symmetric}"
+            f"the reference declares {wording!r} symmetric, but the taxonomy says {predicate.name} "
+            f"is directed"
         )
-    if inverse is not None:
-        declared = canonical_predicate(key(inverse))
-        if declared is not spec.inverse:
-            raise SpatialRelationsEvaluationError(
-                f"the reference declares the inverse of {wording!r} as {inverse!r}, but the "
-                f"taxonomy says the inverse of {predicate.name} is "
-                f"{None if spec.inverse is None else spec.inverse.name}"
-            )
+    if inverse is None:
+        return
+    declared = canonical_predicate(key(inverse))
+    if declared is not None and declared is not spec.inverse:
+        raise SpatialRelationsEvaluationError(
+            f"the reference declares the inverse of {wording!r} as {inverse!r}, but the taxonomy "
+            f"says the inverse of {predicate.name} is "
+            f"{None if spec.inverse is None else spec.inverse.name}"
+        )
 
 
 def _score(
@@ -544,7 +566,7 @@ def _score(
     status: RelationStatus,
     relation: Relation | None,
     key: _Key,
-    reader: SpatialRelationsRunReader,
+    exclusions: _Exclusions,
     misses: Counter[str],
 ) -> None:
     """Count one decided reference relation against what the run predicted for it."""
@@ -559,7 +581,7 @@ def _score(
             counter["missed_rejected"] += 1
         else:
             counter["missed_not_retrieved"] += 1
-            misses[_retrieval_miss_reason(reader, key)] += 1
+            misses[exclusions.reason(key)] += 1
     else:
         counter["annotated_does_not_hold"] += 1
         if state is RelationState.SUPPORTED:
@@ -570,27 +592,43 @@ def _score(
             counter["true_negatives"] += 1
 
 
-def _retrieval_miss_reason(reader: SpatialRelationsRunReader, key: _Key) -> str:
-    """Why the candidate stage never produced a pair, from what the run recorded."""
-    subject, predicate, obj = key
-    spec = predicate_spec(predicate)
-    if spec.is_derived and spec.inverse is not None:
-        subject, predicate, obj = obj, spec.inverse, subject
-    candidates = reader.candidate_set()
-    for exclusion in candidates.exclusions:
-        if (
-            exclusion.subject_entity_ref,
-            exclusion.predicate,
-            exclusion.object_entity_ref,
-        ) == (subject, predicate, obj):
-            return f"excluded:{exclusion.reason.value}"
-    if any(item.predicate is predicate for item in candidates.skipped_predicates):
-        return "skipped_predicate:frame_conventions"
-    return "pair_not_enumerated_or_predicate_not_selected"
+@dataclass(frozen=True)
+class _Exclusions:
+    """Why the candidate stage dropped a pair, indexed for lookup."""
+
+    by_pair: dict[_Key, str]
+    skipped: frozenset[RelationPredicate]
+
+    def reason(self, key: _Key) -> str:
+        """Why a pair that holds was never a candidate, from what the run recorded."""
+        subject, predicate, obj = key
+        spec = predicate_spec(predicate)
+        if spec.is_derived and spec.inverse is not None:
+            subject, predicate, obj = obj, spec.inverse, subject
+        for pair in ((subject, predicate, obj), (obj, predicate, subject)):
+            if pair in self.by_pair:
+                return f"excluded:{self.by_pair[pair]}"
+        if predicate in self.skipped:
+            return "skipped_predicate:frame_conventions"
+        return "pair_not_enumerated_or_predicate_not_selected"
 
 
-def _predicate_evaluation(predicate: RelationPredicate, counts: Counter[str]) -> PredicateEvaluation:
-    return PredicateEvaluation(predicate=predicate, **{name: counts[name] for name in _COUNT_FIELDS})
+def _exclusion_reasons(candidates: RelationCandidateSet) -> _Exclusions:
+    return _Exclusions(
+        by_pair={
+            (item.subject_entity_ref, item.predicate, item.object_entity_ref): item.reason.value
+            for item in candidates.exclusions
+        },
+        skipped=frozenset(item.predicate for item in candidates.skipped_predicates),
+    )
+
+
+def _predicate_evaluation(
+    predicate: RelationPredicate, counts: Counter[str]
+) -> RelationPredicateEvaluation:
+    return RelationPredicateEvaluation(
+        predicate=predicate, **{name: counts[name] for name in _COUNT_FIELDS}
+    )
 
 
 _COUNT_FIELDS = (
@@ -607,39 +645,40 @@ _COUNT_FIELDS = (
 )
 
 
-def _consistency(
-    relations: Mapping[_Key, Relation],
-) -> tuple[ConsistencyViolation, ...]:
-    """Check the persisted relations for inverse, symmetric and mutual-support contradictions."""
-    violations: list[ConsistencyViolation] = []
+def _consistency(relations: Mapping[_Key, Relation]) -> tuple[RelationConsistencyViolation, ...]:
+    """Check the persisted relations for inverse, symmetric and mutual-support contradictions.
+
+    Each contradiction is reported once, from the relation with the smaller identity.
+    """
+    violations: list[RelationConsistencyViolation] = []
     for (subject, predicate, obj), relation in sorted(
         relations.items(), key=lambda item: str(item[1].relation_id)
     ):
         spec = predicate_spec(predicate)
-        other = relations.get((obj, predicate if spec.symmetric else spec.inverse, subject))
-        if spec.inverse is None or other is None:
-            continue
-        if spec.symmetric or spec.is_derived:
-            if other.state is not relation.state and not (
-                spec.symmetric and str(other.relation_id) < str(relation.relation_id)
-            ):
-                violations.append(_violation("symmetric" if spec.symmetric else "inverse", relation, other))
-        elif not spec.symmetric:
-            mirrored = relations.get((obj, predicate, subject))
-            if (
-                mirrored is not None
-                and relation.state is RelationState.SUPPORTED
-                and mirrored.state is RelationState.SUPPORTED
-                and str(relation.relation_id) < str(mirrored.relation_id)
-            ):
-                violations.append(_violation("mutual_support", relation, mirrored))
-            if other.state is not relation.state:
-                violations.append(_violation("inverse", relation, other))
+        counterparts: list[tuple[str, _Key]] = []
+        if spec.inverse is not None:
+            counterparts.append(
+                ("symmetric" if spec.symmetric else "inverse", (obj, spec.inverse, subject))
+            )
+        if not spec.symmetric:
+            counterparts.append(("mutual_support", (obj, predicate, subject)))
+        for kind, other_key in counterparts:
+            other = relations.get(other_key)
+            if other is None or str(other.relation_id) < str(relation.relation_id):
+                continue
+            both_supported = (
+                relation.state is RelationState.SUPPORTED and other.state is RelationState.SUPPORTED
+            )
+            contradicts = (
+                both_supported if kind == "mutual_support" else other.state is not relation.state
+            )
+            if contradicts:
+                violations.append(_violation(kind, relation, other))
     return tuple(violations)
 
 
-def _violation(kind: str, first: Relation, second: Relation) -> ConsistencyViolation:
-    return ConsistencyViolation(
+def _violation(kind: str, first: Relation, second: Relation) -> RelationConsistencyViolation:
+    return RelationConsistencyViolation(
         kind=kind,
         relation_ids=tuple(sorted((str(first.relation_id), str(second.relation_id)))),
         detail=(
@@ -657,7 +696,7 @@ def _policy_identities(policies: Mapping[str, Any]) -> dict[str, dict[str, str]]
     return identities
 
 
-def _encode_predicate(item: PredicateEvaluation) -> dict[str, Any]:
+def _encode_predicate(item: RelationPredicateEvaluation) -> dict[str, Any]:
     return {
         "predicate": item.predicate.value,
         **{name: getattr(item, name) for name in _COUNT_FIELDS},
@@ -670,8 +709,3 @@ def _encode_predicate(item: PredicateEvaluation) -> dict[str, Any]:
         "unresolved_rate": item.unresolved_rate,
         "candidate_retrieval_recall": item.candidate_retrieval_recall,
     }
-
-
-# ``CandidateExclusionReason`` é usado na documentação das razões de retrieval miss; a importação
-# mantém a relação explícita para quem procura as razões possíveis.
-_EXCLUSION_REASONS = tuple(reason.value for reason in CandidateExclusionReason)
