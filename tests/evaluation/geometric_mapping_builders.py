@@ -256,24 +256,15 @@ def write_run(
     index: int = 1,
     aggregation: ScanVoxelPolicy | None = None,
     runtime_s: float | None = None,
-    profile: str = "baseline",
 ) -> GeometricMapArtifactReader:
-    """Persist ``plan`` as a mapping run and open it."""
+    """Persist ``plan`` as a mapping run at ``workspace/run-NNNN`` and open it."""
+    run_dir = workspace / f"run-{index:04d}"
     writer = GeometricMapArtifactWriter(
-        workspace_root=workspace,
+        output_dir=run_dir,
         sequence_name=SEQUENCE,
         run_id=GeometricMapRunId(f"run-{index:04d}"),
         run_index=index,
-        selection_label="full-sequence",
-        profile_label=profile,
         debug_level=MapDebugLevel.NONE,
     )
     writer.finalize(plan=plan, aggregation=aggregation, code_version="test", runtime_s=runtime_s)
-    run_dir = (
-        workspace
-        / "runs"
-        / "geometric-mapping"
-        / SEQUENCE
-        / f"run-{index:04d}__full-sequence__{profile}"
-    )
     return GeometricMapArtifactReader(run_dir)

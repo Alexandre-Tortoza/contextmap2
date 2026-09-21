@@ -71,8 +71,6 @@ from contextmap.shared import (
     FileEntry,
     RunDirectoryError,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.state_estimation import (
     StateEstimationRunId,
@@ -133,8 +131,9 @@ class GeometricMapArtifactManifest:
     """Authoritative metadata of a persisted Geometric Mapping run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's mapping runs.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this sequence, supplied by the
+            caller.
         sequence_name: Name of the mapped sequence.
         map_id: Identity of the map; part of every geometry reference.
         map_frame: The global frame every coordinate is expressed in.
@@ -187,10 +186,6 @@ class GeometricMapArtifactManifest:
     schema_version: str
     created_at: str
     file_inventory: tuple[FileEntry, ...]
-
-
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "geometric-mapping" / sequence_name
 
 
 def encode_mapping_configuration(
@@ -249,36 +244,30 @@ class GeometricMapArtifactWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: GeometricMapRunId,
         run_index: int,
-        selection_label: str,
-        profile_label: str,
         debug_level: MapDebugLevel = MapDebugLevel.NONE,
     ) -> None:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/geometric_mapping``); the writer
+                computes no path, creates the directory atomically on finalization and
+                refuses to replace one that exists.
             sequence_name: Name of the sequence the run maps.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's mapping runs (see
-                :func:`allocate_map_run_index`).
-            selection_label: Short readable selection description for the
-                directory name, e.g. ``"frames-0120-0260"``.
-            profile_label: Short readable configuration description for the
-                directory name, e.g. ``"baseline"``.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             debug_level: Amount of non-contractual debug evidence to persist.
         """
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{profile_label}"
-        )
+        self._final_dir = output_dir
         self._finalized = False
 
     def finalize(
@@ -344,9 +333,6 @@ class GeometricMapArtifactWriter:
             raise MapArtifactError(str(error)) from error
 
         self._finalized = True
-        rebuild_map_run_registry(
-            workspace_root=self._workspace_root, sequence_name=self._sequence_name
-        )
         return _load_manifest(self._final_dir)
 
     def _write_outputs(self, run: AtomicRunDirectory, accumulated: AccumulatedMap) -> None:
@@ -692,54 +678,6 @@ class GeometricMapArtifactReader:
         if self._payload is not None:
             self._payload.close()
         self._geometry = self._map = self._payload = None
-
-
-def allocate_map_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's mapping runs.
-
-    Scans the run directories, never the registry, so an interrupted or
-    incomplete run is not counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
-def rebuild_map_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
-def _valid_run_index(run_dir: Path) -> int | None:
-    # Validade barata (manifesto + tamanhos): não relê gigabytes de geometria só para alocar
-    # um índice. O hash completo continua em verify_integrity().
-    try:
-        manifest = _load_manifest(run_dir)
-    except MapArtifactError:
-        return None
-    for entry in manifest.file_inventory:
-        path = run_dir / entry.path
-        if not path.is_file() or path.stat().st_size != entry.size_bytes:
-            return None
-    return manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = _load_manifest(run_dir)
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
 
 
 def _load_manifest(run_dir: Path) -> GeometricMapArtifactManifest:
