@@ -398,6 +398,9 @@ def test_evidence_variants_are_compared_on_the_same_regions_with_their_real_chan
     assert masked_entry.acceptable_claim_rate == 0.5
     assert masked_entry.acceptable_claim_rate_delta == -0.5
     assert baseline.prompt_template_ids == ("region/v1",)
+    # Sensibilidade à evidência sem anotação: quantas regiões mantêm a hipótese primária.
+    assert (baseline.primary_comparable_count, baseline.primary_agreement_count) == (None, None)
+    assert (masked_entry.primary_comparable_count, masked_entry.primary_agreement_count) == (2, 1)
 
 
 def test_scene_context_evidence_is_a_channel_and_variants_need_a_shared_region() -> None:

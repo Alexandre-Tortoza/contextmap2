@@ -463,6 +463,8 @@ class EvidenceVariantEntry:
     latency_p50_ms: float | None
     acceptable_claim_rate_delta: float | None
     unsupported_claim_rate_delta: float | None
+    primary_comparable_count: int | None
+    primary_agreement_count: int | None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -570,6 +572,7 @@ def compare_evidence_variants(
     ]
     entries: list[EvidenceVariantEntry] = []
     baseline_rates: tuple[float | None, float | None] = (None, None)
+    baseline_primaries: dict[tuple[str, str | None], str | None] = {}
     for variant in ordered:
         samples = tuple(
             sample
@@ -587,8 +590,19 @@ def compare_evidence_variants(
         acceptable = None if quality is None else quality.acceptable_claim_rate
         unsupported = None if quality is None else quality.unsupported_claim_rate
         is_baseline = variant == baseline_variant_id
+        primaries = {
+            (sample.source_observation_id, sample.region_id): sample.primary_hypothesis
+            for sample in samples
+        }
         if is_baseline:
             baseline_rates = (acceptable, unsupported)
+            baseline_primaries = primaries
+        # Sensibilidade à evidência sem anotação: a mesma região mantém a hipótese primária?
+        comparable = [
+            key
+            for key, value in primaries.items()
+            if value is not None and baseline_primaries.get(key) is not None
+        ]
         entries.append(
             EvidenceVariantEntry(
                 variant_id=variant,
@@ -607,6 +621,12 @@ def compare_evidence_variants(
                 latency_p50_ms=_percentile([sample.latency_ms for sample in samples], 50),
                 acceptable_claim_rate_delta=_delta(acceptable, baseline_rates[0], is_baseline),
                 unsupported_claim_rate_delta=_delta(unsupported, baseline_rates[1], is_baseline),
+                primary_comparable_count=None if is_baseline else len(comparable),
+                primary_agreement_count=(
+                    None
+                    if is_baseline
+                    else sum(primaries[key] == baseline_primaries[key] for key in comparable)
+                ),
             )
         )
     return EvidenceVariantComparison(
