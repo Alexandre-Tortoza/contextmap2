@@ -24,12 +24,12 @@ from resolution_builders import (
 
 from contextmap.entity_resolution import (
     AppearanceEvidence,
-    ChannelPolicyRef,
     EvidenceStatus,
     FeatureContribution,
     Finding,
     GeometryEvidence,
     MatchChannel,
+    PolicyRef,
     SupportDistance,
     Unavailability,
     UnavailableReason,
@@ -124,7 +124,7 @@ def test_a_finding_needs_a_rule_and_an_explanation() -> None:
 
 def test_a_channel_names_the_policy_and_configuration_it_was_measured_under() -> None:
     with pytest.raises(ValueError, match="configuration_fingerprint"):
-        ChannelPolicyRef(policy_id="entity-geometry-comparison-v1", configuration_fingerprint="")
+        PolicyRef(policy_id="entity-geometry-comparison-v1", configuration_fingerprint="")
 
 
 # --- geometry -----------------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from contextmap.entity_resolution.evidence import (
     comparison_id_for,
     reference_order,
 )
+from contextmap.entity_resolution.models import PolicyRef
 from contextmap.semantic_mapping import EntityReference
 
 ResolutionDecisionId = NewType("ResolutionDecisionId", str)
@@ -83,27 +84,6 @@ class PolicyStage(Enum):
 
 
 @dataclass(frozen=True, kw_only=True)
-class ResolutionPolicyRef:
-    """The versioned policy and configuration that produced a decision.
-
-    Attributes:
-        policy_id: Versioned identity of the policy.
-        configuration_fingerprint: Hash of the thresholds and options of that execution.
-    """
-
-    policy_id: str
-    configuration_fingerprint: str
-
-    def __post_init__(self) -> None:
-        """Require both identities.
-
-        Raises:
-            ValueError: If an identity is empty.
-        """
-        require_present(self, "policy_id", "configuration_fingerprint")
-
-
-@dataclass(frozen=True, kw_only=True)
 class TriggeredRule:
     """A rule of the policy that fired while evaluating a pair.
 
@@ -152,9 +132,7 @@ class DecisionProvenance:
             require_present(self, "code_version")
 
 
-def decision_id_for(
-    evidence_ref: ComparisonId, policy: ResolutionPolicyRef
-) -> ResolutionDecisionId:
+def decision_id_for(evidence_ref: ComparisonId, policy: PolicyRef) -> ResolutionDecisionId:
     """Compute the deterministic identity of the decision of a policy on a comparison.
 
     Args:
@@ -193,7 +171,7 @@ class ResolutionDecision:
     entity_b_ref: EntityReference
     decision: ResolutionOutcome
     evidence_ref: ComparisonId
-    policy: ResolutionPolicyRef
+    policy: PolicyRef
     triggered_rules: tuple[TriggeredRule, ...]
     channels_used: tuple[MatchChannel, ...]
     channels_ignored: tuple[MatchChannel, ...]

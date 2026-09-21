@@ -10,9 +10,9 @@ from resolution_builders import REF_A, REF_B, decision, policy_ref, ref, trigger
 from contextmap.entity_resolution import (
     DecisionProvenance,
     MatchChannel,
+    PolicyRef,
     PolicyStage,
     ResolutionOutcome,
-    ResolutionPolicyRef,
     TriggeredRule,
     UnresolvedReason,
     comparison_id_for,
@@ -118,7 +118,7 @@ def test_the_decision_points_to_the_evidence_of_the_same_pair() -> None:
 
 def test_the_decision_id_is_derived_from_the_evidence_and_the_policy() -> None:
     comparison = comparison_id_for(REF_A, REF_B)
-    other_policy = ResolutionPolicyRef(
+    other_policy = PolicyRef(
         policy_id="conservative-staged-resolution-v2", configuration_fingerprint="sha256:policy"
     )
 
@@ -130,11 +130,9 @@ def test_the_decision_id_is_derived_from_the_evidence_and_the_policy() -> None:
 
 def test_the_policy_and_its_configuration_are_recorded() -> None:
     with pytest.raises(ValueError, match="configuration_fingerprint"):
-        ResolutionPolicyRef(
-            policy_id="conservative-staged-resolution-v1", configuration_fingerprint=""
-        )
+        PolicyRef(policy_id="conservative-staged-resolution-v1", configuration_fingerprint="")
     with pytest.raises(ValueError, match="policy_id"):
-        ResolutionPolicyRef(policy_id=" ", configuration_fingerprint="sha256:policy")
+        PolicyRef(policy_id=" ", configuration_fingerprint="sha256:policy")
 
 
 def test_a_triggered_rule_states_its_stage_and_an_explanation() -> None:

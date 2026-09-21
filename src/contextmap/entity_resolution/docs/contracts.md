@@ -19,6 +19,8 @@ Referência de campos e invariantes dos contratos públicos de `contextmap.entit
 | `ComparisonId` | derivado do par | `comparison--<sha256[:16]>` do par `(entity_a_ref, entity_b_ref)`; a mesma comparação tem sempre o mesmo id. |
 | `ResolutionDecisionId` | derivado | `decision--<sha256[:16]>` da comparação e da política (id e fingerprint): outra política ou configuração dá outro id. |
 
+`PolicyRef(policy_id, configuration_fingerprint)` identifica, em qualquer canal, na recuperação de candidatos, na política de resolução e na materialização, a regra versionada (`policy_id`) e os parâmetros efetivos de uma execução (`configuration_fingerprint`), que nunca se confundem.
+
 `ResolvedEntityId` é um `NewType` sobre `str`: o tipo distingue o id de uma entidade resolvida de um `EntityId` de origem em tempo de checagem, mas a identidade completa é sempre a referência.
 
 ## `ResolvedEntityReference`
@@ -72,7 +74,7 @@ Todo canal (`ChannelEvidence`) tem:
 
 | Campo | Descrição |
 | --- | --- |
-| `policy` | `ChannelPolicyRef`: política versionada e fingerprint da configuração sob a qual foi medido. |
+| `policy` | `PolicyRef`: política versionada e fingerprint da configuração sob a qual foi medido. |
 | `measurement` | A medição própria do canal; `None` quando indisponível. |
 | `findings` | O resultado de cada regra explícita aplicada à medição; vazio quando indisponível. |
 | `unavailable` | `Unavailability(reason, detail)`; `None` quando medido. |
@@ -116,7 +118,7 @@ Canal opcional. `RepresentationMeasurement` é o análogo de aparência para um 
 | `entity_a_ref`, `entity_b_ref` | O par, em ordem canônica. |
 | `decision` | `ResolutionOutcome`: `match`, `distinct` ou `unresolved`. |
 | `evidence_ref` | O `ComparisonId` da evidência de onde a decisão saiu; precisa ser o do par. |
-| `policy` | `ResolutionPolicyRef(policy_id, configuration_fingerprint)`. |
+| `policy` | `PolicyRef(policy_id, configuration_fingerprint)`. |
 | `triggered_rules` | As regras que dispararam, na ordem de avaliação: `TriggeredRule(stage, rule_id, outcome, detail, channels)`. |
 | `channels_used`, `channels_ignored` | Canais em que a decisão se apoia e canais disponíveis mas ignorados, em ordem canônica; nunca em ambos. |
 | `unresolved_reason` | `comparison_blocked`, `insufficient_evidence` ou `conflicting_evidence`; presente **exatamente** quando `unresolved`. |

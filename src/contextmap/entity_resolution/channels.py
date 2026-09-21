@@ -35,6 +35,7 @@ from contextmap.entity_resolution._checks import (
     require_non_negative,
     require_present,
 )
+from contextmap.entity_resolution.models import PolicyRef
 from contextmap.geometric_mapping import GeometryReference, MapId
 from contextmap.point_representation import PointRepresentationId, PointRepresentationRunId
 from contextmap.semantic_mapping import AmbiguityState, EntityFeatureRef
@@ -93,27 +94,6 @@ class UnavailableReason(Enum):
     INCOMPATIBLE_DOMAIN = "incompatible_domain"
     BLOCKED_BY_GATE = "blocked_by_gate"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-
-
-@dataclass(frozen=True, kw_only=True)
-class ChannelPolicyRef:
-    """The versioned policy and configuration a channel was measured under.
-
-    Attributes:
-        policy_id: Versioned identity of the comparison and interpretation rules.
-        configuration_fingerprint: Hash of the thresholds and options of that execution.
-    """
-
-    policy_id: str
-    configuration_fingerprint: str
-
-    def __post_init__(self) -> None:
-        """Require both identities.
-
-        Raises:
-            ValueError: If an identity is empty.
-        """
-        require_present(self, "policy_id", "configuration_fingerprint")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -194,7 +174,7 @@ class ChannelEvidence:
         unavailable: Why the channel could not compare the pair; ``None`` when it was measured.
     """
 
-    policy: ChannelPolicyRef
+    policy: PolicyRef
     findings: tuple[Finding, ...] = ()
     unavailable: Unavailability | None = None
 

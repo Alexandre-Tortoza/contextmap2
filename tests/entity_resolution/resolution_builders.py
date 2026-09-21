@@ -7,7 +7,6 @@ from typing import Any
 from contextmap.entity_resolution import (
     AppearanceEvidence,
     AppearanceMeasurement,
-    ChannelPolicyRef,
     DecisionProvenance,
     EntityMatchEvidence,
     EvidenceStatus,
@@ -21,12 +20,12 @@ from contextmap.entity_resolution import (
     MatchChannel,
     MatchEvidenceProvenance,
     PointRepresentationEvidence,
+    PolicyRef,
     PolicyStage,
     RepresentationMeasurement,
     RepresentationRef,
     ResolutionDecision,
     ResolutionOutcome,
-    ResolutionPolicyRef,
     SemanticEvidence,
     SemanticMeasurement,
     TemporalEvidence,
@@ -68,8 +67,8 @@ REF_A = ref("entity--support-000001")
 REF_B = ref("entity--support-000002")
 
 
-def channel_policy(policy_id: str = "test-channel-policy-v1") -> ChannelPolicyRef:
-    return ChannelPolicyRef(policy_id=policy_id, configuration_fingerprint="sha256:cfg")
+def channel_policy(policy_id: str = "test-channel-policy-v1") -> PolicyRef:
+    return PolicyRef(policy_id=policy_id, configuration_fingerprint="sha256:cfg")
 
 
 def unavailable(
@@ -273,8 +272,8 @@ def match_evidence(**channels: Any) -> EntityMatchEvidence:
     return EntityMatchEvidence(**values)
 
 
-def policy_ref() -> ResolutionPolicyRef:
-    return ResolutionPolicyRef(
+def policy_ref() -> PolicyRef:
+    return PolicyRef(
         policy_id="conservative-staged-resolution-v1", configuration_fingerprint="sha256:policy"
     )
 

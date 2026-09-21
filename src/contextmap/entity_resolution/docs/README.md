@@ -42,9 +42,9 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 
 - `EntityResolutionRunId`, `ResolvedEntityId`, `ResolvedEntityReference` — identidade escopada ao artifact de resolução e o handle estável `(resolution_run_id, resolved_entity_id)`.
 - `EntityMatchEvidence`, `ComparisonId`, `comparison_id_for`, `MatchEvidenceProvenance`, `GateResult`, `evaluate_comparison_gates`, `COMPARISON_GATES_POLICY_ID`, `reference_order` — a comparação de um par e seus gates.
-- `MatchChannel`, `EvidenceStatus`, `UnavailableReason`, `Unavailability`, `ChannelPolicyRef`, `Finding`, `ChannelEvidence` — o vocabulário comum dos canais.
+- `MatchChannel`, `EvidenceStatus`, `UnavailableReason`, `Unavailability`, `Finding`, `ChannelEvidence` — o vocabulário comum dos canais.
 - `GeometryEvidence`, `GeometryMeasurement`, `SupportDistance`; `SemanticEvidence`, `SemanticMeasurement`, `LabelComparison`, `LabelRelation`, `AttributeComparison`; `AppearanceEvidence`, `AppearanceMeasurement`, `FeatureContribution`; `TemporalEvidence`, `TemporalMeasurement`; `PointRepresentationEvidence`, `RepresentationMeasurement`, `RepresentationRef` — a evidência tipada de cada canal.
-- `ResolutionDecision`, `ResolutionDecisionId`, `ResolutionOutcome`, `UnresolvedReason`, `PolicyStage`, `TriggeredRule`, `ResolutionPolicyRef`, `DecisionProvenance`, `decision_id_for` — a decisão.
+- `ResolutionDecision`, `ResolutionDecisionId`, `ResolutionOutcome`, `UnresolvedReason`, `PolicyStage`, `TriggeredRule`, `DecisionProvenance`, `decision_id_for` — a decisão.
 - `encode_*` e `decode_*` de referência resolvida, evidência de comparação e decisão — o codec JSON, que revalida todas as invariantes.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes.
