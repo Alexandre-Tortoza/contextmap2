@@ -169,8 +169,6 @@ from contextmap.visual_perception.run_artifact import (
     RunArtifactError,
     RunArtifactFileEntry,
     RunArtifactManifest,
-    allocate_run_index,
-    rebuild_run_registry,
 )
 from contextmap.visual_perception.semantic_audit import (
     SEMANTIC_DEBUG_ROOT,
@@ -349,7 +347,6 @@ __all__ = [
     "VisualFeature",
     "VisualViewKind",
     "WrittenDiscoveryEvidence",
-    "allocate_run_index",
     "assemble_perception_result",
     "box_mask_shape",
     "build_discovery_passes",
@@ -376,7 +373,6 @@ __all__ = [
     "perception_result_id_for",
     "pool_region_feature",
     "prepare_image",
-    "rebuild_run_registry",
     "redact_semantic_secrets",
     "region_id_for",
     "render_semantic_prompt",

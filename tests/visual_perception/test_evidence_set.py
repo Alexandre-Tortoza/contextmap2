@@ -50,8 +50,9 @@ def _write_run(
     run_id: str | None = None,
 ) -> Path:
     effective_run_id = run_id or f"run-{run_index:04d}"
+    run_dir = tmp_path / f"run-{run_index:04d}"
     writer = PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=run_dir,
         sequence_name="corridor-02",
         run_id=PerceptionRunId(effective_run_id),
         run_index=run_index,
@@ -60,19 +61,11 @@ def _write_run(
         enabled_capabilities=frozenset({"region_discovery"}),
         pipeline_preset=CANONICAL_PRESET_V1,
         configuration_digest="sha256:test",
-        selection_label="frames",
-        profile_label="fake",
     )
     for observation_id in observation_ids:
         writer.add_result(_result(observation_id, effective_run_id, sequence_artifact_id))
     writer.finalize()
-    return (
-        tmp_path
-        / "runs"
-        / "visual-perception"
-        / "corridor-02"
-        / f"run-{run_index:04d}__frames__fake"
-    )
+    return run_dir
 
 
 def test_overlapping_selections_group_evidence_by_observation(tmp_path: Path) -> None:
@@ -143,15 +136,6 @@ def test_result_run_id_must_match_owning_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(EvidenceSetError, match="result run_id"):
         PerceptionEvidenceSet.open([run_dir])
-
-
-def test_view_works_without_a_registry(tmp_path: Path) -> None:
-    run_dir = _write_run(tmp_path, run_index=1, observation_ids=["frame-0001"])
-    (tmp_path / "runs" / "visual-perception" / "corridor-02" / "runs.json").unlink()
-
-    evidence_set = PerceptionEvidenceSet.open([run_dir])
-
-    assert evidence_set.observation_ids() == [SourceObservationId("frame-0001")]
 
 
 def test_open_with_no_runs_is_rejected() -> None:
