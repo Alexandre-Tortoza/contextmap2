@@ -22,6 +22,7 @@ from contextmap.visual_perception.backends._feature_values import (
     validate_and_normalize_feature_values,
 )
 from contextmap.visual_perception.backends._huggingface import (
+    preprocess_pixel_values,
     validate_huggingface_commit_revision,
 )
 from contextmap.visual_perception.embedding_space import (
@@ -392,18 +393,16 @@ class HuggingFaceClipRuntime:
                     )
                     for view in views
                 ]
-                inputs = self._processor(
+                pixel_values = preprocess_pixel_values(
+                    processor=self._processor,
                     images=crops,
-                    return_tensors="pt",
-                    do_resize=True,
-                    size={"height": self._config.input_height, "width": self._config.input_width},
+                    width=self._config.input_width,
+                    height=self._config.input_height,
                     resample=self._image_module.Resampling.BICUBIC,
-                    do_center_crop=False,
+                ).to(
+                    device=self._config.device,
+                    dtype=self._torch_dtype,
                 )
-            pixel_values = inputs["pixel_values"].to(
-                device=self._config.device,
-                dtype=self._torch_dtype,
-            )
             with self._torch.inference_mode():
                 encoded = self._model.get_image_features(pixel_values=pixel_values)
             if hasattr(encoded, "pooler_output"):
@@ -430,7 +429,8 @@ class HuggingFaceClipRuntime:
             image_module = importlib.import_module("PIL.Image")
         except ModuleNotFoundError as error:
             raise ClipDependencyError(
-                "CLIP requires torch, transformers, and Pillow in the runtime environment"
+                "CLIP requires torch, transformers, and Pillow (plus torchvision with "
+                "transformers 5.x) in the runtime environment"
             ) from error
 
         if self._config.device == "cuda" and not torch.cuda.is_available():
@@ -450,10 +450,15 @@ class HuggingFaceClipRuntime:
                 self._config.checkpoint,
                 revision=self._config.revision,
                 local_files_only=self._config.local_files_only,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
             )
             model = model.to(self._config.device)
             model.eval()
+        except ImportError as error:
+            raise ClipDependencyError(
+                f"CLIP could not import a package required by the Hugging Face image "
+                f"processor or model (transformers 5.x needs torchvision): {error}"
+            ) from error
         except Exception as error:
             mode = "local cache" if self._config.local_files_only else "configured model source"
             raise ClipModelLoadError(
@@ -533,7 +538,7 @@ def _make_view(
         "crop": {"x": box.x, "y": box.y, "width": box.width, "height": box.height},
         "crop_policy": policy,
         "model_input": {"width": config.input_width, "height": config.input_height},
-        "resize": "direct_bicubic_by_clip_processor",
+        "resize": "direct_bicubic_by_pillow",
         "center_crop": False,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -563,7 +568,7 @@ def _configuration_fingerprint(config: ClipConfig) -> str:
         "l2_normalize": config.l2_normalize,
         "crop_policy": config.crop_policy,
         "context_padding_fraction": config.context_padding_fraction,
-        "preprocessing": "huggingface_direct_bicubic_resize_no_crop_v1",
+        "preprocessing": "pillow_direct_bicubic_resize_processor_normalize_no_crop_v2",
         "payload_prefix": config.payload_prefix,
         "code_version": config.code_version,
     }

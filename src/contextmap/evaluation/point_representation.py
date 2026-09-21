@@ -24,7 +24,8 @@ differs. Repeated encodings of identical geometry are never treated as
 independent physical observations.
 
 The harness imports no NumPy, model library or GPU runtime; backends are passed
-in already constructed, so composition stays in ``runtime``.
+in already constructed. Composition remains the caller's responsibility until
+the global runtime is materialized.
 """
 
 from __future__ import annotations

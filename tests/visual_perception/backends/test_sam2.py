@@ -182,7 +182,9 @@ def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
                             [False, False, False, False],
                         ]
                     ),
-                    "bbox": [1.0, 2.0, 2.0, 2.0],
+                    # Convenção do SDK oficial: bbox = [x0, y0, x1 - x0, y1 - y0] com índices
+                    # de pixel inclusivos; a máscara acima ocupa x=0..1 e y=0..1.
+                    "bbox": [0.0, 0.0, 1.0, 1.0],
                     "area": 3,
                     "predicted_iou": 0.91,
                     "stability_score": 0.88,
@@ -200,7 +202,8 @@ def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
     proposals = runtime.predict(_input(), config)
 
     assert generator.received == [MaterializedImage((4, 4), ("pixels", "tile-0002"))]
-    assert proposals[0].box == (1.0, 2.0, 3.0, 4.0)
+    # A caixa canônica é semiaberta: a borda exclusiva é o último índice inclusivo + 1.
+    assert proposals[0].box == (0.0, 0.0, 2.0, 2.0)
     assert proposals[0].mask[:6] == (True, True, False, False, False, True)
     assert proposals[0].predicted_iou == 0.91
     assert dict(proposals[0].metadata)["area_pixels"] == 3
@@ -285,3 +288,37 @@ def test_sam2_runtime_materializes_distinct_scaled_model_inputs() -> None:
     assert [image.size for image in loaded] == [(4, 4), (8, 8)]
     assert generator.received == loaded
     assert generator.received[0] is not generator.received[1]
+
+
+def test_sam2_accepts_official_masks_whose_bbox_uses_inclusive_indices() -> None:
+    class InclusiveBoxGenerator:
+        """Follow the official convention: bbox = [x0, y0, x1 - x0, y1 - y0], inclusive."""
+
+        def generate(self, image: object) -> list[dict[str, object]]:
+            assert isinstance(image, MaterializedImage)
+            width, height = image.size
+            mask = [[2 <= x <= 4 and 1 <= y <= 3 for x in range(width)] for y in range(height)]
+            return [
+                {
+                    "segmentation": mask,
+                    "bbox": [2, 1, 2, 2],
+                    "area": 9,
+                    "predicted_iou": 0.9,
+                    "stability_score": 0.9,
+                }
+            ]
+
+    config = Sam2Config(checkpoint="facebook/sam2.1-hiera-tiny")
+    runtime = Sam2AutomaticMaskRuntime(
+        mask_generator=InclusiveBoxGenerator(),
+        image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
+        config_digest=config.digest,
+    )
+    backend = Sam2RegionDiscovery(config=config, runtime=runtime)
+
+    regions = backend.discover(_input().prepared_image)
+
+    assert len(regions) == 1
+    box = regions[0].bounding_box
+    assert (box.x, box.y, box.width, box.height) == (2, 1, 3, 3)
+    assert regions[0].area_pixels == 9

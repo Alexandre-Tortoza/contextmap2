@@ -49,6 +49,10 @@ from contextmap.visual_perception.models import (
     VisualFeature,
 )
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
+from contextmap.visual_perception.semantic_audit import (
+    SemanticDebugLevel,
+    write_semantic_audit,
+)
 from contextmap.visual_perception.semantic_backend import (
     SemanticInterpretationExecution,
     decode_semantic_execution,
@@ -175,6 +179,7 @@ class PerceptionRunWriter:
         selection_label: str,
         profile_label: str,
         feature_debug_level: FeatureDebugLevel = FeatureDebugLevel.NONE,
+        semantic_debug_level: SemanticDebugLevel = SemanticDebugLevel.FULL,
     ) -> None:
         """Create a writer for a new perception run artifact.
 
@@ -203,6 +208,9 @@ class PerceptionRunWriter:
             feature_debug_level: Amount of non-contractual Feature Extraction
                 debug evidence to persist. Required metrics are independent of
                 this level.
+            semantic_debug_level: Amount of human-oriented Semantic
+                Interpretation evidence to persist. Canonical outputs and
+                response hashes remain independent of this level.
         """
         self._run_id = run_id
         self._run_index = run_index
@@ -213,6 +221,7 @@ class PerceptionRunWriter:
         self._pipeline_preset = pipeline_preset
         self._configuration_digest = configuration_digest
         self._feature_debug_level = feature_debug_level
+        self._semantic_debug_level = semantic_debug_level
         sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
         run_dir_name = f"run-{run_index:04d}__{selection_label}__{profile_label}"
         self._workspace_root = workspace_root
@@ -567,12 +576,15 @@ class PerceptionRunWriter:
             for execution in self._semantic_executions:
                 raw_reference = _semantic_raw_response_reference(execution)
                 _validate_semantic_raw_response_reference(execution, raw_reference)
-                raw_path = self._tmp_dir / raw_reference
-                raw_path.parent.mkdir(parents=True, exist_ok=True)
-                raw_path.write_text(execution.raw_response, encoding="utf-8")
-                file_entries.append(
-                    _file_entry(raw_reference, execution.raw_response.encode("utf-8"))
+                audit_paths = write_semantic_audit(
+                    run_root=self._tmp_dir,
+                    execution=execution,
+                    debug_level=self._semantic_debug_level,
                 )
+                for relative_path in audit_paths:
+                    file_entries.append(
+                        _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
+                    )
                 semantic_records.append(
                     encode_semantic_execution(
                         execution,

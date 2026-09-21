@@ -27,7 +27,9 @@ workspace/
             │   └── debug/
             │       ├── 30-feature-extraction/                           # somente standard/full
             │       └── 40-semantic-interpretation/<request-id>/
-            │           └── raw-response.txt                             # resposta exata do backend
+            │           ├── request.json / prompt.txt / parsed-response.json
+            │           ├── diagnostics.json / semantic-claims.json
+            │           └── raw-response.txt                             # somente full
             └── run-0002__frames-0120-0260__sam3-dinov2-qwen/
                 └── ...
 ```
@@ -55,7 +57,13 @@ Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestam
 - **`outputs/results.jsonl`, não `outputs/results.parquet`.** Mesma decisão e mesmo motivo da issue #39 de Ingestion: nenhuma dependência de runtime nova (`pyarrow`/`pandas`) se justifica ainda; JSON Lines é inspecionável com ferramentas de texto padrão. Revisitar se o volume de resultados tornar leitura linha-a-linha um gargalo real.
 - **`outputs/results.jsonl` continua canônico para metadata; `outputs/features/feature-index.jsonl` indexa apenas payloads numéricos opt-in.** Cada `PerceptionResult` carrega suas `regions`/`features`/`claims`; o feature index não duplica esse contrato, apenas liga a chave `(source_observation_id, feature_id)` ao arquivo `.npy`, hash e metadata necessária para leitura lazy. `finalize()` valida essa referência cruzada antes de publicar o artifact.
 - **Views semânticas são outputs contratuais.** Cada `SemanticVisualView` possui SHA-256 obrigatório e referencia um arquivo abaixo de `outputs/semantic-views/`. `add_semantic_view_payload()` valida o hash antes de enfileirar os bytes; `finalize()` exige que toda view de toda execução possua payload inventariado e rejeita payloads sem request correspondente.
-- **`debug/` só existe quando há conteúdo real.** Feature Extraction materializa previews conforme o nível configurado. Semantic Interpretation materializa a resposta bruta exata em `debug/40-semantic-interpretation/<request-id>/raw-response.txt`; o path é referenciado tanto pelo registro contratual em `outputs/semantic-interpretations.jsonl` quanto pela proveniência da evidência canônica.
+- **`debug/` só existe quando há conteúdo real.** Feature Extraction
+  materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava
+  diagnostics humanos, `STANDARD` grava request/prompt/parsing/final outputs e
+  `FULL` acrescenta a resposta bruta. `outputs/semantic-interpretations.jsonl`,
+  hashes e outputs canônicos permanecem suficientes para leitura quando debug
+  está desabilitado. Campos de credencial conhecidos são redigidos antes de
+  qualquer serialização.
 - **`config.yaml`, `lineage.json`, `environment.json`, `events.jsonl` não são escritos no v0.** Nenhum destes tem produtor real ainda (configuração efetiva de backend, lineage de artefatos upstream, ambiente de execução, eventos granulares) — `manifest.json` já cobre a metadata mínima autoritativa (run_id, índice, sequência, seleção, capabilities, contagens). Adicionar esses arquivos vazios/parciais agora seria estrutura sem conteúdo real.
 
 ## Escrita atômica
@@ -85,4 +93,8 @@ Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`Back
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
 
-O schema `0.4.0` incorpora a nova forma de `SemanticClaim` e os registros completos de execução semântica. Cada registro preserva request, prompt renderizado, resultado do parsing, diagnósticos e configuração efetiva; a resposta bruta é inventariada separadamente no path declarado. Esta é uma quebra pré-1.0: artifacts `0.3.0` são rejeitados na abertura, em vez de serem aceitos e falharem tardiamente durante `list_results()`.
+O schema `0.4.0` incorpora a nova forma de `SemanticClaim` e os registros
+completos de execução semântica. Cada registro preserva request, prompt
+renderizado, resposta/hash, parsing, diagnósticos e configuração efetiva
+redigida. A cópia humana da resposta bruta só é inventariada em debug `FULL`.
+Esta é uma quebra pré-1.0: artifacts `0.3.0` são rejeitados na abertura.

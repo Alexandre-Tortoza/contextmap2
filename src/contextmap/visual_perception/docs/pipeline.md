@@ -8,7 +8,14 @@ Este documento descreve `src/contextmap/visual_perception/pipeline.py`: como um 
 - **Uma instância de backend concreta** — construída por uma `StageBackendFactory` fornecida pelo chamador. Este módulo nunca constrói uma sozinho e nunca importa um SDK de modelo.
 - **`PipelinePreset`** — uma seleção nomeada e versionada de estágios/dependências/backends/parâmetros (ex.: `"canonical/1"`).
 
-Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`, `feature_resolution_enhancement`, `scene_interpretation`, `region_interpretation`). Ela adapta os ports necessários ao grafo atual, mas não equivale a todos os ports públicos de `ports.py`: `SemanticScorer` já existe como contrato público e ainda não está ligado ao pipeline canônico. Tornar uma nova capability executável exige um adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo de despacho genérico.
+Deliberadamente **não** é um sistema de plugin/workflow genérico: o conjunto de capabilities executáveis é a tabela pequena e fixa `_CAPABILITY_ADAPTERS` (`region_discovery`, `feature_extractor`,
+`feature_resolution_enhancement`, `scene_interpretation`,
+`region_interpretation`, `semantic_interpreter`, `semantic_scorer`). Ela adapta
+os ports necessários ao grafo atual. `semantic_scorer` exige produtores
+explícitos de `claims` e `features`; sua disponibilidade no compilador não o
+insere em `CANONICAL_PRESET_V1`. Tornar uma nova capability executável exige um
+adapter explícito, contrato de inputs e decisão de preset — nunca um mecanismo
+de despacho genérico.
 
 ## Preset canônico versionado
 
@@ -39,6 +46,22 @@ flowchart LR
 `image_preparation` é um estágio fonte (`backend_id=None`): sua saída é injetada por `ResolvedPipeline.build_stage_graph()`. Os demais estágios resolvem backends uma única vez por pipeline resolvido. `region_feature_extraction` e `region_interpretation` dependem explicitamente das regiões; `dense_feature_extraction` e `scene_interpretation` permanecem branches independentes.
 
 O estágio `region_discovery` pode ser satisfeito pelos adapters SAM2, SAM3 ou Florence-2 implementados na capability. Passes full-frame/tiles, scale, remapeamento, normalização e Geometry Freeze ficam encapsulados atrás do port `RegionDiscovery`; a topologia do pipeline continua vendo apenas `PreparedImage -> Region2D[]`. Ver [`region-discovery.md`](region-discovery.md).
+
+### Caminho canônico novo de Semantic Interpretation
+
+Além dos dois adapters legados usados por `canonical/1`, `pipeline.py` já
+expõe a capability executável `semantic_interpreter`. Ela recebe exatamente um
+input nomeado `request`, produzido por um estágio-fonte com capability
+`semantic_request`, e devolve `SemanticInterpretationExecution`. Presets
+experimentais/testes podem portanto executar Qwen, Gemini ou outro
+`SemanticInterpreter` sem depender das assinaturas legadas
+`interpret_scene()`/`interpret_regions()`.
+
+A migração de `CANONICAL_PRESET_V1` para esse caminho não foi feita neste
+milestone: ainda falta uma política explícita de construção de
+`SemanticInterpretationRequest` a partir das views/features/contexto
+selecionados. Isso evita esconder seleção de evidência dentro do adapter ou
+alterar a topologia canônica sem contrato e avaliação próprios.
 
 ## Validar antes de carregar modelos pesados
 

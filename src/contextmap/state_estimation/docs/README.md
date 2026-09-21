@@ -43,7 +43,11 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup tempora
 
 Os backends `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) e `contextmap.state_estimation.backends.fast_lio` (`FastLioEstimator`, `FastLioConfig`, `FastLioRunner`) não são reexportados por `contextmap.state_estimation`; são importados pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e interpolação , [`backends.md`](backends.md) para o port e o backend `ExternalPose` e [`preflight.md`](preflight.md) para o frame graph, as checagens e o serviço e [`artifact.md`](artifact.md) para o formato persistido.
+Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de
+transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e
+interpolação, [`backends.md`](backends.md) para o port e os backends
+`ExternalPose`/FAST-LIO, [`preflight.md`](preflight.md) para o frame graph, as
+checagens e o serviço, e [`artifact.md`](artifact.md) para o formato persistido.
 
 ## Módulos consumidos
 
@@ -52,7 +56,8 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção d
 
 ## Módulos que consomem este
 
-`geometric_mapping` e `sensor_association`, sempre através de `contextmap.state_estimation`.
+`geometric_mapping`, `sensor_association`, `semantic_fusion` e `evaluation`,
+sempre através de `contextmap.state_estimation`.
 
 ## Onde estão os documentos detalhados
 

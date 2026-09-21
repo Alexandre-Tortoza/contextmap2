@@ -36,7 +36,7 @@ Mesmo dimensionamento não torna este espaço compatível com DINOv3, CLIP ou ou
 
 ## Preprocessamento e transformação espacial
 
-O runtime Hugging Face faz resize bicúbico direto e determinístico para `input_width × input_height`, sem center crop. A interpolação é passada explicitamente ao processor e entra na identidade da transformação; não depende do default variável do checkpoint/SDK. O processor continua responsável pela conversão RGB, rescale e normalização esperados pelo checkpoint. O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`. O runtime remove CLS e a quantidade de register tokens declarada em `model.config.num_register_tokens` (zero quando o campo não existe). Essa contagem entra no `EmbeddingSpace.layer` e na identidade da transformação.
+O runtime Hugging Face faz resize bicúbico direto para `input_width × input_height`, sem center crop, **no Pillow**, e usa o processor apenas para rescale e normalização esperados pelo checkpoint (`do_resize=False`). O resize é do adapter, não do processor: a implementação de resize do processor depende do backend instalado (torchvision ou PIL) e dá pixels diferentes (até 1,75e-2) e features diferentes (cosseno mínimo por patch 0,981) para o mesmo checkpoint, config e imagem. Com o resize no Pillow, os dois backends concordam a 2,4e-7 (issue #339). A interpolação entra na identidade da transformação (`direct_bicubic_by_pillow`) e no fingerprint (`pillow_direct_bicubic_resize_processor_normalize_no_crop_v2`). O patch size vem de `model.config.patch_size`; o grid é validado contra `model_input // patch_size`. O runtime remove CLS e a quantidade de register tokens declarada em `model.config.num_register_tokens` (zero quando o campo não existe). Essa contagem entra no `EmbeddingSpace.layer` e na identidade da transformação.
 
 Cada patch é mapeado de volta à imagem preparada por escala independente nos eixos X/Y. Origem, stride e suporte são persistidos em pixels da imagem preparada. A identidade da transformação inclui dimensões e transformações da `PreparedImage`, dimensões da entrada do modelo, política de resize, patch size e fingerprint da configuração.
 
@@ -46,11 +46,11 @@ Resize direto pode distorcer aspect ratio quando a configuração não preserva 
 
 Importar `contextmap.visual_perception` ou o módulo do backend não importa PyTorch, Transformers, Pillow ou NumPy. Os SDKs e o checkpoint só são carregados na primeira inferência.
 
-`local_files_only=True` é o default: nenhuma execução baixa pesos implicitamente. Na máquina de inferência, o usuário deve instalar `torch`, `transformers` e `Pillow` e disponibilizar antecipadamente o checkpoint/revision no cache local (ou configurar conscientemente `local_files_only=False`).
+`local_files_only=True` é o default: nenhuma execução baixa pesos implicitamente. Na máquina de inferência, o usuário deve instalar `torch`, `transformers` (>= 4.56, que introduziu `dtype=`) e `Pillow`; com `transformers` 5.x o processor padrão importa também `torchvision`, que precisa estar instalado, e disponibilizar antecipadamente o checkpoint/revision no cache local (ou configurar conscientemente `local_files_only=False`).
 
 Falhas não acionam fallback:
 
-- `DinoV2DependencyError` — SDK opcional ausente;
+- `DinoV2DependencyError` — SDK opcional ausente, incluindo pacotes que o processor ou o modelo importam (por exemplo `torchvision`);
 - `DinoV2DeviceError` — device/precisão indisponível;
 - `DinoV2ModelLoadError` — checkpoint/revision não carregável;
 - `DinoV2InferenceError` — payload, preprocessamento, inferência ou shape nativo inválido.
@@ -60,9 +60,13 @@ rejeitados antes que qualquer payload seja entregue ao artifact writer.
 
 ## Validação desta implementação
 
-Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download, GPU ou inferência real.
+Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download ou GPU.
 
-Uma execução controlada com pesos reais não foi realizada neste ambiente por decisão explícita do usuário. Portanto, equivalência numérica real para um checkpoint específico ainda precisa ser validada na máquina de inferência antes de encerrar a issue #68.
+Execução controlada com pesos reais (issue #68, 2026-09-20; RTX 3060, torch 2.14, transformers 5.17, frames reais de `corridor-02`): `facebook/dinov2-base` com entrada 448×336 produz o mapa `(24, 32, 768)` com stride e suporte de 20 px (`14 × 640/448`) e origem `(0, 0)`. A saída é idêntica (diferença 0,0) em execuções repetidas, na mesma instância e em uma instância nova; fp16 contra fp32 tem cosseno mínimo por patch de 0,9967. O resultado é idêntico a um forward direto do modelo sobre os mesmos pixels, o que confirma a remoção do CLS e o reshape linha×coluna, e um teste de espelhamento horizontal confirma a ordem das linhas e colunas (0,87 alinhado contra 0,61 desalinhado). A saída alimenta `pool_region_feature` com células e pesos corretos.
+
+Após a correção do pré-processamento (issue #339), o adapter contra uma referência independente em Pillow tem diferença máxima de 3e-4 e cosseno mínimo por patch de 0,9999999, e os backends torchvision e PIL do processor produzem o mesmo resultado.
+
+Esses resultados validam o carregamento, o layout espacial, os contratos e a estabilidade numérica dessa configuração; não constituem avaliação científica comparativa da qualidade dos embeddings nem substituem um reference set versionado.
 
 ## O que este backend não faz
 

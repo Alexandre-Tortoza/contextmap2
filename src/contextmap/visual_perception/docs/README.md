@@ -31,12 +31,21 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
-Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; validação numérica com pesos reais permanece explícita. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
+Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2 e CLIP e segue pendente para DINOv3 e AlphaCLIP. Detalhes, resultados e limites estão em [`feature-extraction.md`](feature-extraction.md), [`dinov2.md`](dinov2.md) e [`clip.md`](clip.md).
 
-Semantic Interpretation possui contratos canônicos para claims/contexto e para
-a seleção auditável de views, features e contexto entregue a um backend. A
-validação cruza cada request com a declaração de capacidades antes da execução;
-detalhes estão em [`semantic-interpretation.md`](semantic-interpretation.md).
+Semantic Interpretation possui contratos canônicos para claims/contexto, request,
+prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 implementam
+o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
+isolados e testes determinísticos. `ClipSemanticScorer` e
+`AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Há
+execuções reais registradas de SAM2/SAM3 e DINOv2/CLIP, além de um diagnóstico
+real limitado com Qwen; DINOv3, AlphaCLIP, Gemini e Florence-2 semântico
+continuam sem execução real registrada. Nenhuma dessas validações substitui uma
+avaliação científica comparativa comum, que permanece pendente. O
+`CANONICAL_PRESET_V1` ainda preserva
+temporariamente os estágios legados de cena/região até a construção de
+`SemanticInterpretationRequest` ser integrada ao preset canônico. Detalhes estão em
+[`semantic-interpretation.md`](semantic-interpretation.md).
 
 ## O que este módulo explicitamente não possui
 
@@ -50,10 +59,11 @@ detalhes estão em [`semantic-interpretation.md`](semantic-interpretation.md).
 - `PerceptionRun`/`PerceptionResult` — execução configurada e seu resultado para uma `SourceObservation`.
 - `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext` — evidência visual canônica.
 - `SemanticInterpretationRequest`, `SemanticVisualView`, `SemanticFeatureReference` e `SemanticInterpreterCapabilities` — entrada auditável e validação de capacidade para inferência semântica.
+- `SemanticInterpretationExecution`, `RenderedSemanticPrompt`, `ParsedSemanticResponse` e `SemanticConfidencePolicy` — separação explícita entre request, prompt efetivo, resposta bruta, parsing, métricas e política de score.
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 
-- `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticSupport`.
+- `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticScore`.
 
 - `execute_stage_graph()`/`assemble_perception_result()` — executor de grafo de estágios e montagem de `PerceptionResult`; `StageDefinition`, `StageOutcome`, `StageStatus`, `StageGraphError`.
 
@@ -69,7 +79,7 @@ detalhes estão em [`semantic-interpretation.md`](semantic-interpretation.md).
 
 - `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()` — geradores de identidade determinística.
 
-- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; `RunArtifactManifest`, `allocate_run_index()`, `rebuild_run_registry()`.
+- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui requests/executions semânticos, views content-addressed e resposta bruta auditável; `RunArtifactManifest`, `allocate_run_index()`, `rebuild_run_registry()`.
 - `FeatureStoreWriter`/`FeatureStoreReader` — persistência, indexação e carregamento sob demanda do payload numérico de um `VisualFeature` (`PerceptionRunWriter.add_feature_payload()`/`PerceptionRunReader.feature_store()`); `FeaturePayloadEntry`, `FeatureStoreError`, `FeaturePayloadIntegrityError`.
 - `FeatureExtractionDiagnostic`/`FeatureDebugLevel` — métricas comuns e debug auditável para features densas, globais e de região; integração por `PerceptionRunWriter.add_feature_diagnostic()`/`add_feature_preview()`.
 - `encode_perception_result()`/`decode_perception_result()` (e equivalentes por tipo) — serialização JSON dos contratos públicos.
@@ -84,11 +94,15 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 
 ## Módulos consumidos
 
-`contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`, e futuramente sequência/seleção para orquestração).
+`contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`). A seleção de
+sequência pertence à composição externa; `contextmap.runtime` ainda não existe.
 
 ## Módulos que consomem este
 
-`sensor_association`, `state_estimation` (indiretamente via pose), `semantic_fusion`, `evaluation` e demais capabilities a jusante, sempre através de `contextmap.visual_perception` (nunca de `contextmap.visual_perception.models` diretamente).
+`sensor_association`, `semantic_fusion`, `evaluation` e demais capabilities a
+jusante, sempre através de `contextmap.visual_perception` (nunca de
+`contextmap.visual_perception.models` diretamente). `state_estimation` não consome
+Visual Perception.
 
 ## Onde estão os documentos detalhados
 
