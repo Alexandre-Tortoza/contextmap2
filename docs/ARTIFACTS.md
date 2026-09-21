@@ -39,6 +39,7 @@ O canonical pipeline usa filesystem local como storage primário.
 workspace/
 ├── sequences/
 ├── runs/
+├── runtime/
 ├── maps/
 ├── experiments/
 └── tmp/
@@ -51,6 +52,10 @@ Contém canonical sensor sequences produzidas por Ingestion.
 ### `runs/`
 
 Contém artifacts das capabilities executáveis, separados por capability e sequence.
+
+### `runtime/`
+
+Contém os **registros de execução do runtime** (`runtime/run-NNNN/`): configuração efetiva, plano, estado, eventos e, para um run concluído, as entradas e saídas exatas de cada estágio. Eles **referenciam** os artifacts por id e hash; não os contêm nem os substituem.
 
 ### `maps/`
 
@@ -380,6 +385,24 @@ decision.json                # TechniqueDecision, presa ao digest da evidência 
 - Há um subconjunto sintético de CI versionado em `tests/fixtures/ci_subset/<versão>/` (manifesto, anotações e catálogo). Não existe reference set real versionado nem execução real de experimento registrada.
 
 Detalhes: [reference set](../src/contextmap/evaluation/docs/reference-set.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
+
+### Registros de execução do runtime
+
+Uma execução do runtime deixa um registro em `<workspace>/runtime/run-NNNN/`. Ele não é um artifact de capability (tem formato próprio e não passa por `contextmap.shared.run_directory`), mas registra a linhagem exata da execução. O número é alocado de forma atômica, então execuções concorrentes nunca compartilham um diretório.
+
+```text
+runtime/run-0001/
+├── effective_config.json   # configuração efetiva, digest e camadas; sem segredos
+├── plan.json               # topologia resolvida, com digest (só sem problema estrutural)
+├── status.json             # estado atual, reescrito atomicamente
+├── events.jsonl            # eventos append-only, numerados sem lacuna
+├── execution.json          # entradas e saídas exatas por estágio (só run concluído)
+└── run.lock                # pid do processo dono, só enquanto o run está vivo
+```
+
+`status.json` e `events.jsonl` mudam enquanto o run executa; depois de um estado terminal nada é reescrito, e retomar um run cria um run **novo**. Um processo que morre deixa um registro consistente e inspecionável (`interrupted`). O registro é a autoridade sobre a linhagem de uma execução: os estágios são referenciados por `ArtifactRef` (id e hash) e a inspeção nunca infere o que o registro não contém.
+
+Além do diretório do run, o runtime usa dois insumos explícitos: o **índice de reuso** (um JSON imutável por identidade de estágio, escrito só depois que o estágio conclui) e o **catálogo de runs** para seleção (`{"schema_version": "0.1.0", "entries": [...]}`). Nenhum dos dois é descoberto por varredura de diretório. Detalhes em [lifecycle.md](../src/contextmap/runtime/docs/lifecycle.md), [reuse.md](../src/contextmap/runtime/docs/reuse.md) e [selection.md](../src/contextmap/runtime/docs/selection.md).
 
 ## Immutability
 

@@ -95,7 +95,8 @@ Ver [`contracts.md`](contracts.md) para a referência completa de campos e a reg
 ## Módulos consumidos
 
 `contextmap.shared` e `contextmap.ingestion` (`SourceObservationId`). A seleção de
-sequência pertence à composição externa; `contextmap.runtime` ainda não existe.
+sequência pertence à composição externa; o runtime (`contextmap.runtime`) só
+referencia artifacts por id.
 
 ## Módulos que consomem este
 

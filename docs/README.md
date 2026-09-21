@@ -71,6 +71,8 @@ Semantic Fusion acumula a evidência multi-vista **sem criar identidade de objet
 
 Evaluation, além dos harnesses por capability, possui a infraestrutura de avaliação controlada: o **reference set versionado** (manifesto com amostras ligadas a `SourceObservation`, calibrações, anotações com trust e proveniência declarados, estratos e splits, com digest), as sete famílias de **anotação** (regiões, semântica open-vocabulary, correspondências 3D↔pixel, identidade, relações, visibilidade e contexto de cena, onde ausência nunca é verdade negativa), a **validação de integridade** e de vazamento entre splits, o **QA do conteúdo das anotações** com divergência visível entre anotadores, o **registro versionado de métricas** por estágio e o relatório comum (qualidade e performance separadas, sem score geral), os **manifestos de experimento** e a execução controlada por arm (só as variáveis declaradas variam; arms indisponíveis ficam explícitos), a checagem de reprodutibilidade dos evaluators, um subconjunto determinístico de fixtures para CI e os protocolos e a evidência por estrato das duas técnicas opcionais (resolução de features e fusão ciente de qualidade). Nada disso foi executado sobre dados reais: **não existe reference set real versionado** (só o subconjunto sintético de CI), o runtime que resolve e executa as topologias não existe, Entity Resolution e Spatial Relations não têm avaliadores e **nenhuma decisão foi tomada** sobre as técnicas opcionais.
 
+Runtime & Configuration compõe essas capabilities: possui a configuração efetiva versionada (perfil, arquivos e overrides, digest determinístico, segredos só do ambiente), o catálogo de stages, pontos de variação e backends, a composition root, o DAG de estágios com preflight, o reuso por identidade de conteúdo, a seleção explícita de runs com linhagem, o ciclo de vida do run (journal, eventos, cancelamento, retomada), o serviço público de ingestion, a CLI `contextmap` e a API pública de aplicação `Runtime` para qualquer frontend. Só a Ingestion possui um executor de estágio real: os demais são fornecidos por quem chama e os testes usam estágios falsos, então o pipeline canônico ainda **não foi executado de ponta a ponta com dados reais**. Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` continuam declarados como estágios indisponíveis.
+
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
 ## Ordem recomendada de leitura
@@ -119,6 +121,8 @@ flowchart TD
     M --> PR[src/contextmap/point_representation/docs/README.md]
     M --> SF[src/contextmap/semantic_fusion/docs/README.md]
     M --> EV[src/contextmap/evaluation/docs/README.md]
+    M --> RTM[src/contextmap/runtime/docs/README.md]
+    RTM --> RTD[configuration / composition / pipeline / reuse / selection / lifecycle / cli / api]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]
@@ -184,6 +188,7 @@ Módulos com documentação própria:
 - [`sensor_association`](../src/contextmap/sensor_association/docs/README.md) — evidência visual 2D ancorada em geometria 3D persistente: `SpatialObservation`, modelos de câmera, visibilidade e oclusão, pertencimento à máscara, features densas e `ObservationQuality`.
 - [`semantic_fusion`](../src/contextmap/semantic_fusion/docs/README.md) — acumulação de evidência multi-vista sobre suporte espacial, sem identidade de objeto: `FusionSupport`, `FusedEvidence`, agrupamento por observação física, política baseline e ciente de qualidade, canais tipados e o artifact de run.
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
+- [`runtime`](../src/contextmap/runtime/docs/README.md) — configuração efetiva, composition root, DAG com preflight, reuso, seleção de runs, lifecycle, CLI, serviço de ingestion e a API pública `Runtime` para frontends; compõe e executa, sem decidir ciência.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline; [reference set](../src/contextmap/evaluation/docs/reference-set.md), [anotações](../src/contextmap/evaluation/docs/annotations.md), [integridade](../src/contextmap/evaluation/docs/reference-integrity.md), [QA](../src/contextmap/evaluation/docs/annotation-qa.md), [métricas](../src/contextmap/evaluation/docs/metrics.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md), [fixtures de CI](../src/contextmap/evaluation/docs/ci-fixtures.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
 
 ## Integração da documentação

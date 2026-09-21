@@ -23,8 +23,8 @@ class StateEstimator(Protocol):
 - Erros: `StateEstimationError` (base) e `MissingEstimatorInputError` (o request não traz uma entrada de que o backend depende).
 
 Não existe fallback implícito para outro backend quando o selecionado falha. A
-construção dos backends concretos pertencerá à composition root planejada;
-`contextmap.runtime` ainda não existe.
+construção dos backends concretos pertence à composition root do runtime
+(`contextmap.runtime.compose()`); esta capability não a conhece.
 
 ## Backend `ExternalPose`
 
