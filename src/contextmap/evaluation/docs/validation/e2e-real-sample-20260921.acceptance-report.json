@@ -1,0 +1,290 @@
+{
+  "code_version": "ac1eb59+e2e",
+  "final_artifact": null,
+  "gates": [
+    {
+      "detail": "manifest digest equals the scenario pin: True; the 892 scans and the 20 selected images decode from the window; the hash verification of the whole 24 GB artifact was not run",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "ingestion.sequence_integrity",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "run verifies=True; 19/20 selected images resolved a pose and 1 was rejected explicitly ([{'rejection': 'interpolation_gap', 'source_observation_id': 'camera_1_image_raw-009106'}]); 32 of 892 scans rejected explicitly by the map plan",
+      "evidence_class": "real",
+      "evidence_refs": [
+        "state_estimation:se-corridor-02-extpose-w336-attempt1@sha256:cd5331188f8ee9b3e13367cf9e8827e41357424a272493354175b120e88f4f0e"
+      ],
+      "failing_capabilities": [],
+      "gate_id": "state_estimation.trajectory_coverage",
+      "status": "passed"
+    },
+    {
+      "detail": "not applicable: the trajectory is the declared pose input, not an estimate",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "state_estimation.accuracy",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "partially checked: integrity=[], frame, clock and 700524 geometry references verified with 0 findings; transform traces and the artifact round trip were not run",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "geometric_mapping.map_frame_consistency",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "the geometric mapping evaluator was not run on the coarse map",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "geometric_mapping.quality_report",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "the reused run has SAM2, DINOv2 and CLIP results for 20/20 frames but no semantic interpretation (0 claims): the canonical Qwen runtime has not run on the sample",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "visual_perception"
+      ],
+      "gate_id": "visual_perception.evidence_completeness",
+      "status": "blocked"
+    },
+    {
+      "detail": "no annotated reference set exists for corridor-02",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "reference_set"
+      ],
+      "gate_id": "visual_perception.region_quality",
+      "status": "blocked"
+    },
+    {
+      "detail": "no annotated reference set exists for corridor-02",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "reference_set"
+      ],
+      "gate_id": "visual_perception.semantic_quality",
+      "status": "blocked"
+    },
+    {
+      "detail": "19 frames, 410 observations (332 with geometry, 78 without support); visibility counts add up to frames x points = 81958267; 700524 coordinate checks with 0 findings; 1 frame rejected explicitly (interpolation_gap)",
+      "evidence_class": "real",
+      "evidence_refs": [
+        "sensor_association:sa-e2e-geometry-only@sha256:d2b176f0dd8e2e5e92b59d8ca3c0de25f569547564762d72e25ee0c0a607ed1a"
+      ],
+      "failing_capabilities": [],
+      "gate_id": "sensor_association.projection_validity",
+      "status": "passed"
+    },
+    {
+      "detail": "the association evaluator was not run on this sample",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "sensor_association.projection_quality",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "155 supports, 166 observations excluded for too little geometry; 2349 traceability and 554 physical-identity checks with 0 findings; VACUOUS for semantics: the perception run has 0 claims, so alternatives and conflicts were not exercised",
+      "evidence_class": "real",
+      "evidence_refs": [
+        "semantic_fusion:sf-e2e-baseline@sha256:809e1b8f0683dfbbeddd2000982595178e72dfc1a520373c89515fb4ce2203be"
+      ],
+      "failing_capabilities": [],
+      "gate_id": "semantic_fusion.evidence_preservation",
+      "status": "passed"
+    },
+    {
+      "detail": "no annotated reference set exists for corridor-02",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "reference_set"
+      ],
+      "gate_id": "semantic_fusion.reference_recovery",
+      "status": "blocked"
+    },
+    {
+      "detail": "the entity_resolution capability is not implemented on this branch",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "entity_resolution"
+      ],
+      "gate_id": "entity_resolution.identity_lineage",
+      "status": "blocked"
+    },
+    {
+      "detail": "the entity_resolution capability is not implemented on this branch",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "entity_resolution"
+      ],
+      "gate_id": "entity_resolution.identity_quality",
+      "status": "blocked"
+    },
+    {
+      "detail": "the spatial_relations capability is not implemented on this branch",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "spatial_relations"
+      ],
+      "gate_id": "spatial_relations.reference_integrity",
+      "status": "blocked"
+    },
+    {
+      "detail": "the spatial_relations capability is not implemented on this branch",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "spatial_relations"
+      ],
+      "gate_id": "spatial_relations.relation_quality",
+      "status": "blocked"
+    },
+    {
+      "detail": "the artifact capability is not implemented on this branch",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "artifact"
+      ],
+      "gate_id": "artifact.integrity",
+      "status": "blocked"
+    },
+    {
+      "detail": "17 checks, 2 findings; limitations: the trajectory records no calibration identity (the backend does not consume calibration), so calibration lineage is verified between the map and the associations only: map sequence calibration is 'sha256:6b3f6bf0780fdb3643f73b173e89880404a60b308af0d6125ac77540535a2e48', expected 'sha256:e62cb707caef06431b37d35e63c615da6d718066540a7d1e51deacc5e0e7cf8f'; association run sa-e2e-geometry-only sequence calibration is 'sha256:6b3f6bf0780fdb3643f73b173e89880404a60b308af0d6125ac77540535a2e48', expected 'sha256:e62cb707caef06431b37d35e63c615da6d718066540a7d1e51deacc5e0e7cf8f'",
+      "evidence_class": "real",
+      "evidence_refs": [
+        "semantic_fusion:sf-e2e-baseline@sha256:809e1b8f0683dfbbeddd2000982595178e72dfc1a520373c89515fb4ce2203be"
+      ],
+      "failing_capabilities": [
+        "geometric_mapping",
+        "sensor_association"
+      ],
+      "gate_id": "cross_stage.lineage_closure",
+      "status": "failed"
+    },
+    {
+      "detail": "boundaries up to semantic_fusion verified (700524 checks, 0 findings; limitations: the trajectory records no calibration identity (the backend does not consume calibration), so calibration lineage is verified between the map and the associations only); not yet verifiable: entity_resolution, spatial_relations, artifact",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "entity_resolution",
+        "spatial_relations",
+        "artifact"
+      ],
+      "gate_id": "cross_stage.coordinate_consistency",
+      "status": "blocked"
+    },
+    {
+      "detail": "boundaries up to semantic_fusion verified (2349 checks, 0 findings; limitations: the trajectory records no calibration identity (the backend does not consume calibration), so calibration lineage is verified between the map and the associations only); not yet verifiable: entity_resolution, spatial_relations, artifact",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "entity_resolution",
+        "spatial_relations",
+        "artifact"
+      ],
+      "gate_id": "cross_stage.evidence_traceability",
+      "status": "blocked"
+    },
+    {
+      "detail": "boundaries up to semantic_fusion verified (554 checks, 0 findings; limitations: the trajectory records no calibration identity (the backend does not consume calibration), so calibration lineage is verified between the map and the associations only); not yet verifiable: entity_resolution, spatial_relations, artifact",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [
+        "entity_resolution",
+        "spatial_relations",
+        "artifact"
+      ],
+      "gate_id": "cross_stage.physical_observation_identity",
+      "status": "blocked"
+    },
+    {
+      "detail": "not run on the real sample in this pass; see limitations",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "runtime.provenance_identity",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "not run on the real sample in this pass; see limitations",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "runtime.resource_reporting",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "not run on the real sample in this pass; see limitations",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "reproducibility.rerun_equivalence",
+      "status": "not_evaluated"
+    },
+    {
+      "detail": "not run on the real sample in this pass; see limitations",
+      "evidence_class": null,
+      "evidence_refs": [],
+      "failing_capabilities": [],
+      "gate_id": "reproducibility.interruption_recovery",
+      "status": "not_evaluated"
+    }
+  ],
+  "limitations": [
+    "partial run: ingestion, state estimation and perception artifacts are reused by reference from the 2026-09-21 validation; geometry (voxel 0.20 m per scan), association and fusion were produced here, on CPU",
+    "the pinned SequenceArtifact carries no camera model (ingested before MEI was canonical); the map and the association used a declared, hashed MEI override built from corridor-02-Intrinsics.yaml, which the lineage gate reports as a break against the sequence calibration",
+    "the reused perception run has no semantic interpretation (0 claims); no annotated reference set exists; entity resolution, spatial relations and the final artifact are not implemented on this branch",
+    "the scenario selection admits images whose bracketing pose gap is up to 450 ms, but ExternalPose declares gaps above 350 ms: one of the 20 images is rejected at association",
+    "the map aggregation (voxel 0.20 m per scan) and the association occlusion policy are exploratory values, not frozen by scenario 1.0.0"
+  ],
+  "report_id": "e2e-real-partial-20260921",
+  "run_id": "validation-e2e-20260921",
+  "scenario": {
+    "digest": "sha256:1bbed3b51366cb7c1c984faa03b1846065d92954f017734ad53101a209e1de93",
+    "evidence_class": "real",
+    "matrix_digest": "sha256:ac91ea8697efb77692584b839a81c00cdf179fa1016a4e850d9c6bdab1ed9e6a",
+    "scenario_id": "solution-1-canonical",
+    "version": "1.0.0"
+  },
+  "schema": "contextmap.e2e.acceptance-report/v1",
+  "stage_artifacts": {
+    "geometric_mapping": {
+      "artifact_id": "gm-e2e-voxel20cm",
+      "digest": "sha256:a268e503ce213cc624870641aeeaf43d4df00881c6f151555c53910a7a86217d"
+    },
+    "ingestion": {
+      "artifact_id": "e145f73f8d894f18b96ef1f55ca308c2",
+      "digest": "sha256:74d39984385d63de00480249d1fe9d774f639e6172c89f5ceb0eafa078cc468d"
+    },
+    "semantic_fusion": {
+      "artifact_id": "sf-e2e-baseline",
+      "digest": "sha256:809e1b8f0683dfbbeddd2000982595178e72dfc1a520373c89515fb4ce2203be"
+    },
+    "sensor_association": {
+      "artifact_id": "sa-e2e-geometry-only",
+      "digest": "sha256:d2b176f0dd8e2e5e92b59d8ca3c0de25f569547564762d72e25ee0c0a607ed1a"
+    },
+    "state_estimation": {
+      "artifact_id": "se-corridor-02-extpose-w336-attempt1",
+      "digest": "sha256:cd5331188f8ee9b3e13367cf9e8827e41357424a272493354175b120e88f4f0e"
+    },
+    "visual_perception": {
+      "artifact_id": "vp-sam2-rerun",
+      "digest": "sha256:a5ae38bceb37971498dd62d58c409fc5a9cadfe47d48683534b061e29c22e03e"
+    }
+  }
+}
