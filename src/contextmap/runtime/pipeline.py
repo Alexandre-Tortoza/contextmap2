@@ -359,6 +359,43 @@ class StageRequest:
     output_dir: Path | None = None
     workspace: Path | None = None
 
+    def identity(self) -> str:
+        """Return the identity of this execution: what a writer records as its run id.
+
+        It combines the stage, the stage's own configuration and the exact content hash of every
+        input, so an identical execution gets an identical identity (and therefore identical
+        content, which keeps reuse valid across runs) while any change of configuration or input
+        gets another. It is a function of the request only, never of the run that asks.
+
+        Returns:
+            32 hexadecimal characters.
+
+        Raises:
+            ValueError: If an input has no content hash: it cannot take part in an identity.
+        """
+        parts = [self.stage_id, self.config_digest]
+        for name in sorted(self.inputs):
+            for ref in self.inputs[name]:
+                if ref.content_hash is None:
+                    raise ValueError(
+                        f"input {name!r} ({ref.artifact_id!r}) has no content hash: an execution "
+                        "identity cannot be derived from it"
+                    )
+                parts.append(f"{name}={ref.content_hash}")
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+
+    def run_number(self) -> int:
+        """Return the number of the run this request belongs to (``run-0003`` gives ``3``).
+
+        Returns:
+            The number, or ``0`` when the request has no output directory or the run is not
+            named ``run-NNNN``. It is the ordinal a writer records as its ``run_index``.
+        """
+        if self.output_dir is None:
+            return 0
+        name = self.output_dir.parent.name
+        return int(name.removeprefix("run-")) if name.removeprefix("run-").isdigit() else 0
+
     def directory_of(self, ref: ArtifactRef) -> Path:
         """Return the directory of an input artifact.
 

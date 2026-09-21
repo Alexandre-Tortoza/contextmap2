@@ -994,8 +994,8 @@ class TestIngestCommand:
             "image",
             "--sync-tolerance-ns",
             "100000000",
-            "--workspace",
-            str(tmp_path / "ws"),
+            "--output-dir",
+            str(tmp_path / "ws" / "sequences" / "corridor-02" / "artifact-1"),
             *extra,
         ]
 
@@ -1068,14 +1068,14 @@ class TestIngestCommand:
         assert code == 130 and "cancelled" in out + err
         assert self._published(tmp_path) == []
 
-    def test_a_workspace_is_required(self, tmp_path: Path) -> None:
+    def test_an_output_directory_is_required(self, tmp_path: Path) -> None:
         args = self._args(tmp_path)
-        position = args.index("--workspace")
+        position = args.index("--output-dir")
         without = args[:position] + args[position + 2 :]
 
         code, out, err = cli(*without, adapter_factory=fake_factory())
 
-        assert code == 2 and "--workspace" in out + err
+        assert code == 2 and "--output-dir" in out + err
 
     def test_a_selected_adapter_is_required(self, tmp_path: Path) -> None:
         document = _document()

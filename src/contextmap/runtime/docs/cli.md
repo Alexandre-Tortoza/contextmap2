@@ -34,7 +34,7 @@ Precedência: perfil < arquivos < `--set` < flags. A seleção continua explíci
 
 ### `ingest`
 
-Ingestion canônica pelo [serviço público de ingestion](ingestion-service.md): `--preflight` só confere o pedido; sem ele lê, valida, sincroniza e publica um `SequenceArtifact` imutável no workspace. O adapter **não** é uma flag: vem do backend selecionado em `components.ingestion.source_adapter.backend` e é composto pela composition root (módulo opcional ausente falha com a dica de instalação). O progresso sai em stderr e o resultado em stdout (ou JSON, com os eventos); Ctrl+C sai com `130` sem publicar nada.
+Ingestion canônica pelo [serviço público de ingestion](ingestion-service.md): `--preflight` só confere o pedido; sem ele lê, valida, sincroniza e publica um `SequenceArtifact` imutável em `--output-dir DIR` (o diretório final, que não pode existir; num run, o estágio `ingestion` publica em `<run>/ingestion` pelo mesmo serviço). O adapter **não** é uma flag: vem do backend selecionado em `components.ingestion.source_adapter.backend` e é composto pela composition root (módulo opcional ausente falha com a dica de instalação). O progresso sai em stderr e o resultado em stdout (ou JSON, com os eventos); Ctrl+C sai com `130` sem publicar nada.
 
 ### `run` e `stage`
 
