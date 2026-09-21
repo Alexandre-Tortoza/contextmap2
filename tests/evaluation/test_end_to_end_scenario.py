@@ -37,6 +37,7 @@ from contextmap.evaluation.end_to_end import (
     assemble_acceptance_report,
     encode_acceptance_report,
     encode_scenario,
+    scenario_runtime_document,
     scenario_snapshot_name,
     unmet_required_gates,
     write_acceptance_report,
@@ -429,3 +430,34 @@ def test_the_report_records_scenario_identity_limitations_and_exact_artifacts(
     assert json.loads(path.read_text(encoding="utf-8")) == json.loads(json.dumps(document))
     with pytest.raises(FileExistsError):
         write_acceptance_report(path, report)
+
+
+def test_the_scenario_selects_its_backends_in_a_runtime_configuration_document() -> None:
+    scenario = canonical_real_scenario()
+
+    document = scenario_runtime_document(scenario)
+
+    assert document["pipeline"] == {
+        "preset": "canonical/1",
+        # Point Representation é só por ablação: o perfil canônico a mantém desligada.
+        "stages": {"point_representation": False},
+    }
+    components = document["components"]
+    assert components["visual_perception"]["region_discovery"] == {"backend": "sam2"}
+    assert components["visual_perception"]["semantic_interpretation"] == {"backend": "qwen"}
+    assert components["state_estimation"]["estimator"] == {"backend": "external_pose"}
+    assert components["semantic_fusion"]["accumulation"] == {
+        "backend": BASELINE_ACCUMULATION_POLICY_ID
+    }
+    # Só a seleção de backend: checkpoint, revisão e limiares pertencem a quem os possui.
+    assert all(
+        set(slot) == {"backend"}
+        for capability in components.values()
+        for slot in capability.values()
+    )
+    selected = {
+        component.component_id for stage in scenario.stages for component in stage.components
+    }
+    assert {
+        f"{capability}.{name}" for capability, slots in components.items() for name in slots
+    } == selected

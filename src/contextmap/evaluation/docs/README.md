@@ -97,6 +97,7 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 - `E2EScenario`/`ScenarioSubject`/`ScenarioStage`/`AblationOnlyOption` — o cenário congelado: a sequência registrada e a seleção fixadas por identidade, o perfil canônico de backends e as opções que só entram por ablação. Tem `digest` próprio e `matrix_digest`; um snapshot JSON revisável fica em `docs/scenarios/`.
 - `canonical_real_scenario()`/`canonical_ci_scenario()` — o cenário sobre a amostra real do `corridor-02` e sobre o subconjunto sintético de CI, com a mesma matriz.
+- `scenario_runtime_document()` — o documento de configuração do runtime que expressa o perfil canônico (preset, opcionais desligados, seleção de backend), sem uma segunda fonte de verdade.
 - `AcceptanceGate`/`GateKind` — um gate por requisito de estágio, com a capability responsável, as métricas do registro e as anotações que exige. Não há score global.
 - `GateResult`/`GateStatus`/`EvidenceClass` — resultado por gate: `passed`, `failed`, `blocked` ou `not_evaluated`, com evidência `real` ou `fake_contract` e a capability que responde por falha ou bloqueio.
 - `assemble_acceptance_report()`/`AcceptanceReport`/`unmet_required_gates()`/`encode_acceptance_report()`/`write_acceptance_report()` — o relatório de aceitação: exatamente um resultado por gate, evidência de contrato nunca cumpre um gate, escrita imutável.

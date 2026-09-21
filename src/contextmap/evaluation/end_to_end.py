@@ -448,6 +448,42 @@ def scenario_snapshot_name(scenario: E2EScenario) -> str:
     return f"{scenario.scenario_id}-{scenario.version}-{scenario.subject.subject_id}.json"
 
 
+RUNTIME_PRESET = "canonical/1"
+"""Runtime topology preset the scenario's profile is expressed against."""
+
+_OPTIONAL_STAGES_OFF = ("point_representation",)
+"""Optional runtime stages the canonical profile keeps off; they run only as ablations."""
+
+
+def scenario_runtime_document(scenario: E2EScenario) -> dict[str, Any]:
+    """Return the runtime configuration document that selects the scenario's backends.
+
+    The document only *selects*: backend parameters such as checkpoint, revision and
+    thresholds belong to the capability that owns the backend and to the run that
+    records them, never to the scenario. Writing it as a ``.json`` file and passing it to
+    the runtime resolves the canonical profile without a second source of truth.
+
+    Args:
+        scenario: The frozen scenario.
+
+    Returns:
+        A JSON-compatible document with the topology preset, the optional stages kept
+        off, and one backend per variation point of the profile.
+    """
+    components: dict[str, dict[str, dict[str, str]]] = {}
+    for stage in scenario.stages:
+        for component in stage.components:
+            capability, slot = component.component_id.split(".", 1)
+            components.setdefault(capability, {})[slot] = {"backend": component.backend}
+    return {
+        "pipeline": {
+            "preset": RUNTIME_PRESET,
+            "stages": {stage_id: False for stage_id in _OPTIONAL_STAGES_OFF},
+        },
+        "components": components,
+    }
+
+
 # ------------------------------------------------------------------------------ results
 
 
