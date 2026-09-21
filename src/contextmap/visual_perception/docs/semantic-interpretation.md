@@ -220,6 +220,51 @@ limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
 
+`GeminiSemanticConfig` também registra `structured_output` (pede
+`response_mime_type=application/json`; o schema continua no prompt canônico
+versionado, porque a API aceita só um subconjunto de JSON Schema e não há como
+validá-lo sem chamada real) e `retry_backoff_s`, a base do backoff exponencial
+entre tentativas (tentativa `n` espera `retry_backoff_s * 2**(n-1)`, limitada a
+60 s). Sem `retry_wait` injetado, o adapter dorme esse tempo, para que um 429
+não seja repetido imediatamente.
+
+### Cliente `google-genai` (`GoogleGenAIGeminiClient`)
+
+`GoogleGenAIGeminiClient` implementa `GeminiClient` com o SDK oficial
+`google-genai`, importado de forma lazy (`GeminiDependencyError` se ausente; não
+há extra em `pyproject.toml`, seguindo o padrão de torch/transformers). Construí-lo
+não contata o serviço; **`generate` envia os bytes das views e o prompt para a
+API do Google**, então quem o chama precisa ter decidido que aqueles frames
+podem sair da máquina.
+
+- **Credencial.** Chave explícita ou variável `GEMINI_API_KEY` (nome
+  configurável). Sem chave, `GeminiCredentialError` na construção. A chave é
+  privada, não aparece em `repr`, e é removida de toda mensagem levantada; as
+  exceções do provedor não são encadeadas (`from None`), pois o texto delas
+  poderia ecoar a chave. Nada da credencial entra no fingerprint, na
+  configuração efetiva, nos outputs nem no debug.
+- **Requisição.** As views seguem em ordem como partes inline (`png`, `jpeg` ou
+  `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
+  `thinking_budget`, `structured_output` e o timeout por tentativa
+  (`timeout_s`, em milissegundos no SDK) vêm da configuração.
+- **Falhas.** Timeout, falha de transporte, HTTP 408/429 e 5xx são
+  `GeminiTransientError` e entram nos retries do adapter. Demais erros HTTP
+  (400/401/403/404), exceções inesperadas, prompt bloqueado, resposta sem
+  candidatos, `finish_reason` diferente de `STOP`/`MAX_TOKENS` e texto vazio são
+  `GeminiSemanticError` terminais e nunca são repetidos nem substituídos por outro
+  backend. `MAX_TOKENS` devolve o texto com warning de truncamento. Saída
+  malformada continua sendo `SemanticResponseParseError` do parser
+  compartilhado, sem retry.
+- **Usage.** `input_tokens` vem de `prompt_token_count`; `output_tokens` soma
+  `candidates_token_count` e `thoughts_token_count`, porque os tokens de
+  raciocínio são faturados como saída. Ausência de metadata vira `None`, não zero.
+
+Não existe execução real do Gemini: `GEMINI_API_KEY` não está configurada e
+enviar frames a um serviço externo exige consentimento explícito. A validação é
+fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
+SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
+fixam o formato da requisição e o mapeamento dos erros reais sem rede.
+
 ## Adapter Florence-2
 
 `Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
@@ -227,8 +272,76 @@ quando ambos compartilham lifecycle/modelo no composition root. Sua
 `Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
 suportados, device, precision e geração. A task e o mode entram em
 `task_identity`; checkpoint, revisão e configuração entram na provenance e no
-fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
-passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+fingerprint. A saída passa pelo mesmo parser canônico com `UNSCORED_ONLY`.
+
+### Decisão de design: task token versus JSON canônico
+
+Florence-2 é dirigido por *task tokens* e responde texto puro (por exemplo,
+`<REGION_TO_CATEGORY>` devolve `door`). O boundary canônico exige JSON
+`semantic-response/1`, e o prompt canônico (instruções mais JSON Schema) não é
+algo que o modelo entenda. A decisão foi:
+
+1. **O adapter é dono do mapeamento, não o runtime.** O `Florence2SemanticRuntime`
+   devolve o texto nativo da task, após o parser oficial do processor. A regra
+   `florence2-task-envelope/1` (`_canonical_response_json`) é uma função pura,
+   testável sem transformers: o texto vira **exatamente uma claim `primary`**,
+   com `hypothesis` igual ao texto, sem `category`, `region_kind`, atributos nem
+   confidence (`null`). Nunca há alternativas. No modo `scene`, a claim fica em
+   um `scene_context` vazio, porque nenhum campo de cena (tipo, ambiente,
+   iluminação, navegabilidade) pode ser derivado do texto sem heurística. Texto
+   vazio vira `abstained=true`, uma abstenção explícita com warning, e nunca uma
+   claim inventada.
+2. **O texto só é publicado como claim depois do parser compartilhado.** O JSON
+   intermediário é serializado com `json.dumps`, então um texto que pareça JSON
+   não consegue acrescentar claims, alternativas ou campos, e passa por
+   `parse_semantic_response` como qualquer outro backend.
+3. **O raw response é o texto do modelo.** `execution.raw_response` e o hash
+   `raw_response_sha256` referem-se ao texto nativo da task; o envelope é
+   reconstruível pela política e sua aplicação fica registrada no diagnostic
+   `wrapped_task_text` do parsing.
+4. **O prompt canônico não é input do modelo.** Ele continua renderizado no
+   `SemanticInterpretationExecution` (o request o exige), mas o modelo recebe só
+   o task token e a imagem. Um warning constante em cada execução registra isso,
+   para que o fingerprint do prompt não sugira uma instrução que o Florence-2
+   nunca viu.
+5. **Tasks declaradas.** `FLORENCE2_SEMANTIC_TASKS` lista as tasks de texto:
+   `<CAPTION>`, `<DETAILED_CAPTION>` e `<MORE_DETAILED_CAPTION>` (modo `scene`,
+   view `FULL_FRAME`) e `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>` (modo
+   `region`). As tasks que produzem geometria (`<OD>`, `<REGION_PROPOSAL>`, ...)
+   ficam de fora de propósito: pertencem a `Florence2RegionDiscovery`, e seus
+   rótulos não são claims semânticas. Uma task serve um único modo, e
+   `supported_modes` precisa coincidir com ele.
+6. **Views aceitas.** Uma task de região recebe a view inteira como região
+   (`<loc_0><loc_0><loc_999><loc_999>`), pois o request não carrega a caixa da
+   região dentro de um frame completo ou de um crop contextual. Por isso só
+   `TIGHT_CROP` e `MASKED_SUBJECT` são aceitos; qualquer outra view é rejeitada
+   antes do modelo, assim como requests com mais de uma view.
+
+**Trade-offs aceitos.**
+
+- Nada é fabricado e o mapeamento é determinístico e auditável, ao custo de
+  claims pobres: uma legenda vira uma frase em `hypothesis`, não um conceito, e
+  `casefold-exact/1` quase nunca a casa com um conceito anotado. O relatório
+  deve ler isso como limitação do output do Florence-2, não como alucinação.
+- Sem alternativas, a preservação de ambiguidade é impossível para este backend.
+  A abstenção só acontece por texto vazio.
+- `scene_context` não é estruturado, então as métricas de campos de cena do
+  Florence-2 são vazias por construção.
+- Alternativas rejeitadas: extrair substantivos ou atributos da legenda
+  (fabricação por NLP ad hoc); usar `<OD>` para claims de cena (mistura Region
+  Discovery); pedir JSON ao modelo (não suportado); devolver o JSON no runtime
+  (mistura regra de domínio com o SDK e impede testar sem transformers).
+
+### Runtime Transformers (`HuggingFaceFlorence2SemanticRuntime`)
+
+Carrega o port transformers-nativo (`florence-community/Florence-2-*`) na
+revisão fixada, com `Florence2ForConditionalGeneration` e `AutoProcessor`, sem
+`trust_remote_code` e somente do cache local por padrão. Aplica o parser oficial
+`post_process_generation` da task e remove os tokens `<loc_*>` que ecoam a caixa
+de entrada nas tasks de região, pois repetem o input e não fazem parte da
+resposta. Registra tokens, pico de memória de GPU e o mesmo `load()` explícito
+do runtime Qwen. Sem SDK, device ou checkpoint disponível, falha com erro
+explícito.
 
 ## Avaliação
 
