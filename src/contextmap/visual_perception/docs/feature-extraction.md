@@ -148,6 +148,8 @@ debug/30-feature-extraction/       inspeção humana opcional
 
 `FeatureExtractionDiagnostic` registra status, backend, modelo/configuração, prepared input, feature, embedding space, preprocessing, timing, memória, warnings, failures ou abstentions.
 
+Todo diagnostic `SUCCEEDED`/`WARNING` é conferido no `finalize()` contra exatamente uma `VisualFeature` do run (scope, shape, dtype, normalização, payload, proveniência, `EmbeddingSpace` e, para dense, grade e run dono); ver [`feature_diagnostics.md`](feature_diagnostics.md).
+
 Os níveis `none | standard | full` controlam apenas debug. Nível `none` não remove outputs nem métricas. Previews são fornecidos pelo produtor e não podem substituir o payload contratual.
 
 ## Enhancement opcional

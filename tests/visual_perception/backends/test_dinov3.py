@@ -94,6 +94,7 @@ def _backend(
     output: DinoV3NativeOutput | None = None,
     l2_normalize: bool = False,
     feature_stage_id: str = "dense_feature_extraction",
+    source_artifact_id: str = "perception-run-0001",
 ) -> tuple[DinoV3DenseFeatureBackend, FakeDinoV3Runtime, RecordingPayloadSink]:
     runtime = FakeDinoV3Runtime(output or _native_output())
     sink = RecordingPayloadSink()
@@ -110,7 +111,7 @@ def _backend(
         ),
         run_id=PerceptionRunId("run-0001"),
         feature_stage_id=feature_stage_id,
-        source_artifact_id="perception-run-0001",
+        source_artifact_id=source_artifact_id,
         payload_sink=sink,
         runtime=runtime,
     )
@@ -354,7 +355,8 @@ def test_persisted_required_metrics_rebuild_the_dense_map_and_reproduce_pooling(
     tmp_path: Path,
 ) -> None:
     """Regression from the real DINOv3 run: the mapping must not depend on debug or assumptions."""
-    backend, _, sink = _backend()
+    # O dono da feature é o run que a persiste: o writer exige source_artifact_id == run_id.
+    backend, _, sink = _backend(source_artifact_id="run-0001")
     extraction = backend.extract_dense(_image())
     feature = extraction.dense_map.feature
     sampling = extraction.dense_map.sampling

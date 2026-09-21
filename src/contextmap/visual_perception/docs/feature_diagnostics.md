@@ -23,9 +23,30 @@ Desabilitar debug não remove `VisualFeature`, payload, índice nem métricas de
 - preprocessing ordenado;
 - timing, memória, warnings, falha ou abstention.
 
-`DenseFeatureDiagnostic` acrescenta artifact de origem, grid, origem (`origin_x`, `origin_y`), stride, suporte e transformação espacial. Essa geometria é contratual: ela vai em `metrics/feature-extraction.jsonl` (chave `dense`, com o tamanho da imagem preparada) em qualquer nível de debug, e reconstrói exatamente o `DenseFeatureSampling` do mapa. Sem ela o payload denso não vira mapa espacial reaberto de um run; uma execução real com DINOv3 mostrou que antes a geometria só existia em `debug/` e sem a origem, obrigando o leitor a supor `(0, 0)`. `RegionFeatureDiagnostic` acrescenta região/box, view de suporte, mask reference/hash, transformação e estatísticas de pooling quando aplicáveis.
+`DenseFeatureDiagnostic` acrescenta o run dono da feature (`source_artifact_id`), grid, origem (`origin_x`, `origin_y`), stride, suporte e transformação espacial. Origem, stride e suporte precisam ser finitos (NaN/Inf são rejeitados) e stride e suporte precisam ser positivos: as mesmas regras de `DenseFeatureSampling`, para que o que foi persistido sempre reconstrua um sampling válido. Essa geometria é contratual: ela vai em `metrics/feature-extraction.jsonl` (chave `dense`, com o tamanho da imagem preparada) em qualquer nível de debug, e reconstrói exatamente o `DenseFeatureSampling` do mapa. Sem ela o payload denso não vira mapa espacial reaberto de um run; uma execução real com DINOv3 mostrou que antes a geometria só existia em `debug/` e sem a origem, obrigando o leitor a supor `(0, 0)`. `RegionFeatureDiagnostic` acrescenta região/box, view de suporte, mask reference/hash, transformação e estatísticas de pooling quando aplicáveis.
 
-Falha ou abstention pode existir sem inventar `feature_id`/payload. Eventos bem-sucedidos ou com warning exigem metadata completa. Estatísticas de pooling são um grupo coerente: todas presentes ou todas ausentes.
+Falha ou abstention pode existir sem inventar `feature_id`/payload (e, por isso, não é conferida contra nenhuma feature). Eventos bem-sucedidos ou com warning exigem metadata completa. Estatísticas de pooling são um grupo coerente: todas presentes ou todas ausentes.
+
+## Vínculo com a feature persistida
+
+`metrics/feature-extraction.jsonl` é contratual, então um registro que apenas confere por hash não basta: ele pode pertencer a outro payload ou ser incompatível com ele. Antes de publicar o run, `PerceptionRunWriter.finalize()` exige que todo diagnostic `SUCCEEDED` ou `WARNING` descreva **exatamente uma** `VisualFeature` dos resultados do próprio run, localizada por `source_observation_id` + `feature_id`. Sem correspondência, ou com mais de um diagnostic para a mesma feature (a geometria ficaria ambígua), o `finalize()` falha com `RunArtifactError` e nenhum diretório de run é criado.
+
+Para a feature encontrada, o writer compara:
+
+| Diagnostic | `VisualFeature` |
+| --- | --- |
+| `scope` | `scope` |
+| `output_shape` | `shape` |
+| `dtype` | `dtype` |
+| `normalization` | `normalization` |
+| `payload_reference` | `payload_reference` |
+| `backend` | `provenance` |
+| fingerprint de `embedding_space` | `embedding_space_id` |
+| `region.region_id` (escopo `REGION`) | `region_id` |
+
+Para o escopo `DENSE`, o writer também reconstrói o `DenseFeatureMap` exatamente como um consumidor de `metrics/` o faria (`DenseFeatureSampling` a partir da geometria persistida, mais a feature do resultado). Assim o shape precisa ser `(altura, largura, canais)` e `(grid_height, grid_width)` precisa ser igual a `feature.shape[:2]`; uma grade transposta é outro mapa e é rejeitada. Além disso, `dense.source_artifact_id` precisa ser `str(run_id)` do run que persiste a feature: `FeatureId` só é local a um resultado e o mapa denso é identificado pelo run dono.
+
+O payload continua opcional por feature: o diagnostic se vincula à feature do resultado, e, quando o payload existe, `finalize()` já o cruza com essa mesma feature (ver [`run_artifact.md`](run_artifact.md)). `PerceptionRunReader.verify_integrity()` segue conferindo apenas o inventário (presença, tamanho e hash); a garantia semântica vale para todo run finalizado por este writer e não é refeita na leitura.
 
 ## Níveis de debug
 
