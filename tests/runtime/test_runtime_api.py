@@ -85,9 +85,15 @@ def _runtime(
     return runtime, world
 
 
+# O dataset é a sequência física do catálogo de teste (`Lineage(sequence=...)`).
+DATASET = "corridor-02"
+
+
 def _write(tmp_path: Path, document: dict[str, Any] | None = None) -> Path:
     path = tmp_path / "experiment.json"
-    path.write_text(json.dumps(document or selected_document()), encoding="utf-8")
+    document = document or selected_document()
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    path.write_text(json.dumps(document), encoding="utf-8")
     return path
 
 
@@ -860,7 +866,7 @@ def test_list_runs_is_deterministic_numeric_and_lists_unreadable_records(tmp_pat
     runtime.run(config, targets=TARGET)
     world.fail_at = "ingestion"
     runtime.run(config, targets=TARGET)
-    base = tmp_path / "ws" / "runtime"
+    base = tmp_path / "ws" / DATASET
     (base / "run-9999").mkdir()
     (base / "run-9999" / "status.json").write_text("{not json", encoding="utf-8")
     (base / "run-10000").mkdir()
@@ -1001,3 +1007,33 @@ def test_an_injected_adapter_factory_backs_the_ingestion_service(tmp_path: Path)
     report = runtime.ingestion(config).preflight(request(tmp_path))
 
     assert report.ok, report.problems
+
+
+def test_list_runs_spans_every_dataset_of_the_workspace_and_orders_by_dataset_then_number(
+    tmp_path: Path,
+) -> None:
+    runtime, _ = _runtime(tmp_path)
+    base = tmp_path / "ws"
+    for dataset, names in (
+        ("corridor-03", ["run-0002"]),
+        ("corridor-02", ["run-0010", "run-0002"]),
+    ):
+        for name in names:
+            (base / dataset / name).mkdir(parents=True)
+
+    runs = runtime.list_runs()
+
+    assert [(run.run_id, run.dataset) for run in runs] == [
+        ("run-0002", "corridor-02"),
+        ("run-0010", "corridor-02"),
+        ("run-0002", "corridor-03"),
+    ]
+
+
+def test_a_run_id_present_in_two_datasets_is_ambiguous_and_never_guessed(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    for dataset in ("corridor-02", "corridor-03"):
+        (tmp_path / "ws" / dataset / "run-0001").mkdir(parents=True)
+
+    with pytest.raises(RunRecordError, match="several datasets"):
+        runtime.inspect_run("run-0001")

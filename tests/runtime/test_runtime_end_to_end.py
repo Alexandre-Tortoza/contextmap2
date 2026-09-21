@@ -76,7 +76,7 @@ class Campaign:
         )
 
     def record(self, number: int) -> Path:
-        return self.workspace / "runtime" / f"run-{number:04d}"
+        return self.workspace / "S1" / f"run-{number:04d}"
 
     def status(self, number: int) -> dict[str, Any]:
         return _document(self.record(number) / "status.json")
