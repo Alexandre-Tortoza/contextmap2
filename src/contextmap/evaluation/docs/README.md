@@ -44,8 +44,10 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `evaluate_semantic_interpretation()` — avaliação por request/evidence variant
   com matching policy versionada.
 - `MATCHING_POLICY`, `SemanticBackendComparison` e
-  `compare_semantic_backends()` — exigem exatamente os mesmos requests e
-  variants para Qwen, Gemini e Florence-2.
+  `compare_semantic_backends()` — exigem exatamente os mesmos requests sobre as
+  mesmas observações, regiões, modos e variants (falhas incluídas, com identidade
+  física completa) e o mesmo reference-set, seleção, run de percepção, versão do
+  evaluator e matching policy, para Qwen, Gemini e Florence-2.
 
 ### State Estimation
 

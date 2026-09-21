@@ -21,12 +21,27 @@ from contextmap.visual_perception import (
     BackendProvenance,
     HypothesisRole,
     SemanticInterpretationExecution,
+    SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticResponseParseError,
 )
 
 MATCHING_POLICY = "casefold-exact/1"
 """Versioned open-vocabulary matching policy used by the baseline evaluator."""
+
+_BACKEND_COMPARISON_CONTEXT_FIELDS = (
+    "reference_set_version",
+    "selection_id",
+    "perception_run_id",
+    "evaluator_version",
+)
+"""Context identities that make two reports the same experiment run by different backends.
+
+They fix the reference expectations, the selected frames, the perception run whose regions were
+interpreted (a ``region_id`` is only meaningful inside it) and the evaluator that scored them.
+``evaluation_id``, ``artifact_id`` and ``pipeline_configuration_digest`` are excluded on purpose:
+they identify each backend's own evaluation, output and pipeline, so they differ by design.
+"""
 
 PERCENTILE_METHOD = "nearest-rank"
 """Percentile convention of every latency percentile: the ceil(p * n)-th sorted value."""
@@ -194,6 +209,13 @@ class SemanticEvaluationFailure:
             ``backend`` (the model, runtime or provider failed).
         raw_response: The rejected text for a parser failure, so truncation or schema drift
             can be told from a model that answered wrongly.
+        mode: ``scene`` or ``region``.
+        source_observation_id: Frame the failed request interpreted.
+        region_id: Region the failed request interpreted; ``None`` for a scene request.
+
+    ``mode``, ``source_observation_id`` and ``region_id`` are the physical identity of the
+    failed request. A single report does not need them, but ``compare_semantic_backends``
+    rejects a failure that lacks them, because it could not tell which input failed.
     """
 
     request_id: str
@@ -421,16 +443,25 @@ class SemanticEvaluationReport:
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticRequestOutcomes:
-    """The outcome of one request per compared backend, in report order."""
+    """The outcome of one request per compared backend, in report order.
+
+    Attributes:
+        source_observation_id: Frame every compared backend interpreted for this request.
+        region_id: Region every compared backend interpreted, ``None`` for a scene request.
+        mode: ``scene`` or ``region``, shared by every compared backend.
+    """
 
     request_id: str
     evidence_variant_id: str
+    source_observation_id: str
+    region_id: str | None
+    mode: str
     outcomes: tuple[str, ...]
 
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticBackendComparison:
-    """Reports aligned over the same attempted requests and evidence variants.
+    """Reports aligned over the same attempted requests, physical inputs and evidence variants.
 
     Attributes:
         outcomes: Per request, ``claims``, ``abstained``, ``parser_failure`` or
@@ -509,30 +540,52 @@ def evaluate_semantic_interpretation(
 def compare_semantic_backends(
     reports: tuple[SemanticEvaluationReport, ...],
 ) -> SemanticBackendComparison:
-    """Align backend reports only when they attempted the same requests and variants."""
+    """Align backend reports only when they attempted the same physical inputs.
+
+    A request is aligned by its request id, evidence variant, source observation, region and
+    mode, so two reports that reuse the same request ids for other frames or regions are not
+    comparable. A failure is an attempt like any other and must carry the same identity.
+
+    Args:
+        reports: One report per backend, in the order the outcomes are listed.
+
+    Returns:
+        The per-request outcomes and the agreement between primary hypotheses.
+
+    Raises:
+        SemanticEvaluationError: If there are fewer than two reports; the reports differ in
+            reference set, selection, perception run, evaluator version or matching policy;
+            a failure lacks the physical identity needed to align it; or the reports did not
+            attempt exactly the same requests over the same observations, regions, modes and
+            evidence variants.
+    """
     if len(reports) < 2:
         raise SemanticEvaluationError("backend comparison requires at least two reports")
-    attempted = [_attempted(report) for report in reports]
-    if any(keys != attempted[0] for keys in attempted[1:]):
-        raise SemanticEvaluationError(
-            "backend reports must evaluate the same request and evidence variants"
-        )
+    _require_shared_experiment(reports)
+    attempts = [_attempts(report) for report in reports]
+    for index, other in enumerate(attempts[1:], start=1):
+        if other.keys() != attempts[0].keys():
+            raise SemanticEvaluationError(_misalignment(attempts[0].keys(), other.keys(), index))
+    keys = sorted(attempts[0], key=_alignment_order)
     outcomes = tuple(
         SemanticRequestOutcomes(
-            request_id=request_id,
-            evidence_variant_id=variant,
-            outcomes=tuple(_outcome(report, request_id, variant) for report in reports),
+            request_id=key.request_id,
+            evidence_variant_id=key.evidence_variant_id,
+            source_observation_id=key.source_observation_id,
+            region_id=key.region_id,
+            mode=key.mode,
+            outcomes=tuple(report_attempts[key].outcome for report_attempts in attempts),
         )
-        for request_id, variant in sorted(attempted[0])
+        for key in keys
     )
     comparable = agreement = 0
-    for request_id, variant in sorted(attempted[0]):
-        primaries = [_primary(report, request_id, variant) for report in reports]
+    for key in keys:
+        primaries = [report_attempts[key].primary_hypothesis for report_attempts in attempts]
         if all(primary is not None for primary in primaries):
             comparable += 1
             agreement += len(set(primaries)) == 1
     return SemanticBackendComparison(
-        request_ids=tuple(sorted({request_id for request_id, _variant in attempted[0]})),
+        request_ids=tuple(sorted({key.request_id for key in keys})),
         reports=reports,
         outcomes=outcomes,
         primary_comparable_count=comparable,
@@ -977,47 +1030,125 @@ def _strata(
     return tuple(reports)
 
 
-def _attempted(report: SemanticEvaluationReport) -> set[tuple[str, str]]:
-    keys = {
-        (sample.request_id, sample.evidence_variant_id)
+@dataclass(frozen=True)
+class _RequestKey:
+    """What a backend comparison aligns on: the request, its evidence and its physical input."""
+
+    request_id: str
+    evidence_variant_id: str
+    source_observation_id: str
+    region_id: str | None
+    mode: str
+
+
+@dataclass(frozen=True)
+class _Attempt:
+    """The outcome of one attempted request in one report."""
+
+    outcome: str
+    primary_hypothesis: str | None
+
+
+def _alignment_order(key: _RequestKey) -> tuple[str, str, str, str, str]:
+    return (
+        key.request_id,
+        key.evidence_variant_id,
+        key.source_observation_id,
+        key.mode,
+        key.region_id or "",
+    )
+
+
+def _describe(key: _RequestKey) -> str:
+    return (
+        f"request {key.request_id!r} (variant {key.evidence_variant_id!r}, "
+        f"observation {key.source_observation_id!r}, region {key.region_id!r}, "
+        f"mode {key.mode!r})"
+    )
+
+
+def _require_shared_experiment(reports: Sequence[SemanticEvaluationReport]) -> None:
+    """Reject reports whose reference set, selection, run, evaluator or matcher differ."""
+    first = reports[0]
+    for index, report in enumerate(reports[1:], start=1):
+        for name in _BACKEND_COMPARISON_CONTEXT_FIELDS:
+            expected = getattr(first.context, name)
+            found = getattr(report.context, name)
+            if expected != found:
+                raise SemanticEvaluationError(
+                    f"backend reports must share {name}: report 0 has {expected!r}, "
+                    f"report {index} has {found!r}"
+                )
+        if report.matching_policy != first.matching_policy:
+            raise SemanticEvaluationError(
+                f"backend reports must share matching_policy: report 0 has "
+                f"{first.matching_policy!r}, report {index} has {report.matching_policy!r}"
+            )
+
+
+def _attempts(report: SemanticEvaluationReport) -> dict[_RequestKey, _Attempt]:
+    """Map every primary-run attempt, success or failure, to its physical alignment key."""
+    attempts = {
+        _RequestKey(
+            request_id=sample.request_id,
+            evidence_variant_id=sample.evidence_variant_id,
+            source_observation_id=sample.source_observation_id,
+            region_id=sample.region_id,
+            mode=sample.mode,
+        ): _Attempt(
+            outcome="abstained" if sample.abstained else "claims",
+            primary_hypothesis=sample.primary_hypothesis,
+        )
         for sample in report.samples
         if sample.repeat_index == 0
     }
-    keys |= {
-        (failure.request_id, failure.evidence_variant_id)
-        for failure in report.failures
-        if failure.repeat_index == 0
-    }
-    return keys
-
-
-def _outcome(report: SemanticEvaluationReport, request_id: str, variant: str) -> str:
-    for sample in report.samples:
-        if (sample.request_id, sample.evidence_variant_id, sample.repeat_index) == (
-            request_id,
-            variant,
-            0,
-        ):
-            return "abstained" if sample.abstained else "claims"
     for failure in report.failures:
-        if (failure.request_id, failure.evidence_variant_id, failure.repeat_index) == (
-            request_id,
-            variant,
-            0,
-        ):
-            return f"{failure.failure_kind}_failure"
-    raise SemanticEvaluationError(f"request {request_id!r} was not attempted")
+        if failure.repeat_index == 0:
+            attempts[_failure_key(failure)] = _Attempt(
+                outcome=f"{failure.failure_kind}_failure", primary_hypothesis=None
+            )
+    return attempts
 
 
-def _primary(report: SemanticEvaluationReport, request_id: str, variant: str) -> str | None:
-    for sample in report.samples:
-        if (sample.request_id, sample.evidence_variant_id, sample.repeat_index) == (
-            request_id,
-            variant,
-            0,
-        ):
-            return sample.primary_hypothesis
-    return None
+def _failure_key(failure: SemanticEvaluationFailure) -> _RequestKey:
+    """Build the alignment key of a failure, which must name the physical input it failed on."""
+    if failure.mode is None or failure.source_observation_id is None:
+        raise SemanticEvaluationError(
+            f"failure of request {failure.request_id!r} (variant "
+            f"{failure.evidence_variant_id!r}) lacks the physical identity a comparison needs: "
+            "mode and source_observation_id (and region_id for a region request)"
+        )
+    if (failure.mode == SemanticInterpretationMode.REGION.value) != (failure.region_id is not None):
+        raise SemanticEvaluationError(
+            f"failure of request {failure.request_id!r} (variant "
+            f"{failure.evidence_variant_id!r}) has an inconsistent physical identity: "
+            f"region_id must be present exactly for region mode, got mode {failure.mode!r} "
+            f"and region_id {failure.region_id!r}"
+        )
+    return _RequestKey(
+        request_id=failure.request_id,
+        evidence_variant_id=failure.evidence_variant_id,
+        source_observation_id=failure.source_observation_id,
+        region_id=failure.region_id,
+        mode=failure.mode,
+    )
+
+
+def _misalignment(first: Iterable[_RequestKey], other: Iterable[_RequestKey], index: int) -> str:
+    """Name the first request each side attempted that the other did not."""
+    first_keys, other_keys = set(first), set(other)
+    only_first = min(first_keys - other_keys, key=_alignment_order, default=None)
+    only_other = min(other_keys - first_keys, key=_alignment_order, default=None)
+    differences = []
+    if only_first is not None:
+        differences.append(f"only report 0 has {_describe(only_first)}")
+    if only_other is not None:
+        differences.append(f"only report {index} has {_describe(only_other)}")
+    return (
+        "backend reports must evaluate the same requests over the same physical inputs "
+        "(request id, evidence variant, source observation, region and mode): "
+        + "; ".join(differences)
+    )
 
 
 def _backend_from_outputs(execution: SemanticInterpretationExecution) -> BackendProvenance:

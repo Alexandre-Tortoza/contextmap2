@@ -402,7 +402,10 @@ Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
 artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
 região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
 custo permanecem em blocos distintos. O baseline usa a policy versionada
-`casefold-exact/1`.
+`casefold-exact/1`. A comparação entre backends alinha os reports pela
+identidade física de cada request (observação, região, modo e variante), não só
+pelo `request_id`; ver
+[Avaliação de Semantic Interpretation](../../evaluation/docs/semantic-interpretation.md).
 
 
 ## Estado do milestone
@@ -421,7 +424,9 @@ O branch de integração materializa:
 - os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
   SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
-- o harness de avaliação compara qualidade e custo sem Semantic Fusion;
+- o harness de avaliação compara qualidade e custo sem Semantic Fusion, e só
+  compara backends que interpretaram as mesmas observações, regiões, modos e
+  variantes de evidência;
 - testes determinísticos cobrem parsing, abstention, retries, materialização no
   `PerceptionResult` e reabertura do run artifact.
 

@@ -5,7 +5,9 @@ claims, escolher winners ou aplicar Semantic Fusion. O mesmo report schema
 aceita Qwen, Gemini e Florence-2.
 
 O `SemanticEvaluationContext` torna obrigatórios reference-set, seleção, run,
-artifact, pipeline/configuration digest e evaluator version. Cada
+artifact, pipeline/configuration digest e evaluator version (na comparação entre
+backends, quais deles precisam coincidir está em
+[Comparações controladas](#comparações-controladas)). Cada
 `SemanticEvaluationInput` associa uma execution a um `evidence_variant_id` e,
 opcionalmente, a uma anotação, permitindo ablações controladas como masked
 subject, tight crop, contextual crop e with/without scene context.
@@ -62,10 +64,34 @@ evidências físicas: a qualidade conta somente `repeat_index=0`.
 ## Comparações controladas
 
 `compare_semantic_backends()` alinha os reports pelas requests **tentadas**
-(sucesso ou falha) e rejeita reports que não cubram os mesmos pares
-request/evidence variant, para que uma falha seja um resultado e não desapareça
-do alinhamento. Lista o resultado por request e backend e o acordo entre as
+(sucesso ou falha), para que uma falha seja um resultado e não desapareça do
+alinhamento. Lista o resultado por request e backend e o acordo entre as
 hipóteses primárias. Acordo entre backends não é correção.
+
+A comparação só vale se os backends interpretaram as **mesmas entradas físicas**.
+`request_id` e variante de evidência não bastam: dois reports podem reutilizar os
+mesmos ids para outros frames ou regiões. Por isso a chave de alinhamento de cada
+request é `(request_id, evidence_variant_id, source_observation_id, region_id,
+mode)`, e a comparação é rejeitada (`SemanticEvaluationError`) quando os
+conjuntos de chaves diferem em qualquer componente; a mensagem nomeia a primeira
+request que cada lado tentou e o outro não. Cada `SemanticRequestOutcomes` grava
+a observação, a região e o modo em que os reports foram alinhados.
+
+Uma falha é uma tentativa como as outras e precisa carregar a mesma identidade:
+`SemanticEvaluationFailure` continua aceitando `mode`, `source_observation_id` e
+`region_id` opcionais (um report isolado não precisa deles, e
+`SemanticEvaluationFailure.from_error` os preenche a partir do request), mas a
+comparação rejeita uma falha sem `mode` e `source_observation_id`, uma falha de
+região sem `region_id` e uma falha de cena com `region_id`.
+
+O contexto de avaliação também precisa ser compatível. A comparação exige o mesmo
+`reference_set_version`, `selection_id`, `perception_run_id` (um `region_id` só
+tem sentido dentro do run de percepção que o produziu), `evaluator_version` e
+`matching_policy`. `evaluation_id`, `artifact_id` e `pipeline_configuration_digest`
+ficam de fora de propósito: identificam a avaliação, o artifact e o pipeline de
+cada backend e por isso diferem por construção. Os relatórios reais desta
+milestone (cena, região com tight crop e nf4 versus int8) continuam comparáveis
+sob essa regra e reproduzem as mesmas contagens.
 
 `compare_evidence_variants()` é o gancho de ablação: pareia a mesma observação e
 região entre variantes de evidência e mede cada uma contra uma variante de

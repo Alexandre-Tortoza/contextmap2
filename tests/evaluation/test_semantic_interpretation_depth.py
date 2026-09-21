@@ -422,18 +422,31 @@ def test_scene_context_evidence_is_a_channel_and_variants_need_a_shared_region()
         )
 
 
+def _region_failure(
+    request_id: str,
+    *,
+    kind: str = "parser",
+    frame: str = "frame-1",
+    region: str | None = None,
+    variant: str = "tight_crop",
+) -> SemanticEvaluationFailure:
+    """Build a region failure that carries the full physical identity of its request."""
+    return SemanticEvaluationFailure(
+        request_id=request_id,
+        evidence_variant_id=variant,
+        failure_kind=kind,
+        message="failed",
+        mode="region",
+        source_observation_id=frame,
+        region_id=region or request_id,
+    )
+
+
 def test_backend_comparison_aligns_on_attempted_requests_and_lists_outcomes() -> None:
     first = _report(
         _input(request_id="r1", region="r1", hypotheses=(("door", "primary"),)),
         _input(request_id="r2", region="r2", hypotheses=(("wall", "primary"),)),
-        failures=(
-            SemanticEvaluationFailure(
-                request_id="r3",
-                evidence_variant_id="tight_crop",
-                failure_kind="parser",
-                message="bad",
-            ),
-        ),
+        failures=(_region_failure("r3", kind="parser"),),
     )
     second = _report(
         _input(
@@ -448,14 +461,7 @@ def test_backend_comparison_aligns_on_attempted_requests_and_lists_outcomes() ->
             hypotheses=(("floor", "primary"),),
             backend_id="florence2_semantic",
         ),
-        failures=(
-            SemanticEvaluationFailure(
-                request_id="r2",
-                evidence_variant_id="tight_crop",
-                failure_kind="backend",
-                message="oom",
-            ),
-        ),
+        failures=(_region_failure("r2", kind="backend"),),
     )
 
     comparison = compare_semantic_backends((first, second))
@@ -471,6 +477,165 @@ def test_backend_comparison_aligns_on_attempted_requests_and_lists_outcomes() ->
 
     with pytest.raises(SemanticEvaluationError, match="same request"):
         compare_semantic_backends((first, _report(_input(request_id="r1", region="r1"))))
+
+
+def test_backend_comparison_outcomes_record_the_physical_identity_they_aligned() -> None:
+    first = _report(_input(request_id="r1", region="region-a", frame="frame-7"))
+    second = _report(
+        _input(request_id="r1", region="region-a", frame="frame-7", backend_id="florence2_semantic")
+    )
+
+    (outcome,) = compare_semantic_backends((first, second)).outcomes
+
+    assert (outcome.source_observation_id, outcome.region_id, outcome.mode) == (
+        "frame-7",
+        "region-a",
+        "region",
+    )
+    encoded = encode_semantic_backend_comparison(compare_semantic_backends((first, second)))
+    assert encoded["outcomes"][0]["source_observation_id"] == "frame-7"
+
+
+@pytest.mark.parametrize(
+    ("other", "divergent_identity"),
+    [
+        (dict(frame="frame-2", region="r1"), "frame-2"),
+        (dict(frame="frame-1", region="region-elsewhere"), "region-elsewhere"),
+    ],
+)
+def test_backend_comparison_rejects_the_same_request_ids_over_other_observations_or_regions(
+    other: dict[str, str], divergent_identity: str
+) -> None:
+    first = _report(
+        _input(request_id="r1", region="r1", frame="frame-1"),
+        _input(request_id="r2", region="r2", frame="frame-1"),
+    )
+    second = _report(
+        _input(request_id="r1", **other, backend_id="florence2_semantic"),  # type: ignore[arg-type]
+        _input(request_id="r2", region="r2", frame="frame-1", backend_id="florence2_semantic"),
+    )
+
+    with pytest.raises(SemanticEvaluationError, match="same request") as caught:
+        compare_semantic_backends((first, second))
+
+    assert divergent_identity in str(caught.value)
+
+
+def test_backend_comparison_rejects_the_same_request_id_across_scene_and_region_modes() -> None:
+    region = _report(_input(request_id="r1", region="r1", frame="frame-1"))
+    scene = _report(
+        _input(request_id="r1", mode=SCENE, region=None, frame="frame-1", variant="tight_crop")
+    )
+
+    with pytest.raises(SemanticEvaluationError, match="same request"):
+        compare_semantic_backends((region, scene))
+
+
+def test_backend_comparison_matches_a_failure_by_its_physical_identity() -> None:
+    sample = _report(_input(request_id="r1", region="r1", frame="frame-1"))
+    failure_on_the_same_input = _report(
+        failures=(_region_failure("r1", kind="backend", frame="frame-1", region="r1"),)
+    )
+    failure_on_another_frame = _report(
+        failures=(_region_failure("r1", kind="backend", frame="frame-2", region="r1"),)
+    )
+    failure_on_another_region = _report(
+        failures=(_region_failure("r1", kind="backend", frame="frame-1", region="r9"),)
+    )
+
+    (outcome,) = compare_semantic_backends((sample, failure_on_the_same_input)).outcomes
+    assert outcome.outcomes == ("claims", "backend_failure")
+    for other in (failure_on_another_frame, failure_on_another_region):
+        with pytest.raises(SemanticEvaluationError, match="same request"):
+            compare_semantic_backends((sample, other))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        SemanticEvaluationFailure(
+            request_id="r1", evidence_variant_id="tight_crop", failure_kind="backend", message="x"
+        ),
+        SemanticEvaluationFailure(
+            request_id="r1",
+            evidence_variant_id="tight_crop",
+            failure_kind="backend",
+            message="x",
+            mode="region",
+            region_id="r1",
+        ),
+        SemanticEvaluationFailure(
+            request_id="r1",
+            evidence_variant_id="tight_crop",
+            failure_kind="backend",
+            message="x",
+            source_observation_id="frame-1",
+            region_id="r1",
+        ),
+        SemanticEvaluationFailure(
+            request_id="r1",
+            evidence_variant_id="tight_crop",
+            failure_kind="backend",
+            message="x",
+            mode="region",
+            source_observation_id="frame-1",
+        ),
+        SemanticEvaluationFailure(
+            request_id="r1",
+            evidence_variant_id="tight_crop",
+            failure_kind="backend",
+            message="x",
+            mode="scene",
+            source_observation_id="frame-1",
+            region_id="r1",
+        ),
+    ],
+    ids=["no-identity", "no-observation", "no-mode", "region-without-region", "scene-with-region"],
+)
+def test_backend_comparison_rejects_failures_without_enough_physical_identity(
+    failure: SemanticEvaluationFailure,
+) -> None:
+    complete = _report(_input(request_id="r1", region="r1", frame="frame-1"))
+
+    with pytest.raises(SemanticEvaluationError, match="physical identity"):
+        compare_semantic_backends((complete, _report(failures=(failure,))))
+
+
+@pytest.mark.parametrize(
+    "field", ["reference_set_version", "selection_id", "perception_run_id", "evaluator_version"]
+)
+def test_backend_comparison_rejects_reports_from_different_experimental_contexts(
+    field: str,
+) -> None:
+    first = _report(_input(request_id="r1", region="r1"))
+    second = _report(_input(request_id="r1", region="r1", backend_id="florence2_semantic"))
+    other_context = replace(second.context, **{field: "another/1"})
+
+    with pytest.raises(SemanticEvaluationError, match=field):
+        compare_semantic_backends((first, replace(second, context=other_context)))
+
+
+def test_backend_comparison_rejects_reports_with_different_matching_policies() -> None:
+    first = _report(_input(request_id="r1", region="r1"))
+    second = _report(_input(request_id="r1", region="r1", backend_id="florence2_semantic"))
+
+    with pytest.raises(SemanticEvaluationError, match="matching_policy"):
+        compare_semantic_backends((first, replace(second, matching_policy="other-matcher/1")))
+
+
+def test_backend_comparison_accepts_the_identities_that_belong_to_each_backend() -> None:
+    first = _report(_input(request_id="r1", region="r1"))
+    second = _report(_input(request_id="r1", region="r1", backend_id="florence2_semantic"))
+    own_context = replace(
+        second.context,
+        evaluation_id="semantic-eval-0002",
+        artifact_id="artifact-0002",
+        pipeline_configuration_digest="sha256:another-backend-pipeline",
+    )
+
+    comparison = compare_semantic_backends((first, replace(second, context=own_context)))
+
+    assert comparison.primary_comparable_count == 1
 
 
 def test_a_parse_error_carries_the_raw_response_it_rejected() -> None:

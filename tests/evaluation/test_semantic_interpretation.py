@@ -169,6 +169,9 @@ def test_reports_compare_same_requests_and_expose_failure_kind() -> None:
                 evidence_variant_id="masked-subject",
                 failure_kind="parser",
                 message="malformed JSON",
+                mode="region",
+                source_observation_id="frame-0002",
+                region_id="region-0009",
             ),
         ),
     )
@@ -194,6 +197,9 @@ def test_reports_compare_same_requests_and_expose_failure_kind() -> None:
                 evidence_variant_id="masked-subject",
                 failure_kind="backend",
                 message="provider timeout",
+                mode="region",
+                source_observation_id="frame-0002",
+                region_id="region-0009",
             ),
         ),
     )
