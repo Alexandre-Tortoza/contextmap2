@@ -15,6 +15,7 @@ from contextmap.entity_resolution import (
     ResolvedEntityId,
     ResolvedEntityReference,
     ResolvedEntitySet,
+    resolution_artifact_digest,
 )
 from contextmap.geometric_mapping import MapId
 from contextmap.semantic_mapping import EntityGeometry
@@ -32,7 +33,6 @@ from contextmap.spatial_relations import (
     evaluate_geometric_candidates,
     generate_relation_candidates,
     lineage_from_resolution_manifest,
-    resolution_artifact_digest,
     resolved_entity_geometries,
 )
 
@@ -78,28 +78,6 @@ def test_the_lineage_is_derived_from_the_resolution_manifest(resolution_dir: Pat
         geometric_map_id=manifest.lineage.geometric_map_id,
     )
     assert lineage.geometric_map_id == MapId("map-0001")
-
-
-def test_the_digest_covers_the_identity_and_the_inventory_and_nothing_else(
-    resolution_dir: Path,
-) -> None:
-    manifest = EntityResolutionRunReader(resolution_dir).manifest
-    digest = resolution_artifact_digest(manifest)
-    assert digest.startswith("sha256:")
-    assert digest == resolution_artifact_digest(
-        dataclasses.replace(manifest, created_at="2000-01-01T00:00:00+00:00", code_version="x")
-    )
-    entry = manifest.file_inventory[0]
-    tampered = dataclasses.replace(
-        manifest,
-        file_inventory=(
-            dataclasses.replace(entry, content_hash="sha256:other"),
-            *manifest.file_inventory[1:],
-        ),
-    )
-    assert resolution_artifact_digest(tampered) != digest
-    other_version = dataclasses.replace(manifest, schema_version="9.9.9")
-    assert resolution_artifact_digest(other_version) != digest
 
 
 # --- the geometry of resolved entities ---

@@ -28,7 +28,6 @@ effective configuration live inside ``manifest.json`` instead of separate ``conf
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -47,6 +46,7 @@ from contextmap.entity_resolution import (
     UnknownResolvedEntityError,
     decode_resolved_entity_reference,
     encode_resolved_entity_reference,
+    resolution_artifact_digest,
 )
 from contextmap.geometric_mapping import MapId
 from contextmap.shared import AtomicRunDirectory, FileEntry, RunDirectoryError, check_file_inventory
@@ -149,8 +149,8 @@ class RelationsRunLineage:
             entity reference in the run.
         entity_resolution_schema_version: The schema version of that run.
         entity_resolution_artifact_digest: Digest of that run's identity and inventory, so that
-            a later change of the upstream artifact is detectable; see
-            :func:`resolution_artifact_digest`.
+            a later change of the upstream artifact is detectable; it is Entity Resolution's own
+            ``resolution_artifact_digest``.
         geometric_map_id: The immutable geometric map the geometric evidence was measured on.
     """
 
@@ -175,32 +175,6 @@ class RelationsRunLineage:
                 raise ValueError(f"{name} must not be empty")
 
 
-def resolution_artifact_digest(manifest: EntityResolutionRunManifest) -> str:
-    """Digest the identity and the inventory of a persisted Entity Resolution run.
-
-    The digest covers the run identity, its schema version and the path and hash of every
-    contractual file, so it is independent of the run's layout and of anything that is not
-    contractual (creation time, code version, ``debug/``), and it changes if anything the relations
-    were built on changes. It follows the convention of the sibling artifacts.
-
-    Args:
-        manifest: The manifest of the run, read through Entity Resolution's public reader.
-
-    Returns:
-        ``sha256:`` followed by the digest.
-    """
-    canonical = json.dumps(
-        {
-            "run_id": str(manifest.run_id),
-            "schema_version": manifest.schema_version,
-            "files": sorted([entry.path, entry.content_hash] for entry in manifest.file_inventory),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
-
-
 def lineage_from_resolution_manifest(manifest: EntityResolutionRunManifest) -> RelationsRunLineage:
     """Derive the lineage of a relations run from the resolution run it consumes.
 
@@ -208,8 +182,8 @@ def lineage_from_resolution_manifest(manifest: EntityResolutionRunManifest) -> R
         manifest: The manifest of the selected Entity Resolution run.
 
     Returns:
-        The lineage: that run's identity, schema version and digest, and the geometric map its
-        entities were resolved on.
+        The lineage: that run's identity, schema version and digest (computed by Entity
+        Resolution, the owner of the artifact) and the geometric map its entities were resolved on.
     """
     return RelationsRunLineage(
         entity_resolution_run_id=manifest.run_id,
