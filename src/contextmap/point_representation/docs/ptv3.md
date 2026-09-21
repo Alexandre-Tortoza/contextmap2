@@ -12,11 +12,30 @@ O pipeline canônico não exige PTv3: o backend é opcional e desabilitá-lo nã
 
 ## Estado de verificação
 
-O adaptador (`backends/ptv3.py`) é verificado com um runtime falso determinístico: configuração, identidade, encaminhamento das coordenadas, normalização, falhas explícitas, telemetria e isolamento de importação. Isso testa a **fronteira**, não a qualidade nem o custo de um PTv3.
+**Fronteira (runtime falso).** O adaptador (`backends/ptv3.py`) é verificado com um runtime falso determinístico: configuração, identidade, encaminhamento das coordenadas, normalização, falhas explícitas, telemetria e isolamento de importação. Isso testa a **fronteira**, não a qualidade nem o custo de um PTv3.
 
-O runtime real (`backends/ptv3_pointcept.py`, ver abaixo) tem testes determinísticos sem torch para tudo que o cerca: voxelização, agrupamento, verificação do hash do checkpoint, compatibilidade com a configuração e falha explícita por dependência ausente. A passagem direta real só roda nos testes opt-in `tests/point_representation/test_ptv3_pointcept_real.py`, que exigem GPU, o clone do Pointcept e o checkpoint (variáveis `CONTEXTMAP_POINTCEPT_ROOT` e `CONTEXTMAP_PTV3_CHECKPOINT`) e são ignorados nas demais máquinas.
+**Runtime real, sem GPU.** `backends/ptv3_pointcept.py` (ver abaixo) tem testes determinísticos sem torch para tudo que o cerca: voxelização, agrupamento, verificação do hash do checkpoint, compatibilidade com a configuração e falha explícita por dependência ausente.
 
-**Ainda não registrado:** a execução dessa suíte opt-in, o tempo por suporte e o pico de VRAM medidos pela classe `PointceptPTv3Runtime`. O carregamento estrito do backbone com os argumentos de `NUSCENES_SEMSEG_PTV3M1_BASE` e uma passagem direta na GPU foram verificados em um protótipo descartável (não versionado), não pela classe.
+**Runtime real, com GPU (real, não falso).** A suíte opt-in `tests/point_representation/test_ptv3_pointcept_real.py` exige GPU, o clone do Pointcept e o checkpoint (variáveis `CONTEXTMAP_POINTCEPT_ROOT` e `CONTEXTMAP_PTV3_CHECKPOINT`) e é ignorada nas demais máquinas. Executada na RTX 3060, no ambiente descrito abaixo, pela classe `PointceptPTv3Runtime`: **7 de 7 testes passaram em 11 s**. Eles verificam um vetor finito de largura 64, repetição do mesmo suporte dentro de `1e-4`, `center` diferente de `mean`, pico de memória de tensores maior que os pesos residentes, suporte de um único ponto, o fluxo completo pelo `PTv3PointEncoder` e pelo `RepresentationService`, e falta de memória: com um teto artificial de cerca de 800 KB imposto ao processo, a chamada levanta `PTv3OutOfMemoryError` e a seguinte, sem o teto, volta a funcionar.
+
+**Custo medido em geometria real.** 100 suportes reais de raio 0,5 m sobre o corredor-02 (recorte descrito em [`point_representation.md`](../../evaluation/docs/point_representation.md) de `evaluation`; mediana de 297 pontos por suporte, de 52 a 367), uma chamada por suporte, `float32`, `grid_size_m = 0,05`, RTX 3060, torch 2.8.0+cu126:
+
+| Medida | Valor |
+| --- | --- |
+| Tempo por chamada, dentro do runtime (aquecido) | mediana 30,2 ms, p95 35,9 ms, máximo 50,5 ms; 30,9 ms em média |
+| Tempo por chamada nos 10% maiores suportes | 30,2 ms (o tempo é praticamente constante nesta faixa de tamanhos) |
+| Custo por representação, com a extração de suporte | 32,4 ms |
+| Partida a frio (primeira chamada) | 6,4 s: import de torch/spconv, SHA-256 de 554 MB, leitura do checkpoint e transferência para a GPU |
+| Pico de memória de tensores (`max_memory_allocated`) | 202 568 704 bytes (193,2 MiB), incluindo os pesos residentes (cerca de 188 MB, medidos no protótipo) |
+| Memória reservada pelo alocador do processo | 209 715 200 bytes (200 MiB) no fim da execução |
+| Payload por representação | 256 bytes (64 `float32`) |
+| Falta de memória | 0 ocorrências em 100 suportes |
+
+O tempo por representação é cerca de 20 vezes o do descritor determinístico (1,5 a 2,9 ms em duas execuções; o tempo de extração varia com a carga da máquina). Por extrapolação linear, representar os 28 787 pontos do recorte levaria cerca de 15 min com o PTv3 e de 1 a 1,5 min com o descritor. A GPU compartilhada usa também ~0,6 GB de outros processos; o pico do processo do PTv3 é uma fração pequena dos 8 GB.
+
+**Repetição.** O mesmo suporte não gera bits idênticos: a maior diferença absoluta entre duas execuções foi de `2,9e-6` para vetores de norma mediana 11 (relativa de cerca de `2,6e-7`). É a não determinação do `float32` em GPU, não a permutação de serialização (que o runtime desliga). Com a tolerância padrão `0.0` do harness a repetibilidade é relatada como falsa; com uma tolerância explícita de `1e-4` seria verdadeira.
+
+**O que essas medidas não dizem.** Custo e repetição não dizem se o PTv3 melhora o mapa. A avaliação contra `off` e contra o descritor está em [`point_representation.md`](../../evaluation/docs/point_representation.md) de `evaluation`, e o efeito downstream continua pendente por falta de Entity Resolution integrada e de anotações de identidade.
 
 ## Configuração (`PTv3Config`)
 
