@@ -25,9 +25,13 @@ from contextmap.semantic_fusion import (
     accumulate_baseline_evidence,
 )
 from contextmap.semantic_mapping import (
+    CandidateRejection,
     Entity,
     EntityMaterializationPolicy,
     SemanticMapId,
+    SemanticMappingRunId,
+    SemanticMappingRunWriter,
+    lineage_from_fusion_manifest,
     materialize_entities,
 )
 
@@ -39,6 +43,7 @@ __all__ = [
     "fuse",
     "outcomes_for",
     "write_fusion_run",
+    "write_mapping_run",
     "write_run",
 ]
 
@@ -149,3 +154,31 @@ def entity_from_outcome(
     )
     (entity,) = result.entities
     return entity
+
+
+def write_mapping_run(
+    workspace: Path,
+    run: FusionRun,
+    entities: Sequence[Entity],
+    *,
+    rejections: Sequence[CandidateRejection] = (),
+) -> Path:
+    """Persist entities as a real Semantic Mapping run and return the run directory."""
+    SemanticMappingRunWriter(
+        workspace_root=workspace,
+        sequence_name="sequence-0001",
+        run_id=SemanticMappingRunId("mapping-run-0001"),
+        run_index=1,
+        selection_label="fusion-run-0001",
+        policy_label="one-support-one-entity",
+        semantic_map_id=SEMANTIC_MAP_ID,
+        lineage=lineage_from_fusion_manifest(run.manifest),
+        code_version="test",
+    ).write(entities, rejections=rejections)
+    return (
+        workspace
+        / "runs"
+        / "semantic-mapping"
+        / "sequence-0001"
+        / "run-0001__fusion-run-0001__one-support-one-entity"
+    )
