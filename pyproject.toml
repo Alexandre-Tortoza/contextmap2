@@ -25,7 +25,7 @@ classifiers = [
 # 3.11 (see [tool.mypy] below). Revisit once the project's floor moves to
 # 3.12+ or mypy's stub handling improves.
 dependencies = [
-  "numpy<2.4",
+  "numpy<2.5",
 ]
 
 [project.optional-dependencies]
