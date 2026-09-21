@@ -410,13 +410,13 @@ O importante não é esse construtor específico; são os invariantes:
 A divisão arquitetural materializada na `dev` é:
 
 - **Ingestion**, produz e reabre `SequenceArtifact`;
-- **Visual Perception**, possui Region Discovery, Feature Extraction, Semantic Interpretation e Semantic Scoring, contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`; os adapters Qwen/Gemini/Florence-2 e os scorers CLIP/AlphaCLIP existem, enquanto execuções controladas com checkpoints/serviços reais e a promoção de `semantic_interpreter` ao preset canônico continuam explicitamente pendentes;
+- **Visual Perception**, possui Region Discovery, Feature Extraction, Semantic Interpretation e Semantic Scoring, contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`; DINOv2/DINOv3/CLIP possuem execuções reais de Feature Extraction registradas, AlphaCLIP continua sem execução real, Qwen possui apenas um diagnóstico real limitado e Gemini/Florence-2 semântico continuam sem execução real. A promoção de `semantic_interpreter` ao preset canônico permanece pendente;
 - **State Estimation**, publica `PoseEstimate`/`Trajectory`, lookup temporal, preflight, backends `ExternalPose` e FAST-LIO e `StateEstimationRunArtifact`;
 - **Geometric Mapping**, transforma e acumula geometria persistente, publica `GeometrySource` e persiste `GeometricMapArtifact`;
 - **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;
 - **Point Representation**, opcional, publica representações 3D locais e persiste `PointRepresentationRunArtifact`;
 - **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
-- **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, e persiste `SemanticMappingRunArtifact`;
+- **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, persiste `SemanticMappingRunArtifact` e já valida deterministicamente contratos, lineage e round-trip; essa validação ainda é sintética;
 - **Runtime & Configuration**, ainda planejado, deverá compor esse conjunto em um DAG end-to-end, resolver configuração, reuse/recompute, CLI e lifecycle entre capabilities.
 
 Entity Resolution e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
