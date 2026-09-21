@@ -38,10 +38,11 @@ prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 imp
 o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
 isolados e testes determinísticos. `ClipSemanticScorer` e
 `AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Há
-execuções reais registradas de SAM2/SAM3 e DINOv2/CLIP, além de um diagnóstico
-real limitado com Qwen; DINOv3, AlphaCLIP, Gemini e Florence-2 semântico
-continuam sem execução real registrada. Nenhuma dessas validações substitui uma
-avaliação científica comparativa comum, que permanece pendente. O
+execuções reais registradas de SAM2/SAM3, DINOv2/CLIP, Qwen e Florence-2
+semântico (os dois últimos sem anotações humanas); DINOv3, AlphaCLIP e Gemini
+continuam sem execução real registrada, e o Gemini tem cliente validado só com
+transporte simulado. Nenhuma dessas validações substitui uma avaliação
+científica comparativa comum, que permanece pendente. O
 `CANONICAL_PRESET_V1` ainda preserva
 temporariamente os estágios legados de cena/região até a construção de
 `SemanticInterpretationRequest` ser integrada ao preset canônico. Detalhes estão em
