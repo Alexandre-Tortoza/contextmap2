@@ -76,9 +76,46 @@ flowchart TD
     CM --> OUT
 ```
 
+## Mapa mental dos módulos
+
+Antes dos detalhes de cada capability, esta é a leitura operacional da pipeline: **por que cada módulo existe, o que ele faz, o que consome e o que produz**.
+
+> A ordem não é totalmente linear. Depois da Ingestion, Visual Perception e State Estimation formam duas branches que podem executar em paralelo. Elas se reencontram quando a percepção precisa ser ancorada na geometria 3D.
+
+| Ordem | Módulo | Por que existe | O que faz | Entrada principal | Saída principal | Estado |
+| --- | --- | --- | --- | --- | --- | --- |
+| 00 | Runtime | Uma pipeline multi-stage precisa de uma composição reproduzível, sem espalhar seleção de backend e orchestration pelos módulos científicos. | Resolve configuração, seleciona backends e artifacts, monta o DAG e decide reuse/recompute. | Configuração + artifacts disponíveis | Plano de execução | planejado |
+| 01 | Ingestion | ROS, bags, datasets e sensores não devem contaminar o domínio interno. | Sincroniza, normaliza timestamps/calibração e converte a fonte registrada em observações canônicas. | ROS 1/ROS 2/bag/dataset/fonte registrada | `SequenceArtifact` | implementado |
+| 02A | Visual Perception | O mapa precisa de evidência visual antes de poder construir semântica persistente. | Descobre regiões, extrai features/embeddings e produz claims/contexto semântico por frame/run. Não cria identidade persistente de objeto. | RGB/frames do `SequenceArtifact` | `PerceptionRunArtifact` | implementado |
+| 02B | State Estimation | Medições locais só podem ser colocadas no mapa se soubermos onde o sensor estava em cada instante. | Produz/importa a trajetória canônica e permite consultar a pose do robô/sensor ao longo do tempo. | LiDAR/IMU/odometria/poses do `SequenceArtifact` | `StateEstimationRunArtifact` | implementado |
+| 03 | Geometric Mapping | Pontos LiDAR/depth chegam no frame local do sensor, não no frame persistente do mapa. | Usa a trajetória para transformar e acumular geometria 3D em um frame global, preservando referências e provenance. | `SequenceArtifact` + trajetória | `GeometricMapArtifact` | implementado |
+| 04 | Sensor Association | Ver uma região na imagem não diz automaticamente qual parte do mundo 3D ela representa. | Projeta/associa evidência visual à geometria usando câmera, pose, visibilidade, oclusão e máscara. | Percepção + geometria + trajetória/calibração | `SensorAssociationRunArtifact` / `SpatialObservation` | implementado |
+| 05 | Point Representation | Geometria bruta pode precisar de uma descrição local reutilizável além de XYZ. | Calcula descritores/embeddings 3D locais sobre suportes geométricos. É opcional e não substitui a geometria. | `GeometricMapArtifact` | `PointRepresentationRunArtifact` | implementado, opcional |
+| 06 | Semantic Fusion | Uma observação isolada não deve virar verdade persistente. | Acumula evidência de múltiplas observações físicas sobre suporte espacial compatível, preservando alternativas, conflitos, abstenções e incerteza. | `SpatialObservation` + evidência visual + representação 3D opcional | `SemanticFusionRunArtifact` / `FusedEvidence` | implementado |
+| 07 | Semantic Mapping | Evidência fundida ainda não é uma entidade persistente consultável. | Materializa entidades com suporte geométrico, estado semântico, evidence links, estado temporal e provenance, sem decidir ainda se duas entidades são o mesmo objeto. | `FusedEvidence` + geometria | `SemanticMappingRunArtifact` / `Entity` | implementado |
+| 08 | Entity Resolution | A mesma entidade física pode aparecer como múltiplas entidades de origem em diferentes suportes/observações. | Decide quais entidades devem permanecer distintas, ser agrupadas ou ficar não resolvidas, preservando as source entities. | Entidades de Semantic Mapping | `EntityResolutionRunArtifact` | planejado |
+| 09 | Spatial Relations | O mapa contextual precisa representar como as entidades se relacionam, não apenas quais entidades existem. | Deriva relações espaciais/topológicas entre entidades resolvidas, como containment, adjacency e proximidade. | Entidades resolvidas + geometria | `SpatialRelationsRunArtifact` | planejado |
+| 10 | Context Map Assembly | Consumidores precisam de um produto final único, versionado e consultável. | Reúne geometria, entidades resolvidas, relações, lineage e schemas no artifact final, sem apagar os artifacts/evidências de origem. | Geometria + entidades resolvidas + relações | `ContextMapArtifact` | planejado |
+
+Uma forma curta de lembrar a responsabilidade de cada estágio é:
+
+```text
+Ingestion            -> transforma fonte específica em dados canônicos
+Visual Perception    -> extrai evidência visual
+State Estimation     -> diz onde o robô/sensor estava
+Geometric Mapping    -> coloca medições no mapa 3D global
+Sensor Association   -> liga evidência visual ao lugar 3D correspondente
+Point Representation -> descreve estrutura 3D local (opcional)
+Semantic Fusion      -> acumula múltiplas observações sem colapsar incerteza
+Semantic Mapping     -> materializa entidades persistentes
+Entity Resolution    -> decide quais entidades representam o mesmo objeto
+Spatial Relations    -> descreve relações entre entidades
+Context Map Assembly -> monta o artifact contextual final
+```
+
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticFusionRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local e a Semantic Fusion acumula a evidência multi-vista sem criar identidade de objeto:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticMappingRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local, a Semantic Fusion acumula evidência multi-vista sem criar identidade de objeto e a Semantic Mapping materializa essa evidência como entidades persistentes sem ainda resolver identidade entre entidades.
 
 ```mermaid
 flowchart LR
