@@ -331,6 +331,10 @@ workspace/runs/semantic-mapping/<sequence-name>/
 
 O artifact guarda **todas** as hipóteses, conflitos, abstenções e sinais sem score de cada entidade, mantém frames físicos e resultados de inferência distintos e **não** contém estado de merge, split ou resolução. Nada a montante é duplicado: a evidência é referenciada com a identidade, a versão do schema e o digest do inventário do artifact de fusão, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (o run de fusão selecionado, o mapa geométrico e, pela linhagem da fusão, as runs de associação, percepção e Point Representation), a política de materialização e o fingerprint da configuração; um run guarda uma política. O leitor abre sem NumPy, sem runtime de percepção, de fusão ou de modelo, resolve uma `EntityReference` sem carregar as demais e recusa uma referência de outro semantic map. Entity Resolution e Spatial Relations não podem depender de `debug/`. Detalhes: [Semantic Mapping artifact](../src/contextmap/semantic_mapping/docs/artifact.md).
 
+### SpatialRelationsRunArtifact
+
+O `SpatialRelationsRunArtifact` guarda as relações de um run com a evidência de cada uma, a decisão por trás dela, os candidatos avaliados e descartados e um índice das relações de cada entidade resolvida, para a montagem do Context Map reutilizá-las sem recalcular avaliações de par. O escritor grava num **`output_dir` explícito** (o diretório final, com `AtomicRunDirectory`): não há contador de runs, `runs.json` nem caminho `run-NNNN` calculado dentro, e a identidade do run vem de quem chama. `outputs/` traz `relations`, `relation-evidence`, `relation-candidates`, `relation-decisions` e `entity-relation-index`; `manifest.json` traz a linhagem (run de Entity Resolution, versão e digest, e o mapa geométrico), a versão da taxonomia, cada política efetiva com id, fingerprint e parâmetros, os eixos declarados e o inventário com SHA-256. Relações `SUPPORTED`, `REJECTED` e `UNRESOLVED` são todas persistidas e distinguíveis, e nada de entidade ou geometria é copiado. O leitor só precisa do diretório do run, lê por identidade e pelo índice, detecta corrupção e recusa `debug/` como fonte. A linhagem, as políticas e a configuração ficam no manifest, seguindo os artifacts irmãos, em vez de `config.yaml`, `lineage.json`, `environment.json` e `events.jsonl` separados. Detalhes: [Spatial Relations artifact](../src/contextmap/spatial_relations/docs/artifact.md).
+
 ### Evidência auditável de Region Discovery
 
 Region Discovery possui um writer de evidência de estágio próprio para experimentação, inspeção e avaliação. Ele não cria uma nova identidade de percepção paralela ao `PerceptionRunArtifact`; registra os intermediários e métricas necessários para explicar como `Region2D[]` foi produzido.
@@ -863,7 +867,7 @@ descrevem artifacts **planejados**, exceto pelo trecho de entidade
 (`Source Entity → FusedEvidence → SpatialObservation → PerceptionResult →
 SourceObservation`), que o `SemanticMappingRunArtifact` já persiste e que
 `trace_entity_evidence` percorre por identidade. As capabilities
-`entity_resolution`, `spatial_relations` e `artifact` ainda não existem.
+`entity_resolution` e `artifact` ainda não persistem artifacts; `spatial_relations` já persiste o `SpatialRelationsRunArtifact`.
 
 ```mermaid
 flowchart RL
