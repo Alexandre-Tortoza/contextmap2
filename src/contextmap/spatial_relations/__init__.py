@@ -92,7 +92,6 @@ from contextmap.spatial_relations.run_artifact import (
     SpatialRelationsRunReader,
     SpatialRelationsRunWriter,
     lineage_from_resolution_manifest,
-    resolution_artifact_digest,
 )
 from contextmap.spatial_relations.serialization import (
     decode_candidate_set,
@@ -221,6 +220,5 @@ __all__ = [
     "observation_evidence_from_statements",
     "predicate_spec",
     "relation_id_for",
-    "resolution_artifact_digest",
     "resolved_entity_geometries",
 ]

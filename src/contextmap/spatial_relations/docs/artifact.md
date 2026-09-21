@@ -30,7 +30,7 @@ O escritor recebe **`output_dir`**, o diretório final do artifact. Não existe 
 | Campo | Significado |
 | --- | --- |
 | `run_id`, `schema_version`, `created_at`, `code_version` | Identidade, versão do schema, instante UTC e revisão do código. |
-| `lineage` | `RelationsRunLineage`: run de Entity Resolution selecionado (`entity_resolution_run_id`, `_schema_version`, `_artifact_digest`) e o mapa geométrico (`geometric_map_id`). É **derivada do manifest de Entity Resolution** por `lineage_from_resolution_manifest`, e o digest (`resolution_artifact_digest`: identidade, versão do schema e caminho e hash de cada arquivo contratual, como nos artifacts irmãos) torna detectável uma mudança posterior do artifact upstream. |
+| `lineage` | `RelationsRunLineage`: run de Entity Resolution selecionado (`entity_resolution_run_id`, `_schema_version`, `_artifact_digest`) e o mapa geométrico (`geometric_map_id`). É **derivada do manifest de Entity Resolution** por `lineage_from_resolution_manifest`, e o digest é o `resolution_artifact_digest` **do próprio Entity Resolution**, dono do artifact (identidade, versão do schema e hash de cada arquivo contratual, como nos artifacts irmãos): ele torna detectável uma mudança posterior do artifact upstream, sem duplicar a regra aqui. |
 | `taxonomy_version` | Versão do vocabulário de predicados. |
 | `policies` | A política de cada etapa com id, fingerprint e parâmetros: `candidate`, `geometric`, `contact` (quando há esse canal), `frame_conventions` (eixos declarados), `observation` e `decision`. |
 | `counts` | Resumo: relações, evidência, candidatos e relações por estado. |
