@@ -1,0 +1,29 @@
+{
+  "annotations": [
+    {
+      "identity_id": null,
+      "level": "fully_visible",
+      "observation_id": "frame-0000",
+      "occluded_fraction": 0.0,
+      "region_id": "region-a",
+      "sample_id": "sample-0000"
+    },
+    {
+      "identity_id": null,
+      "level": "partially_occluded",
+      "observation_id": "frame-0000",
+      "occluded_fraction": 0.3,
+      "region_id": "region-b",
+      "sample_id": "sample-0000"
+    },
+    {
+      "identity_id": "pallet-2",
+      "level": "unknown",
+      "observation_id": "frame-0002",
+      "occluded_fraction": null,
+      "region_id": null,
+      "sample_id": "sample-0002"
+    }
+  ],
+  "schema": "contextmap.reference.visibility/v1"
+}

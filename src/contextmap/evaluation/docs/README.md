@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip).
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip). Além dos harnesses por capability, o módulo possui o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
 
 ## O que este módulo explicitamente não possui
 
@@ -102,6 +102,60 @@ Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
 - `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
 - `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
 
+### Reference set
+
+- `ReferenceSetManifest`/`ReferenceSetIdentity` — manifesto versionado e hasheado do reference set: fontes, calibrações, amostras ligadas a `SourceObservationId`, estratos, anotações, proveniência e splits.
+- `ReferenceTrust` — trust declarado por arquivo de anotação (`trusted_ground_truth`, `approximate_annotation`, `derived_measurement`, `diagnostic_only`); nunca inferido do nome do arquivo. Anotações de origem `model_inference` só podem ser `diagnostic_only`.
+- `encode_reference_set()`/`decode_reference_set()`/`write_reference_set()`/`read_reference_set()` — persistência imutável com digest verificado na leitura.
+- `verify_annotation_files()` e `require_version_bump_on_change()` — hashes dos arquivos de anotação e regra de que a versão muda quando o conteúdo muda.
+
+### Anotações de referência
+
+- `AnnotationFamily` — as sete famílias versionadas (`regions`, `semantics`, `geometry`, `identity`, `relations`, `visibility`, `scene_context`) e seus schemas `contextmap.reference.<família>/v1`.
+- `RegionAnnotationSet`, `SemanticAnnotationSet`, `GeometryAnnotationSet`, `IdentityAnnotationSet`, `RelationAnnotationSet`, `VisibilityAnnotationSet` e `SceneContextAnnotationSet` — o conteúdo de cada família; anotações parciais, ambiguidade e desconhecido são valores explícitos, e ausência nunca é verdade negativa.
+- `LabelNormalization` — política de normalização explícita e versionada (`casefold-exact/1`, `casefold-alias/1`) sob a qual rótulos literais são comparados.
+- `write_annotation_set()`/`read_annotation_set()`/`encode_annotation_set()`/`decode_annotation_set()` — persistência imutável e leitura despachada pelo schema.
+- `ground_truth_regions()` e `SemanticAnnotationSet.to_semantic_annotation()` — entrega das anotações aos avaliadores de Region Discovery e Semantic Interpretation.
+
+### Integridade do reference set
+
+- `validate_reference_set()`/`ReferenceSetIntegrityReport` — relatório de blockers e warnings com identidade (`id`, `version`, `digest`), checagem opcional dos arquivos de anotação e auditoria de proveniência independente de saídas de modelo.
+- `require_valid_reference_set()`/`open_validated_reference_set()`/`ValidatedReferenceSet` — entradas das ferramentas de avaliação: recusam por padrão um reference set com blockers e não aceitam um relatório inválido, de outro reference set ou sem a checagem dos arquivos.
+- Política de split explícita por tarefa: unidade, justificativa, chaves de grupo e janela de adjacência; sobreposição, vazamento por unidade, observações compartilhadas e vizinhança temporal entre splits são blockers.
+
+### Subconjunto de fixtures para CI
+
+- `generate_ci_fixture_subset()`/`build_synthetic_sequence()` — gera, só com fórmulas, uma sequência sintética canônica (RGB, LiDAR, pose, calibração), o reference set do subconjunto e o catálogo; commitado em `tests/fixtures/ci_subset/<versão>/`.
+- `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
+- O subconjunto protege contra regressões e não substitui a avaliação com dados reais.
+
+### Registro de métricas e relatório comum
+
+- `MetricRegistry`/`MetricDefinition`/`default_metric_registry()` — definições versionadas e legíveis por máquina de todas as métricas por estágio: nome/versão, população, unidade/faixa, anotações exigidas, agregação, comportamento com dados ausentes, evaluator e direção. Não existe unidade `probability`: score de suporte arbitrário não é probabilidade calibrada.
+- `EvaluationReport`/`ReproducibilityMetadata`/`MetricResult` — envelope comum com metadados de reprodutibilidade compartilhados, métricas de **qualidade** e de **performance** em campos separados e o relatório do estágio intocado; `not_applicable`/`unsupported` nunca viram zero e não há score geral.
+- `assemble_evaluation_report()`/`decode_evaluation_report()` — validam o relatório contra o registro; `require_annotation_compatibility()` recusa versões de anotação incompatíveis.
+- `region_discovery_evaluation_report()`/`semantic_interpretation_evaluation_report()`/`wrap_stage_report()` — levam os relatórios existentes para o envelope sem recalcular métricas.
+
+### Experimentos e ablações
+
+- `ExperimentManifest`/`ExperimentVariable`/`ExperimentArm`/`ResolvedTopology` — manifesto versionado e hasheado de uma comparação controlada: seleção exata de amostras do reference set, topologia resolvida por arm, artifacts upstream pinados, variáveis sob teste, controles fixos, métricas e política de captura de recursos. Só se constrói se **apenas as variáveis declaradas variam** e se o trecho variado consome artifacts imutáveis pinados.
+- `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.
+- `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.
+- `run_experiment()`/`ExperimentRun`/`ArmExecutor` — executa cada arm por um executor injetado e emite um run manifest e um relatório por arm mais um `ComparisonManifest`; arms indisponíveis ou com resultado inconsistente ficam explícitos e tornam a comparação incompleta (`require_complete_comparison()`), sem fallback e sem score geral.
+
+### QA das anotações e reprodutibilidade
+
+- `check_annotation_quality()`/`AnnotationQaReport`/`AnnotationQaPolicy` — verifica o conteúdo dos arquivos de anotação (tamanho de máscara/caixa e imagem, geometria 3D, consistência de identidade, existência de sujeito/objeto e simetria/inverso de relações, semântica de ambiguidade, duplicatas e conflitos) e embute o relatório de integridade. **Blockers**, warnings, observações permissíveis (ambiguidade, desconhecido, cobertura parcial) e divergências entre anotadores ficam separados.
+- `DisagreementSummary` — divergência entre anotadores, visível e sem escolha silenciosa: mostra o que cada arquivo diz; não há campo de resolução.
+- `certify_reference_set()`/`CertifiedReferenceSet` — exige integridade e QA sem blockers; a integridade é pré-requisito das execuções oficiais.
+- `check_evaluator_reproducibility()`/`compare_evaluation_reports()`/`NondeterministicField` — rodam um evaluator repetidamente sobre as mesmas entradas e recusam qualquer diferença não declarada; valores de recursos são excluídos explicitamente e o não determinismo inevitável exige motivo.
+
+### Avaliação de técnicas opcionais
+
+- `build_feature_resolution_protocol()`/`build_quality_aware_fusion_protocol()`/`TechniqueProtocol` — os dois experimentos controlados (features nativas × melhoradas; fusão uniforme × ciente de qualidade) como um manifesto por estágio avaliado, com o mesmo artifact upstream pinado nos dois arms, os estratos do protocolo e as métricas de qualidade e de custo separadas.
+- `build_technique_evidence()`/`TechniqueEvidence`/`EffectPolicy` — efeito por métrica **e por estrato** (inclusive regressões escondidas por um ganho global), custos à parte, estágios não avaliados e arms indisponíveis explícitos, artifacts compartilhados e disponibilidade dos estratos; sem score geral.
+- `record_technique_decision()`/`TechniqueDecision` — decisão humana (manter, adiar, propor mudar o default) presa ao digest da evidência; nunca altera configuração e exige re-validação E2E para mudar o default.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -123,6 +177,14 @@ pipeline principal.
 - [`semantic_mapping.md`](semantic_mapping.md) — as seis camadas de validação de Semantic Mapping, a linhagem do relatório e a robustez a upstream corrompido.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`optional-techniques.md`](optional-techniques.md) — protocolos das técnicas opcionais, estratos, evidência por estrato, custos separados e decisão manter/adiar/mudar o default.
+- [`annotation-qa.md`](annotation-qa.md) — verificações do conteúdo das anotações por família, ambiguidade permissível, divergência entre anotadores, certificação e reprodutibilidade dos evaluators.
+- [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
+- [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
+- [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
+- [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
+- [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
+- [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
