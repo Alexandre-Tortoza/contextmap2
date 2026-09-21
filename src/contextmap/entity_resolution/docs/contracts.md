@@ -68,6 +68,10 @@ Invariantes: um gate reprovado **bloqueia** a comparação, e uma comparação b
 
 `evaluate_comparison_gates` (`entity-comparison-gates-v1`) avalia três gates duros: `distinct-entities` (uma entidade nunca é comparada com ela mesma), `same-geometric-map` e `same-map-frame`. Coordenadas de mapas ou frames diferentes nunca são comparadas sem um alinhamento explícito, então o gate reprovado nomeia os valores comparados.
 
+## `EntityCandidateSet`
+
+Os alvos plausíveis de comparação de uma entidade, produzidos **antes** de qualquer evidência cara. É recuperação, não decisão: não tem `decision`, `match` nem `score`. Ver [`candidate-retrieval.md`](candidate-retrieval.md) para os campos, a política e o índice.
+
 ## Evidência de canal
 
 Todo canal (`ChannelEvidence`) tem:
@@ -135,3 +139,4 @@ Uma decisão vale para referências de entidades sob um contexto de resolução 
 - `encode_resolved_entity_reference`, `decode_resolved_entity_reference`
 - `encode_match_evidence`, `decode_match_evidence`
 - `encode_resolution_decision`, `decode_resolution_decision`
+- `encode_candidate_set`, `decode_candidate_set`

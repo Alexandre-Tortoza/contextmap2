@@ -23,12 +23,8 @@ from typing import NewType
 
 from contextmap.entity_resolution._checks import require_present
 from contextmap.entity_resolution.channels import MatchChannel
-from contextmap.entity_resolution.evidence import (
-    ComparisonId,
-    comparison_id_for,
-    reference_order,
-)
-from contextmap.entity_resolution.models import PolicyRef
+from contextmap.entity_resolution.evidence import ComparisonId, comparison_id_for
+from contextmap.entity_resolution.models import PolicyRef, reference_order
 from contextmap.semantic_mapping import EntityReference
 
 ResolutionDecisionId = NewType("ResolutionDecisionId", str)
