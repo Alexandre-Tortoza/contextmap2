@@ -193,3 +193,26 @@ Recursos recomendados:
 - private vulnerability reporting;
 - CodeQL scanning;
 - regras de proteção para `main`, `dev` e, quando viável, padrão `milestone/*`.
+
+## Estado verificado em 2026-09-21
+
+Este documento descreve as configurações **esperadas**. A tabela abaixo confronta cada uma com o que a API do GitHub devolveu em 2026-09-21, por leitura (`GET`) com as credenciais do mantenedor; nenhuma configuração foi alterada. Uma configuração que a API não permite ler com esse acesso é marcada como não verificável, e nenhuma é dada como ativa sem evidência.
+
+| Configuração | Esperado | Observado | Situação |
+| --- | --- | --- | --- |
+| Branch `main` | existe, é o padrão e origem das tags | **não existe** no remoto; o padrão é `dev` | divergente, e bloqueia a release: o gate do workflow `Release` exige a tag em `main` |
+| Proteção de `main` e `dev` | PR obrigatório, CI obrigatório, sem force push | `dev` sem proteção (a API responde "Branch not protected"); nenhum ruleset (`[]`) | **não ativa** |
+| Checks obrigatórios (`CI / quality`, `Branch policy / validate`, `Commit policy / validate`) | exigidos por regra de proteção | sem regra de proteção, nada os exige | **não ativos**; os workflows existem e rodam |
+| Métodos de merge | squash e rebase; merge commit desabilitado | squash, rebase **e** merge commit habilitados | divergente; o fluxo de milestones usa merge commit, então o documento ou a configuração precisa mudar |
+| Excluir branch após o merge | habilitado | desabilitado | divergente |
+| Auto-merge | opcional | desabilitado | consistente |
+| Descrição e tópicos | descrição e tópicos sugeridos acima | descrição vazia; nenhum tópico | divergente |
+| Tags | somente em `main` | nenhuma tag existe | consistente com "sem release ainda" |
+| Secret scanning e push protection | recomendados | habilitados | consistente |
+| Dependabot alerts e security updates | recomendados | security updates desabilitado; o endpoint de alertas responde 404 (não habilitado); a atualização de versões por `.github/dependabot.yml` está ativa | divergente |
+| Private vulnerability reporting | recomendado | desabilitado | divergente |
+| CodeQL | habilitado | workflow ativo, análises existentes, nenhum alerta aberto | consistente |
+| Actions | permissões mínimas | Actions habilitadas, todas as actions permitidas, token padrão somente leitura, sem fixação obrigatória por SHA | parcial |
+| Licença detectada | AGPL-3.0 | AGPL-3.0 | consistente |
+
+Ações que dependem do mantenedor e que este repositório não executa: criar `main` (e decidir se ela passa a ser a branch padrão), ativar proteção ou rulesets com os checks acima, decidir os métodos de merge, preencher descrição e tópicos, habilitar o private vulnerability reporting e os Dependabot alerts.
