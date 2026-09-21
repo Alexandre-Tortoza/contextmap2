@@ -1,57 +1,54 @@
+# Os globs seguem os diretórios reais das capabilities em src/contextmap/. Os rótulos
+# são os definidos em labels.yml; este arquivo nunca cria rótulos.
 "area: input":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/input/**"
-          - "src/**/adapters/**"
-          - "config/**"
+          - "src/contextmap/ingestion/**"
 
 "area: perception":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/perception/**"
-          - "src/**/vision/**"
+          - "src/contextmap/visual_perception/**"
 
 "area: geometry":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/geometry/**"
-          - "src/**/projection/**"
+          - "src/contextmap/geometric_mapping/**"
+          - "src/contextmap/state_estimation/**"
+          - "src/contextmap/point_representation/**"
 
 "area: association":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/association/**"
+          - "src/contextmap/sensor_association/**"
 
 "area: fusion":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/fusion/**"
+          - "src/contextmap/semantic_fusion/**"
 
 "area: semantics":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/semantic*/**"
-          - "src/**/context/**"
+          - "src/contextmap/semantic_mapping/**"
 
 "area: relations":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/relation*/**"
-          - "src/**/graph/**"
+          - "src/contextmap/entity_resolution/**"
+          - "src/contextmap/spatial_relations/**"
 
 "area: artifact":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**/artifact/**"
-          - "src/**/serialization/**"
-          - "schemas/**"
+          - "src/contextmap/artifact/**"
 
 "area: evaluation":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/contextmap/evaluation/**"
           - "benchmarks/**"
           - "tests/**"
-          - "evaluation/**"
 
 "type: docs":
   - changed-files:

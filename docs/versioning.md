@@ -55,8 +55,12 @@ Uma tag de release deve apontar para um commit que:
 
 ## Automação
 
-Ao publicar uma tag que corresponda a `v*.*.*`, o workflow de release valida o formato da versão, gera a distribuição Python, publica o build como artifact do workflow e cria uma GitHub Release.
+A tag é criada por um mantenedor; nenhum workflow cria tags. Ao receber uma tag que corresponda a `v*.*.*`, o workflow `Release` executa, em ordem, e só cria a GitHub Release se todas as etapas passarem:
 
-Releases da série `v0.x.y` são marcadas como pre-release automaticamente.
+1. `verify`: a tag tem o formato estrito `vMAJOR.MINOR.PATCH` e o commit tagueado é ancestral de `origin/main` (`.github/scripts/verify_release_tag.sh`, coberto por `tests/packaging/test_release_gate.py`). Se `main` não existir, o gate falha;
+2. `checks`: reutiliza o workflow `CI` sobre o commit da tag (qualidade em Python 3.11, testes em 3.12 a 3.14, build de sdist e wheel com `twine check --strict`, smoke de instalação em ambientes novos e suíte completa contra a wheel instalada só com NumPy);
+3. `publish`: instala a wheel que a CI construiu e testou, exige que ela reporte a versão da tag, gera `SHA256SUMS` e cria a release com `gh release create --verify-tag`, com as wheels, o sdist e os checksums. Somente este job tem `contents: write`; o workflow não usa segredos além do `GITHUB_TOKEN`.
+
+Releases da série `v0.x.y` são marcadas como pre-release automaticamente. O passo de criação da release não tem execução a seco: ele só roda com uma tag real, e o restante do caminho (build, smoke, gate de tag) é exercitado a cada pull request pela CI.
 
 O repositório não publica no PyPI durante a fase de validação do canonical pipeline.
