@@ -1,10 +1,14 @@
-"""Errors raised while turning a resolved configuration into concrete implementations."""
+"""Errors raised while composing implementations and while planning or running the stage DAG."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from contextmap.runtime.config import ConfigProblem
+
+if TYPE_CHECKING:
+    from contextmap.runtime.pipeline import PreflightReport
 
 
 class CompositionError(Exception):
@@ -75,3 +79,43 @@ class StageUnavailableError(CompositionError):
         self.stage_id = stage_id
         self.reason = reason
         super().__init__(f"stage {stage_id!r} is unavailable: {reason}")
+
+
+class PipelineError(Exception):
+    """Base class of the errors the stage DAG raises."""
+
+
+class PreflightError(PipelineError):
+    """Raised when a plan cannot run: preflight found problems and nothing was executed.
+
+    Attributes:
+        report: Everything preflight found, so a user fixes it in one pass.
+    """
+
+    def __init__(self, report: PreflightReport) -> None:
+        """Build the error from the preflight report."""
+        self.report = report
+        lines = "\n".join(f"  - {problem}" for problem in report.problems)
+        super().__init__(f"the plan cannot run:\n{lines}")
+
+
+class PlanDocumentError(PipelineError):
+    """Raised when a persisted plan or execution record cannot be written or trusted."""
+
+
+class StageExecutionError(PipelineError):
+    """Raised when a stage fails or returns something its declaration forbids.
+
+    The run stops at that stage: nothing later is executed and nothing is substituted.
+
+    Attributes:
+        stage_id: The stage that failed.
+        completed: Stages that had completed before it, in execution order.
+    """
+
+    def __init__(self, stage_id: str, completed: Sequence[str], reason: str) -> None:
+        """Explain which stage failed and what had completed."""
+        self.stage_id = stage_id
+        self.completed = tuple(completed)
+        done = ", ".join(self.completed) or "none"
+        super().__init__(f"stage {stage_id!r} failed: {reason} (completed before it: {done})")
