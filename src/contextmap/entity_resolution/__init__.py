@@ -144,6 +144,7 @@ from contextmap.entity_resolution.run_artifact import (
     UnresolvedEntity,
     lineage_from_mapping_manifest,
     mapping_artifact_digest,
+    resolution_artifact_digest,
 )
 from contextmap.entity_resolution.semantic_comparison import (
     BASELINE_REFINEMENT_MODIFIERS,
@@ -310,6 +311,7 @@ __all__ = [
     "materialize_resolved_entities",
     "normalize_label",
     "reference_order",
+    "resolution_artifact_digest",
     "resolve_candidate_pairs",
     "resolved_entity_id_for",
     "retrieve_candidate_sets",
