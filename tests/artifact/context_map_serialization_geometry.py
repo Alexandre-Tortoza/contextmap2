@@ -59,9 +59,6 @@ POINT_COUNT = SCAN_COUNT * POINTS_PER_SCAN
 _SEQUENCE_ID = SequenceArtifactId("sequence-0001")
 _TRAJECTORY_ID = TrajectoryId("run-0001--trajectory")
 _MS = 1_000_000
-_CLOUD = tuple(
-    (math.sin(i) * 3.0, math.cos(i) * 2.0, (i % 5) * 0.1) for i in range(POINTS_PER_SCAN)
-)
 
 
 def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
@@ -69,7 +66,13 @@ def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
     return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=CLOCK_ID)
 
 
-def _scan(index: int) -> LidarObservation:
+def _cloud(points_per_scan: int) -> tuple[tuple[float, float, float], ...]:
+    return tuple(
+        (math.sin(i) * 3.0, math.cos(i) * 2.0, (i % 5) * 0.1) for i in range(points_per_scan)
+    )
+
+
+def _scan(index: int, points_per_scan: int) -> LidarObservation:
     fields = tuple(
         PointFieldDescriptor(name=name, offset_bytes=i * 4, data_type=PointFieldDataType.FLOAT32)
         for i, name in enumerate(("x", "y", "z"))
@@ -80,15 +83,17 @@ def _scan(index: int) -> LidarObservation:
         frame_id=FrameId("lidar"),
         timestamp=_timestamp(index * 100 * _MS),
         provenance=SourceProvenance(source_type="fixture", source_path="fixtures/lidar"),
-        point_count=len(_CLOUD),
+        point_count=points_per_scan,
         point_step_bytes=12,
         fields=fields,
-        data=b"".join(struct.pack("<3f", *point) for point in _CLOUD),
+        data=b"".join(struct.pack("<3f", *point) for point in _cloud(points_per_scan)),
         is_dense=True,
     )
 
 
-def build_geometry_artifact(workspace_root: Path) -> tuple[Path, GeometricMapArtifactManifest]:
+def build_geometry_artifact(
+    workspace_root: Path, *, scans: int = SCAN_COUNT, points_per_scan: int = POINTS_PER_SCAN
+) -> tuple[Path, GeometricMapArtifactManifest]:
     """Write a real GeometricMapArtifact under ``workspace_root`` and return it.
 
     Args:
@@ -96,8 +101,8 @@ def build_geometry_artifact(workspace_root: Path) -> tuple[Path, GeometricMapArt
             the geometric-mapping writer does.
 
     Returns:
-        The run directory and its manifest. The map is ``corridor-02--run-0001`` with
-        ``POINT_COUNT`` raw points in the frame ``map``.
+        The run directory and its manifest. The map is ``corridor-02--map-run-0001`` with
+        ``scans * points_per_scan`` raw points (``POINT_COUNT`` by default) in the frame ``map``.
     """
     calibration = CalibrationSet(
         entries={},
@@ -123,7 +128,7 @@ def build_geometry_artifact(workspace_root: Path) -> tuple[Path, GeometricMapArt
                 source_observation_ids=(SourceObservationId(f"pose-{index}"),)
             ),
         )
-        for index in range(SCAN_COUNT)
+        for index in range(scans)
     )
     trajectory = Trajectory(
         trajectory_id=_TRAJECTORY_ID,
@@ -145,7 +150,7 @@ def build_geometry_artifact(workspace_root: Path) -> tuple[Path, GeometricMapArt
             sequence_artifact_id=_SEQUENCE_ID,
             selection=selection,
             selection_id=selection_identity(_SEQUENCE_ID, selection),
-            observations=tuple(_scan(index) for index in range(SCAN_COUNT)),
+            observations=tuple(_scan(index, points_per_scan) for index in range(scans)),
         ),
         calibration=calibration,
         trajectory=trajectory,

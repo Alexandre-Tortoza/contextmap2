@@ -84,9 +84,11 @@ def make_upstream(root: Path, name: str, artifact_id: str) -> Path:
     return final_dir
 
 
-def make_world(root: Path) -> World:
+def make_world(root: Path, *, geometry_scans: int = 10, points_per_scan: int = 100) -> World:
     """Write the geometry and the upstream runs a populated test map cites."""
-    geometry_dir, _ = build_geometry_artifact(root / "geometry-workspace")
+    geometry_dir, _ = build_geometry_artifact(
+        root / "geometry-workspace", scans=geometry_scans, points_per_scan=points_per_scan
+    )
     return World(
         root=root,
         geometry_dir=geometry_dir,
