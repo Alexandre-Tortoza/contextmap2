@@ -111,6 +111,14 @@ def _check_console_scripts() -> list[str]:
         )
         if result.returncode != 0:
             problems.append(f"`{entry.name} --help` exited {result.returncode}: {result.stderr}")
+        installed = importlib.metadata.version("contextmap")
+        reported = subprocess.run(
+            [str(executable), "--version"], capture_output=True, text=True, check=False
+        )
+        if reported.returncode != 0 or installed not in reported.stdout:
+            problems.append(
+                f"`{entry.name} --version` must report {installed}, got {reported.stdout!r}"
+            )
     print(f"checked {len(scripts)} console script(s)")
     return problems
 
