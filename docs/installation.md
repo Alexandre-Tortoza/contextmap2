@@ -22,7 +22,7 @@ python -m pip install .
 
 Instala só o NumPy. É suficiente para importar todos os contratos públicos das capabilities e para abrir e validar artifacts persistidos (`SequenceArtifact`, `PerceptionRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `SemanticFusionRunArtifact`, ...) sem ROS, Torch, CUDA ou modelos. Nenhum módulo importa um SDK opcional na importação, exceto os dois adapters de bag ROS (`ros1_bag` e `ros2_bag`), que ficam fora da API pública e só são alcançados pelo caminho pontilhado completo.
 
-Duas verificações protegem essa promessa: `tests/packaging/test_dependencies.py` (todo import de terceiros está ligado a um extra ou listado como externo, e todos os módulos importam com qualquer módulo de terceiros, exceto NumPy, bloqueado) e `tests/packaging/smoke_installed_package.py` (executado em um venv novo com a wheel instalada).
+Duas verificações protegem essa promessa: `tests/packaging/test_dependencies.py` (todo import de terceiros está ligado a um extra ou listado como externo, e todos os módulos importam com qualquer módulo de terceiros, exceto NumPy, bloqueado) e `tests/packaging/smoke_installed_package.py` (executado em um venv novo com a wheel instalada). A CI repete isso a cada pull request: o job `package` instala a wheel e o sdist em ambientes novos e o job `lightweight-install` roda a suíte inteira contra a wheel só com NumPy.
 
 ## Extras opcionais
 
