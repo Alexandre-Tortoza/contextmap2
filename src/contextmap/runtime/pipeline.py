@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -32,10 +33,23 @@ from contextmap.runtime.config import (
     check_component_availability,
     check_component_selection,
 )
-from contextmap.runtime.errors import PlanDocumentError, PreflightError, StageExecutionError
+from contextmap.runtime.errors import (
+    PlanDocumentError,
+    PreflightError,
+    RunCancelledError,
+    StageExecutionError,
+)
+from contextmap.runtime.lifecycle import (
+    CancellationToken,
+    EventEmitter,
+    EventSink,
+    FailureCategory,
+    categorize_failure,
+)
 from contextmap.runtime.reuse import ReuseDecision, ReuseKey, ReusePolicy
 
 if TYPE_CHECKING:
+    from contextmap.runtime.runs import RunJournal, RunSummary
     from contextmap.runtime.selection import ResolvedSelections
 
 PLAN_SCHEMA_VERSION = "0.1.0"
@@ -377,6 +391,8 @@ class ExecutionRecord:
         reused: Existing artifacts that fed the stages, by producing stage.
         selections: The resolved run selection the execution started from: the exact
             artifact ids, how each was chosen and the lineage each declared.
+        resume: When the execution resumed an earlier run: which run, and which of its
+            completed stages were reused and which had to be recomputed.
     """
 
     plan_digest: str
@@ -384,6 +400,7 @@ class ExecutionRecord:
     stages: tuple[StageRecord, ...]
     reused: Mapping[str, tuple[ArtifactRef, ...]]
     selections: Mapping[str, Any] | None = None
+    resume: Mapping[str, Any] | None = None
 
     def to_document(self) -> dict[str, Any]:
         """Return the JSON-compatible record of the execution."""
@@ -396,6 +413,7 @@ class ExecutionRecord:
                 for stage_id, refs in self.reused.items()
             },
             "selections": None if self.selections is None else dict(self.selections),
+            "resume": None if self.resume is None else dict(self.resume),
             "stages": [
                 {
                     "stage_id": record.stage_id,
@@ -708,18 +726,28 @@ def run_plan(
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
     reuse: ReusePolicy | None = None,
+    journal: RunJournal | None = None,
+    events: EventSink | None = None,
+    cancellation: CancellationToken | None = None,
+    redact: Callable[[str], str] | None = None,
+    clock: Callable[[], str] | None = None,
+    resume_from: RunSummary | None = None,
 ) -> ExecutionRecord:
     """Execute a scoped plan in dependency order.
 
     Preflight runs first and blocks everything when it finds a problem. Each stage then
     receives the exact artifacts of the stages that feed it, reused or just produced. The
     first failure, or an output that contradicts the stage's declared contract, stops the
-    run: nothing later runs and nothing is substituted.
+    run: nothing later runs, nothing is retried and nothing is substituted.
 
     With a reuse policy, each stage is decided in dependency order against the index of
     completed artifacts: identical identity reuses the exact prior artifact without
     running the stage; anything else runs it and, once it completes, indexes its output.
     A stage that fails leaves nothing indexed. Every decision is recorded with its reason.
+
+    Every step emits a structured event (planned, blocked, started, stage started, reused,
+    completed or failed, cancelled, completed) to the journal and to ``events``. The events
+    carry no secret: every string in them goes through ``redact``.
 
     Args:
         execution: The scoped execution.
@@ -728,40 +756,150 @@ def run_plan(
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
         reuse: How to decide between reusing and recomputing, or ``None`` to always run.
+        journal: Persists the run's lifecycle, status and execution record.
+        events: An extra receiver of the run's events.
+        cancellation: Cooperative cancellation, checked before each stage.
+        redact: Replaces secret values inside a string.
+        clock: Returns event timestamps; defaults to the current UTC time.
+        resume_from: The run this execution resumes; :func:`resume_plan` validates it.
 
     Returns:
         The execution record: order, exact inputs and outputs, decisions and reused
         artifacts.
 
     Raises:
+        ValueError: If ``resume_from`` is given without a reuse policy.
         PreflightError: If preflight found problems; nothing was executed.
         StageExecutionError: If a stage failed or returned an artifact of another kind.
+        RunCancelledError: If cancellation was requested before a stage started.
     """
-    report = preflight(
-        execution,
-        executors=executors,
-        environ=environ,
-        module_available=module_available,
-        provided_runtimes=provided_runtimes,
-        reuse=reuse,
+    if resume_from is not None and reuse is None:
+        raise ValueError("resuming a run needs a reuse policy: completed stages are reused")
+    sinks = [sink for sink in (journal, events) if sink is not None]
+    emitter = EventEmitter(sinks, clock=clock, redact=redact)
+    emitter.emit(
+        "run_planned",
+        plan_digest=execution.plan.digest,
+        config_digest=execution.plan.config_digest,
+        stages=[stage.stage_id for stage in execution.stages],
+        provided={
+            stage: [ref.artifact_id for ref in refs] for stage, refs in execution.reused.items()
+        },
     )
-    if not report.ok:
-        raise PreflightError(report)
+    if resume_from is not None:
+        emitter.emit(
+            "run_resumed",
+            resumed_from=resume_from.run_id,
+            previous_status=resume_from.status.value,
+            previously_completed=list(resume_from.completed_stages),
+        )
+    started = time.monotonic()
+    progress: list[str] = []
+    try:
+        report = preflight(
+            execution,
+            executors=executors,
+            environ=environ,
+            module_available=module_available,
+            provided_runtimes=provided_runtimes,
+            reuse=reuse,
+        )
+        if not report.ok:
+            emitter.emit(
+                "run_blocked",
+                problems=[{"path": p.path, "message": p.message} for p in report.problems],
+            )
+            raise PreflightError(report)
+        emitter.emit("run_started")
+        records = _run_stages(execution, executors, reuse, emitter, cancellation, redact, progress)
+    except (PreflightError, StageExecutionError, RunCancelledError):
+        raise
+    except KeyboardInterrupt:
+        if not emitter.terminal:
+            emitter.emit("run_cancelled", reason="interrupted", completed=list(progress))
+        raise
+    except Exception as error:
+        if not emitter.terminal:
+            emitter.emit(
+                "run_failed",
+                category=FailureCategory.UNEXPECTED.value,
+                message=str(error),
+                exception_type=type(error).__name__,
+                completed=list(progress),
+            )
+        raise
+    record = ExecutionRecord(
+        plan_digest=execution.plan.digest,
+        order=tuple(record.stage_id for record in records),
+        stages=tuple(records),
+        reused=dict(execution.reused),
+        selections=None if execution.selections is None else execution.selections.to_document(),
+        resume=_resume_report(resume_from, records),
+    )
+    if journal is not None:
+        journal.record_execution(record)
+    emitter.emit(
+        "run_completed",
+        order=list(record.order),
+        elapsed_s=round(time.monotonic() - started, 6),
+        resume=None if record.resume is None else dict(record.resume),
+    )
+    return record
 
+
+def _run_stages(
+    execution: ExecutionPlan,
+    executors: Mapping[str, StageExecutor],
+    reuse: ReusePolicy | None,
+    emitter: EventEmitter,
+    cancellation: CancellationToken | None,
+    redact: Callable[[str], str] | None,
+    progress: list[str],
+) -> list[StageRecord]:
+    """Run the stages in order, emitting an event for each step and stopping at a failure."""
     outputs: dict[str, tuple[ArtifactRef, ...]] = dict(execution.reused)
     records: list[StageRecord] = []
     for stage in execution.stages:
+        if cancellation is not None and cancellation.cancelled:
+            emitter.emit(
+                "run_cancelled",
+                stage_id=stage.stage_id,
+                reason=cancellation.reason,
+                completed=list(progress),
+            )
+            raise RunCancelledError(stage.stage_id, progress, cancellation.reason)
         inputs = {item.name: outputs[item.source] for item in stage.inputs}
-        completed = [record.stage_id for record in records]
         decision: ReuseDecision | None = None
         key: ReuseKey | None = None
         produced: ArtifactRef | None = None
         if reuse is not None:
             decision, produced, key = _decide(stage, inputs, reuse)
-        if produced is None:
+        if produced is not None:
+            emitter.emit(
+                "stage_reused",
+                stage_id=stage.stage_id,
+                artifact=produced.to_document(),
+                decision=None if decision is None else decision.to_document(),
+            )
+        else:
             executor = executors.get(stage.stage_id)
             if executor is None:
-                raise StageExecutionError(stage.stage_id, completed, "no executor is registered")
+                raise _stage_failed(
+                    emitter,
+                    stage.stage_id,
+                    progress,
+                    redact,
+                    category=FailureCategory.EXECUTION.value,
+                    exception_type="LookupError",
+                    message="no executor is registered",
+                )
+            emitter.emit(
+                "stage_started",
+                stage_id=stage.stage_id,
+                inputs={name: [ref.artifact_id for ref in refs] for name, refs in inputs.items()},
+                config_digest=stage.config_digest,
+            )
+            began = time.monotonic()
             request = StageRequest(
                 stage_id=stage.stage_id,
                 inputs=inputs,
@@ -771,27 +909,101 @@ def run_plan(
             try:
                 produced = executor.execute(request)
             except Exception as error:
-                raise StageExecutionError(stage.stage_id, completed, str(error)) from error
-            if produced.contract != stage.output or produced.stage_id != stage.stage_id:
-                raise StageExecutionError(
+                raise _stage_failed(
+                    emitter,
                     stage.stage_id,
-                    completed,
-                    f"returned a {produced.contract!r} artifact from stage "
-                    f"{produced.stage_id!r}; the stage declares {stage.output!r}",
+                    progress,
+                    redact,
+                    category=categorize_failure(error),
+                    exception_type=type(error).__name__,
+                    message=str(error),
+                    elapsed=time.monotonic() - began,
+                ) from error
+            if produced.contract != stage.output or produced.stage_id != stage.stage_id:
+                raise _stage_failed(
+                    emitter,
+                    stage.stage_id,
+                    progress,
+                    redact,
+                    category=FailureCategory.CONTRACT.value,
+                    exception_type="ContractViolation",
+                    message=(
+                        f"returned a {produced.contract!r} artifact from stage "
+                        f"{produced.stage_id!r}; the stage declares {stage.output!r}"
+                    ),
+                    elapsed=time.monotonic() - began,
                 )
             if reuse is not None and decision is not None and key is not None:
                 decision = _index(reuse, key, produced, decision)
+            emitter.emit(
+                "stage_completed",
+                stage_id=stage.stage_id,
+                artifact=produced.to_document(),
+                decision=None if decision is None else decision.to_document(),
+                elapsed_s=round(time.monotonic() - began, 6),
+            )
         outputs[stage.stage_id] = (produced,)
+        progress.append(stage.stage_id)
         records.append(
             StageRecord(stage_id=stage.stage_id, inputs=inputs, output=produced, decision=decision)
         )
-    return ExecutionRecord(
-        plan_digest=execution.plan.digest,
-        order=tuple(record.stage_id for record in records),
-        stages=tuple(records),
-        reused=dict(execution.reused),
-        selections=None if execution.selections is None else execution.selections.to_document(),
+    return records
+
+
+def _stage_failed(
+    emitter: EventEmitter,
+    stage_id: str,
+    progress: Sequence[str],
+    redact: Callable[[str], str] | None,
+    *,
+    category: str,
+    exception_type: str,
+    message: str,
+    elapsed: float | None = None,
+) -> StageExecutionError:
+    """Record a stage failure as events and build the error that stops the run."""
+    clean = message if redact is None else redact(message)
+    emitter.emit(
+        "stage_failed",
+        stage_id=stage_id,
+        category=category,
+        message=clean,
+        exception_type=exception_type,
+        elapsed_s=None if elapsed is None else round(elapsed, 6),
     )
+    emitter.emit(
+        "run_failed",
+        stage_id=stage_id,
+        category=category,
+        message=clean,
+        exception_type=exception_type,
+        completed=list(progress),
+    )
+    return StageExecutionError(stage_id, list(progress), clean)
+
+
+def _resume_report(
+    resume_from: RunSummary | None, records: Sequence[StageRecord]
+) -> dict[str, Any] | None:
+    """Say which stages the resumed run had completed, and how this run treated each."""
+    if resume_from is None:
+        return None
+    by_stage = {record.stage_id: record for record in records}
+    reused, recomputed = [], []
+    for stage_id in resume_from.completed_stages:
+        record = by_stage.get(stage_id)
+        if record is None:
+            continue  # o estágio não faz parte desta execução (foi fornecido)
+        if record.decision is not None and record.decision.kind == "reused":
+            reused.append(stage_id)
+        else:
+            recomputed.append(stage_id)
+    return {
+        "from": resume_from.run_id,
+        "previous_status": resume_from.status.value,
+        "reused": reused,
+        "recomputed": recomputed,
+    }
 
 
 def _combined_hash(content_hashes: Sequence[str | None]) -> str:
