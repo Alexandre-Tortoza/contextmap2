@@ -50,12 +50,12 @@ _SPACE = EmbeddingSpace(
 
 
 def _run_dir(tmp_path: Path) -> Path:
-    return tmp_path / "runs" / "visual-perception" / "corridor" / "run-0001__frame-0001__features"
+    return tmp_path / "visual_perception"
 
 
 def _writer(tmp_path: Path, level: FeatureDebugLevel) -> PerceptionRunWriter:
     return PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=_run_dir(tmp_path),
         sequence_name="corridor",
         run_id=PerceptionRunId("run-0001"),
         run_index=1,
@@ -64,8 +64,6 @@ def _writer(tmp_path: Path, level: FeatureDebugLevel) -> PerceptionRunWriter:
         enabled_capabilities=frozenset({"feature_extractor"}),
         pipeline_preset=CANONICAL_PRESET_V1,
         configuration_digest="sha256:pipeline",
-        selection_label="frame-0001",
-        profile_label="features",
         feature_debug_level=level,
     )
 

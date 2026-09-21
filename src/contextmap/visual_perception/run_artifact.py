@@ -2,9 +2,8 @@
 
 A ``PerceptionRunArtifact`` is a first-class, immutable directory holding
 the results of one configured :class:`~contextmap.visual_perception.models.PerceptionRun`.
-It must be openable and inspectable on its own — a convenience
-``runs.json`` registry may help discovery, but is never required to open
-or understand a run. See
+It must be openable and inspectable on its own, at the directory the caller
+chose to write it. See
 ``src/contextmap/visual_perception/docs/run_artifact.md`` for the on-disk
 layout and the trade-offs made for v0 (notably: JSON Lines outputs
 instead of Parquet, and a smaller debug layout than the issue's full
@@ -12,9 +11,8 @@ candidate structure).
 
 Writing is atomic, the same pattern as
 :mod:`contextmap.ingestion.sequence_artifact`: :class:`PerceptionRunWriter`
-builds the run in a temporary sibling directory and only makes it visible
-under its final, readable path (``run-<index>__<selection>__<profile>/``)
-after an internal integrity check succeeds.
+builds the run in a temporary sibling of the ``output_dir`` its caller chose
+and only makes it visible there after an internal integrity check succeeds.
 """
 
 from __future__ import annotations
@@ -85,7 +83,6 @@ _METRICS_FILENAME = "metrics/stage-timings.jsonl"
 _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
 _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
-_REGISTRY_FILENAME = "runs.json"
 
 
 class RunArtifactError(Exception):
@@ -116,9 +113,9 @@ class RunArtifactManifest:
     """Authoritative metadata for a persisted perception run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's
-            visual-perception runs; never a global identity.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this
+            sequence, supplied by the caller; never a global identity.
         sequence_name: Name of the processed sequence.
         sequence_artifact_id: Canonical sequence artifact processed.
         selection_id: Deterministic identity of the sequence selection
@@ -167,7 +164,7 @@ class PerceptionRunWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: PerceptionRunId,
         run_index: int,
@@ -176,19 +173,22 @@ class PerceptionRunWriter:
         enabled_capabilities: frozenset[str],
         pipeline_preset: PipelinePreset,
         configuration_digest: str,
-        selection_label: str,
-        profile_label: str,
         feature_debug_level: FeatureDebugLevel = FeatureDebugLevel.NONE,
         semantic_debug_level: SemanticDebugLevel = SemanticDebugLevel.FULL,
     ) -> None:
         """Create a writer for a new perception run artifact.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses
+                it (in the runtime, ``<workspace>/<dataset>/<run>/visual_perception``);
+                the writer computes no path, builds the run in a temporary
+                sibling of ``output_dir`` and refuses to replace a directory
+                that already exists.
             sequence_name: Name of the sequence this run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's
-                visual-perception runs (see :func:`allocate_run_index`).
+            run_id: Identity of the run, supplied by the caller and never
+                allocated here.
+            run_index: Ordinal of this run among the caller's runs of the
+                same sequence, supplied by the caller and recorded as given.
             sequence_artifact_id: Canonical sequence artifact processed.
             selection_id: Deterministic identity of the sequence
                 selection processed.
@@ -199,12 +199,6 @@ class PerceptionRunWriter:
             configuration_digest: This run's resolved pipeline
                 configuration digest (see
                 :meth:`~contextmap.visual_perception.pipeline.ResolvedPipeline.configuration_digest`).
-            selection_label: Short, readable description of the
-                selection for the run directory name, e.g.
-                ``"frames-0120-0260"``.
-            profile_label: Short, readable description of the enabled
-                backends for the run directory name, e.g.
-                ``"sam3-dinov2-gemini"``.
             feature_debug_level: Amount of non-contractual Feature Extraction
                 debug evidence to persist. Required metrics are independent of
                 this level.
@@ -222,12 +216,8 @@ class PerceptionRunWriter:
         self._configuration_digest = configuration_digest
         self._feature_debug_level = feature_debug_level
         self._semantic_debug_level = semantic_debug_level
-        sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
-        run_dir_name = f"run-{run_index:04d}__{selection_label}__{profile_label}"
-        self._workspace_root = workspace_root
-        self._sequence_dir = sequence_dir
-        self._final_dir = sequence_dir / run_dir_name
-        self._tmp_dir = sequence_dir / f".tmp-{run_dir_name}-{uuid4().hex[:8]}"
+        self._final_dir = output_dir
+        self._tmp_dir = output_dir.parent / f".tmp-{output_dir.name}-{uuid4().hex[:8]}"
         self._results: list[PerceptionResult] = []
         self._source_observation_ids: set[SourceObservationId] = set()
         self._stage_outcomes: list[StageOutcome] = []
@@ -377,15 +367,12 @@ class PerceptionRunWriter:
     def finalize(self) -> RunArtifactManifest:
         """Write every queued result/outcome and finalize the run atomically.
 
-        Also rebuilds the sequence's ``runs.json`` convenience registry
-        from every valid run directory present, including this one.
-
         Returns:
             The manifest of the finalized run.
 
         Raises:
             RunArtifactError: If already finalized, if a run already
-                exists at the target path, or if writing fails.
+                exists at ``output_dir``, or if writing fails.
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
@@ -404,7 +391,6 @@ class PerceptionRunWriter:
                     f"internal consistency check failed before finalize: {problems}"
                 )
             self._tmp_dir.rename(self._final_dir)
-            rebuild_run_registry(self._workspace_root, self._sequence_name)
         except BaseException:
             shutil.rmtree(self._tmp_dir, ignore_errors=True)
             raise
@@ -761,81 +747,6 @@ class PerceptionRunReader:
             found.
         """
         return _check_file_inventory(self._root, self._manifest)
-
-
-def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's visual-perception runs.
-
-    Scans existing, integral run directories directly — never
-    ``runs.json`` — so an interrupted, incomplete, or corrupted run
-    directory is never counted, and allocation works correctly even
-    when the registry is absent or stale.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence to allocate a run index for.
-
-    Returns:
-        The next run index, starting at ``1`` when no run exists yet.
-    """
-    sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
-    if not sequence_dir.is_dir():
-        return 1
-
-    max_index = 0
-    for entry in sequence_dir.iterdir():
-        if not entry.is_dir() or entry.name.startswith(".tmp-"):
-            continue
-        try:
-            reader = PerceptionRunReader(entry)
-        except RunArtifactError:
-            continue
-        if reader.verify_integrity():
-            continue
-        manifest = reader.manifest
-        max_index = max(max_index, manifest.run_index)
-    return max_index + 1
-
-
-def rebuild_run_registry(workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its run directories.
-
-    ``runs.json`` is never the source of truth — it can be deleted and
-    regenerated from the runs' own manifests at any time, and any
-    directory that is not a complete, valid run artifact is silently
-    skipped rather than included.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence to rebuild the registry for.
-    """
-    sequence_dir = workspace_root / "runs" / "visual-perception" / sequence_name
-    if not sequence_dir.is_dir():
-        return
-
-    entries = []
-    for entry in sorted(sequence_dir.iterdir()):
-        if not entry.is_dir() or entry.name.startswith(".tmp-"):
-            continue
-        try:
-            reader = PerceptionRunReader(entry)
-        except RunArtifactError:
-            continue
-        if reader.verify_integrity():
-            continue
-        manifest = reader.manifest
-        entries.append(
-            {
-                "run_index": manifest.run_index,
-                "run_id": str(manifest.run_id),
-                "directory": entry.name,
-            }
-        )
-
-    registry_path = sequence_dir / _REGISTRY_FILENAME
-    registry_path.write_text(
-        json.dumps({"runs": entries}, indent=2, sort_keys=True), encoding="utf-8"
-    )
 
 
 def _render_readme(manifest: RunArtifactManifest) -> str:

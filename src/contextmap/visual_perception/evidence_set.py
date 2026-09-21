@@ -105,7 +105,8 @@ class PerceptionEvidenceSet:
 
         Args:
             run_dirs: Directories of the runs to select, each opened
-                independently (no ``runs.json`` is read or required).
+                independently, at the directory the caller wrote it (there is no
+                registry to read).
 
         Returns:
             The resulting view.
