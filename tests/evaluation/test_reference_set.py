@@ -6,29 +6,27 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from reference_set_builders import (
+    content_hash,
+    make_annotation,
+    make_manifest,
+    make_provenance,
+    make_sample,
+    make_scheme,
+    make_source,
+)
 
 from contextmap.evaluation.reference_set import (
     REFERENCE_SET_SCHEMA,
-    AnnotationFileEntry,
     AnnotationProvenance,
-    CalibrationIdentity,
     ProvenanceOrigin,
     ProvenanceReview,
-    ReferenceSample,
     ReferenceSampleId,
     ReferenceSetError,
-    ReferenceSetManifest,
-    ReferenceSource,
-    ReferenceSplit,
     ReferenceTrust,
-    SampleGroup,
     SampleStratum,
     SampleTimeSpan,
-    SourceKind,
-    SplitRole,
     SplitScheme,
-    SplitUnit,
-    StratumDefinition,
     decode_reference_set,
     encode_reference_set,
     read_reference_set,
@@ -40,118 +38,8 @@ from contextmap.ingestion import CalibrationReferenceId, SourceObservationId
 from contextmap.shared import SourceTimestamp
 
 
-def _hash(text: str) -> str:
-    return f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
-
-
-def _source() -> ReferenceSource:
-    return ReferenceSource(
-        source_id="seq-a",
-        kind=SourceKind.SEQUENCE_ARTIFACT,
-        identity="sequence-artifact-0001",
-        content_hash=_hash("seq-a"),
-        license="CC-BY-4.0",
-        redistributable=True,
-    )
-
-
-def _calibration() -> CalibrationIdentity:
-    return CalibrationIdentity(
-        calibration_id=CalibrationReferenceId("cam0"),
-        source_id="seq-a",
-        content_hash=_hash("cam0"),
-    )
-
-
-def _sample(index: int) -> ReferenceSample:
-    start = SourceTimestamp(seconds=index, nanoseconds=0, clock_id="dataset:seq-a")
-    end = SourceTimestamp(seconds=index, nanoseconds=100_000_000, clock_id="dataset:seq-a")
-    return ReferenceSample(
-        sample_id=ReferenceSampleId(f"sample-{index:04d}"),
-        source_id="seq-a",
-        observation_ids=(
-            SourceObservationId(f"frame-{index:04d}"),
-            SourceObservationId(f"scan-{index:04d}"),
-        ),
-        calibration_ids=(CalibrationReferenceId("cam0"),),
-        time_span=SampleTimeSpan(start=start, end=end),
-        content_hash=_hash(f"sample-{index}"),
-        strata=(SampleStratum(name="visibility", value="clear"),),
-        groups=(SampleGroup(unit=SplitUnit.SCENE, key="scene-1"),),
-    )
-
-
-def _provenance(
-    origin: ProvenanceOrigin = ProvenanceOrigin.MANUAL_ANNOTATION,
-) -> AnnotationProvenance:
-    return AnnotationProvenance(
-        provenance_id="prov-manual",
-        origin=origin,
-        annotator="annotator-team-a",
-        method="manual mask painting, protocol v2",
-        tool_version="labeler 1.4",
-    )
-
-
-def _annotation(
-    *, trust: ReferenceTrust = ReferenceTrust.TRUSTED_GROUND_TRUTH
-) -> AnnotationFileEntry:
-    return AnnotationFileEntry(
-        annotation_id="ann-regions",
-        schema="contextmap.reference.regions/v1",
-        path="annotations/regions.json",
-        content_hash=_hash("regions"),
-        trust=trust,
-        provenance_id="prov-manual",
-        sample_ids=(ReferenceSampleId("sample-0000"), ReferenceSampleId("sample-0001")),
-    )
-
-
-def _scheme() -> SplitScheme:
-    return SplitScheme(
-        scheme_id="regions-by-sequence",
-        task="region_discovery",
-        unit=SplitUnit.SEQUENCE,
-        rationale="frames of one sequence are temporally correlated",
-        splits=(
-            ReferenceSplit(
-                name="tuning",
-                role=SplitRole.TUNING,
-                sample_ids=(ReferenceSampleId("sample-0000"),),
-            ),
-            ReferenceSplit(
-                name="test",
-                role=SplitRole.TEST,
-                sample_ids=(ReferenceSampleId("sample-0002"), ReferenceSampleId("sample-0001")),
-            ),
-        ),
-    )
-
-
-def _manifest(**overrides: object) -> ReferenceSetManifest:
-    fields: dict[str, object] = {
-        "reference_set_id": "ref-set-alpha",
-        "version": "1.0.0",
-        "sources": (_source(),),
-        "calibrations": (_calibration(),),
-        "stratum_definitions": (
-            StratumDefinition(
-                name="visibility",
-                values=("clear", "occluded"),
-                description="occlusion level of the annotated subject",
-            ),
-        ),
-        "samples": (_sample(0), _sample(1), _sample(2)),
-        "provenance": (_provenance(),),
-        "annotations": (_annotation(),),
-        "split_schemes": (_scheme(),),
-    }
-    fields.update(overrides)
-    return ReferenceSetManifest(**fields)  # type: ignore[arg-type]
-
-
 def test_manifest_round_trips_with_a_stable_digest() -> None:
-    manifest = _manifest()
+    manifest = make_manifest()
 
     document = encode_reference_set(manifest)
     restored = decode_reference_set(json.loads(json.dumps(document)))
@@ -165,14 +53,18 @@ def test_manifest_round_trips_with_a_stable_digest() -> None:
 
 
 def test_digest_changes_when_annotations_or_selections_change() -> None:
-    base = _manifest()
+    base = make_manifest()
 
-    reordered = _manifest(split_schemes=(_reordered_scheme(),))
-    other_annotation = _manifest(
-        annotations=(replace(_annotation(), content_hash=_hash("edited")),)
+    reordered = make_manifest(split_schemes=(_reordered_scheme(),))
+    other_annotation = make_manifest(
+        annotations=(replace(make_annotation(), content_hash=content_hash("edited")),)
     )
-    other_sample = _manifest(
-        samples=(replace(_sample(0), content_hash=_hash("edited")), _sample(1), _sample(2))
+    other_sample = make_manifest(
+        samples=(
+            replace(make_sample(0), content_hash=content_hash("edited")),
+            make_sample(1),
+            make_sample(2),
+        )
     )
 
     assert (
@@ -182,13 +74,13 @@ def test_digest_changes_when_annotations_or_selections_change() -> None:
 
 
 def _reordered_scheme() -> SplitScheme:
-    scheme = _scheme()
+    scheme = make_scheme()
     test = replace(scheme.splits[1], sample_ids=tuple(reversed(scheme.splits[1].sample_ids)))
     return replace(scheme, splits=(scheme.splits[0], test))
 
 
 def test_selection_reproduces_the_exact_ordered_samples() -> None:
-    manifest = _manifest()
+    manifest = make_manifest()
 
     selected = manifest.selection("regions-by-sequence", "test")
 
@@ -200,7 +92,7 @@ def test_selection_reproduces_the_exact_ordered_samples() -> None:
 
 
 def test_selection_rejects_unknown_scheme_or_split() -> None:
-    manifest = _manifest()
+    manifest = make_manifest()
 
     with pytest.raises(ReferenceSetError):
         manifest.selection("missing", "test")
@@ -210,60 +102,64 @@ def test_selection_rejects_unknown_scheme_or_split() -> None:
 
 def test_samples_are_bound_to_physical_observation_identities() -> None:
     with pytest.raises(ValueError, match="observation"):
-        replace(_sample(0), observation_ids=())
+        replace(make_sample(0), observation_ids=())
     with pytest.raises(ValueError, match="unique"):
         replace(
-            _sample(0),
+            make_sample(0),
             observation_ids=(SourceObservationId("frame-0000"), SourceObservationId("frame-0000")),
         )
 
 
 def test_sample_and_annotation_identities_must_be_unique() -> None:
     with pytest.raises(ValueError, match="sample"):
-        _manifest(samples=(_sample(0), _sample(0), _sample(1), _sample(2)))
+        make_manifest(samples=(make_sample(0), make_sample(0), make_sample(1), make_sample(2)))
     with pytest.raises(ValueError, match="annotation"):
-        _manifest(annotations=(_annotation(), _annotation()))
+        make_manifest(annotations=(make_annotation(), make_annotation()))
 
 
 def test_references_must_resolve_inside_the_manifest() -> None:
     with pytest.raises(ValueError, match="source"):
-        _manifest(samples=(replace(_sample(0), source_id="missing"), _sample(1), _sample(2)))
+        make_manifest(
+            samples=(replace(make_sample(0), source_id="missing"), make_sample(1), make_sample(2))
+        )
     with pytest.raises(ValueError, match="calibration"):
-        _manifest(
+        make_manifest(
             samples=(
-                replace(_sample(0), calibration_ids=(CalibrationReferenceId("missing"),)),
-                _sample(1),
-                _sample(2),
+                replace(make_sample(0), calibration_ids=(CalibrationReferenceId("missing"),)),
+                make_sample(1),
+                make_sample(2),
             )
         )
     with pytest.raises(ValueError, match="provenance"):
-        _manifest(annotations=(replace(_annotation(), provenance_id="missing"),))
+        make_manifest(annotations=(replace(make_annotation(), provenance_id="missing"),))
     with pytest.raises(ValueError, match="annotated sample"):
-        _manifest(
-            annotations=(replace(_annotation(), sample_ids=(ReferenceSampleId("sample-9999"),)),)
+        make_manifest(
+            annotations=(
+                replace(make_annotation(), sample_ids=(ReferenceSampleId("sample-9999"),)),
+            )
         )
     with pytest.raises(ValueError, match="split sample"):
-        scheme = _scheme()
+        scheme = make_scheme()
         broken = replace(scheme.splits[0], sample_ids=(ReferenceSampleId("sample-9999"),))
-        _manifest(split_schemes=(replace(scheme, splits=(broken, scheme.splits[1])),))
+        make_manifest(split_schemes=(replace(scheme, splits=(broken, scheme.splits[1])),))
 
 
 def test_annotations_are_required_to_declare_provenance_and_trust() -> None:
-    document = encode_reference_set(_manifest())
+    document = encode_reference_set(make_manifest())
     del document["annotations"][0]["trust"]  # type: ignore[index]
     with pytest.raises(ReferenceSetError, match="trust"):
         decode_reference_set(document)
 
-    document = encode_reference_set(_manifest())
+    document = encode_reference_set(make_manifest())
     del document["annotations"][0]["provenance_id"]  # type: ignore[index]
     with pytest.raises(ReferenceSetError, match="provenance_id"):
         decode_reference_set(document)
 
 
 def test_trust_is_never_inferred_from_file_names() -> None:
-    entry = replace(_annotation(trust=ReferenceTrust.DIAGNOSTIC_ONLY), path="reference/gt.pcd")
+    entry = replace(make_annotation(trust=ReferenceTrust.DIAGNOSTIC_ONLY), path="reference/gt.pcd")
 
-    manifest = _manifest(annotations=(entry,))
+    manifest = make_manifest(annotations=(entry,))
 
     assert manifest.annotations[0].trust is ReferenceTrust.DIAGNOSTIC_ONLY
     assert entry.path == "reference/gt.pcd"
@@ -278,18 +174,24 @@ def test_trust_is_never_inferred_from_file_names() -> None:
     ],
 )
 def test_model_inference_can_only_be_diagnostic(trust: ReferenceTrust) -> None:
-    provenance = replace(_provenance(ProvenanceOrigin.MODEL_INFERENCE), provenance_id="prov-model")
-    entry = replace(_annotation(trust=trust), provenance_id="prov-model")
+    provenance = replace(
+        make_provenance(ProvenanceOrigin.MODEL_INFERENCE), provenance_id="prov-model"
+    )
+    entry = replace(make_annotation(trust=trust), provenance_id="prov-model")
 
     with pytest.raises(ValueError, match="model"):
-        _manifest(provenance=(provenance,), annotations=(entry,))
+        make_manifest(provenance=(provenance,), annotations=(entry,))
 
 
 def test_model_inference_is_accepted_as_explicit_diagnostic_data() -> None:
-    provenance = replace(_provenance(ProvenanceOrigin.MODEL_INFERENCE), provenance_id="prov-model")
-    entry = replace(_annotation(trust=ReferenceTrust.DIAGNOSTIC_ONLY), provenance_id="prov-model")
+    provenance = replace(
+        make_provenance(ProvenanceOrigin.MODEL_INFERENCE), provenance_id="prov-model"
+    )
+    entry = replace(
+        make_annotation(trust=ReferenceTrust.DIAGNOSTIC_ONLY), provenance_id="prov-model"
+    )
 
-    manifest = _manifest(provenance=(provenance,), annotations=(entry,))
+    manifest = make_manifest(provenance=(provenance,), annotations=(entry,))
 
     assert manifest.annotations[0].trust is ReferenceTrust.DIAGNOSTIC_ONLY
 
@@ -305,8 +207,8 @@ def test_provenance_records_seeding_artifacts_and_review() -> None:
         review=ProvenanceReview(reviewer="reviewer-b", method="full pass against source frames"),
     )
 
-    manifest = _manifest(
-        provenance=(_provenance(), reviewed),
+    manifest = make_manifest(
+        provenance=(make_provenance(), reviewed),
     )
     restored = decode_reference_set(encode_reference_set(manifest))
 
@@ -316,29 +218,29 @@ def test_provenance_records_seeding_artifacts_and_review() -> None:
 
 def test_strata_must_use_declared_definitions() -> None:
     with pytest.raises(ValueError, match="stratum"):
-        _manifest(
+        make_manifest(
             samples=(
-                replace(_sample(0), strata=(SampleStratum(name="visibility", value="foggy"),)),
-                _sample(1),
-                _sample(2),
+                replace(make_sample(0), strata=(SampleStratum(name="visibility", value="foggy"),)),
+                make_sample(1),
+                make_sample(2),
             )
         )
     with pytest.raises(ValueError, match="stratum"):
-        _manifest(
+        make_manifest(
             samples=(
-                replace(_sample(0), strata=(SampleStratum(name="range", value="near"),)),
-                _sample(1),
-                _sample(2),
+                replace(make_sample(0), strata=(SampleStratum(name="range", value="near"),)),
+                make_sample(1),
+                make_sample(2),
             )
         )
 
 
 def test_hashes_and_paths_are_validated() -> None:
     with pytest.raises(ValueError, match="sha256"):
-        replace(_source(), content_hash="md5:abc")
+        replace(make_source(), content_hash="md5:abc")
     for path in ("/abs/regions.json", "../regions.json", "annotations/../../x.json", ""):
         with pytest.raises(ValueError, match="path"):
-            replace(_annotation(), path=path)
+            replace(make_annotation(), path=path)
 
 
 def test_time_span_requires_ordered_timestamps_of_one_clock() -> None:
@@ -353,7 +255,7 @@ def test_time_span_requires_ordered_timestamps_of_one_clock() -> None:
 
 
 def test_writer_is_immutable_and_reader_verifies_the_digest(tmp_path: Path) -> None:
-    manifest = _manifest()
+    manifest = make_manifest()
     root = tmp_path / "ref-set-alpha" / "1.0.0"
 
     write_reference_set(root, manifest)
@@ -364,14 +266,14 @@ def test_writer_is_immutable_and_reader_verifies_the_digest(tmp_path: Path) -> N
 
     path = root / "manifest.json"
     tampered = json.loads(path.read_text(encoding="utf-8"))
-    tampered["samples"][0]["content_hash"] = _hash("tampered")
+    tampered["samples"][0]["content_hash"] = content_hash("tampered")
     path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(ReferenceSetError, match="digest"):
         read_reference_set(root)
 
 
 def test_reader_rejects_unknown_schema(tmp_path: Path) -> None:
-    document = encode_reference_set(_manifest())
+    document = encode_reference_set(make_manifest())
     document["schema"] = "contextmap.reference-set/v0"
 
     with pytest.raises(ReferenceSetError, match="schema"):
@@ -380,8 +282,8 @@ def test_reader_rejects_unknown_schema(tmp_path: Path) -> None:
 
 def test_annotation_files_are_verified_against_declared_hashes(tmp_path: Path) -> None:
     content = b'{"records": []}'
-    entry = replace(_annotation(), content_hash=f"sha256:{hashlib.sha256(content).hexdigest()}")
-    manifest = _manifest(annotations=(entry,))
+    entry = replace(make_annotation(), content_hash=f"sha256:{hashlib.sha256(content).hexdigest()}")
+    manifest = make_manifest(annotations=(entry,))
     target = tmp_path / "annotations" / "regions.json"
 
     with pytest.raises(ReferenceSetError, match="missing"):
@@ -397,8 +299,10 @@ def test_annotation_files_are_verified_against_declared_hashes(tmp_path: Path) -
 
 
 def test_version_must_change_when_content_changes() -> None:
-    previous = _manifest()
-    edited = _manifest(annotations=(replace(_annotation(), content_hash=_hash("edited")),))
+    previous = make_manifest()
+    edited = make_manifest(
+        annotations=(replace(make_annotation(), content_hash=content_hash("edited")),)
+    )
 
     require_version_bump_on_change(previous, previous)
     require_version_bump_on_change(previous, replace(edited, version="1.1.0"))
