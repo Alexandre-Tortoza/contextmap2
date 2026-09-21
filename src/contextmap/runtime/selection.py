@@ -19,8 +19,11 @@ An incompatible selection is reported before anything runs.
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.runtime.artifacts import ArtifactRef
@@ -63,6 +66,36 @@ class Lineage:
             "upstream": {stage: list(ids) for stage, ids in sorted(self.upstream.items())},
         }
 
+    @classmethod
+    def from_document(cls, document: Mapping[str, Any]) -> Lineage:
+        """Rebuild a lineage from its persisted form.
+
+        Args:
+            document: A mapping produced by :meth:`to_document`; every key is optional.
+
+        Returns:
+            The lineage.
+
+        Raises:
+            ValueError: If an identity is not text or ``upstream`` is not a mapping of
+                stage to a list of artifact ids.
+        """
+        values: dict[str, str | None] = {}
+        for name in ("sequence", "selection", "calibration", "schema_version"):
+            value = document.get(name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"lineage {name} must be text or null")
+            values[name] = value
+        raw_upstream = document.get("upstream") or {}
+        if not isinstance(raw_upstream, Mapping):
+            raise ValueError("lineage upstream must be a mapping of stage to artifact ids")
+        upstream: dict[str, tuple[str, ...]] = {}
+        for stage, ids in raw_upstream.items():
+            if not isinstance(ids, list | tuple) or not all(isinstance(i, str) for i in ids):
+                raise ValueError(f"lineage upstream of {stage!r} must be a list of artifact ids")
+            upstream[str(stage)] = tuple(ids)
+        return cls(upstream=upstream, **values)
+
 
 @dataclass(frozen=True, kw_only=True)
 class CatalogEntry:
@@ -78,6 +111,81 @@ class CatalogEntry:
     ref: ArtifactRef
     lineage: Lineage
     run_index: int
+
+    def to_document(self) -> dict[str, Any]:
+        """Return the JSON-compatible form of the entry, as a catalog file lists it."""
+        return {
+            **self.ref.to_document(),
+            "run_index": self.run_index,
+            "lineage": self.lineage.to_document(),
+        }
+
+    @classmethod
+    def from_document(cls, document: Mapping[str, Any]) -> CatalogEntry:
+        """Rebuild an entry from its persisted form.
+
+        Args:
+            document: A mapping produced by :meth:`to_document`.
+
+        Returns:
+            The entry.
+
+        Raises:
+            ValueError: If the artifact reference, the run index or the lineage is invalid.
+        """
+        if not isinstance(document, Mapping):
+            raise ValueError("a catalog entry must be a mapping")
+        run_index = document.get("run_index")
+        if not isinstance(run_index, int) or isinstance(run_index, bool) or run_index < 0:
+            raise ValueError("a catalog entry needs a non-negative integer run_index")
+        lineage = document.get("lineage") or {}
+        if not isinstance(lineage, Mapping):
+            raise ValueError("a catalog entry's lineage must be a mapping")
+        return cls(
+            ref=ArtifactRef.from_document(document),
+            lineage=Lineage.from_document(lineage),
+            run_index=run_index,
+        )
+
+
+CATALOG_SCHEMA_VERSION = "0.1.0"
+"""Version of the catalog file format."""
+
+
+def load_catalog(path: str | os.PathLike[str]) -> StaticCatalog:
+    """Load a catalog file listing the runs available to select from.
+
+    The file is a JSON document ``{"schema_version": "0.1.0", "entries": [...]}`` whose
+    entries are :meth:`CatalogEntry.to_document` mappings. It is an explicit input: nothing
+    is discovered by scanning directories or matching names.
+
+    Args:
+        path: Path of the catalog file.
+
+    Returns:
+        The catalog.
+
+    Raises:
+        ValueError: If the file cannot be read, follows another schema version or holds an
+            invalid entry.
+    """
+    source = Path(path)
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot read catalog {source}: {error}") from error
+    if not isinstance(document, dict) or document.get("schema_version") != CATALOG_SCHEMA_VERSION:
+        raise ValueError(f"catalog {source} must follow schema_version {CATALOG_SCHEMA_VERSION!r}")
+    entries = document.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError(f"catalog {source} needs an 'entries' list")
+    loaded = []
+    for index, raw in enumerate(entries):
+        try:
+            loaded.append(CatalogEntry.from_document(raw))
+        except ValueError as error:
+            raise ValueError(f"catalog {source}: entry {index} is invalid: {error}") from error
+    return StaticCatalog(loaded)
 
 
 class ArtifactCatalog(Protocol):

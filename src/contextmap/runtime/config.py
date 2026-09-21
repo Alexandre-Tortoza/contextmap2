@@ -285,6 +285,27 @@ class EffectiveConfig:
     digest: str
     sources: tuple[ConfigurationSource, ...]
 
+    def to_document(self) -> dict[str, Any]:
+        """Return the JSON-compatible document persisted as ``effective_config.json``.
+
+        Returns:
+            The schema version, the digest, the resolved configuration and the layers
+            that produced it. It contains no secret and no override value.
+        """
+        return {
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "digest": self.digest,
+            "config": self.config.to_document(),
+            "sources": [
+                {
+                    "kind": source.kind,
+                    "identity": source.identity,
+                    "content_hash": source.content_hash,
+                }
+                for source in self.sources
+            ],
+        }
+
 
 def resolve_effective_config(
     *,
@@ -582,27 +603,7 @@ def write_effective_config(effective: EffectiveConfig, directory: str | os.PathL
     """
     target = Path(directory)
     final = target / EFFECTIVE_CONFIG_FILENAME
-    text = (
-        json.dumps(
-            {
-                "schema_version": CONFIG_SCHEMA_VERSION,
-                "digest": effective.digest,
-                "config": effective.config.to_document(),
-                "sources": [
-                    {
-                        "kind": source.kind,
-                        "identity": source.identity,
-                        "content_hash": source.content_hash,
-                    }
-                    for source in effective.sources
-                ],
-            },
-            indent=2,
-            sort_keys=True,
-            allow_nan=False,
-        )
-        + "\n"
-    )
+    text = json.dumps(effective.to_document(), indent=2, sort_keys=True, allow_nan=False) + "\n"
     try:
         return publish_text(target, EFFECTIVE_CONFIG_FILENAME, text)
     except FileExistsError:
