@@ -68,6 +68,25 @@ class TestCatalogAgainstCapabilities:
         assert optional == ["point_representation"]
         assert not CANONICAL_PRESET.stage("point_representation").default_enabled
 
+    def test_every_input_is_wired_to_a_stage_that_produces_its_contract(self) -> None:
+        stages = {stage.stage_id: stage for stage in CANONICAL_PRESET.stages}
+
+        for stage in CANONICAL_PRESET.stages:
+            for item in stage.inputs:
+                assert item.source in stages, f"{stage.stage_id}.{item.name}"
+                assert stages[item.source].output == item.contract, f"{stage.stage_id}.{item.name}"
+
+    def test_every_stage_declares_what_it_produces(self) -> None:
+        assert all(stage.output for stage in CANONICAL_PRESET.stages)
+
+    def test_the_canonical_topology_resolves_without_structural_problems(self) -> None:
+        from contextmap.runtime import resolve_effective_config, resolve_plan
+
+        plan = resolve_plan(resolve_effective_config())
+
+        assert plan.problems == ()
+        assert plan.order is not None
+
     def test_the_canonical_profile_is_a_known_preset(self) -> None:
         assert PRESETS[CANONICAL_PROFILE_ID] is CANONICAL_PRESET
 

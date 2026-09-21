@@ -31,7 +31,6 @@ import json
 import math
 import os
 import re
-import tempfile
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -39,6 +38,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias
 
+from contextmap.runtime._files import publish_text
 from contextmap.runtime.catalog import (
     CANONICAL_PROFILE_ID,
     COMPONENTS,
@@ -359,19 +359,35 @@ def check_selection(config: RuntimeConfig) -> tuple[ConfigProblem, ...]:
     """
     problems = []
     for component_id, component in config.components.items():
-        if component.backend is None:
-            supported = ", ".join(sorted(COMPONENTS[component_id].backends))
-            capability, slot = component_id.split(".", 1)
-            problems.append(
-                ConfigProblem(
-                    path=f"components.{component_id}",
-                    message=(
-                        f"no backend selected; choose one of: {supported} "
-                        f"(components.{capability}.{slot}.backend=<id>)"
-                    ),
-                )
-            )
+        problem = check_component_selection(component_id, component)
+        if problem is not None:
+            problems.append(problem)
     return tuple(problems)
+
+
+def check_component_selection(
+    component_id: str, component: ComponentConfig
+) -> ConfigProblem | None:
+    """Report a variation point that has no backend selected.
+
+    Args:
+        component_id: Identity of the variation point, ``"<capability>.<slot>"``.
+        component: Its resolved configuration.
+
+    Returns:
+        The problem, or ``None`` when a backend is selected.
+    """
+    if component.backend is not None:
+        return None
+    supported = ", ".join(sorted(COMPONENTS[component_id].backends))
+    capability, slot = component_id.split(".", 1)
+    return ConfigProblem(
+        path=f"components.{component_id}",
+        message=(
+            f"no backend selected; choose one of: {supported} "
+            f"(components.{capability}.{slot}.backend=<id>)"
+        ),
+    )
 
 
 def check_availability(
@@ -551,7 +567,6 @@ def write_effective_config(effective: EffectiveConfig, directory: str | os.PathL
             configuration.
     """
     target = Path(directory)
-    target.mkdir(parents=True, exist_ok=True)
     final = target / EFFECTIVE_CONFIG_FILENAME
     text = (
         json.dumps(
@@ -574,23 +589,15 @@ def write_effective_config(effective: EffectiveConfig, directory: str | os.PathL
         )
         + "\n"
     )
-    descriptor, temporary_name = tempfile.mkstemp(dir=target, prefix=".tmp-", suffix=".json")
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        try:
-            # link falha se o destino existir: publicação sem sobrescrever, atômica.
-            os.link(temporary, final)
-        except FileExistsError:
-            existing = read_effective_config(final)
-            if existing.digest != effective.digest:
-                raise ConfigurationError.single(
-                    f"{final} already holds a different effective configuration "
-                    f"({existing.digest}); a published run is never rewritten"
-                ) from None
-    finally:
-        temporary.unlink(missing_ok=True)
+        return publish_text(target, EFFECTIVE_CONFIG_FILENAME, text)
+    except FileExistsError:
+        existing = read_effective_config(final)
+        if existing.digest != effective.digest:
+            raise ConfigurationError.single(
+                f"{final} already holds a different effective configuration "
+                f"({existing.digest}); a published run is never rewritten"
+            ) from None
     return final
 
 

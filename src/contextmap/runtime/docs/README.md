@@ -14,7 +14,9 @@ flowchart LR
     ENV["Ambiente"] -. só segredos .-> SEC["resolve_secrets()"]
     EFF --> COMP["compose()<br/>composition root"]
     COMP --> IMPL["ComposedRuntime<br/>ports das capabilities"]
-    IMPL -. planejado .-> DAG["DAG, reuse, lifecycle, CLI"]
+    EFF --> PLAN["resolve_plan()<br/>PipelinePlan"]
+    PLAN --> SCOPE["scope() → preflight()<br/>run_plan()"]
+    IMPL -. planejado .-> CLI["CLI"]
 ```
 
 ## O que este módulo explicitamente não possui
@@ -29,7 +31,9 @@ Existe a **configuração versionada e a resolução da configuração efetiva**
 
 Existe também a **composition root** (issue #162): `compose()` constrói, a partir da configuração efetiva, as implementações de ingestion, percepção visual, state estimation, point representation e semantic fusion atrás dos ports das capabilities, com falha explícita para backend indisponível ou sem runtime e sem qualquer fallback. Detalhes em [`composition.md`](composition.md).
 
-O DAG, o reuse, a seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
+Existe ainda o **DAG de estágios** (issue #163): `resolve_plan()` deriva da configuração uma topologia determinística e inspecionável, `plan.scope()` escolhe um pipeline completo ou um subgrafo que reutiliza artifacts fornecidos, `preflight()` valida tudo sem carregar modelo, e `run_plan()` executa em ordem de dependência com executores intercambiáveis (incluindo estágios falsos em CI). Detalhes em [`pipeline.md`](pipeline.md).
+
+O reuso por identidade, a seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -44,6 +48,12 @@ O DAG, o reuse, a seleção de runs, a CLI e o lifecycle são as demais issues d
 - `compose()`, `ComposedRuntime`, `FeatureBuildScope`, `RuntimeProvider` — a composition root e o estado de execução de que os extratores de features precisam.
 - `CompositionError`, `BackendConfigurationError`, `BackendUnavailableError`, `BackendRuntimeMissingError`, `StageUnavailableError` — falhas de composição, todas explícitas.
 - `check_component_availability()` — a checagem de disponibilidade de um único ponto de variação.
+- `resolve_plan()`, `PipelinePlan`, `PlannedStage`, `PlannedInput` — a topologia derivada da configuração, com a ordem e as identidades.
+- `StageInput`, `Interception` — a declaração de entradas tipadas e de inserção de um estágio opcional.
+- `ExecutionPlan`, `preflight()`, `PreflightReport` — o escopo de uma execução e a validação antes dela.
+- `run_plan()`, `StageExecutor`, `StageRequest`, `ArtifactRef`, `ExecutionRecord`, `StageRecord` — a execução e o registro exato de entradas e saídas.
+- `write_plan()`, `write_execution_record()`, `read_plan_document()` — a persistência da topologia e da execução.
+- `PipelineError`, `PreflightError`, `PlanDocumentError`, `StageExecutionError` — falhas do DAG, todas explícitas.
 
 ## Módulos consumidos
 

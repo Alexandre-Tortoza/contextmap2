@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
 
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import (
-    ConfigurationError,
-    EffectiveConfig,
-    resolve_effective_config,
-)
+from contextmap.runtime import ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -47,75 +43,6 @@ from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDis
 
 REGION = "visual_perception.region_discovery"
 INTERPRETER = "visual_perception.semantic_interpretation"
-SHA_A = "a" * 40
-SHA_B = "b" * 40
-
-SUPPORT_POLICY = {
-    "support_type": "neighborhood",
-    "method": "radius",
-    "radius_m": 0.5,
-    "k": None,
-    "max_neighbors": None,
-    "preparation": {"centering": "centroid", "scale_normalization": "none"},
-}
-
-
-def _document() -> dict[str, Any]:
-    return {
-        "pipeline": {"stages": {"point_representation": True}},
-        "resources": {"device": "cpu"},
-        "components": {
-            "ingestion": {"source_adapter": {"backend": "ros1_bag"}},
-            "visual_perception": {
-                "region_discovery": {
-                    "backend": "sam3",
-                    "sam3": {"checkpoint": "sam3-x", "strategy": "text_prompt", "prompt": "chair"},
-                },
-                "dense_features": {
-                    "backend": "dinov3",
-                    "dinov3": {"checkpoint": "facebook/dinov3-x", "revision": SHA_A},
-                },
-                "region_features": {
-                    "backend": "clip",
-                    "clip": {"checkpoint": "openai/clip-x", "revision": SHA_B},
-                },
-                "semantic_interpretation": {
-                    "backend": "qwen",
-                    "qwen": {
-                        "model": "Qwen/Qwen-x",
-                        "precision": "float32",
-                        "max_new_tokens": 256,
-                        "temperature": 0.0,
-                    },
-                },
-            },
-            "state_estimation": {
-                "estimator": {
-                    "backend": "external_pose",
-                    "external_pose": {"reference_frame": "map", "body_frame": "base"},
-                }
-            },
-            "point_representation": {
-                "encoder": {
-                    "backend": "geometric_descriptor",
-                    "geometric_descriptor": {"support_policy": SUPPORT_POLICY},
-                }
-            },
-            "semantic_fusion": {
-                "support": {
-                    "backend": "geometry-jaccard-support-v1",
-                    "geometry-jaccard-support-v1": {"min_geometry_count": 5, "min_overlap": 0.3},
-                },
-                "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
-            },
-        },
-    }
-
-
-def _effective(tmp_path: Path, document: dict[str, Any] | None = None) -> EffectiveConfig:
-    file = tmp_path / "config.json"
-    file.write_text(json.dumps(document or _document()), encoding="utf-8")
-    return resolve_effective_config(files=[file])
 
 
 class _Recorder:
@@ -154,7 +81,7 @@ def _compose(
     recorder = recorder or _Recorder()
     options.setdefault("module_available", lambda _name: True)
     options.setdefault("environ", {})
-    return compose(_effective(tmp_path, document), providers=_providers(recorder), **options)
+    return compose(effective_from(tmp_path, document), providers=_providers(recorder), **options)
 
 
 class TestCanonicalComposition:
@@ -176,7 +103,7 @@ class TestCanonicalComposition:
         self, tmp_path: Path
     ) -> None:
         recorder = _Recorder()
-        document = _document()
+        document = selected_document()
         document["resources"]["device"] = "cuda"
         composed = _compose(tmp_path, document=document, recorder=recorder)
 
@@ -189,7 +116,7 @@ class TestCanonicalComposition:
         )
 
     def test_swapping_a_backend_is_a_configuration_change_only(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["region_discovery"] = {
             "backend": "florence2",
             "florence2": {"checkpoint": "microsoft/Florence-2-x", "task": "<OD>"},
@@ -200,7 +127,7 @@ class TestCanonicalComposition:
         assert isinstance(composed.region_discovery, Florence2RegionDiscovery)
 
     def test_quality_aware_policy_is_built_with_its_nested_values(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["semantic_fusion"]["accumulation"] = {
             "backend": "quality-aware-evidence-accumulation-v1",
             "quality-aware-evidence-accumulation-v1": {
@@ -223,7 +150,7 @@ class TestCanonicalComposition:
         self, tmp_path: Path
     ) -> None:
         recorder = _Recorder()
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
             "gemini": {"model": "gemini-x", "timeout_s": 30, "max_retries": 2, "temperature": 0.0},
@@ -264,7 +191,7 @@ class TestFeatureBackendsAreRunScoped:
         assert isinstance(region, ClipVisualFeatureBackend)
 
     def test_the_region_features_slot_fixes_the_clip_scope(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["region_features"]["clip"]["scope"] = "global"
 
         with pytest.raises(BackendConfigurationError, match="scope"):
@@ -273,7 +200,7 @@ class TestFeatureBackendsAreRunScoped:
     def test_configuration_errors_surface_at_composition_not_at_run_time(
         self, tmp_path: Path
     ) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["dense_features"]["dinov3"]["revision"] = "main"
 
         with pytest.raises(BackendConfigurationError, match="revision"):
@@ -284,7 +211,7 @@ class TestOtherBackends:
     def test_fast_lio_gets_its_bundled_subprocess_runner_from_configuration(
         self, tmp_path: Path
     ) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["state_estimation"]["estimator"] = {
             "backend": "fast_lio",
             "fast_lio": {
@@ -304,7 +231,7 @@ class TestOtherBackends:
         assert isinstance(composed.state_estimator, FastLioEstimator)
 
     def test_fast_lio_without_a_runner_is_a_configuration_error(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["state_estimation"]["estimator"] = {
             "backend": "fast_lio",
             "fast_lio": {
@@ -319,7 +246,7 @@ class TestOtherBackends:
             _compose(tmp_path, document=document)
 
     def test_fast_lio_rejects_a_command_without_the_placeholders(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["state_estimation"]["estimator"] = {
             "backend": "fast_lio",
             "fast_lio": {
@@ -337,7 +264,7 @@ class TestOtherBackends:
     def test_a_learned_encoder_needs_a_support_policy_and_a_caller_runtime(
         self, tmp_path: Path
     ) -> None:
-        document = _document()
+        document = selected_document()
         ptv3 = {
             "variant": "ptv3-base",
             "checkpoint": "ptv3-x",
@@ -363,7 +290,7 @@ class TestOtherBackends:
         recorder = _Recorder()
         providers = {**_providers(recorder), "point_representation.encoder": recorder.provider()}
         composed = compose(
-            _effective(tmp_path, document),
+            effective_from(tmp_path, document),
             providers=providers,
             module_available=lambda _name: True,
             environ={},
@@ -373,7 +300,7 @@ class TestOtherBackends:
     def test_region_discovery_forwards_its_pass_and_normalization_policies(
         self, tmp_path: Path
     ) -> None:
-        document = _document()
+        document = selected_document()
         sam3 = document["components"]["visual_perception"]["region_discovery"]["sam3"]
         sam3["pass_config"] = {"include_full_frame": True, "max_candidates_per_pass": 10}
         sam3["normalization_config"] = {"minimum_area_pixels": 32}
@@ -387,7 +314,7 @@ class TestOtherBackends:
     def test_a_mask_conditioned_extractor_needs_the_mask_source_of_its_run(
         self, tmp_path: Path
     ) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["region_features"] = {
             "backend": "alphaclip",
             "alphaclip": {
@@ -415,7 +342,7 @@ class TestOtherBackends:
     ) -> None:
         recorder = _Recorder()
         composed = compose(
-            _effective(tmp_path),
+            effective_from(tmp_path),
             providers={
                 **_providers(recorder),
                 "visual_perception.dense_features": recorder.provider("dino"),
@@ -466,7 +393,7 @@ class TestExplicitFailures:
     ) -> None:
         with pytest.raises(BackendRuntimeMissingError) as error:
             compose(
-                _effective(tmp_path),
+                effective_from(tmp_path),
                 providers={INTERPRETER: _Recorder().provider()},
                 module_available=lambda _name: True,
                 environ={},
@@ -482,7 +409,7 @@ class TestExplicitFailures:
             _compose(tmp_path, module_available=lambda name: name != "torch")
 
     def test_a_missing_secret_is_reported_by_name(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
             "gemini": {"model": "gemini-x", "timeout_s": 30, "max_retries": 2, "temperature": 0.0},
@@ -495,7 +422,7 @@ class TestExplicitFailures:
         self, tmp_path: Path
     ) -> None:
         recorder = _Recorder()
-        document = _document()
+        document = selected_document()
         document["components"]["visual_perception"]["region_discovery"]["sam3"] = {
             "checkpoint": "x",
             "strategy": "text_prompt",
@@ -507,14 +434,14 @@ class TestExplicitFailures:
         assert recorder.calls == []
 
     def test_an_unknown_parameter_names_the_valid_ones(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["state_estimation"]["estimator"]["external_pose"]["nope"] = 1
 
         with pytest.raises(BackendConfigurationError, match="reference_frame"):
             _compose(tmp_path, document=document)
 
     def test_an_incomplete_selection_is_a_configuration_error(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["components"]["state_estimation"]["estimator"] = {"backend": None}
 
         with pytest.raises(ConfigurationError, match=r"state_estimation\.estimator"):
@@ -523,7 +450,7 @@ class TestExplicitFailures:
 
 class TestStagesAndExtensionPoints:
     def test_a_stage_that_is_not_selected_is_not_built(self, tmp_path: Path) -> None:
-        document = _document()
+        document = selected_document()
         document["pipeline"]["stages"]["point_representation"] = False
 
         composed = _compose(tmp_path, document=document)

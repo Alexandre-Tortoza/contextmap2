@@ -21,6 +21,19 @@ CANONICAL_PROFILE_ID = "canonical/1"
 
 _ROSBAGS_HINT = "pip install 'contextmap[ros1]'"
 
+# Contratos que atravessam as arestas do DAG: os artifacts imutáveis de docs/PIPELINE.md.
+SEQUENCE = "SequenceArtifact"
+PERCEPTION = "PerceptionRunArtifact"
+TRAJECTORY = "StateEstimationRunArtifact"
+GEOMETRY = "GeometricMapArtifact"
+ASSOCIATION = "SensorAssociationRunArtifact"
+REPRESENTATION = "PointRepresentationRunArtifact"
+FUSION = "SemanticFusionRunArtifact"
+ENTITIES = "SemanticEntityArtifact"
+RESOLUTION = "EntityResolutionRunArtifact"
+RELATIONS = "SpatialRelationsRunArtifact"
+CONTEXT_MAP = "ContextMapArtifact"
+
 
 @dataclass(frozen=True, kw_only=True)
 class BackendSpec:
@@ -69,6 +82,41 @@ class ComponentSpec:
 
 
 @dataclass(frozen=True, kw_only=True)
+class StageInput:
+    """One typed input of a stage, wired to the stage that produces it.
+
+    Attributes:
+        name: Input name, unique inside the stage.
+        contract: Identity of the artifact kind the input consumes.
+        source: Stage that produces it in the base topology.
+        optional: Whether the stage runs without it. An optional input is dropped when
+            its source stage does not take part, and wired when it does.
+    """
+
+    name: str
+    contract: str
+    source: str
+    optional: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class Interception:
+    """Where an optional stage inserts itself between a producer and a consumer.
+
+    The intercepting stage consumes what the consumer's input used to read and produces
+    the same contract, so the consumer keeps reading its declared contract and never
+    learns which stage produced it.
+
+    Attributes:
+        consumer: Stage whose input is redirected.
+        input_name: The redirected input of ``consumer``.
+    """
+
+    consumer: str
+    input_name: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class StageDeclaration:
     """One node of a runtime topology.
 
@@ -80,6 +128,9 @@ class StageDeclaration:
         available: Whether the capability that owns the stage is implemented.
         unavailable_reason: Why the stage cannot run, when ``available`` is false.
         components: Component identities this stage needs a backend for.
+        inputs: Typed inputs, each wired to its producing stage.
+        output: Identity of the artifact kind the stage produces.
+        intercepts: For an optional stage, the input it inserts itself into.
     """
 
     stage_id: str
@@ -89,6 +140,9 @@ class StageDeclaration:
     available: bool = True
     unavailable_reason: str = ""
     components: tuple[str, ...] = ()
+    inputs: tuple[StageInput, ...] = ()
+    output: str | None = None
+    intercepts: Interception | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -219,7 +273,14 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 """Every selectable variation point, keyed by ``"<capability>.<slot>"``."""
 
 
-def _unimplemented(stage_id: str, capability: str, milestone: int) -> StageDeclaration:
+def _unimplemented(
+    stage_id: str,
+    capability: str,
+    milestone: int,
+    *,
+    inputs: tuple[StageInput, ...],
+    output: str,
+) -> StageDeclaration:
     return StageDeclaration(
         stage_id=stage_id,
         capability=capability,
@@ -227,6 +288,8 @@ def _unimplemented(stage_id: str, capability: str, milestone: int) -> StageDecla
         unavailable_reason=(
             f"the {capability} capability is not implemented yet (milestone #{milestone})"
         ),
+        inputs=inputs,
+        output=output,
     )
 
 
@@ -242,6 +305,7 @@ CANONICAL_PRESET = RuntimePreset(
             stage_id="ingestion",
             capability="ingestion",
             components=("ingestion.source_adapter",),
+            output=SEQUENCE,
         ),
         StageDeclaration(
             stage_id="visual_perception",
@@ -252,30 +316,102 @@ CANONICAL_PRESET = RuntimePreset(
                 "visual_perception.region_features",
                 "visual_perception.semantic_interpretation",
             ),
+            inputs=(StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),),
+            output=PERCEPTION,
         ),
         StageDeclaration(
             stage_id="state_estimation",
             capability="state_estimation",
             components=("state_estimation.estimator",),
+            inputs=(StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),),
+            output=TRAJECTORY,
         ),
-        StageDeclaration(stage_id="geometric_mapping", capability="geometric_mapping"),
-        StageDeclaration(stage_id="sensor_association", capability="sensor_association"),
+        StageDeclaration(
+            stage_id="geometric_mapping",
+            capability="geometric_mapping",
+            inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+                StageInput(name="trajectory", contract=TRAJECTORY, source="state_estimation"),
+            ),
+            output=GEOMETRY,
+        ),
+        StageDeclaration(
+            stage_id="sensor_association",
+            capability="sensor_association",
+            inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+                StageInput(name="perception", contract=PERCEPTION, source="visual_perception"),
+                StageInput(name="trajectory", contract=TRAJECTORY, source="state_estimation"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
+            output=ASSOCIATION,
+        ),
         StageDeclaration(
             stage_id="point_representation",
             capability="point_representation",
             optional=True,
             default_enabled=False,
             components=("point_representation.encoder",),
+            inputs=(
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+                StageInput(
+                    name="association",
+                    contract=ASSOCIATION,
+                    source="sensor_association",
+                    optional=True,
+                ),
+            ),
+            output=REPRESENTATION,
         ),
         StageDeclaration(
             stage_id="semantic_fusion",
             capability="semantic_fusion",
             components=("semantic_fusion.support", "semantic_fusion.accumulation"),
+            inputs=(
+                StageInput(name="association", contract=ASSOCIATION, source="sensor_association"),
+                StageInput(name="perception", contract=PERCEPTION, source="visual_perception"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+                StageInput(
+                    name="representation",
+                    contract=REPRESENTATION,
+                    source="point_representation",
+                    optional=True,
+                ),
+            ),
+            output=FUSION,
         ),
-        _unimplemented("semantic_mapping", "semantic_mapping", 12),
-        _unimplemented("entity_resolution", "entity_resolution", 13),
-        _unimplemented("spatial_relations", "spatial_relations", 14),
-        _unimplemented("context_map", "artifact", 15),
+        _unimplemented(
+            "semantic_mapping",
+            "semantic_mapping",
+            12,
+            inputs=(StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),),
+            output=ENTITIES,
+        ),
+        _unimplemented(
+            "entity_resolution",
+            "entity_resolution",
+            13,
+            inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
+            output=RESOLUTION,
+        ),
+        _unimplemented(
+            "spatial_relations",
+            "spatial_relations",
+            14,
+            inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
+            output=RELATIONS,
+        ),
+        _unimplemented(
+            "context_map",
+            "artifact",
+            15,
+            inputs=(
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
+            ),
+            output=CONTEXT_MAP,
+        ),
     ),
 )
 
