@@ -100,6 +100,14 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `encode_reference_set()`/`decode_reference_set()`/`write_reference_set()`/`read_reference_set()` — persistência imutável com digest verificado na leitura.
 - `verify_annotation_files()` e `require_version_bump_on_change()` — hashes dos arquivos de anotação e regra de que a versão muda quando o conteúdo muda.
 
+### Anotações de referência
+
+- `AnnotationFamily` — as sete famílias versionadas (`regions`, `semantics`, `geometry`, `identity`, `relations`, `visibility`, `scene_context`) e seus schemas `contextmap.reference.<família>/v1`.
+- `RegionAnnotationSet`, `SemanticAnnotationSet`, `GeometryAnnotationSet`, `IdentityAnnotationSet`, `RelationAnnotationSet`, `VisibilityAnnotationSet` e `SceneContextAnnotationSet` — o conteúdo de cada família; anotações parciais, ambiguidade e desconhecido são valores explícitos, e ausência nunca é verdade negativa.
+- `LabelNormalization` — política de normalização explícita e versionada (`casefold-exact/1`, `casefold-alias/1`) sob a qual rótulos literais são comparados.
+- `write_annotation_set()`/`read_annotation_set()`/`encode_annotation_set()`/`decode_annotation_set()` — persistência imutável e leitura despachada pelo schema.
+- `ground_truth_regions()` e `SemanticAnnotationSet.to_semantic_annotation()` — entrega das anotações aos avaliadores de Region Discovery e Semantic Interpretation.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -120,6 +128,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.

@@ -70,5 +70,5 @@ flowchart LR
 ## O que este módulo não faz
 
 - não valida vazamento entre splits, duplicidade de conteúdo nem a política de proveniência (integridade);
-- não define o conteúdo dos arquivos de anotação, só o schema declarado e o hash (famílias de anotação);
+- não define o conteúdo dos arquivos de anotação, só o schema declarado e o hash; as famílias e seus schemas estão em [`annotations.md`](annotations.md);
 - não substitui `RegionDiscoveryReferenceSet`, que continua sendo o formato da avaliação de Region Discovery.
