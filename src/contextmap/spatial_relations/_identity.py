@@ -50,6 +50,22 @@ def reference_key(reference: ResolvedEntityReference) -> tuple[str, str]:
     return (reference.resolution_run_id, reference.resolved_entity_id)
 
 
+def directed_key(
+    subject: ResolvedEntityReference, predicate: RelationPredicate, obj: ResolvedEntityReference
+) -> tuple[str, str, str, str, str]:
+    """Order directed pairs canonically: by subject, then predicate, then object.
+
+    Args:
+        subject: The entity the statement is about.
+        predicate: The predicate.
+        obj: The entity it is related to.
+
+    Returns:
+        The sort key; two different directed pairs never share one.
+    """
+    return (*reference_key(subject), predicate.value, *reference_key(obj))
+
+
 def candidate_digest(
     subject: ResolvedEntityReference,
     predicate: RelationPredicate,

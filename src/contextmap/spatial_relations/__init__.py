@@ -26,6 +26,15 @@ from contextmap.spatial_relations.contact_predicates import (
     evaluate_contact_candidates,
     evaluate_contact_predicate,
 )
+from contextmap.spatial_relations.decision import (
+    CONSERVATIVE_DECISION_POLICY_ID,
+    DecisionRule,
+    EvidenceUse,
+    RelationDecision,
+    RelationDecisionResult,
+    decide_relations,
+    decision_policy_fingerprint,
+)
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
     EvidenceCaveatKind,
@@ -64,8 +73,10 @@ from contextmap.spatial_relations.models import (
 )
 from contextmap.spatial_relations.serialization import (
     decode_relation,
+    decode_relation_decision,
     decode_relation_evidence,
     encode_relation,
+    encode_relation_decision,
     encode_relation_evidence,
 )
 from contextmap.spatial_relations.taxonomy import (
@@ -80,6 +91,7 @@ from contextmap.spatial_relations.taxonomy import (
 
 __all__ = [
     "CANDIDATE_POLICY_ID",
+    "CONSERVATIVE_DECISION_POLICY_ID",
     "CONTACT_POLICY_ID",
     "CONTACT_PREDICATES",
     "FRAME_CONVENTIONS_POLICY_ID",
@@ -94,8 +106,10 @@ __all__ = [
     "CandidateProvenance",
     "CandidateReason",
     "ContactPredicatePolicy",
+    "DecisionRule",
     "EvidenceCaveat",
     "EvidenceCaveatKind",
+    "EvidenceUse",
     "FrameConventionError",
     "FrameConventions",
     "FrameRequirement",
@@ -108,6 +122,8 @@ __all__ = [
     "Relation",
     "RelationCandidate",
     "RelationCandidateSet",
+    "RelationDecision",
+    "RelationDecisionResult",
     "RelationEvidence",
     "RelationEvidenceChannel",
     "RelationEvidenceId",
@@ -121,9 +137,13 @@ __all__ = [
     "RelationUncertaintyKind",
     "SkippedPredicate",
     "UndeclaredAxisError",
+    "decide_relations",
+    "decision_policy_fingerprint",
     "decode_relation",
+    "decode_relation_decision",
     "decode_relation_evidence",
     "encode_relation",
+    "encode_relation_decision",
     "encode_relation_evidence",
     "evaluate_contact_candidates",
     "evaluate_contact_predicate",

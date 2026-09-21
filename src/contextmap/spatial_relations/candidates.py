@@ -54,7 +54,11 @@ from contextmap.spatial_relations._bounds import (
     directed_interval,
 )
 from contextmap.spatial_relations._checks import require_canonical, require_finite, require_present
-from contextmap.spatial_relations._identity import reference_key, require_relatable_pair
+from contextmap.spatial_relations._identity import (
+    directed_key,
+    reference_key,
+    require_relatable_pair,
+)
 from contextmap.spatial_relations.frame_conventions import AxisDirection, FrameConventions
 from contextmap.spatial_relations.taxonomy import (
     TAXONOMY_VERSION,
@@ -569,11 +573,7 @@ def _axis_of(role: _AxisRole | None, conventions: FrameConventions) -> AxisDirec
 
 def _directed_key(item: RelationCandidate | CandidateExclusion) -> tuple[str, str, str, str, str]:
     """Canonical order of a directed pair: subject, predicate, object."""
-    return (
-        *reference_key(item.subject_entity_ref),
-        item.predicate.value,
-        *reference_key(item.object_entity_ref),
-    )
+    return directed_key(item.subject_entity_ref, item.predicate, item.object_entity_ref)
 
 
 def _require_candidate_shape(
