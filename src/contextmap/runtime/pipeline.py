@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.runtime._files import publish_text
-from contextmap.runtime.artifacts import ArtifactRef
+from contextmap.runtime.artifacts import ArtifactRef, artifact_directory
 from contextmap.runtime.catalog import PRESETS, RuntimePreset
 from contextmap.runtime.config import (
     ComponentConfig,
@@ -347,6 +347,9 @@ class StageRequest:
             finalizes it atomically: the directory does not exist yet, and an executor never
             computes a path of its own. ``None`` only when the plan runs without a journal
             (an in-memory execution), where an executor that persists cannot run.
+        workspace: The workspace root the run lives in, or ``None`` without a journal. An
+            executor opens an input through :meth:`directory_of`, which resolves the location of
+            the artifact (possibly written by an earlier run) inside this workspace.
     """
 
     stage_id: str
@@ -354,6 +357,23 @@ class StageRequest:
     components: Mapping[str, ComponentConfig]
     config_digest: str
     output_dir: Path | None = None
+    workspace: Path | None = None
+
+    def directory_of(self, ref: ArtifactRef) -> Path:
+        """Return the directory of an input artifact.
+
+        Args:
+            ref: One of the request's input handles.
+
+        Returns:
+            The directory of the artifact, wherever the run that wrote it lives.
+
+        Raises:
+            ValueError: If the request has no workspace, or the handle has no valid location.
+        """
+        if self.workspace is None:
+            raise ValueError("this request has no workspace: run the plan with a journal")
+        return artifact_directory(self.workspace, ref)
 
 
 class StageExecutor(Protocol):
@@ -923,6 +943,7 @@ def _run_stages(
                 components=stage.component_configs,
                 config_digest=stage.config_digest,
                 output_dir=None if run_directory is None else run_directory / stage.stage_id,
+                workspace=None if run_directory is None else run_directory.parent.parent,
             )
             try:
                 produced = executor.execute(request)
@@ -937,6 +958,25 @@ def _run_stages(
                     message=str(error),
                     elapsed=time.monotonic() - began,
                 ) from error
+            expected = (
+                None
+                if request.output_dir is None or request.workspace is None
+                else request.output_dir.relative_to(request.workspace).as_posix()
+            )
+            if expected is not None and produced.location not in (None, expected):
+                raise _stage_failed(
+                    emitter,
+                    stage.stage_id,
+                    progress,
+                    redact,
+                    category=FailureCategory.CONTRACT.value,
+                    exception_type="ContractViolation",
+                    message=(
+                        f"reported the location {produced.location!r}; the stage was given "
+                        f"{expected!r}"
+                    ),
+                    elapsed=time.monotonic() - began,
+                )
             if produced.contract != stage.output or produced.stage_id != stage.stage_id:
                 raise _stage_failed(
                     emitter,
