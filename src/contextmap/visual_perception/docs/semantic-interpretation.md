@@ -220,6 +220,51 @@ limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
 
+`GeminiSemanticConfig` também registra `structured_output` (pede
+`response_mime_type=application/json`; o schema continua no prompt canônico
+versionado, porque a API aceita só um subconjunto de JSON Schema e não há como
+validá-lo sem chamada real) e `retry_backoff_s`, a base do backoff exponencial
+entre tentativas (tentativa `n` espera `retry_backoff_s * 2**(n-1)`, limitada a
+60 s). Sem `retry_wait` injetado, o adapter dorme esse tempo, para que um 429
+não seja repetido imediatamente.
+
+### Cliente `google-genai` (`GoogleGenAIGeminiClient`)
+
+`GoogleGenAIGeminiClient` implementa `GeminiClient` com o SDK oficial
+`google-genai`, importado de forma lazy (`GeminiDependencyError` se ausente; não
+há extra em `pyproject.toml`, seguindo o padrão de torch/transformers). Construí-lo
+não contata o serviço; **`generate` envia os bytes das views e o prompt para a
+API do Google**, então quem o chama precisa ter decidido que aqueles frames
+podem sair da máquina.
+
+- **Credencial.** Chave explícita ou variável `GEMINI_API_KEY` (nome
+  configurável). Sem chave, `GeminiCredentialError` na construção. A chave é
+  privada, não aparece em `repr`, e é removida de toda mensagem levantada; as
+  exceções do provedor não são encadeadas (`from None`), pois o texto delas
+  poderia ecoar a chave. Nada da credencial entra no fingerprint, na
+  configuração efetiva, nos outputs nem no debug.
+- **Requisição.** As views seguem em ordem como partes inline (`png`, `jpeg` ou
+  `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
+  `thinking_budget`, `structured_output` e o timeout por tentativa
+  (`timeout_s`, em milissegundos no SDK) vêm da configuração.
+- **Falhas.** Timeout, falha de transporte, HTTP 408/429 e 5xx são
+  `GeminiTransientError` e entram nos retries do adapter. Demais erros HTTP
+  (400/401/403/404), exceções inesperadas, prompt bloqueado, resposta sem
+  candidatos, `finish_reason` diferente de `STOP`/`MAX_TOKENS` e texto vazio são
+  `GeminiSemanticError` terminais e nunca são repetidos nem substituídos por outro
+  backend. `MAX_TOKENS` devolve o texto com warning de truncamento. Saída
+  malformada continua sendo `SemanticResponseParseError` do parser
+  compartilhado, sem retry.
+- **Usage.** `input_tokens` vem de `prompt_token_count`; `output_tokens` soma
+  `candidates_token_count` e `thoughts_token_count`, porque os tokens de
+  raciocínio são faturados como saída. Ausência de metadata vira `None`, não zero.
+
+Não existe execução real do Gemini: `GEMINI_API_KEY` não está configurada e
+enviar frames a um serviço externo exige consentimento explícito. A validação é
+fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
+SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
+fixam o formato da requisição e o mapeamento dos erros reais sem rede.
+
 ## Adapter Florence-2
 
 `Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
