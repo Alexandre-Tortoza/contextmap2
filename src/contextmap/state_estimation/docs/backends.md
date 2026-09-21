@@ -148,7 +148,7 @@ flowchart LR
 
 ### Execução por docker
 
-A imagem vem da receita `docker/fast-lio-ros1/Dockerfile` (FAST-LIO no commit `7cc4175de6f8ba2edf34bab02a42195b141027e9` sobre ROS 1 Noetic, com os commits do Livox SDK e do driver fixados). Ela contém só o FAST-LIO compilado; o wrapper é montado em tempo de execução, então alterá-lo não exige reconstruir a imagem. O comando do runner usa os placeholders de arquivo:
+A imagem vem da receita `docker/fast-lio-ros1/Dockerfile` (FAST-LIO no commit `7cc4175de6f8ba2edf34bab02a42195b141027e9` sobre ROS 1 Noetic; o que a receita fixa e o que não fixa está em "Identidade e reconstrução da imagem", abaixo). Ela contém só o FAST-LIO compilado; o wrapper é montado em tempo de execução, então alterá-lo não exige reconstruir a imagem. O comando do runner usa os placeholders de arquivo:
 
 ```text
 docker run --rm --network none --user <uid>:<gid> --read-only
@@ -162,9 +162,37 @@ docker run --rm --network none --user <uid>:<gid> --read-only
         --job /data/job.json --output-dir /data/output --deadline-s <timeout - 30>
 ```
 
-O container roda sem rede, sem privilégios, com o sistema de arquivos somente leitura, como o usuário do host (as saídas ficam suas) e com o `Log/` do FAST-LIO em tmpfs (o nó tenta abrir arquivos de log ali). A imagem é referenciada pelo **ID**, não por uma tag móvel, porque o comando entra no fingerprint. O fingerprint inclui os caminhos do host do comando (o do wrapper e o uid); para comparar execuções entre máquinas, compare a identidade da implantação (ID da imagem, commit do FAST-LIO e hash do wrapper), que a validação registra à parte.
+O container roda sem rede, sem privilégios, com o sistema de arquivos somente leitura, como o usuário do host (as saídas ficam suas) e com o `Log/` do FAST-LIO em tmpfs (o nó tenta abrir arquivos de log ali). A imagem é referenciada pelo **ID**, não por uma tag móvel, porque o comando entra no fingerprint. O fingerprint inclui os caminhos do host do comando (o do wrapper e o uid); para comparar execuções entre máquinas, compare a identidade da implantação (ID da imagem, commit do FAST-LIO e hash do wrapper), que a validação registra à parte. O ID muda a cada build, então, para saber se duas imagens são a mesma, compare também o digest da base, a lista de pacotes e o hash do binário `fastlio_mapping` (ver a seção seguinte).
 
 O FAST-LIO é um consumidor em tempo real: o bag é tocado a 1×, então a execução dura a duração da janela mais cerca de 10 s de inicialização (CPU apenas; não usa GPU).
+
+### Identidade e reconstrução da imagem
+
+A receita **não é garantidamente reprodutível**; ela fixa o que pode ser fixado, e o restante fica declarado aqui e no cabeçalho do `Dockerfile`.
+
+| Item | Fixado por |
+| --- | --- |
+| Imagem base `osrf/ros:noetic-desktop-full` | digest do manifesto `sha256:7dbfb9576d8e6d226c31e06129a82aaab8702695f38eca2116918cb9b9308797` (a tag é móvel e não resolve nada) |
+| Pacotes APT do passo de instalação | versão exata de cada um: `build-essential=12.8ubuntu1.1`, `cmake=3.16.3-1ubuntu1.20.04.1`, `git=1:2.25.1-1ubuntu3.14`, `git-man=1:2.25.1-1ubuntu3.14`, `libapr1-dev=1.6.5-1ubuntu1.1`, `liberror-perl=0.17029-1`. Esse passo só instala `git`, `git-man` e `liberror-perl`; os demais já vêm da base e a versão só é confirmada |
+| Livox SDK, `livox_ros_driver` e FAST-LIO | commits `9306596a…`, `3d240d56…` e `7cc4175d…` (os submódulos do FAST-LIO vêm dos gitlinks desse commit) |
+
+`tests/state_estimation/test_state_estimation_fast_lio_image_recipe.py` lê o `Dockerfile` (sem docker nem rede) e falha se um `FROM` não tiver digest, se um pacote de `apt-get install` não tiver `nome=versão` exata ou se um `ARG *_REF` não for um commit completo. Se uma versão fixada sair do arquivo do Ubuntu, o `apt-get` falha: o build não troca de versão em silêncio.
+
+**Verificação (2026-09-21).** A imagem que rodou a execução real é local (ID `sha256:670973462caa…`, construída em 2026-09-09 pela forma anterior da receita, que não fixava a base nem os pacotes). Comparada com uma reconstrução a partir da receita fixada (`docker build --no-cache`, na mesma máquina):
+
+| Verificação | Resultado |
+| --- | --- |
+| 13 camadas da base (diff IDs) | idênticas às da imagem do digest fixado: a execução real usou essa base |
+| Pacotes instalados pelo passo APT | o `/var/log/apt/history.log` da imagem validada mostra exatamente `git`, `git-man` e `liberror-perl` nas versões acima, sem upgrade; a reconstrução resolveu os mesmos três (`0 upgraded, 3 newly installed`) |
+| Lista completa de pacotes (1496 entradas `pacote=versão` do `dpkg-query -W`) | idêntica nas duas imagens |
+| `/opt/fast-lio/devel/lib/fast_lio/fastlio_mapping` | `sha256:2bfa3f97b3f7a8a8532899a2735f8c3f7a9818ca37bf92fc160ff71d61a8d20e` nas duas: binário idêntico bit a bit **nesta máquina** |
+| Camadas do build (5) e ID da imagem | diferem (timestamps de arquivos e attestation do BuildKit): o ID da imagem **não** é critério de identidade; o digest da base, a lista de pacotes e o hash do binário são |
+
+**O que continua não fixado:**
+
+- A **disponibilidade** dos artefatos fixados: o arquivo do Ubuntu (o Ubuntu 20.04 saiu do suporte padrão) deve continuar servindo as versões APT, o GitHub os três repositórios e o Docker Hub o digest da base. Se algum sumir, o build falha, mas deixa de ser reconstruível a partir do repositório. A imagem **não foi publicada** em um registry, então não existe um digest de imagem recuperável; a cadeia de reprodução é o `Dockerfile` fixado mais a verificação acima.
+- O **número de threads do OpenMP** é gravado no binário em tempo de compilação: o `CMakeLists.txt` do FAST-LIO usa `ProcessorCount` do host do build (mais de 4 processadores: 3 threads; 4: 2; menos: o padrão do OpenMP). As duas imagens acima foram construídas em uma máquina de 16 processadores (3 threads). Em outra classe de máquina o binário difere e o resultado pode divergir numericamente; a receita não altera o fonte do FAST-LIO para fixar isso.
+- O build não é determinístico por construção (não há `SOURCE_DATE_EPOCH` nem flags de reprodutibilidade): a identidade do binário acima é uma observação, não uma garantia.
 
 ### Proveniência e falhas
 
@@ -179,7 +207,7 @@ O FAST-LIO é um consumidor em tempo real: o bag é tocado a 1×, então a execu
 
 **Testes determinísticos (CI, sem ROS nem docker):** o estimador com um runner falso, o bag de entrada (incluindo o round trip pelo adapter de Ingestion), o `job.json`, o parsing da trajetória, o runner de processo com um processo substituto (sucesso, código de saída, timeout, ausência de saída, saída inválida, divergência, falha de inicialização, ausência de shell) e o wrapper com um runtime ROS substituto: mapeamento e validação de parâmetros, direção do extrínseco, formato da trajetória, versão, status de falha e concordância byte a byte com o que o `SubprocessFastLioRunner` lê. Esses testes **não** exercitam o FAST-LIO; o `RosRuntime` do wrapper só é coberto pela execução real abaixo.
 
-**Execução real (2026-09-21, `corridor-02`, CPU, sem GPU):** o `FastLioEstimator` com o `SubprocessFastLioRunner` e a imagem `sha256:670973462caa9496acaf41dd2a94f07277f14439b4d026d3bd9965c81b1dd985` (FAST-LIO `7cc4175de6f8ba2edf34bab02a42195b141027e9`) sobre a janela de 90 s de `outputs/validation/2026-09-21/selection.json` (identidade `sha256:dc641b34…`), lida do índice da sequência ingerida sem carregar os 24 GB de payloads:
+**Execução real (2026-09-21, `corridor-02`, CPU, sem GPU):** o `FastLioEstimator` com o `SubprocessFastLioRunner` e a imagem local `sha256:670973462caa9496acaf41dd2a94f07277f14439b4d026d3bd9965c81b1dd985` (base `osrf/ros@sha256:7dbfb957…`, FAST-LIO `7cc4175de6f8ba2edf34bab02a42195b141027e9`, `fastlio_mapping` `sha256:2bfa3f97…`; a equivalência com a receita fixada foi verificada, ver "Identidade e reconstrução da imagem") sobre a janela de 90 s de `outputs/validation/2026-09-21/selection.json` (identidade `sha256:dc641b34…`), lida do índice da sequência ingerida sem carregar os 24 GB de payloads:
 
 | Item | Resultado |
 | --- | --- |
