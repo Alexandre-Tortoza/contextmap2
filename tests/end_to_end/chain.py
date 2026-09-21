@@ -163,8 +163,9 @@ class SyntheticChain:
 
 def _ingest(workspace: Path) -> SequenceArtifactReader:
     sequence = build_synthetic_sequence()
+    directory = workspace / "ingestion"
     with SequenceArtifactWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         artifact_id=SEQUENCE_ARTIFACT_ID,
     ) as writer:
@@ -172,7 +173,7 @@ def _ingest(workspace: Path) -> SequenceArtifactReader:
         for observation in sequence.observations:
             writer.add_observation(observation)
         writer.finalize()
-    return SequenceArtifactReader(workspace / "sequences" / SEQUENCE_NAME / "ci-fixture")
+    return SequenceArtifactReader(directory)
 
 
 def _estimate(workspace: Path, sequence: SequenceArtifactReader) -> StateEstimationRunReader:

@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from contextmap.ingestion import (
     MODALITY_NAMES,
@@ -37,6 +38,7 @@ from contextmap.ingestion import (
     LidarObservation,
     MissingRequiredTopicError,
     SequenceArtifactError,
+    SequenceArtifactId,
     SequenceArtifactReader,
     SequenceArtifactWriter,
     SequenceProvenance,
@@ -637,14 +639,18 @@ class IngestionService:
                 )
             )
 
+        # O serviço é o chamador do writer: ele escolhe a identidade e o diretório final. O writer
+        # apenas grava onde lhe mandam e nunca aloca nada.
+        artifact_id = SequenceArtifactId(uuid4().hex)
+        directory = Path(request.workspace) / "sequences" / request.sequence_name / artifact_id
         with SequenceArtifactWriter(
-            workspace_root=Path(request.workspace), sequence_name=request.sequence_name
+            output_dir=directory, sequence_name=request.sequence_name, artifact_id=artifact_id
         ) as writer:
             calibration = self._read(run, adapter, writer)
             self._validate(run, calibration)
             diagnostics = self._synchronize(run)
             manifest = self._publish(run, adapter, writer, calibration, diagnostics)
-        self._verify(run, manifest)
+        self._verify(run, manifest, directory)
 
     def _read(
         self, run: _Run, adapter: SourceAdapter, writer: SequenceArtifactWriter
@@ -739,13 +745,7 @@ class IngestionService:
         except (SequenceArtifactError, OSError) as error:
             raise run.abort("output", error) from error
 
-    def _verify(self, run: _Run, manifest: Any) -> None:
-        directory = (
-            Path(run.request.workspace)
-            / "sequences"
-            / run.request.sequence_name
-            / str(manifest.artifact_id)
-        )
+    def _verify(self, run: _Run, manifest: Any, directory: Path) -> None:
         run.manifest = manifest
         run.artifact_path = directory
         problems = SequenceArtifactReader(directory).verify_integrity()
