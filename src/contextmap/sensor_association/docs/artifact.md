@@ -20,26 +20,26 @@ Quando uma associação sai errada, é preciso descobrir se a causa está no alc
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/sensor_association/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/sensor-association/<sequence>/
-├── runs.json                                  # registry reconstruível
-└── run-000N__<selection>__<canal>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/                               # contratual
-    │   ├── spatial-observations.jsonl         # um SpatialObservation por linha
-    │   ├── observation-index.jsonl            # id, frame, região, offsets em observações e qualidade
-    │   ├── geometry-support.u32               # região → geometria, tabela colunar de uint32
-    │   ├── observation-quality.jsonl          # ObservationQuality por observação
-    │   ├── projection-records.jsonl           # por frame: câmera, pose, extrínseco, cadeia de imagem
-    │   ├── visibility-records.jsonl           # por frame: política, contagens, pertencimento, regiões
-    │   ├── dense-feature-associations.jsonl   # por frame e canal: proveniência e offsets (se houver canais)
-    │   └── dense-feature-cells.bin            # índices e pesos das células (se houver canais)
-    ├── metrics/                               # contratual
-    │   ├── frame-diagnostics.jsonl            # FrameDiagnostics por frame, com os achados
-    │   ├── summary.json                       # agregados e frames rejeitados
-    │   └── runtime.json                       # somente quando o tempo foi medido
-    └── debug/                                 # nunca contratual
+<output_dir>/
+├── README.md
+├── manifest.json
+├── outputs/                               # contratual
+│   ├── spatial-observations.jsonl         # um SpatialObservation por linha
+│   ├── observation-index.jsonl            # id, frame, região, offsets em observações e qualidade
+│   ├── geometry-support.u32               # região → geometria, tabela colunar de uint32
+│   ├── observation-quality.jsonl          # ObservationQuality por observação
+│   ├── projection-records.jsonl           # por frame: câmera, pose, extrínseco, cadeia de imagem
+│   ├── visibility-records.jsonl           # por frame: política, contagens, pertencimento, regiões
+│   ├── dense-feature-associations.jsonl   # por frame e canal: proveniência e offsets (se houver canais)
+│   └── dense-feature-cells.bin            # índices e pesos das células (se houver canais)
+├── metrics/                               # contratual
+│   ├── frame-diagnostics.jsonl            # FrameDiagnostics por frame, com os achados
+│   ├── summary.json                       # agregados e frames rejeitados
+│   └── runtime.json                       # somente quando o tempo foi medido
+└── debug/                                 # nunca contratual
 ```
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a configuração efetiva e a linhagem ficam no `manifest.json`, e os achados, em `metrics/frame-diagnostics.jsonl`. Criar arquivos sem produtor real violaria YAGNI, o critério dos outros artifacts.
@@ -86,11 +86,12 @@ Arquivos de debug são escritos mas nunca entram no inventário, então removê-
 ## Integridade, imutabilidade e identidade
 
 - a escrita acontece em um diretório temporário e o run só aparece no caminho final depois de a checagem de inventário passar; uma escrita interrompida não pode parecer um run válido;
-- um run finalizado nunca é sobrescrito; reexecutar cria outro `run_index`;
+- um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, e reexecutar grava em outro diretório;
 - o writer confere que a geometria de cada observação coincide com o seu pertencimento antes de persistir; uma observação inconsistente nunca é gravada;
-- `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest, `IncompleteRunArtifactError`;
-- `allocate_run_index()` percorre os diretórios de run válidos (nunca o registry), e `rebuild_run_registry()` regenera `runs.json`.
+- `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest, `IncompleteRunArtifactError`.
+
+`run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.
 
 ## Como é verificado
 
-Layout e linhagem no manifest; ida e volta das observações com a geometria resolvida da tabela colunar; leitura de uma observação por identidade; o índice geometria → regiões com sobreposição; ida e volta da qualidade e das associações densas (índices e pesos); os registros por frame; o resumo com frames rejeitados; nativo e melhorado com artifacts compartilhados e identidades independentes; imutabilidade, índice de rerun e registry; escrita interrompida sem run visível; integridade (ausente, tamanho, hash), schema e manifest; recusa de `debug/` a jusante; cada nível de debug, inclusive a decodificação do PNG; e a abertura do artifact em um subprocesso sem NumPy, ROS ou bibliotecas de modelo.
+Layout e linhagem no manifest; ida e volta das observações com a geometria resolvida da tabela colunar; leitura de uma observação por identidade; o índice geometria → regiões com sobreposição; ida e volta da qualidade e das associações densas (índices e pesos); os registros por frame; o resumo com frames rejeitados; nativo e melhorado com artifacts compartilhados e identidades independentes; imutabilidade, identidade gravada como recebida e diretório de saída exato, sem registro; escrita interrompida sem run visível; integridade (ausente, tamanho, hash), schema e manifest; recusa de `debug/` a jusante; cada nível de debug, inclusive a decodificação do PNG; e a abertura do artifact em um subprocesso sem NumPy, ROS ou bibliotecas de modelo.
