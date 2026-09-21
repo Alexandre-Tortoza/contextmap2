@@ -123,3 +123,33 @@ class StageExecutionError(PipelineError):
 
 class ReuseError(PipelineError):
     """Raised when an artifact cannot be indexed under the identity it was produced for."""
+
+
+class RunCancelledError(PipelineError):
+    """Raised when a run stops because cancellation was requested.
+
+    The run stops at a stage boundary, so every artifact produced before it is complete.
+
+    Attributes:
+        stage_id: The stage that was about to start.
+        completed: Stages that had completed before it, in order.
+        reason: Why cancellation was requested.
+    """
+
+    def __init__(self, stage_id: str, completed: Sequence[str], reason: str) -> None:
+        """Explain where the run stopped."""
+        self.stage_id = stage_id
+        self.completed = tuple(completed)
+        self.reason = reason
+        done = ", ".join(self.completed) or "none"
+        super().__init__(
+            f"run cancelled before stage {stage_id!r}: {reason} (completed before it: {done})"
+        )
+
+
+class RunRecordError(PipelineError):
+    """Raised when a run directory is not a readable, coherent run record."""
+
+
+class ResumeError(PipelineError):
+    """Raised when a run cannot be resumed as requested."""

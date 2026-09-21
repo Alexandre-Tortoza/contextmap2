@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -30,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
 from contextmap import __version__
+from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import CANONICAL_PROFILE_ID
 from contextmap.runtime.config import (
     DEBUG_LEVELS,
@@ -38,21 +38,28 @@ from contextmap.runtime.config import (
     EffectiveConfig,
     read_effective_config,
     resolve_effective_config,
-    write_effective_config,
+    resolve_secrets,
 )
-from contextmap.runtime.errors import PipelineError, PreflightError
+from contextmap.runtime.errors import PipelineError, PreflightError, RunRecordError
 from contextmap.runtime.pipeline import (
     ExecutionPlan,
-    ExecutionRecord,
     PipelinePlan,
     PreflightReport,
     StageExecutor,
+    predict_reuse,
     preflight,
     read_plan_document,
     resolve_plan,
     run_plan,
-    write_execution_record,
-    write_plan,
+)
+from contextmap.runtime.reuse import FileArtifactStore, ReusePolicy
+from contextmap.runtime.runs import (
+    RUNS_DIRECTORY,
+    RunJournal,
+    RunSummary,
+    check_resumable,
+    read_run,
+    resume_plan,
 )
 from contextmap.runtime.selection import ResolvedSelections, load_catalog, resolve_selections
 from contextmap.shared import FileEntry, check_file_inventory
@@ -60,6 +67,7 @@ from contextmap.shared import FileEntry, check_file_inventory
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+EXIT_INTERRUPTED = 130
 
 _MANIFEST = "manifest.json"
 _SUMMARY_KEYS = (
@@ -89,6 +97,7 @@ class _Session:
     executors: Mapping[str, StageExecutor]
     environ: Mapping[str, str] | None
     module_available: Callable[[str], bool] | None
+    verifier: Callable[[ArtifactRef], bool] | None
     out: TextIO
     err: TextIO
 
@@ -99,19 +108,29 @@ class _Session:
         else:
             print("\n".join(lines), file=self.out)
 
-    def fail(self, message: str, problems: Sequence[ConfigProblem] = ()) -> int:
+    def fail(
+        self,
+        message: str,
+        problems: Sequence[ConfigProblem] = (),
+        *,
+        run_directory: Path | None = None,
+    ) -> int:
         """Report a failure, as JSON on stdout or as text on stderr."""
         if self.args.json:
-            document = {
+            document: dict[str, Any] = {
                 "ok": False,
                 "error": message,
                 "problems": [{"path": p.path, "message": p.message} for p in problems],
             }
+            if run_directory is not None:
+                document["run_directory"] = str(run_directory)
             print(json.dumps(document, indent=2, sort_keys=True), file=self.out)
         else:
             print(f"error: {message}", file=self.err)
             for problem in problems:
                 print(f"  - {problem}", file=self.err)
+            if run_directory is not None:
+                print(f"run record: {run_directory}", file=self.err)
         return EXIT_FAILED
 
 
@@ -121,6 +140,7 @@ def main(
     executors: Mapping[str, StageExecutor] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
+    verifier: Callable[[ArtifactRef], bool] | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
@@ -132,6 +152,8 @@ def main(
             a real run without them is blocked by preflight.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
+        verifier: Tells whether an indexed artifact still exists and is intact; the reuse
+            flags need it, and only the owner of the executors can provide it.
         stdout: Stream for results; defaults to ``sys.stdout``.
         stderr: Stream for errors; defaults to ``sys.stderr``.
 
@@ -150,6 +172,7 @@ def main(
             executors=executors or {},
             environ=environ,
             module_available=module_available,
+            verifier=verifier,
             out=out,
             err=err,
         )
@@ -212,6 +235,14 @@ def _build_parser() -> argparse.ArgumentParser:
     subjects.add_parser(
         "plan", parents=[config], help="show the resolved topology without executing anything"
     ).set_defaults(handler=_inspect_plan)
+    run_record = subjects.add_parser(
+        "run", help="show a run's lifecycle: status, failure record, events and environment"
+    )
+    _path_argument(run_record)
+    run_record.add_argument(
+        "--events", action="store_true", help="list every event, not only the summary"
+    )
+    run_record.set_defaults(handler=_inspect_run)
     artifact = subjects.add_parser(
         "artifact", help="summarise an artifact directory or a runtime document"
     )
@@ -268,6 +299,22 @@ def _execution_flags(parser: argparse.ArgumentParser) -> None:
         "--dry-run",
         action="store_true",
         help="show the resolved plan, inputs, outputs and preflight; load nothing, run nothing",
+    )
+    reuse = parser.add_argument_group("reuse and resume (need --reuse-index)")
+    reuse.add_argument("--reuse-index", metavar="DIR", help="index of completed artifacts to reuse")
+    reuse.add_argument(
+        "--code-identity", metavar="ID", help="identity of the code producing the results"
+    )
+    reuse.add_argument(
+        "--force",
+        action="append",
+        metavar="STAGE",
+        help="always recompute this stage; repeat for several",
+    )
+    reuse.add_argument(
+        "--resume",
+        metavar="RUN",
+        help="resume a failed, cancelled or interrupted run (a directory or a run id)",
     )
 
 
@@ -372,95 +419,212 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
         )
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
-
+    reuse = _reuse_policy(session)
     if args.dry_run:
-        # Um dry-run não confere executores: mostra o que a configuração resolve.
-        report = preflight(
-            execution, environ=session.environ, module_available=session.module_available
-        )
-        missing = [s.stage_id for s in execution.stages if s.stage_id not in session.executors]
-        document = {
-            "effective_config": effective.to_document(),
-            "plan": plan.to_document(),
-            "plan_digest": plan.digest,
-            "scope": {
-                "run": [s.stage_id for s in execution.stages],
-                "provided": {
-                    stage: [ref.artifact_id for ref in refs]
-                    for stage, refs in execution.reused.items()
-                },
-            },
-            "selections": None if resolved is None else resolved.to_document(),
-            "preflight": {"ok": report.ok, "problems": _problem_documents(report.problems)},
-            "executors": {"registered": sorted(session.executors), "missing": missing},
-        }
-        lines = [
-            *_config_lines(effective),
-            "",
-            *_plan_lines(plan, execution),
-            "",
-            *_preflight_lines(report),
-            *(
-                [f"executors: none registered for {', '.join(missing)} (a real run is blocked)"]
-                if missing
-                else ["executors: registered for every stage to run"]
-            ),
-        ]
-        session.emit(document, lines)
-        return EXIT_OK if report.ok else EXIT_FAILED
-
-    record = run_plan(
-        execution,
-        session.executors,
-        environ=session.environ,
-        module_available=session.module_available,
-    )
+        return _dry_run(session, effective, plan, execution, resolved, reuse)
     assert workspace is not None  # exigido acima
-    run_directory = _publish_run(Path(workspace), effective, plan, record)
+    return _execute(session, effective, execution, Path(workspace), reuse)
+
+
+def _dry_run(
+    session: _Session,
+    effective: EffectiveConfig,
+    plan: PipelinePlan,
+    execution: ExecutionPlan,
+    resolved: ResolvedSelections | None,
+    reuse: ReusePolicy | None,
+) -> int:
+    """Show what the configuration resolves to, without loading, running or writing anything."""
+    # Um dry-run não confere executores: mostra o que a configuração resolve.
+    report = preflight(
+        execution, environ=session.environ, module_available=session.module_available, reuse=reuse
+    )
+    missing = [s.stage_id for s in execution.stages if s.stage_id not in session.executors]
+    predicted = {} if reuse is None else predict_reuse(execution, reuse)
+    document = {
+        "effective_config": effective.to_document(),
+        "plan": plan.to_document(),
+        "plan_digest": plan.digest,
+        "scope": {
+            "run": [s.stage_id for s in execution.stages],
+            "provided": {
+                stage: [ref.artifact_id for ref in refs] for stage, refs in execution.reused.items()
+            },
+        },
+        "selections": None if resolved is None else resolved.to_document(),
+        "reuse": {stage: decision.to_document() for stage, decision in predicted.items()},
+        "preflight": {"ok": report.ok, "problems": _problem_documents(report.problems)},
+        "executors": {"registered": sorted(session.executors), "missing": missing},
+    }
+    lines = [
+        *_config_lines(effective),
+        "",
+        *_plan_lines(plan, execution),
+        "",
+        *(
+            [
+                "reuse (predicted):",
+                *(f"  {s}: {d.kind} - {d.reason}" for s, d in predicted.items()),
+                "",
+            ]
+            if predicted
+            else []
+        ),
+        *_preflight_lines(report),
+        *(
+            [f"executors: none registered for {', '.join(missing)} (a real run is blocked)"]
+            if missing
+            else ["executors: registered for every stage to run"]
+        ),
+    ]
+    session.emit(document, lines)
+    return EXIT_OK if report.ok else EXIT_FAILED
+
+
+def _execute(
+    session: _Session,
+    effective: EffectiveConfig,
+    execution: ExecutionPlan,
+    workspace: Path,
+    reuse: ReusePolicy | None,
+) -> int:
+    """Run for real, journaling every step of the lifecycle into a fresh run directory."""
+    args = session.args
+    previous: Path | None = None
+    if args.resume is not None:
+        if reuse is None:
+            raise _UsageError(
+                "--resume reuses the completed stages: pass --reuse-index and --code-identity"
+            )
+        previous = _previous_run(workspace, args.resume)
+        check_resumable(read_run(previous), execution)  # recusa antes de criar um run novo
+    secrets = resolve_secrets(effective.config, environ=session.environ)
+    journal = RunJournal.create(workspace, effective, execution, code_identity=args.code_identity)
+    try:
+        if previous is not None and reuse is not None:
+            record = resume_plan(
+                previous,
+                execution,
+                session.executors,
+                reuse=reuse,
+                environ=session.environ,
+                module_available=session.module_available,
+                journal=journal,
+                redact=secrets.redact,
+            )
+        else:
+            record = run_plan(
+                execution,
+                session.executors,
+                environ=session.environ,
+                module_available=session.module_available,
+                reuse=reuse,
+                journal=journal,
+                redact=secrets.redact,
+            )
+    except PreflightError as error:
+        return session.fail(
+            "the plan cannot run", error.report.problems, run_directory=journal.directory
+        )
+    except PipelineError as error:
+        return session.fail(str(error), run_directory=journal.directory)
+    except KeyboardInterrupt:
+        print(f"cancelled; run record: {journal.directory}", file=session.err)
+        return EXIT_INTERRUPTED
     result = {
         "ok": True,
-        "run_directory": str(run_directory),
+        "run_directory": str(journal.directory),
         "execution": record.to_document(),
     }
     lines = [
-        f"run completed: {run_directory}",
+        f"run completed: {journal.directory}",
         f"  order: {' -> '.join(record.order)}",
         *(f"  {stage.stage_id}: {stage.output.artifact_id}" for stage in record.stages),
     ]
+    if record.resume is not None:
+        lines.append(
+            f"  resumed {record.resume['from']}: reused {record.resume['reused']}, "
+            f"recomputed {record.resume['recomputed']}"
+        )
     session.emit(result, lines)
     return EXIT_OK
 
 
-def _publish_run(
-    workspace: Path, effective: EffectiveConfig, plan: PipelinePlan, record: ExecutionRecord
-) -> Path:
-    """Write the run records into a fresh ``runtime/run-NNNN`` directory, atomically.
+def _reuse_policy(session: _Session) -> ReusePolicy | None:
+    """Build the reuse policy from the flags; an artifact verifier has to come from outside."""
+    args = session.args
+    if args.reuse_index is None:
+        if args.force:
+            raise _UsageError("--force applies to reuse: pass --reuse-index DIR")
+        return None
+    if session.verifier is None:
+        raise _UsageError(
+            "--reuse-index needs an artifact verifier: the CLI cannot tell whether an indexed "
+            "artifact still exists, so the owner of the stage executors supplies it to main()"
+        )
+    if not args.code_identity:
+        raise _UsageError(
+            "reuse across runs needs --code-identity ID: it must be a decision, not an accident"
+        )
+    return ReusePolicy(
+        store=FileArtifactStore(args.reuse_index, verify=session.verifier),
+        code_identity=args.code_identity,
+        force_recompute=frozenset(args.force or ()),
+    )
 
-    The records are written into a temporary directory that is renamed into place only when
-    complete, so an interrupted write never leaves something that looks like a run.
-    """
-    base = workspace / "runtime"
-    base.mkdir(parents=True, exist_ok=True)
-    taken = [
-        int(path.name.removeprefix("run-"))
-        for path in base.iterdir()
-        if path.name.startswith("run-") and path.name.removeprefix("run-").isdigit()
+
+def _previous_run(workspace: Path, reference: str) -> Path:
+    """Resolve ``--resume`` as a run directory, or as a run id under the workspace."""
+    candidate = Path(reference)
+    if candidate.is_dir():
+        return candidate
+    under = workspace / RUNS_DIRECTORY / reference
+    if under.is_dir():
+        return under
+    raise _Failure(f"no run record at {candidate} or {under}")
+
+
+def _inspect_run(session: _Session) -> int:
+    summary = read_run(session.args.path)
+    session.emit(summary.to_document(), _run_lines(summary, events=session.args.events))
+    return EXIT_OK
+
+
+def _run_lines(summary: RunSummary, *, events: bool) -> list[str]:
+    state = summary.status.value + (
+        " (interrupted: no live process owns it)" if summary.interrupted else ""
+    )
+    lines = [
+        f"run {summary.run_id}: {state}",
+        f"  created: {summary.created_at}    updated: {summary.updated_at}",
+        f"  plan: {summary.plan_digest}",
+        f"  config: {summary.config_digest}",
+        f"  stages to run: {', '.join(summary.targets) or '-'}",
+        f"  completed: {', '.join(summary.completed_stages) or '-'}",
     ]
-    index = max(taken, default=0) + 1
-    temporary = base / f".tmp-run-{os.getpid()}-{index:04d}"
-    write_effective_config(effective, temporary)
-    write_plan(plan, temporary)
-    write_execution_record(record, temporary)
-    while True:
-        final = base / f"run-{index:04d}"
-        try:
-            os.rename(temporary, final)
-        except OSError:
-            if not final.exists():
-                raise
-            index += 1  # outro processo publicou este índice primeiro
-            continue
-        return final
+    if summary.resumed_from is not None:
+        lines.append(f"  resumed from: {summary.resumed_from}")
+    if summary.code_identity is not None:
+        lines.append(f"  code identity: {summary.code_identity}")
+    if summary.failure is not None:
+        failure = summary.failure
+        lines.append(
+            f"  failure: {failure.category} in {failure.stage_id or 'the runner'}: "
+            f"{failure.message} ({failure.exception_type})"
+        )
+    for problem in summary.blocked_problems:
+        lines.append(f"  blocked: {problem['path']}: {problem['message']}")
+    lines.extend(f"  note: {note}" for note in summary.notes)
+    if summary.truncated:
+        lines.append("  note: the last event was cut off (the process died while writing it)")
+    lines.append(f"  environment: {json.dumps(dict(summary.environment), sort_keys=True)}")
+    if events:
+        lines.append("  events:")
+        lines.extend(
+            f"    {e.sequence:>3} {e.time} {e.kind}{' ' + e.stage_id if e.stage_id else ''}"
+            for e in summary.events
+        )
+    return lines
 
 
 # --- artifacts -----------------------------------------------------------------------
@@ -488,6 +652,8 @@ def _examine(path: Path) -> dict[str, Any]:
     """Inspect an artifact directory or a runtime document with standard-library tools only."""
     if not path.exists():
         raise _Failure(f"{path} does not exist")
+    if path.is_dir() and (path / "status.json").is_file():
+        return _examine_run(path)
     if path.is_dir():
         return _examine_manifest(path)
     if path.name == "effective_config.json":
@@ -499,6 +665,42 @@ def _examine(path: Path) -> dict[str, Any]:
         f"{path} is not recognised: pass an artifact directory containing {_MANIFEST}, or an "
         "effective_config.json, plan.json or execution.json runtime document"
     )
+
+
+def _examine_run(directory: Path) -> dict[str, Any]:
+    """Check a run record: its status and event log, and the digest of each document."""
+    problems: list[str] = []
+    summary: dict[str, Any] = {}
+    try:
+        run = read_run(directory)
+    except RunRecordError as error:
+        problems.append(str(error))
+    else:
+        summary = {
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "interrupted": run.interrupted,
+            "events": len(run.events),
+            "completed_stages": len(run.completed_stages),
+        }
+        problems.extend(run.notes)
+    documents: tuple[tuple[str, Callable[[Path], object]], ...] = (
+        ("effective_config.json", read_effective_config),
+        ("plan.json", read_plan_document),
+        ("execution.json", read_plan_document),
+    )
+    for name, read in documents:
+        if (directory / name).is_file():
+            try:
+                read(directory / name)
+            except (ConfigurationError, PipelineError) as error:
+                problems.append(f"{name}: {error}")
+    return {
+        "kind": "run",
+        "path": str(directory),
+        "summary": summary,
+        "integrity": {"ok": not problems, "problems": problems},
+    }
 
 
 def _examine_manifest(root: Path) -> dict[str, Any]:

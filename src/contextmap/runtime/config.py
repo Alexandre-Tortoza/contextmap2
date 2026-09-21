@@ -551,6 +551,23 @@ class ResolvedSecrets:
             )
         return self._values[name]
 
+    def redact(self, text: str) -> str:
+        """Replace every held secret value inside ``text`` with a placeholder.
+
+        This is how an error message or an event is cleaned before it is recorded: the value
+        never leaves this object, it is only searched for.
+
+        Args:
+            text: Any text, for example an exception message.
+
+        Returns:
+            ``text`` with each secret value replaced by ``***``.
+        """
+        for value in sorted(self._values.values(), key=len, reverse=True):
+            if value:
+                text = text.replace(value, "***")
+        return text
+
     def __repr__(self) -> str:
         """Render names only."""
         return f"ResolvedSecrets(names={list(self.names)}, missing={list(self.missing)})"

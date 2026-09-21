@@ -40,7 +40,7 @@ Existe ainda a **seleção explícita de runs e o vínculo de linhagem** (issue 
 
 Existe ainda a **CLI** (issue #166), uma camada fina que traduz flags em overrides e chama esses serviços: `run`, `stage`, `inspect` e `validate`, com dry-run que mostra o plano resolvido sem carregar modelo, saída `--json`, erros acionáveis e verificação de integridade só com a biblioteca padrão. Detalhes em [`cli.md`](cli.md).
 
-O lifecycle é a demais issue da milestone #17 que ainda não existe. Configuração em [`configuration.md`](configuration.md).
+Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`planned`, `running`, `completed`, `failed`, `blocked`, `cancelled`), eventos estruturados append-only, registro de falha com categoria, cancelamento cooperativo, ambiente para reprodução, segredos sempre redigidos e retomada como um run novo que só reutiliza artifacts que passam nas checagens normais de reuso. Detalhes em [`lifecycle.md`](lifecycle.md). Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -60,6 +60,9 @@ O lifecycle é a demais issue da milestone #17 que ainda não existe. Configura�
 - `ExecutionPlan`, `preflight()`, `PreflightReport` — o escopo de uma execução e a validação antes dela.
 - `run_plan()`, `StageExecutor`, `StageRequest`, `ArtifactRef`, `ExecutionRecord`, `StageRecord` — a execução e o registro exato de entradas e saídas.
 - `write_plan()`, `write_execution_record()`, `read_plan_document()` — a persistência da topologia e da execução.
+- `RunJournal`, `read_run()`, `RunSummary`, `RunStatus`, `FailureRecord`, `resume_plan()`, `check_resumable()` — o journal persistente de um run, sua leitura e a retomada.
+- `ExecutionEvent`, `EventSink`, `CancellationToken`, `StageFailure`, `FailureCategory`, `capture_environment()`, `categorize_failure()` — eventos, cancelamento, categorias de falha e ambiente.
+- `RunCancelledError`, `RunRecordError`, `ResumeError` — falhas do ciclo de vida, todas explícitas.
 - `contextmap.runtime.cli.main()` — a CLI (`contextmap` / `python -m contextmap`); `load_catalog()` lê o arquivo de catálogo que ela usa para resolver seleções.
 - `resolve_selections()`, `ResolvedSelections`, `SelectedRun`, `ArtifactCatalog`, `StaticCatalog`, `CatalogEntry`, `Lineage`, `check_lineage()`, `LATEST`, `NAMED_PREFIX` — a seleção explícita de runs e a checagem de linhagem.
 - `ReusePolicy`, `ReuseKey`, `ReuseDecision`, `ArtifactStore`, `FileArtifactStore`, `StoreLookup`, `predict_reuse()` — o reuso por identidade e a previsão do que seria reutilizado.

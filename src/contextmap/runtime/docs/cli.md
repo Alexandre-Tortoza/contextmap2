@@ -36,17 +36,19 @@ Precedência: perfil < arquivos < `--set` < flags. A seleção continua explíci
 Resolvem a configuração, derivam o plano, escopam (o pipeline completo, ou os alvos de `--stage`; `stage` é exatamente um alvo), validam o preflight e executam.
 
 - **`--dry-run`**: mostra a configuração efetiva com o digest, a topologia resolvida (entradas, saídas e backends de cada estágio, o que roda, o que é fornecido por seleção, o que é indisponível e por quê), a seleção resolvida, o preflight e a cobertura de executores. **Não carrega modelo, não executa e não escreve nada.** Sai com `0` se o preflight passa e `1` se está bloqueado.
-- **execução real**: exige `--workspace` (ou `resources.workspace`), porque persiste seus registros. Depois de o run terminar, grava `effective_config.json`, `plan.json` e `execution.json` em `<workspace>/runtime/run-NNNN/`, publicado por renomeação atômica: uma escrita interrompida não deixa nada que pareça um run. Cada run tem seu próprio diretório e nunca sobrescreve um anterior. Uma falha (preflight bloqueado, estágio que falha) não persiste nada.
+- **execução real**: exige `--workspace` (ou `resources.workspace`), porque persiste seus registros. Cria `<workspace>/runtime/run-NNNN/` **antes** de executar e o journal grava ali o plano, os eventos, o status e, ao concluir, `execution.json` ([`lifecycle.md`](lifecycle.md)). Cada run tem seu próprio diretório e nunca sobrescreve outro. Um preflight bloqueado, um estágio que falha ou uma interrupção deixam um registro inspecionável (`run record: <diretório>` na mensagem de erro); Ctrl+C sai com `130`.
+- **reuso e retomada** (`--reuse-index DIR`, `--code-identity ID`, `--force ESTÁGIO`, `--resume RUN`): o reuso combina a identidade exata dos estágios; `--resume` retoma um run falhado, cancelado ou interrompido como um run novo. Exigem um verificador de artifacts que o dono dos executores fornece a `main(verifier=...)`: a CLI não sabe se um artifact indexado ainda existe.
 
 ### `inspect`
 
 - `inspect config`: a configuração efetiva, o digest e as camadas que a produziram;
 - `inspect plan`: a topologia resolvida, sem executar nada;
+- `inspect run DIR [--events]`: o ciclo de vida de um run (estado, falha, problemas de bloqueio, estágios concluídos, eventos, ambiente);
 - `inspect artifact CAMINHO`: um resumo do `manifest.json` de um diretório de artifact (id, schema, criação, número e tamanho dos arquivos) e o resultado da checagem de integridade, ou um documento do runtime.
 
 ### `validate CAMINHO`
 
-Verifica a integridade: em um diretório de artifact, cada arquivo do `file_inventory` (existência, tamanho e SHA-256; um caminho que sai do artifact é recusado); em `effective_config.json`, `plan.json` e `execution.json`, a versão de schema e o digest. Sai com `1` se algo falha e nomeia o arquivo ou o problema. Usa só a biblioteca padrão: não importa NumPy, modelo nem ROS.
+Verifica a integridade: em um registro de run (`status.json`), o log de eventos (linha corrompida, lacuna na numeração), a coerência com o status e o digest de cada documento; em um diretório de artifact, cada arquivo do `file_inventory` (existência, tamanho e SHA-256; um caminho que sai do artifact é recusado); em `effective_config.json`, `plan.json` e `execution.json`, a versão de schema e o digest. Sai com `1` se algo falha e nomeia o arquivo ou o problema. Usa só a biblioteca padrão: não importa NumPy, modelo nem ROS.
 
 ## Erros acionáveis
 
@@ -67,6 +69,5 @@ Os executores dos estágios reais **não** estão empacotados: `main(argv, execu
 - **Execução real do canônico.** O comando existe e é testado de ponta a ponta com executores falsos, mas os executores das capabilities reais (que precisam das políticas de Geometric Mapping e Sensor Association e dos hashes de conteúdo dos manifests) acompanham a validação end-to-end (#177). Além disso, o pipeline completo continua bloqueado pelos estágios das milestones #12–#15; hoje o caminho executável é um subgrafo (`--stage`).
 - **`ingest`.** O comando de ingestão chega com o serviço público de ingestion (issue #263), que a CLI deve chamar em vez de recompor adapters, validação e sincronização.
 - **`export`.** Não há artifact a exportar antes das milestones #15/#16 (`ContextMapArtifact`).
-- **Reuso.** A CLI ainda não expõe a `ReusePolicy`: o índice precisa do `verify` de cada capability. As flags chegam com os executores reais.
-- **Lifecycle.** Falhas e interrupções não geram registro persistido; o registro de ciclo de vida é a issue #167.
+- **Verificador de artifacts.** As flags de reuso e retomada existem, mas o `verify` do índice vem do dono dos executores reais (#177); a CLI recusa `--reuse-index` sem ele.
 - **API pública.** A CLI chama as funções do runtime diretamente; a fachada pública frontend-neutra (#264) passa a ser o que ela consome.

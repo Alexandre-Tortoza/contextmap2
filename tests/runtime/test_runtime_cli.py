@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_worlds import World
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -68,6 +69,11 @@ def cli(*argv: str, **options: Any) -> tuple[int, str, str]:
     options.setdefault("environ", {})
     code = main(list(argv), stdout=out, stderr=err, **options)
     return code, out.getvalue(), err.getvalue()
+
+
+def _status(run_dir: Path) -> dict[str, Any]:
+    document: dict[str, Any] = json.loads((run_dir / "status.json").read_text("utf-8"))
+    return document
 
 
 def _json(text: str) -> dict[str, Any]:
@@ -301,8 +307,10 @@ class TestRun:
         run_dir = workspace / "runtime" / "run-0001"
         assert sorted(p.name for p in run_dir.iterdir()) == [
             "effective_config.json",
+            "events.jsonl",
             "execution.json",
             "plan.json",
+            "status.json",
         ]
         execution = json.loads((run_dir / "execution.json").read_text("utf-8"))["document"]
         assert execution["order"] == ["ingestion", "state_estimation", "geometric_mapping"]
@@ -358,7 +366,9 @@ class TestRun:
         assert "workspace" in out + err
         assert log == []
 
-    def test_a_stage_without_an_executor_blocks_the_run_and_says_so(self, tmp_path: Path) -> None:
+    def test_a_stage_without_an_executor_blocks_the_run_and_records_it(
+        self, tmp_path: Path
+    ) -> None:
         code, out, err = cli(
             "run",
             "-c",
@@ -371,9 +381,12 @@ class TestRun:
 
         assert code == 1
         assert "executor" in out + err and "ingestion" in out + err
-        assert not (tmp_path / "ws").exists()
+        assert "run record" in err
+        status = _status(tmp_path / "ws" / "runtime" / "run-0001")
+        assert status["status"] == "blocked"
+        assert not (tmp_path / "ws" / "runtime" / "run-0001" / "execution.json").exists()
 
-    def test_a_failing_stage_reports_what_completed_and_persists_nothing(
+    def test_a_failing_stage_reports_what_completed_and_leaves_a_failure_record(
         self, tmp_path: Path
     ) -> None:
         executors: dict[str, Any] = _executors([])
@@ -398,7 +411,12 @@ class TestRun:
         assert code == 1
         text = out + err
         assert "state_estimation" in text and "out of memory" in text and "ingestion" in text
-        assert not (tmp_path / "ws" / "runtime").exists()
+        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        assert str(run_dir) in err
+        status = _status(run_dir)
+        assert status["status"] == "failed"
+        assert status["failure"]["stage_id"] == "state_estimation"
+        assert not (run_dir / "execution.json").exists()
 
     def test_the_stage_command_targets_exactly_one_stage(self, tmp_path: Path) -> None:
         log: list[str] = []
@@ -702,3 +720,252 @@ class TestThinness:
         assert code == 0
         for command in ("run", "stage", "inspect", "validate"):
             assert command in text
+
+
+class TestLifecycleCommands:
+    def _world_executors(self, world: World) -> dict[str, Any]:
+        from contextmap.runtime.catalog import CANONICAL_PRESET
+
+        return {
+            s.stage_id: world.executor(s.stage_id, s.output or "") for s in CANONICAL_PRESET.stages
+        }
+
+    def _resumable(
+        self, tmp_path: Path, *, fail_at: str = "geometric_mapping"
+    ) -> tuple[World, list[str]]:
+        world = World()
+        world.fail_at = fail_at
+        args = [
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "semantic_fusion",
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--reuse-index",
+            str(tmp_path / "index"),
+            "--code-identity",
+            "code-1",
+        ]
+        code, _, _ = cli(
+            *args,
+            executors=self._world_executors(world),
+            verifier=lambda ref: ref.artifact_id in world.existing,
+            module_available=_ready,
+        )
+        assert code == 1
+        world.fail_at = None
+        world.runs.clear()
+        return world, args
+
+    def test_inspect_run_shows_the_failure_record_and_the_trail(self, tmp_path: Path) -> None:
+        self._resumable(tmp_path)
+        run_dir = str(tmp_path / "ws" / "runtime" / "run-0001")
+
+        code, out, _ = cli("inspect", "run", run_dir, "--events")
+
+        assert code == 0
+        assert "failed" in out and "geometric_mapping" in out and "execution" in out
+        assert "stage_failed" in out and "run_failed" in out and "code-1" in out
+
+    def test_inspect_run_json_carries_every_event_and_the_environment(self, tmp_path: Path) -> None:
+        self._resumable(tmp_path)
+
+        code, out, _ = cli(
+            "inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"), "--json"
+        )
+
+        document = _json(out)
+        assert code == 0
+        assert document["status"] == "failed"
+        assert document["failure"]["category"] == "execution"
+        assert [e["kind"] for e in document["events"]][:2] == ["run_planned", "run_started"]
+        assert "python" in document["environment"]
+
+    def test_inspect_run_reports_a_blocked_run_with_its_problems(self, tmp_path: Path) -> None:
+        cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "ingestion",
+            "--workspace",
+            str(tmp_path / "ws"),
+        )
+
+        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"))
+
+        assert code == 0
+        assert "blocked" in out and "executor" in out
+
+    def test_validate_checks_a_run_record_and_catches_a_corrupt_event_log(
+        self, tmp_path: Path
+    ) -> None:
+        self._resumable(tmp_path)
+        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        assert cli("validate", str(run_dir))[0] == 0
+
+        events = run_dir / "events.jsonl"
+        lines = events.read_text("utf-8").splitlines()
+        lines[1] = "{broken"
+        events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        code, out, err = cli("validate", str(run_dir))
+
+        assert code == 1
+        assert "line 2" in out + err
+
+    def test_resume_continues_from_the_failed_stage_as_a_new_run(self, tmp_path: Path) -> None:
+        world, args = self._resumable(tmp_path)
+
+        code, out, err = cli(
+            *args,
+            "--resume",
+            "run-0001",
+            executors=self._world_executors(world),
+            verifier=lambda ref: ref.artifact_id in world.existing,
+            module_available=_ready,
+        )
+
+        assert code == 0, out + err
+        assert world.runs == ["geometric_mapping", "sensor_association", "semantic_fusion"]
+        assert "resumed run-0001" in out
+        new = tmp_path / "ws" / "runtime" / "run-0002"
+        assert _status(new)["resumed_from"] == "run-0001"
+        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "failed"
+
+    def test_resuming_a_completed_run_is_refused_and_creates_no_run(self, tmp_path: Path) -> None:
+        world, args = self._resumable(tmp_path)
+        options: dict[str, Any] = {
+            "executors": self._world_executors(world),
+            "verifier": lambda ref: ref.artifact_id in world.existing,
+            "module_available": _ready,
+        }
+        assert cli(*args, "--resume", "run-0001", **options)[0] == 0
+
+        code, out, err = cli(*args, "--resume", "run-0002", **options)
+
+        assert code == 1
+        assert "nothing to resume" in out + err
+        assert not (tmp_path / "ws" / "runtime" / "run-0003").exists()
+
+    def test_resume_and_reuse_flags_have_explicit_requirements(self, tmp_path: Path) -> None:
+        base = [
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "ingestion",
+            "--workspace",
+            str(tmp_path / "ws"),
+        ]
+
+        no_index = cli(*base, "--resume", "run-0001", executors=_executors([]))
+        no_verifier = cli(*base, "--reuse-index", str(tmp_path / "i"), "--code-identity", "c")
+        no_identity = cli(*base, "--reuse-index", str(tmp_path / "i"), verifier=lambda ref: True)
+        force_alone = cli(*base, "--force", "ingestion")
+
+        for code, out, err in (no_index, no_verifier, no_identity, force_alone):
+            assert code == 2, out + err
+        assert "--reuse-index" in no_index[1] + no_index[2]
+        assert "verifier" in no_verifier[1] + no_verifier[2]
+        assert "--code-identity" in no_identity[1] + no_identity[2]
+        assert "--reuse-index" in force_alone[1] + force_alone[2]
+
+    def test_an_unknown_run_to_resume_is_reported(self, tmp_path: Path) -> None:
+        world = World()
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "ingestion",
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--reuse-index",
+            str(tmp_path / "i"),
+            "--code-identity",
+            "c",
+            "--resume",
+            "run-0009",
+            verifier=lambda ref: ref.artifact_id in world.existing,
+            executors=self._world_executors(world),
+        )
+
+        assert code == 1
+        assert "run-0009" in out + err
+
+    def test_an_interrupt_is_a_cancelled_run_with_the_conventional_exit_code(
+        self, tmp_path: Path
+    ) -> None:
+        world = World()
+        world.fail_at = "state_estimation"
+        world.fail_with = KeyboardInterrupt()
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "geometric_mapping",
+            "--workspace",
+            str(tmp_path / "ws"),
+            executors=self._world_executors(world),
+        )
+
+        assert code == 130
+        assert "cancelled" in out + err
+        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "cancelled"
+
+    def test_a_secret_never_reaches_the_output_or_the_run_record(self, tmp_path: Path) -> None:
+        secret = "s3cr3t-token-value"
+        document = _document()
+        document["components"]["visual_perception"]["semantic_interpretation"] = {
+            "backend": "gemini",
+            "gemini": {"model": "g", "timeout_s": 1, "max_retries": 1, "temperature": 0.0},
+        }
+        world = World()
+        world.fail_at = "visual_perception"
+        world.fail_with = RuntimeError(f"401 for key {secret}")
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "visual_perception",
+            "--workspace",
+            str(tmp_path / "ws"),
+            executors=self._world_executors(world),
+            environ={"GEMINI_API_KEY": secret},
+        )
+
+        assert code == 1
+        assert secret not in out + err
+        for path in (tmp_path / "ws" / "runtime" / "run-0001").iterdir():
+            assert secret not in path.read_text("utf-8"), path.name
+
+    def test_the_dry_run_predicts_what_reuse_would_do(self, tmp_path: Path) -> None:
+        world, _ = self._resumable(tmp_path)
+
+        code, out, _ = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "semantic_fusion",
+            "--dry-run",
+            "--reuse-index",
+            str(tmp_path / "index"),
+            "--code-identity",
+            "code-1",
+            "--json",
+            verifier=lambda ref: ref.artifact_id in world.existing,
+            module_available=_ready,
+        )
+
+        reuse = _json(out)["reuse"]
+        assert code == 0
+        assert reuse["ingestion"]["kind"] == "reused"
+        assert reuse["geometric_mapping"]["kind"] == "recomputed"

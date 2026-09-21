@@ -64,4 +64,4 @@ No `preflight()`, um estágio que **certamente** será reutilizado dispensa exec
 
 - Os executores reais precisam calcular o `content_hash` a partir dos manifests das capabilities e fornecer o `verify` com seus leitores; isso acompanha os executores da validação end-to-end (#177). Os testes usam estágios puros que derivam o conteúdo de suas entradas e configuração.
 - O índice não tem coleta de lixo nem é distribuído: fora do escopo do v0.1.0.
-- Seleção explícita de runs, validação de lineage entre artifacts e o lifecycle de retomada são as issues seguintes; o reuso continua sendo, aqui, um artifact fornecido ou indexado por identidade.
+- A retomada de um run interrompido usa exatamente estas checagens de reuso ([`lifecycle.md`](lifecycle.md)); a seleção de runs e a validação de linhagem estão em [`selection.md`](selection.md).
