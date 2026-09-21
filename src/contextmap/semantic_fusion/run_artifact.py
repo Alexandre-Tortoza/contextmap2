@@ -685,7 +685,7 @@ class _Tally:
         self.fusion_fingerprint: str | None = None
         self._previous: FusionSupportId | None = None
         self._physical: set[str] = set()
-        self._inference = 0
+        self._results: set[str] = set()
         self._per_support: dict[str, list[int]] = {
             "physical_observations_per_support": [],
             "inference_results_per_support": [],
@@ -777,9 +777,16 @@ class _Tally:
         self.support_count += 1
         self.contribution_count += len(evidence.contributions)
         self._hypotheses += len(evidence.hypotheses)
-        self._inference += evidence.inference_result_count
         self._physical.update(
             str(g.physical_observation_id) for g in evidence.physical_observation_groups
+        )
+        # Um resultado de percepção tem várias regiões e cada uma pode cair em um suporte diferente:
+        # somar `inference_result_count` por suporte contaria o mesmo resultado várias vezes e
+        # deixaria de ser comparável com os frames físicos distintos acima.
+        self._results.update(
+            str(result)
+            for g in evidence.physical_observation_groups
+            for result in g.perception_result_ids
         )
         counts = self._per_support
         counts["physical_observations_per_support"].append(evidence.physical_observation_count)
@@ -888,7 +895,7 @@ class _Tally:
             "contributions": self.contribution_count,
             "hypotheses": self._hypotheses,
             "physical_observations": len(self._physical),
-            "inference_results": self._inference,
+            "inference_results": len(self._results),
             "claims": {
                 "total": self._claims_total,
                 "scored": scored,

@@ -49,7 +49,7 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.sensor_association import ObservationQuality, SpatialObservationId
 
-EVALUATOR_VERSION = "1"
+EVALUATOR_VERSION = "2"
 """Bumped whenever a metric's definition changes, so reports stay comparable."""
 
 _TOLERANCE = 1e-9
@@ -427,7 +427,9 @@ class SemanticFusionEvaluationReport:
         profile: The stratification profile used.
         support_count: Supports in the run.
         physical_observation_count: Distinct physical observations in the run.
-        inference_result_count: Inference results, summed over supports.
+        inference_result_count: Distinct inference results in the run: a result reaches every
+            support that one of its regions falls in, and is counted once, like the physical
+            observations.
         evidence_base_id: Hash of the supports, contributions and physical observations.
         hypothesis_labels_id: Hash of the hypotheses' labels per support.
         hypothesis_stances_id: Hash of every claim's stance under every hypothesis.
@@ -513,7 +515,6 @@ class _Facts:
 
     support_id: str
     physical: int
-    inference: int
     labels: tuple[str, ...]
     leaders: tuple[str, ...]
     weighted_leaders: tuple[str, ...] | None
@@ -599,7 +600,7 @@ def evaluate_semantic_fusion(
         profile=profile,
         support_count=len(tally.facts),
         physical_observation_count=len(tally.physical_observations),
-        inference_result_count=sum(item.inference for item in tally.facts),
+        inference_result_count=len(tally.inference_results),
         evidence_base_id=tally.evidence_base_id(),
         hypothesis_labels_id=_digest(tally.label_records),
         hypothesis_stances_id=_digest(tally.stance_records),
@@ -802,6 +803,7 @@ class _Tally:
     def __init__(self) -> None:
         self.facts: list[_Facts] = []
         self.physical_observations: set[str] = set()
+        self.inference_results: set[str] = set()
         self.label_records: list[Any] = []
         self.stance_records: list[Any] = []
         self._base: list[Any] = []
@@ -845,6 +847,11 @@ class _Tally:
         )
         self.physical_observations.update(
             str(g.physical_observation_id) for g in evidence.physical_observation_groups
+        )
+        self.inference_results.update(
+            str(result)
+            for g in evidence.physical_observation_groups
+            for result in g.perception_result_ids
         )
         self._add_correlation(evidence)
         self._add_uncertainty(evidence, facts)
@@ -1117,7 +1124,6 @@ def _facts(
     return _Facts(
         support_id=str(outcome.support.fusion_support_id),
         physical=evidence.physical_observation_count,
-        inference=evidence.inference_result_count,
         labels=tuple(sorted(h.label for h in hypotheses)),
         leaders=leaders,
         weighted_leaders=weighted_leaders,

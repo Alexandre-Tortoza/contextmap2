@@ -1,6 +1,6 @@
 # Avaliação de Semantic Fusion
 
-Este documento descreve `src/contextmap/evaluation/semantic_fusion.py`, versão `EVALUATOR_VERSION = "1"`.
+Este documento descreve `src/contextmap/evaluation/semantic_fusion.py`, versão `EVALUATOR_VERSION = "2"`.
 
 Semantic Fusion é validada como uma etapa de **acumulação de evidência**, e suas falhas precisam continuar visíveis: consistência multi-vista, preservação de incerteza, tratamento de correlação e o valor real dos canais de evidência opcionais. O avaliador lê runs persistidos pelo leitor público, **nunca altera um run e nunca lê `debug/`**, e reporta cada grandeza **separada e com o seu denominador**: não há ranking, vencedor nem escore composto. Custo fica à parte de toda medida de qualidade.
 
@@ -26,6 +26,10 @@ flowchart LR
 | `annotations` | Só com anotações (ver abaixo). |
 | `strata` | As mesmas medidas por condição (ver abaixo). |
 | `cost` | Tempo e memória (só se medidos) e tamanho de cada arquivo contratual, à parte da qualidade. |
+
+### Contagens do run
+
+`physical_observation_count` e `inference_result_count` são **ambas distintas no run inteiro**. Um resultado de percepção tem dezenas de regiões e cada uma cai em um suporte, então somar os resultados por suporte contaria o mesmo resultado várias vezes e deixaria de ser comparável com os frames físicos. O defeito só apareceu na execução real (ver abaixo): com 19 frames físicos e 51 resultados distintos, a versão `"1"` do avaliador (e `metrics/counts.json`) informava 604, porque os fixtures sintéticos tinham uma região por resultado. A versão `"2"` conta cada resultado uma vez; a contagem por suporte continua em `metrics/distributions.json` e em `correlation`.
 
 ## Anotações: recuperação da referência
 

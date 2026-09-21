@@ -65,7 +65,7 @@ Um run sem suportes é válido e explícito (as políticas ficam `null`).
 
 Separadas, sem um escalar único:
 
-- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência (contados à parte), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
+- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência, ambos **distintos no run inteiro** e contados à parte (um resultado de percepção com várias regiões em suportes diferentes conta uma vez; o valor por suporte está em `distributions.json`), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
 - `distributions.json`: por suporte, frames físicos, resultados de inferência, contribuições e hipóteses (contagem, mínimo, mediana, máximo);
 - `payload.json`: o tamanho de cada arquivo contratual;
 - `runtime.json`: tempo e memória, **só** quando quem chama os mediu, e nunca misturados às métricas de qualidade.
