@@ -30,6 +30,7 @@ from contextmap.artifact import (
     context_map_from_record,
     context_map_to_record,
 )
+from contextmap.spatial_relations import RelationPredicate
 
 # --- frame -------------------------------------------------------------------------------------
 
@@ -202,11 +203,14 @@ def test_optional_content_is_declared_explicitly() -> None:
             MapCapability.POINT_REPRESENTATION_EVIDENCE,
             MapCapability.RELATIONS,
         ),
-        relation_predicates=("inside", "on"),
+        relation_predicates=(RelationPredicate.INSIDE, RelationPredicate.ON_TOP_OF),
     )
 
     assert MapCapability.RELATIONS in declared.content
-    assert declared.relation_predicates == ("inside", "on")
+    assert declared.relation_predicates == (
+        RelationPredicate.INSIDE,
+        RelationPredicate.ON_TOP_OF,
+    )
 
 
 def test_geometry_is_always_declared() -> None:
@@ -225,23 +229,27 @@ def test_relations_cannot_be_declared_without_entities() -> None:
     with pytest.raises(ValueError, match="entities"):
         capabilities(
             content=(MapCapability.GEOMETRY, MapCapability.RELATIONS),
-            relation_predicates=("on",),
+            relation_predicates=(RelationPredicate.ON_TOP_OF,),
         )
 
 
 def test_relation_types_are_only_declared_with_the_relations_capability() -> None:
     with pytest.raises(ValueError, match="relation_predicates"):
-        capabilities(relation_predicates=("on",))
+        capabilities(relation_predicates=(RelationPredicate.ON_TOP_OF,))
 
 
-def test_relation_predicates_are_sorted_unique_and_not_blank() -> None:
+def test_relation_predicates_are_sorted_and_unique() -> None:
     both = (MapCapability.ENTITIES, MapCapability.GEOMETRY, MapCapability.RELATIONS)
     with pytest.raises(ValueError, match="sorted"):
-        capabilities(content=both, relation_predicates=("on", "inside"))
+        capabilities(
+            content=both,
+            relation_predicates=(RelationPredicate.ON_TOP_OF, RelationPredicate.INSIDE),
+        )
     with pytest.raises(ValueError, match="unique"):
-        capabilities(content=both, relation_predicates=("on", "on"))
-    with pytest.raises(ValueError, match="relation_predicates"):
-        capabilities(content=both, relation_predicates=(" ",))
+        capabilities(
+            content=both,
+            relation_predicates=(RelationPredicate.ON_TOP_OF, RelationPredicate.ON_TOP_OF),
+        )
 
 
 def test_relations_may_be_declared_with_no_predicate_yet() -> None:

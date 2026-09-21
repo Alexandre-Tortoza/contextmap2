@@ -1,9 +1,10 @@
 """Builds the human-readable representative ContextMap fixture from public contracts only.
 
-The fixture is a small map of a corridor: four entities (one merged from two source entities, one
-ambiguous, one conflicting, one with insufficient evidence), three relations (supported,
-unresolved and conflicting) and the full provenance behind them. Every identity and digest is
-synthetic and deterministic. Run this module to regenerate the committed JSON file::
+The fixture is a small map of a corridor: four entities (one merged from two source entities,
+one ambiguous with an unresolved neighbor, one conflicting, one with insufficient evidence),
+three relations (supported, unresolved and rejected) and the full provenance behind them. Every
+identity and digest is synthetic and deterministic. Run this module to regenerate the committed
+JSON file::
 
     python tests/artifact/context_map_fixture_builder.py
 """
@@ -40,15 +41,28 @@ from contextmap.artifact import (
     MapFrame,
     ObservationWindow,
     PolicyRef,
-    RelationState,
     SourceSequence,
     UpstreamArtifact,
     UpstreamRecordRef,
     context_map_to_record,
 )
+from contextmap.entity_resolution import (
+    EntityResolutionRunId,
+    ResolutionDecisionId,
+    ResolvedEntityId,
+    ResolvedEntityReference,
+)
 from contextmap.geometric_mapping import Bounds3D, GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import FrameId
+from contextmap.semantic_mapping import EntityId, EntityReference, SemanticMapId
 from contextmap.shared import SourceTimestamp
+from contextmap.spatial_relations import (
+    RelationId,
+    RelationPredicate,
+    RelationState,
+    RelationUncertaintyKind,
+    SpatialRelationsRunId,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "context_map" / "corridor.json"
 
@@ -76,6 +90,10 @@ def _origin(
     kind: DerivationKind, *records: UpstreamRecordRef, policy: PolicyRef | None = None
 ) -> EvidenceOrigin:
     return EvidenceOrigin(kind=kind, derived_from=tuple(sorted(records)), policy=policy)
+
+
+def _source_entity(name: str) -> EntityReference:
+    return EntityReference(semantic_map_id=SemanticMapId(SEMANTIC_MAP), entity_id=EntityId(name))
 
 
 def _geometry(*indices: int) -> tuple[GeometryReference, ...]:
@@ -107,6 +125,10 @@ def _relation_policy() -> PolicyRef:
     return PolicyRef(policy_id="geometric-relations", version="1")
 
 
+def _entity_order(reference: EntityReference) -> tuple[str, str]:
+    return (str(reference.semantic_map_id), str(reference.entity_id))
+
+
 def _entities() -> tuple[ContextEntity, ...]:
     def entity(
         number: int,
@@ -115,16 +137,19 @@ def _entities() -> tuple[ContextEntity, ...]:
         state: ContextSemanticState,
         members: tuple[str, ...],
         decisions: tuple[str, ...] = (),
+        unresolved: tuple[str, ...] = (),
         evidence: tuple[UpstreamRecordRef, ...],
     ) -> ContextEntity:
         identity = f"entity-{number:04d}"
         return ContextEntity(
             entity_id=ContextEntityId(identity),
-            source=_record(ENTITY_RESOLUTION, f"resolved-{number:04d}"),
-            member_entities=tuple(sorted(_record(SEMANTIC_MAP, member) for member in members)),
-            resolution_decisions=tuple(
-                sorted(_record(ENTITY_RESOLUTION, decision) for decision in decisions)
+            source=ResolvedEntityReference(
+                resolution_run_id=EntityResolutionRunId(ENTITY_RESOLUTION),
+                resolved_entity_id=ResolvedEntityId(f"resolved-{number:04d}"),
             ),
+            member_entities=tuple(sorted(map(_source_entity, members), key=_entity_order)),
+            resolution_decisions=tuple(sorted(ResolutionDecisionId(item) for item in decisions)),
+            unresolved_neighbors=tuple(sorted(map(_source_entity, unresolved), key=_entity_order)),
             geometry_refs=_geometry(*geometry),
             semantic_state=state,
             origin=_origin(DerivationKind.MULTIVIEW_FUSED, *evidence, policy=_fusion_policy()),
@@ -160,6 +185,9 @@ def _entities() -> tuple[ContextEntity, ...]:
                 ),
             ),
             members=("entity-c",),
+            # A resolução deixou UNRESOLVED contra outra entidade de origem:
+            # nem fundida, nem declarada distinta.
+            unresolved=("entity-f",),
             evidence=(_record(FUSION, "fused-support-0003"),),
         ),
         entity(
@@ -188,15 +216,22 @@ def _entities() -> tuple[ContextEntity, ...]:
 
 def _relations() -> tuple[ContextRelation, ...]:
     def relation(
-        number: int, subject: str, predicate: str, target: str, state: RelationState
+        number: int,
+        subject: str,
+        predicate: RelationPredicate,
+        target: str,
+        state: RelationState,
+        uncertainty: tuple[RelationUncertaintyKind, ...] = (),
     ) -> ContextRelation:
         return ContextRelation(
             relation_id=ContextRelationId(f"relation-{number:04d}"),
-            source=_record(SPATIAL_RELATIONS, f"relation-{number:04d}"),
+            source_run_id=SpatialRelationsRunId(SPATIAL_RELATIONS),
+            source_relation_id=RelationId(f"relation-{number:04d}"),
             subject=_reference(subject),
             predicate=predicate,
             object=_reference(target),
             state=state,
+            uncertainty_kinds=uncertainty,
             origin=_origin(
                 DerivationKind.GEOMETRY_DERIVED,
                 _record(SPATIAL_RELATIONS, f"relation-evidence-{number:04d}"),
@@ -206,9 +241,20 @@ def _relations() -> tuple[ContextRelation, ...]:
         )
 
     return (
-        relation(1, "entity-0001", "next_to", "entity-0002", RelationState.SUPPORTED),
-        relation(2, "entity-0003", "on", "entity-0002", RelationState.UNRESOLVED),
-        relation(3, "entity-0004", "near", "entity-0001", RelationState.CONFLICTING),
+        relation(
+            1, "entity-0001", RelationPredicate.NEXT_TO, "entity-0002", RelationState.SUPPORTED
+        ),
+        # Evidência que apoia e contradiz: não resolvida, e o motivo fica registrado.
+        relation(
+            2,
+            "entity-0003",
+            RelationPredicate.ON_TOP_OF,
+            "entity-0002",
+            RelationState.UNRESOLVED,
+            (RelationUncertaintyKind.CONFLICTING_EVIDENCE,),
+        ),
+        # Evidência que contradiz o predicado: rejeitada, mantida como conhecimento negativo.
+        relation(3, "entity-0004", RelationPredicate.INSIDE, "entity-0001", RelationState.REJECTED),
     )
 
 
@@ -284,7 +330,11 @@ def build_fixture_map() -> ContextMap:
                 MapCapability.POINT_REPRESENTATION_EVIDENCE,
                 MapCapability.RELATIONS,
             ),
-            relation_predicates=("near", "next_to", "on"),
+            relation_predicates=(
+                RelationPredicate.INSIDE,
+                RelationPredicate.NEXT_TO,
+                RelationPredicate.ON_TOP_OF,
+            ),
         ),
     )
     return ContextMap(

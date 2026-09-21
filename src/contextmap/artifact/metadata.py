@@ -21,6 +21,7 @@ from contextmap.artifact._checks import (
 from contextmap.artifact.frame import MapFrame
 from contextmap.geometric_mapping import Bounds3D
 from contextmap.shared import SourceTimestamp
+from contextmap.spatial_relations import RelationPredicate
 
 
 @dataclass(frozen=True, kw_only=True, order=True)
@@ -147,28 +148,31 @@ class DeclaredCapabilities:
 
     Attributes:
         content: The declared capabilities, sorted and unique; geometry is always among them.
-        relation_predicates: The relation types present, sorted and unique; empty unless
-            relations are declared.
+        relation_predicates: The canonical predicates present, sorted by value and unique; empty
+            unless relations are declared.
     """
 
     content: tuple[MapCapability, ...]
-    relation_predicates: tuple[str, ...]
+    relation_predicates: tuple[RelationPredicate, ...]
 
     def __post_init__(self) -> None:
         """Validate that the declaration is canonical and coherent.
 
         Raises:
             ValueError: If the declaration is not sorted and unique, omits geometry, declares
-                relations without entities, or lists predicates without relations or a blank one.
+                relations without entities, or lists predicates without relations.
         """
         require_canonical("content", self.content, lambda item: (item.value,), detail="by value ")
         if MapCapability.GEOMETRY not in self.content:
             raise ValueError("a map always declares its geometry capability")
         if MapCapability.RELATIONS in self.content and MapCapability.ENTITIES not in self.content:
             raise ValueError("relations are between entities: declare entities as well")
-        require_canonical("relation_predicates", self.relation_predicates, lambda item: (item,))
-        if any(not predicate.strip() for predicate in self.relation_predicates):
-            raise ValueError("relation_predicates must not contain a blank predicate")
+        require_canonical(
+            "relation_predicates",
+            self.relation_predicates,
+            lambda item: (item.value,),
+            detail="by value ",
+        )
         if self.relation_predicates and MapCapability.RELATIONS not in self.content:
             raise ValueError("relation_predicates are only declared with the relations capability")
 

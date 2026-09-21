@@ -30,7 +30,8 @@ Nada é reparado em silêncio: um registro inválido **nunca** vira um mapa "cor
 - frame, unidades, âncora e extensão: unidade desconhecida, frame vazio, `up_direction` que não é unitário, origem local que reivindica referência externa, origem externa sem referência, bounds em outro frame, janela com relógios distintos, nenhuma sequência de origem;
 - referências: mapa geométrico vazio, geometria de outro mapa, geometria além do intervalo, mapa geométrico ausente da linhagem;
 - entidades: id duplicado, ordem, duas entidades para o mesmo registro de origem, entidade sem geometria, entidade resolvida a partir de nada;
-- relações: entidade inexistente, entidade de outro mapa, relação consigo mesma, predicado vazio, artifact de origem do tipo errado;
+- relações: entidade inexistente, entidade de outro mapa, relação consigo mesma, predicado fora da taxonomia, estado desconhecido, relação não resolvida sem motivo, relação decidida com incerteza, run de origem do tipo errado;
+- identidade: entidade de origem do run errado, membro de artifact que não é um mapa semântico, vizinho não resolvido que também é membro;
 - estado: estado inequívoco com duas hipóteses, conflito reduzido a um rótulo, abstenção com hipótese;
 - capacidades: entidades, relações e evidência de representação 3D fora da declaração, tipos de relação divergentes do conteúdo;
 - linhagem e proveniência: artifact citado fora da linhagem, tipo errado, linhagem fora de ordem, identidade de conteúdo que não é digest, resultado fundido sem política, origem sem evidência, saída de VLM marcada como observada, relação marcada como observação direta, categoria desconhecida;
@@ -45,12 +46,12 @@ Também há testes de **ausência de conteúdo opcional** (mapa só com geometri
 | Parte | O que demonstra |
 | --- | --- |
 | `entity-0001` (`chair`, `UNAMBIGUOUS`) | entidade **resolvida a partir de duas entidades de origem** (`member_entities`) com uma decisão de resolução; origem `MULTIVIEW_FUSED` citando fusão, **observações físicas** e evidência 3D opcional; hipótese `MODEL_INFERRED` |
-| `entity-0002` (`desk` / `table`, `AMBIGUOUS`) | hipóteses concorrentes preservadas, sem ranking |
+| `entity-0002` (`desk` / `table`, `AMBIGUOUS`) | hipóteses concorrentes preservadas, sem ranking; um **vizinho não resolvido** (`unresolved_neighbors`): a resolução não a fundiu nem a declarou distinta de outra entidade de origem |
 | `entity-0003` (`bin` / `box`, `CONFLICTING`) | conflito preservado: as duas hipóteses continuam no mapa |
 | `entity-0004` (`INSUFFICIENT_EVIDENCE`) | abstenção: nenhuma hipótese afirmada, o que não é evidência negativa |
-| `relation-0001` (`next_to`, `SUPPORTED`) | relação confirmada, `GEOMETRY_DERIVED` com a política versionada |
-| `relation-0002` (`on`, `UNRESOLVED`) | relação candidata que **não** vira confirmada |
-| `relation-0003` (`near`, `CONFLICTING`) | evidência que apoia e contradiz |
+| `relation-0001` (`NEXT_TO`, `SUPPORTED`) | relação confirmada, `GEOMETRY_DERIVED` com a política versionada |
+| `relation-0002` (`ON_TOP_OF`, `UNRESOLVED`, `CONFLICTING_EVIDENCE`) | relação candidata que **não** vira confirmada, com o motivo: a evidência apoia e contradiz |
+| `relation-0003` (`INSIDE`, `REJECTED`) | evidência que contradiz o predicado, mantida como conhecimento negativo |
 | `metadata.frame` | frame local de estimador com `up_direction` **desconhecida** (`null` explícito) |
 | `lineage` | sequência, percepção (com modelos), fusão, mapa semântico, mapa geométrico, representação 3D, resolução e relações, cada um com digest de conteúdo |
 
@@ -60,4 +61,4 @@ Os testes verificam que a fixture é válida, que reconstrói exatamente o mesmo
 
 - integridade de arquivos, hashes e payloads: validador do artifact;
 - verificação contra o `GeometricMap` real (frame, tamanho e bounds do artifact de geometria): feita por quem abre os dois artifacts, como o validador;
-- `entity_resolution` e `spatial_relations` reais: enquanto seus contratos não existem na `dev`, a fixture usa `UpstreamRecordRef` para as identidades de origem.
+- os registros completos de `ResolvedEntity` e `Relation`: o mapa guarda as referências reais (`ResolvedEntityReference`, `RelationId`) e o que o consumidor precisa, e os artifacts a montante seguem sendo a fonte do restante.

@@ -40,12 +40,12 @@ from contextmap.artifact import (
     MapCapability,
     ProvenanceError,
     ReferenceIntegrityError,
-    RelationState,
     UnsupportedSchemaVersionError,
     context_map_from_record,
     context_map_to_record,
 )
 from contextmap.geometric_mapping import MapId, geometry_id_for
+from contextmap.spatial_relations import RelationPredicate, RelationState, RelationUncertaintyKind
 
 Record = dict[str, Any]
 
@@ -134,15 +134,23 @@ def test_the_fixture_preserves_unresolved_and_conflicting_state() -> None:
     assert [item.state for item in fixture.relations] == [
         RelationState.SUPPORTED,
         RelationState.UNRESOLVED,
-        RelationState.CONFLICTING,
+        RelationState.REJECTED,
     ]
+    assert fixture.relations[1].uncertainty_kinds == (RelationUncertaintyKind.CONFLICTING_EVIDENCE,)
 
 
 def test_the_fixture_keeps_the_merge_lineage_of_a_resolved_entity() -> None:
     merged = build_fixture_map().entities[0]
 
     assert len(merged.member_entities) == 2
-    assert [item.record_id for item in merged.resolution_decisions] == ["decision-a-b"]
+    assert list(merged.resolution_decisions) == ["decision-a-b"]
+
+
+def test_the_fixture_keeps_an_entity_whose_identity_resolution_left_a_neighbor_unresolved() -> None:
+    ambiguous = build_fixture_map().entities[1]
+
+    assert [item.entity_id for item in ambiguous.unresolved_neighbors] == ["entity-f"]
+    assert not set(ambiguous.unresolved_neighbors) & set(ambiguous.member_entities)
 
 
 def test_a_consumer_walks_from_a_relation_to_geometry_and_evidence_using_public_types() -> None:
@@ -249,6 +257,13 @@ def _mutate_relation(relation_id: str, path: list[str], value: Any) -> Callable[
         for step in path[:-1]:
             target = target[step]
         target[path[-1]] = value
+
+    return mutate
+
+
+def _mutate_member_map(entity_id: str, semantic_map_id: str) -> Callable[[Record], None]:
+    def mutate(record: Record) -> None:
+        _entity(record, entity_id)["member_entities"][0]["semantic_map_id"] = semantic_map_id
 
     return mutate
 
@@ -375,6 +390,26 @@ INVALID_CASES: list[tuple[str, Callable[[Record], None], type[Exception], str]] 
         ValueError,
         "member_entities",
     ),
+    (
+        "unresolved-neighbor-also-a-member",
+        lambda record: _entity(record, "entity-0002").update(
+            unresolved_neighbors=deepcopy(_entity(record, "entity-0002")["member_entities"])
+        ),
+        ValueError,
+        "member",
+    ),
+    (
+        "member-entity-from-the-wrong-artifact",
+        _mutate_member_map("entity-0001", FUSION),
+        ReferenceIntegrityError,
+        "SEMANTIC_MAP",
+    ),
+    (
+        "entity-from-the-wrong-artifact",
+        _set(["entities", 0, "source", "resolution_run_id"], FUSION),
+        ReferenceIntegrityError,
+        "ENTITY_RESOLUTION_RUN",
+    ),
     # --- relations: subject and object validity
     (
         "relation-to-an-unknown-entity",
@@ -390,14 +425,32 @@ INVALID_CASES: list[tuple[str, Callable[[Record], None], type[Exception], str]] 
     ),
     ("relation-to-itself", _relate_entity_to_itself, ValueError, "itself"),
     (
-        "relation-without-predicate",
-        _mutate_relation("relation-0001", ["predicate"], " "),
+        "relation-with-a-predicate-outside-the-taxonomy",
+        _mutate_relation("relation-0001", ["predicate"], "adjacent"),
+        ContextMapRecordError,
+        "RelationPredicate",
+    ),
+    (
+        "unresolved-relation-without-a-reason",
+        _mutate_relation("relation-0002", ["uncertainty_kinds"], []),
         ValueError,
-        "predicate",
+        "says why",
+    ),
+    (
+        "decided-relation-with-uncertainty",
+        _mutate_relation("relation-0001", ["uncertainty_kinds"], ["conflicting_evidence"]),
+        ValueError,
+        "no uncertainty",
+    ),
+    (
+        "rejected-state-unknown-to-the-taxonomy",
+        _mutate_relation("relation-0001", ["state"], "conflicting"),
+        ContextMapRecordError,
+        "RelationState",
     ),
     (
         "relation-from-the-wrong-artifact",
-        _mutate_relation("relation-0001", ["source", "artifact_id"], FUSION),
+        _mutate_relation("relation-0001", ["source_run_id"], FUSION),
         ReferenceIntegrityError,
         "SPATIAL_RELATIONS_RUN",
     ),
@@ -425,7 +478,7 @@ INVALID_CASES: list[tuple[str, Callable[[Record], None], type[Exception], str]] 
     ),
     (
         "relation-types-drift-from-the-content",
-        _set(["metadata", "capabilities", "relation_predicates"], ["near", "on"]),
+        _set(["metadata", "capabilities", "relation_predicates"], ["inside", "on_top_of"]),
         ValueError,
         "relation_predicates",
     ),
@@ -574,7 +627,7 @@ def test_a_relation_between_valid_entities_is_accepted_once_declared() -> None:
     added = populated_map(
         relations=(
             *populated_map().relations,
-            relation("relation-0003", "entity-0001", "next_to", "entity-0003"),
+            relation("relation-0003", "entity-0001", RelationPredicate.NEXT_TO, "entity-0003"),
         )
     )
 
