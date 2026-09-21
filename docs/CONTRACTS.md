@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) e de Semantic Mapping (`Entity`, `EntityReference`, `EntityGeometry`, `EntitySemanticState`, `EntityTemporalState`, [contratos](../src/contextmap/semantic_mapping/docs/contracts.md)) também já existem; os demais, de Entity Resolution em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas. Os contratos da capability transversal `evaluation` (manifesto do reference set, famílias de anotação, definições de métrica, relatório comum, manifesto de experimento e de comparação, evidência e decisão sobre técnicas opcionais) já existem, mas não fazem parte da cadeia de contratos de domínio abaixo: estão em [avaliação](../src/contextmap/evaluation/docs/README.md).
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) e de Semantic Mapping (`Entity`, `EntityReference`, `EntityGeometry`, `EntitySemanticState`, `EntityTemporalState`, [contratos](../src/contextmap/semantic_mapping/docs/contracts.md)) também já existem; os de Entity Resolution (`EntityCandidateSet`, `EntityMatchEvidence`, `ResolutionDecision`, `ResolvedEntity`, `ResolvedEntityReference`, [contratos](../src/contextmap/entity_resolution/docs/contracts.md)) também já existem; os contratos de Spatial Relations (`Relation`, `RelationEvidence` e a taxonomia de predicados, [contratos](../src/contextmap/spatial_relations/docs/contracts.md)) também já existem, sobre `ResolvedEntityReference` e o run de Entity Resolution; os demais, do `ContextMap` em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas. Os contratos da capability transversal `evaluation` (manifesto do reference set, famílias de anotação, definições de métrica, relatório comum, manifesto de experimento e de comparação, evidência e decisão sobre técnicas opcionais) já existem, mas não fazem parte da cadeia de contratos de domínio abaixo: estão em [avaliação](../src/contextmap/evaluation/docs/README.md).
 
 ```mermaid
 flowchart LR
@@ -35,7 +35,8 @@ flowchart LR
     GR --> P3["PointRepresentation<br/>implementado e opcional"]
     SP --> FE["FusedEvidence<br/>implementado"]
     P3 -. evidência opcional .-> FE
-    FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
+    FE --> E["Entity → ResolvedEntity<br/>implementado"]
+    E --> REL["Relation → ContextMap<br/>planejado"]
 ```
 
 ## Cadeia principal de contratos
@@ -58,8 +59,8 @@ flowchart LR
     GM --> P3["PointRepresentation<br/>(opcional)"]
     SP --> FE["FusedEvidence"]
     P3 -. evidência 3D opcional .-> FE
-    FE -. futuro .-> E["Entity"]
-    E -. futuro .-> RE["ResolvedEntity"]
+    FE --> E["Entity"]
+    E --> RE["ResolvedEntity"]
     RE -. futuro .-> REL["Relation"]
     REL -. futuro .-> CM["ContextMap"]
 ```
@@ -615,24 +616,56 @@ Implementado: o histórico é um índice pequeno (`ObservationRef` por frame fí
 
 ## 24. Entity Resolution contracts
 
-Entity Resolution recebe source entities e produz decisões explícitas.
+Entity Resolution recebe source entities (`Entity`, de Semantic Mapping) e produz decisões explícitas e entidades resolvidas. Os contratos existem no código; a fonte de cada campo é a [documentação da capability](../src/contextmap/entity_resolution/docs/contracts.md).
 
-Conceitos esperados:
+Contratos públicos:
 
 ```text
-CandidateSet
-MatchEvidence
+EntityCandidateSet
+EntityMatchEvidence
 ResolutionDecision
 ResolvedEntity
+ResolvedEntityReference
 ```
 
-Estados de decisão podem representar:
+Cada um pertence a um nível semântico diferente e nenhum substitui o anterior:
+
+| Contrato | Nível | O que é |
+| --- | --- | --- |
+| `EntityCandidateSet` | evidência | Os alvos plausíveis de comparação de uma entidade, de forma permissiva e sem all-pairs; nunca decide nada. |
+| `EntityMatchEvidence` | evidência | A evidência de **uma** comparação, um canal tipado por vez, sem score que a resuma. |
+| `ResolutionDecision` | crença | O veredito de uma política versionada sobre essa evidência: `MATCH`, `DISTINCT` ou `UNRESOLVED`. |
+| `ResolvedEntity` | crença | A materialização determinística dos grupos de `MATCH`, com linhagem de fusão. |
+
+### `EntityMatchEvidence`
+
+Um par de `EntityReference` em ordem canônica, o identificador derivado da comparação (`ComparisonId`) e a evidência de cada canal:
 
 ```text
-MATCH
-DISTINCT
-UNRESOLVED
+geometry        # sinais geométricos com unidade e frame
+semantic        # compatibilidade de labels, hipóteses e atributos
+appearance      # similaridade de features visuais, um voto por observação física
+temporal        # compatibilidade do histórico de observações
+point_representation   # opcional: estrutura 3D num RepresentationSpace compatível
 ```
+
+Cada canal é **medido ou indisponível** (com o motivo): a falta de evidência nunca vira zero nem voto por `DISTINCT`, e um canal `None` significa que não foi avaliado. Os sinais de canais diferentes (metros, cosseno, relação entre labels) não se somam, não se fazem média e não recebem um limiar conjunto. Gates duros (entidades distintas, mesmo mapa geométrico, mesmo frame do mapa) bloqueiam a comparação quando reprovam, e uma comparação bloqueada só contém canais indisponíveis; um espaço de embedding ou de representação incompatível torna indisponível o canal correspondente.
+
+### `ResolutionDecision`
+
+```text
+decision_id            # derivado da comparação e da política
+entity_a_ref, entity_b_ref
+decision               # MATCH | DISTINCT | UNRESOLVED
+evidence_ref           # ComparisonId de onde saiu
+policy                 # PolicyRef(policy_id, configuration_fingerprint)
+triggered_rules[]      # estágios: gate, eligibility, evidence, rule, decision
+channels_used[], channels_ignored[]
+unresolved_reason      # presente exatamente quando UNRESOLVED
+provenance
+```
+
+`UNRESOLVED` é resultado válido, nunca forçado a match nem a não-match. Uma decisão `MATCH` ou `DISTINCT` precisa se apoiar em pelo menos um canal e em uma regra do estágio `decision` que conclua o mesmo resultado, o que a torna reconstruível. A política baseline (`conservative-staged-resolution-v1`) trabalha sobre o **estado** de cada canal, sem soma ponderada, e prefere `UNRESOLVED` a um `MATCH` sem explicação.
 
 ### `ResolvedEntity`
 
@@ -640,16 +673,34 @@ Preserva:
 
 ```text
 resolved_entity_id
-member_entity_refs[]
-aggregated geometry support
-semantic state
-temporal summary
-evidence refs[]
+resolution_run_id
+members[]                      # EntityReference de origem + decisões MATCH que as ligam
+geometry                       # união exata das referências de geometria e das caixas
+semantic_state                 # hipóteses e atributos dos membros, verbatim, sem primária
+temporal_state                 # recalculado da união das observações físicas
+evidence                       # união dos vínculos de evidência
 resolution_decision_refs[]
+unresolved_neighbor_refs[]
+contradiction_ids[]
 provenance
 ```
 
-Source entities não são mutadas ou apagadas.
+Toda entidade de origem pertence a **exatamente uma** entidade resolvida (uma entidade que nada casou vira uma resolvida de um membro), e Spatial Relations consome só entidades resolvidas. Um componente ligado por `MATCH` que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction`: um falso merge é pior que uma duplicata visível e rastreada. Source entities não são mutadas ou apagadas.
+
+### Escopo de identidade
+
+`ResolvedEntityId` só faz sentido dentro do artifact que o alocou; o handle estável é `ResolvedEntityReference(resolution_run_id, resolved_entity_id)`. O id é derivado do hash das referências ordenadas dos membros: as mesmas entradas imutáveis dão o mesmo id, e uma nova execução nunca herda identidade.
+
+| Tipo | Escopo |
+| --- | --- |
+| `EntityResolutionRunId` | global: a identidade do artifact de resolução, escopo dos ids resolvidos |
+| `ResolvedEntityId` | um artifact de resolução |
+| `ResolvedEntityReference` | global: `(resolution_run_id, resolved_entity_id)` |
+| `ComparisonId`, `ResolutionDecisionId` | derivados do par e da política |
+
+### O que quem consome fixa
+
+O artifact publica a versão do seu schema e o digest do seu inventário (`resolution_artifact_digest`, calculado por Entity Resolution) e devolve, para uma observação espacial, as entidades resolvidas que ela sustenta; a identidade física de cada entidade resolvida só vem da avaliação contra uma referência anotada ([detalhes](../src/contextmap/entity_resolution/docs/artifact.md)).
 
 ## 25. `RelationEvidence`
 
@@ -668,6 +719,8 @@ provenance
 
 A presença de uma candidate relation não significa relação confirmada.
 
+Implementado em `contextmap.spatial_relations` ([contratos](../src/contextmap/spatial_relations/docs/contracts.md)). `RelationEvidence` registra o que **um canal** (`GEOMETRY`, `CONTACT` ou `OBSERVATION`) mediu ou afirmou sobre **um candidato dirigido**: `measurements` com unidade, `thresholds`, a geometria medida (por digest e, quando pequena, por referência), `caveats` declaradas e a proveniência (regra versionada, fingerprint da configuração, frame e mapa das coordenadas). Os status `SUPPORTS`, `CONFLICTS`, `AMBIGUOUS` e `UNAVAILABLE` mantêm o desconhecido separado do negativo. A evidência de observação carrega as afirmações upstream com vínculo explícito às entidades e nunca decide sozinha ([detalhes](../src/contextmap/spatial_relations/docs/observation-evidence.md)).
+
 ## 26. `Relation`
 
 Representa relação entre `ResolvedEntity` references.
@@ -682,6 +735,8 @@ Relation
 ├── state / uncertainty
 └── provenance
 ```
+
+Implementado: `Relation` guarda `subject_entity_ref` e `object_entity_ref` como `ResolvedEntityReference`, `relation_evidence_refs`, o estado `SUPPORTED`, `REJECTED` ou `UNRESOLVED` com a incerteza declarada, `derived_from` (quando é o inverso ou a gêmea simétrica de outra) e a proveniência da política de decisão. As entidades resolvidas são referenciadas, nunca copiadas ou alteradas.
 
 Predicate precisa definir:
 
