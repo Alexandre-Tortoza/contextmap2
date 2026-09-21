@@ -7,8 +7,10 @@ model runtime is involved.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +18,16 @@ from context_map_builders import capabilities, geometry_link, metadata
 from context_map_builders import context_map as schema_context_map
 from context_map_serialization_geometry import MAP_ID, POINT_COUNT, build_geometry_artifact
 
-from contextmap.artifact import ContextMap, MapCapability, Requirement
-from contextmap.artifact.dependencies import UpstreamArtifact
-from contextmap.artifact.writer import EntityEntry, RelationEntry
+from contextmap.artifact import (
+    ContextMap,
+    ContextMapArtifactManifest,
+    ContextMapArtifactWriter,
+    EntityEntry,
+    MapCapability,
+    RelationEntry,
+    Requirement,
+    UpstreamArtifact,
+)
 from contextmap.geometric_mapping import MapId
 from contextmap.shared import AtomicRunDirectory
 
@@ -97,6 +106,52 @@ def default_relations() -> tuple[RelationEntry, ...]:
         relation("relation-1", "entity-a", "entity-b"),
         relation("relation-2", "entity-c", "entity-a"),
     )
+
+
+def write_artifact(
+    tmp_path: Path,
+    geometry_dir: Path,
+    *,
+    name: str = "context_map",
+    context_map: ContextMap | None = None,
+    entities: tuple[EntityEntry, ...] | None = None,
+    relations: tuple[RelationEntry, ...] | None = None,
+    evidence: tuple[UpstreamArtifact, ...] = (),
+    written_at: datetime | None = None,
+) -> tuple[Path, ContextMapArtifactManifest]:
+    """Write a small artifact under ``tmp_path/out/<name>`` and return it with its manifest."""
+    output_dir = tmp_path / "out" / name
+    manifest = ContextMapArtifactWriter(
+        output_dir=output_dir, written_at=written_at or datetime.fromisoformat(WRITTEN_AT)
+    ).write(
+        context_map if context_map is not None else make_context_map(),
+        geometry_dir=geometry_dir,
+        entities=default_entities() if entities is None else entities,
+        relations=default_relations() if relations is None else relations,
+        evidence=evidence,
+    )
+    return output_dir, manifest
+
+
+def tree_files(root: Path) -> dict[str, bytes]:
+    """Every file under ``root`` by relative path, with its bytes."""
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple[str, int]]:
+    """Every entry under ``root`` with a content hash and its modification time.
+
+    Used to prove that a read did not change anything: same files, same bytes, same times.
+    """
+    snapshot: dict[str, tuple[str, int]] = {}
+    for path in sorted(root.rglob("*")):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "dir"
+        snapshot[path.relative_to(root).as_posix()] = (digest, path.stat().st_mtime_ns)
+    return snapshot
 
 
 def declared_without(context_map: ContextMap, capability: MapCapability) -> ContextMap:
