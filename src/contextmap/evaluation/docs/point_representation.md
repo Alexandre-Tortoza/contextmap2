@@ -62,35 +62,70 @@ Medição ad hoc (não versionada): 149 centros sobre um corredor sintético de 
 
 Esses números mostram o que o relatório reporta para o **controle geométrico**; eles não dizem nada sobre um encoder aprendido, que continua sem execução real.
 
-## Execução real de amostra (descritor, geometria real do corredor-02)
+## Execução real de amostra (geometria real do corredor-02)
 
-Diferente da seção sintética acima, esta usa **geometria real**: o `GeometricMap` que o Geometric Mapping produziu a partir da trajetória `ExternalPose` de `datasets/corridor-02/corridor-02-gt.txt` na janela de 90 s da validação (14 422 535 pontos, 860 varreduras LiDAR; run `geometric-mapping/corridor-02/run-0001__ts-w336-90s__external-pose-all-points`, lido sem modificação e com integridade verificada). Real, e não simulada: a geometria e o descritor. **Não há PTv3 nem downstream nesta seção.**
+Diferente da seção sintética acima, esta usa **geometria real**: o `GeometricMap` que o Geometric Mapping produziu a partir da trajetória `ExternalPose` de `datasets/corridor-02/corridor-02-gt.txt` na janela de 90 s da validação (14 422 535 pontos, 860 varreduras LiDAR; run `geometric-mapping/corridor-02/run-0001__ts-w336-90s__external-pose-all-points`, lido sem modificação e com integridade verificada). São **reais** a geometria, o descritor e o PTv3 (o backbone do Pointcept pelo `PointceptPTv3Runtime`, ver [`ptv3.md`](../../point_representation/docs/ptv3.md)). **Não há downstream** nesta seção.
 
 **Por que um recorte.** Avaliar suportes sobre o mapa inteiro não foi tentado: o harness materializa em memória uma cópia de toda a geometria por variação (14 milhões de objetos `GeometryPoint`), e com 860 varreduras sobrepostas o índice `scan_bounds` tende a selecionar muitas delas por consulta (não medido aqui). A geometria avaliada é um **recorte** do mapa real: os pontos numa caixa de ±4 m em x e y (e de -1,5 a +3,5 m em z) em torno da pose do meio da janela, reduzidos a **um ponto real por voxel de 10 cm** (o de menor índice de geometria). Cada ponto mantido é um `GeometryPoint` real do mapa, com identidade e proveniência próprias, então as referências continuam válidas no mapa. O recorte tem 28 787 pontos (de 1 458 162 na caixa) e o SHA-256 do conjunto de índices mantidos é `sha256:fcf58d10369514dabbba1313f7fb25fda98f51fbfd672ac40e4d2967893a2d4b`.
 
-**Protocolo.** 100 centros reais, sorteados com semente 0 entre os pontos a pelo menos 0,5 m das faces da caixa (para não medir truncamento de suporte); suporte por raio de 0,5 m com centralização; as seis variações da seção sintética. Braços `off` e `descriptor`. Não há configuração downstream fixada, e o fingerprint dela carrega a identidade do recorte. O relatório completo (`report_cpu-arms.json`, `sha256:eeaf10b8d19e2c9b81e9b8fe4db1fdd7417ee91d1fd58ea9149364c7e6a40a76`) e o run artifact do descritor ficam em `workspace/corridor-02/validation-point-representation-20260921/point_representation/`, fora do controle de versão; o driver é `scripts/10_evaluate_real_geometry.py` (`sha256:95938f0bc36b33e135fffde9d85e42843621386a1627e7ad5957b502f7fe504c`), executado no commit `b495e3a`, que não alterou o harness.
+**Protocolo.** 100 centros reais, sorteados com semente 0 entre os pontos a pelo menos 0,5 m das faces da caixa (para não medir truncamento de suporte); suporte por raio de 0,5 m com centralização; as seis variações da seção sintética. Braços `off`, descritor e PTv3 (`ptv3m1-base`, checkpoint `nuscenes-semseg-pt-v3m1-0-base` com `sha256:e2774d2fa1dd33e640a514afe0bd1e5af94eb08be19d08d1f9402f20dfd6db94`, `float32`, `grid_size_m = 0,05`, pooling `center`, sem normalização). Não há configuração downstream fixada, e o fingerprint dela carrega a identidade do recorte. O relatório completo (`report_with-ptv3.json`, `sha256:92567d8c0f45f0d7f921e681b92515f628999bb0df8aeda0e48cdbb9b9d64682`) e os run artifacts dos dois encoders ficam em `workspace/corridor-02/validation-point-representation-20260921/point_representation/`, fora do controle de versão; o driver é `scripts/10_evaluate_real_geometry.py` (`sha256:87794c75570c4a71f372a6f2778bd755f8208e05fe9e47d9232bcb251fac0b18`), executado no commit `42d2e8e`, que não alterou o harness. Espaços: descritor `sha256:ed35aeda…`, PTv3 `sha256:dd1486da…`.
 
-- **Cobertura**: 100 de 100 representadas, 0 parciais, 0 falhas. **Repetibilidade**: diferença máxima `0.0`.
-- **Norma L2**: mediana 641, p95 779 (mínimo 113, máximo 792). **Custo**: 1,5 ms por representação (0,13 s de extração de suporte e 0,02 s no encoder para os 100 centros) e 112 bytes de payload por representação.
-- **Translação rígida**: mudança L2 relativa `0` (invariante).
-- **Rotação de 30° em z**: mediana de `7,7e-4` (p95 `1,1e-3`).
-- **Ruído** de 5 mm e de 2 cm: mediana de `8,0e-3` (p95 `0,026`) e de `0,016` (p95 `0,067`).
-- **Subamostragem** que mantém 70% e 40% dos pontos: mediana de `0,30` (p95 `0,34`) e de `0,59` (p95 `0,64`).
-- **Separação entre lugares** (diagnóstico do driver, não do harness): a distância L2 relativa entre pares de centros distintos tem mediana `0,133` (p95 `0,61`). Uma remoção de 30% dos pontos move o descritor cerca de `2,2` vezes mais que a diferença típica entre dois lugares diferentes do corredor, e uma de 60% cerca de `4,4` vezes: o descritor é dominado pelos componentes de densidade e tamanho do suporte, então **não é robusto à densidade**, propriedade que num LiDAR real varia com a distância. É uma limitação da linha de base, medida, e não uma falha do harness.
+### Braços lado a lado (as seções não são combinadas)
 
-Isso caracteriza o **controle geométrico** em geometria real. Nada aqui diz algo sobre um encoder aprendido nem sobre o efeito downstream.
+| | Descritor (controle) | PTv3 (aprendido) |
+| --- | --- | --- |
+| Cobertura | 100/100, 0 falhas | 100/100, 0 falhas |
+| Repetibilidade (tolerância `0.0`) | idêntica (diferença máxima `0.0`) | **não** idêntica: `2,9e-6` (GPU `float32`; relativa de `2,6e-7`) |
+| Norma L2 (mediana; p95) | 641; 779 | 11,0; 12,1 |
+| Translação rígida (mudança L2 relativa mediana) | `0` | `3,7e-7` |
+| Rotação de 30° em z | `7,7e-4` | `0,32` (p95 `0,67`) |
+| Ruído de 5 mm | `8,0e-3` (p95 `0,026`) | `0,28` (p95 `0,57`) |
+| Ruído de 2 cm | `0,016` (p95 `0,067`) | `0,42` (p95 `0,76`) |
+| Subamostragem a 70% | `0,30` (p95 `0,34`) | `0,29` (p95 `0,52`) |
+| Subamostragem a 40% | `0,59` (p95 `0,64`) | `0,51` (p95 `0,73`) |
+| Separação entre lugares (mediana; p95) | `0,133`; `0,61` | `0,607`; `0,906` |
+| Tempo por representação | 1,5 a 2,9 ms | 32,4 ms |
+| Payload por representação | 112 bytes | 256 bytes |
+| Pico de memória de tensores | CPU | 193 MiB (GPU) |
+
+A separação entre lugares é a distância L2 relativa entre pares de centros distintos do mesmo recorte (diagnóstico do driver, não do harness). Ela dá a escala contra a qual uma mudança deve ser lida: uma variação que move o vetor mais que a diferença típica entre dois lugares diferentes destrói a capacidade de distinguir lugares.
+
+- **Descritor.** É repetível, invariante a translação, quase invariante à rotação (`7,7e-4`) e pouco sensível a ruído, mas a remoção de 30% dos pontos o move cerca de **2,2 vezes** a diferença típica entre dois lugares (e a de 60%, cerca de 4,4): os componentes de densidade e tamanho do suporte dominam o vetor, e a densidade de um LiDAR real varia com a distância. É uma limitação da linha de base, medida.
+- **PTv3.** É invariante a translação até a precisão numérica, mas **não** é invariante a rotação em torno de z (mudança mediana de 0,32) e é sensível a ruído de 5 mm (0,28). Em relação à separação entre lugares, a razão mudança/separação com 30% dos pontos removidos é **0,47** (contra 2,2 do descritor), com ruído de 5 mm **0,46** (contra 0,06) e com rotação de 30° **0,53** (contra 0,006). Ou seja, é bem mais robusto à densidade e bem mais frágil a ruído e rotação. Nenhum braço domina o outro.
+- **Acordo entre os espaços.** Sobre os mesmos 100 centros, o CKA linear entre o descritor e o PTv3 é 0,22 e a sobreposição dos 10 vizinhos mais próximos é 0,18 (o acaso daria cerca de 0,10): os dois espaços organizam os lugares de modo diferente, e o PTv3 não é uma recodificação do descritor.
+
+### Consistência de reobservação (real, sem rótulos de identidade)
+
+Como não há anotações de identidade, o valor de discriminação foi medido por uma proxy com correspondência por **coordenadas do mapa**, não por rótulos inventados. As varreduras que contribuem para o recorte (414) foram divididas na mediana (ordinal 432): as **anteriores** (o robô se aproximando do lugar; 23 900 pontos reais no recorte) e as **posteriores** (afastando-se; 19 970 pontos), com pontos de vista, alcances e densidades diferentes. Cada centro real do primeiro conjunto é pareado ao ponto mais próximo do segundo (no máximo 10 cm; 100 pares, semente 0) e o vetor de um é comparado com os dos 100 pontos pareados do outro. O relatório é `report_reobservation.json` (`sha256:e377264ed07c1bb8c3764a1e570693ac7df0993809ad97a78f769ea4f5ad2995`), do driver `scripts/30_reobservation_consistency.py` (`sha256:cb01915bebdf4db4fb019a47c8aed3c65f7af8b76c1f32adbea7db2d6779d5e5`).
+
+| Medida (L2 bruta; padronizada por componente) | Descritor | PTv3 | Acaso |
+| --- | --- | --- | --- |
+| AUC: o mesmo lugar fica mais perto que outro lugar | 0,510; 0,529 | 0,541; 0,547 | 0,5 |
+| Recall@1 exato | 0,02; 0,00 | 0,01; 0,01 | 0,01 |
+| Recall@5 exato | 0,06; 0,04 | 0,09; 0,12 | 0,05 |
+| Posto mediano do par verdadeiro (de 100) | 53; 44 | 45; 42 | ~50 |
+| Top-1 tolerante (contraparte a até 1 m do lugar) | 0,04; 0,08 | 0,06; 0,08 | 0,067 |
+| Mudança L2 relativa do mesmo lugar (L2 bruta: mediana; p95) | 0,24; 0,45 | 0,53; 0,77 | |
+
+**Leitura.** Os dois encoders ficam **perto do acaso** nesta tarefa. A diferença de AUC entre o PTv3 e o descritor (cerca de 0,03) está dentro do erro esperado com 100 consultas (erro-padrão da AUC de aproximadamente 0,03, por estimativa), então **não demonstra** vantagem do PTv3. Um corredor uniforme é autossimilar, e um suporte local de 0,5 m sobre uma parede plana é quase o mesmo em qualquer ponto dela: para qualquer descritor puramente local de geometria, baixa discriminação é esperada neste ambiente. O resultado diz que o PTv3 não **demonstra** valor aqui, não que não possa tê-lo em outro ambiente ou com um backend adaptado ao domínio (o checkpoint é de segmentação de LiDAR veicular do nuScenes e o canal de intensidade é preenchido com zeros).
+
+### Decisão baseada em evidência
+
+Com o que foi medido, a decisão sustentada é **manter Point Representation opcional e adiar a adoção do PTv3 como backend do caminho canônico**:
+
+1. o custo é cerca de 20 vezes o do descritor por representação (32 ms contra 1,5 a 2,9 ms), exige GPU e um checkpoint de 554 MB de outro domínio;
+2. não há vantagem demonstrada de discriminação de lugar sob reobservação (ambos perto do acaso);
+3. ele troca robustez à densidade por fragilidade a ruído e rotação, o que não é uma melhoria uniforme;
+4. o PTv3 só foi avaliado como baseline genérico; um backend pré-treinado ou destilado (braço D, estilo Sonata/Vernata) caberia no mesmo harness e não foi avaliado.
+
+Isso é uma decisão sobre **qualidade da representação e custo, reportados separadamente**; não há um score único nem vencedor.
 
 ## Estado e pendências
 
-- **Braço C (PTv3) sem execução real registrada no harness**: o runtime real existe (`backends/ptv3_pointcept.py`, ver [`ptv3.md`](../../point_representation/docs/ptv3.md)), mas a passagem real dele sobre este recorte, com tempo e pico de VRAM, ainda não foi registrada. O comando do driver para isso é `10_evaluate_real_geometry.py --arms off,descriptor,ptv3` no venv do modelo, sob o lock da GPU. Até lá a comparação do descritor com um PTv3 real e as medidas de acordo entre os dois espaços continuam pendentes.
-- **Ablação downstream pendente**: Semantic Fusion já existe e aceita Point
-  Representation como canal opcional, mas nenhum resultado downstream foi
-  medido; Entity Resolution ainda não existe, então falsas fusões, duplicatas e
-  taxa de não resolvidas não podem ser medidas nem simuladas. O harness já
-  carrega e compara as condições, sem transformar essa capacidade estrutural em
-  evidência de ganho.
-- **Decisão baseada em evidência**: com o que existe, a única conclusão sustentada é manter Point Representation **opcional** e adiar a adoção de um backend aprendido; a decisão de adotar ou descartar o PTv3 exige o braço C real e o efeito downstream.
-- **Anotações de estrutura em dado real**: não há rótulos de estrutura do corredor, então a capacidade de um espaço distinguir tipos de estrutura não é medida; só estabilidade, invariância, separação entre lugares e custo.
+- **Ablação downstream não realizada, e não simulada.** Entity Resolution existe hoje só no branch `milestone/entity-resolution` (ainda não integrado à `dev`, empilhado sobre `milestone/semantic-mapping-entity-model`), com um canal opcional de estrutura 3D (`RepresentationComparator`). Comparar as decisões de resolução com e sem o canal PTv3 sobre entidades derivadas da geometria real exigiria (a) esse branch, cerca de 46 mil linhas ainda não revisadas, e (b) **anotações de identidade** do corredor-02, que não existem (o esquema `IdentityAnnotationSet` existe em `evaluation-reference-set`, mas não há dado anotado). Sem rótulos, o **valor** downstream (falsas fusões, duplicatas, taxa de não resolvidas) não pode ser pontuado, e inventá-los não é aceitável. A amostra real da validação tem 20 quadros, poucas entidades para uma comparação que, sem rótulos, não pode ser pontuada. Fica para quando Entity Resolution estiver na `dev` e houver anotações de identidade.
+- **Anotações de estrutura em dado real**: não há rótulos de estrutura do corredor, então a capacidade de um espaço distinguir tipos de estrutura não é medida; só estabilidade, invariância, separação entre lugares, consistência de reobservação e custo.
+- **Sensibilidade a raio e a `k`** compara espaços diferentes e exige braços separados por política; não foi executada nesta amostra.
+- **Braço D** (pré-treinado/destilado) continua opcional e fora do caminho canônico v0.1.0.
 
 ## Restrições
 
