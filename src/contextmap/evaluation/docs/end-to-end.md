@@ -159,15 +159,29 @@ Os snapshots JSON em [`scenarios/`](scenarios/) são a forma revisável do cená
 
 - [`validation/e2e-real-sample-20260921.md`](validation/e2e-real-sample-20260921.md) — primeira execução **real e parcial** sobre o `corridor-02` (geometria, associação, fusão e as checagens entre estágios, em CPU): 3 gates cumpridos com evidência real, 1 reprovado (`cross_stage.lineage_closure`, porque o `SequenceArtifact` pinado não carrega modelo de câmera), 12 bloqueados e 9 não avaliados, cada um com o motivo. O relatório de aceitação está em [`validation/e2e-real-sample-20260921.acceptance-report.json`](validation/e2e-real-sample-20260921.acceptance-report.json) e um teste o mantém coerente com o cenário congelado.
 
+## Evidência de contrato pela runtime
+
+`tests/end_to_end/test_runtime_chain.py` roda a cadeia sintética por `run_plan` e `RunJournal`, com os executores reais de `contextmap.runtime.executors` (a sequência e a percepção são dublês). É evidência **`fake_contract`**, e cobre, por gate:
+
+| Gate | O que o teste mostra |
+|---|---|
+| `reproducibility.rerun_equivalence` | dois runs da mesma execução produzem as mesmas identidades de artifact e os mesmos hashes de conteúdo em todos os estágios |
+| `reproducibility.interruption_recovery` | um run interrompido em `semantic_fusion` deixa os estágios concluídos, nenhuma pasta do estágio que falhou e nenhum `.tmp-*`; `resume_plan` o retoma como run novo reutilizando os concluídos **por referência** e refaz só o restante |
+| reuso | um terceiro run reutiliza todos os estágios por `ArtifactRef` (`location` aponta para o run anterior), sem pasta nem cópia no run novo |
+| layout | todo estágio grava só em `<workspace>/<dataset>/<run>/<estágio>/`; não existe `sequences/`, `runs/` nem `runs.json` |
+
+Nenhum desses gates fica cumprido por isso: só evidência `real` cumpre um gate.
+
 ## O que ainda não é avaliável
 
-O estado real de cada gate é decidido pelo relatório de cada run. Nesta versão do repositório:
+O estado real de cada gate é decidido pelo relatório de cada run. Nesta versão:
 
-- Os gates de `entity_resolution`, `spatial_relations`, `artifact` e os `cross_stage.*` que atravessam esses estágios dependem de capabilities que ainda não estão na `dev`; ficam `blocked`, nomeando a capability.
-- Os gates que precisam de anotações ficam `blocked` até existir um reference set anotado para o `corridor-02`.
-- `reproducibility.*` e `runtime.resource_reporting` dependem de um run canônico completo e de execuções repetidas.
-- **Executores reais por estágio (#177).** Só podem escrever no diretório da etapa que o `StageRequest` entregar (a runtime informou que passará esse diretório; hoje ele não existe) e nunca fixam caminhos; uma etapa reutilizada de outro run é referenciada (`ArtifactRef`), nunca copiada. Ligar `entity_resolution`, `spatial_relations` e `context_map` em `runtime/catalog.py` (e atualizar `tests/runtime/test_runtime_catalog.py`, que hoje espera essas etapas como indisponíveis) é trabalho da passada de integração, quando os pacotes existirem.
-- **Reingestão da calibração do `corridor-02`.** O `SequenceArtifact` pinado não carrega modelo de câmera; um run canônico real exige um novo artifact de sequência e, por isso, uma nova versão do cenário.
+- **Executores.** Existem para ingestion, State Estimation, Geometric Mapping, Sensor Association, Semantic Fusion e Semantic Mapping ([`runtime/docs/executors.md`](../../runtime/docs/executors.md)). Faltam: percepção (modelos e GPU: entra por referência), Entity Resolution e Spatial Relations (o executor precisa de um pacote de políticas que nenhuma configuração carrega) e `context_map`.
+- **Não existe o passo de montagem do `ContextMapArtifact`.** O schema, o writer e o leitor existem, mas nada transforma os runs de resolução e de relações em um `ContextMap`; só o builder de teste fixa à mão o estado semântico. Os gates `artifact.integrity` e `cross_stage.*` que atravessam esse estágio continuam `blocked`.
+- **Não há run real pela runtime.** A sequência pinada não tem observações de pose nem modelo de câmera, e a **ingestion não tem janela de seleção**: o adaptador ROS 1 lê o bag inteiro (o hash da fonte custa O(24 GB) e só se desliga com `hash_source = false`). Uma ingestão só da janela de 90 s também mudaria os ids de observação (o contador é por tópico desde o início do bag), então os runs de percepção existentes deixariam de valer. Os runs de Semantic Interpretation da validação (`q3vl4b-nf4`, `f2-*`) são registros de execução (`run.json`, `executions.jsonl`), **não** `PerceptionRunArtifact`, e estão ligados à sequência pinada.
+- **Reingestão da calibração do `corridor-02`.** O `SequenceArtifact` pinado não carrega modelo de câmera; um run canônico real exige um novo artifact de sequência (uma ingestão com o modelo MEI, sem hash da fonte inteira) e, por isso, uma nova versão do cenário.
+- Os gates que precisam de anotações ficam `blocked` até existir um reference set anotado (#179) e os que dependem de modelos externos e chaves (#180) ficam abertos por decisão.
+- `runtime.resource_reporting` só tem medições parciais de CPU dos estágios da validação real parcial; não há perfil de GPU nem de armazenamento de um run canônico completo.
 
 ## Fora do escopo
 
