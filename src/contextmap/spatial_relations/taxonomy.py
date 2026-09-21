@@ -23,6 +23,7 @@ Two rules keep the vocabulary honest:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -257,3 +258,24 @@ def predicate_spec(predicate: RelationPredicate) -> PredicateSpec:
         Its direction, symmetry, inverse, frame requirement and meaning.
     """
     return PREDICATE_SPECS[predicate]
+
+
+def canonical_predicate(text: str) -> RelationPredicate | None:
+    """Map a wording to a canonical predicate, without expanding the vocabulary.
+
+    Only the canonical names themselves are recognized, in any case and with spaces, hyphens or
+    underscores between the words: ``"next to"``, ``"NEXT_TO"`` and ``"next-to"`` are ``NEXT_TO``.
+    A synonym or a related phrase (``"beside"``, ``"near"``, ``"under"``, ``"resting on"``) is not
+    mapped, because turning it into a canonical predicate would be a hidden ontology expansion.
+
+    Args:
+        text: A predicate as some upstream source worded it.
+
+    Returns:
+        The canonical predicate, or ``None`` when the wording is not one of them.
+    """
+    normalized = re.sub(r"[\s_\-]+", "_", text.strip().lower())
+    try:
+        return RelationPredicate(normalized)
+    except ValueError:
+        return None

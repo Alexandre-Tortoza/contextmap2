@@ -71,6 +71,15 @@ from contextmap.spatial_relations.models import (
     RelationUncertaintyKind,
     relation_id_for,
 )
+from contextmap.spatial_relations.observation_evidence import (
+    CONFLICTING_STATEMENTS_CAVEAT,
+    OBSERVATION_RULE_ID,
+    IncompatibleLineageError,
+    ObservationEvidenceResult,
+    UnlinkedEndpointError,
+    observation_evidence_fingerprint,
+    observation_evidence_from_statements,
+)
 from contextmap.spatial_relations.serialization import (
     decode_relation,
     decode_relation_decision,
@@ -79,6 +88,12 @@ from contextmap.spatial_relations.serialization import (
     encode_relation_decision,
     encode_relation_evidence,
 )
+from contextmap.spatial_relations.statements import (
+    EndpointLink,
+    ObservationRelationStatement,
+    StatementPolarity,
+    UpstreamStatementRef,
+)
 from contextmap.spatial_relations.taxonomy import (
     PREDICATE_SPECS,
     TAXONOMY_VERSION,
@@ -86,17 +101,20 @@ from contextmap.spatial_relations.taxonomy import (
     PredicateFamily,
     PredicateSpec,
     RelationPredicate,
+    canonical_predicate,
     predicate_spec,
 )
 
 __all__ = [
     "CANDIDATE_POLICY_ID",
+    "CONFLICTING_STATEMENTS_CAVEAT",
     "CONSERVATIVE_DECISION_POLICY_ID",
     "CONTACT_POLICY_ID",
     "CONTACT_PREDICATES",
     "FRAME_CONVENTIONS_POLICY_ID",
     "GEOMETRIC_POLICY_ID",
     "GEOMETRIC_PREDICATES",
+    "OBSERVATION_RULE_ID",
     "PREDICATE_SPECS",
     "TAXONOMY_VERSION",
     "AxisDirection",
@@ -107,6 +125,7 @@ __all__ = [
     "CandidateReason",
     "ContactPredicatePolicy",
     "DecisionRule",
+    "EndpointLink",
     "EvidenceCaveat",
     "EvidenceCaveatKind",
     "EvidenceUse",
@@ -115,7 +134,10 @@ __all__ = [
     "FrameRequirement",
     "GeometricPredicatePolicy",
     "IncompatibleFrameError",
+    "IncompatibleLineageError",
     "MeasuredGeometry",
+    "ObservationEvidenceResult",
+    "ObservationRelationStatement",
     "PredicateFamily",
     "PredicateSpec",
     "Quantity",
@@ -136,7 +158,11 @@ __all__ = [
     "RelationUncertainty",
     "RelationUncertaintyKind",
     "SkippedPredicate",
+    "StatementPolarity",
     "UndeclaredAxisError",
+    "UnlinkedEndpointError",
+    "UpstreamStatementRef",
+    "canonical_predicate",
     "decide_relations",
     "decision_policy_fingerprint",
     "decode_relation",
@@ -151,6 +177,8 @@ __all__ = [
     "evaluate_geometric_predicate",
     "evidence_id_for",
     "generate_relation_candidates",
+    "observation_evidence_fingerprint",
+    "observation_evidence_from_statements",
     "predicate_spec",
     "relation_id_for",
 ]

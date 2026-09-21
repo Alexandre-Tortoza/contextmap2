@@ -6,7 +6,14 @@ is deliberately conservative: it prefers ``UNRESOLVED`` when the evidence is ins
 materially contradictory. It is a set of explicit rules, not a weighted sum, and it has no
 threshold of its own: every number lives in the evidence it reads.
 
-For each candidate the evidence of every channel is read:
+Only the *measured* channels (geometry and contact) decide. Observation-level evidence, which is
+upstream statements held by reference, is recorded next to the verdict but is corroborating only: it
+can never establish a relation, reject one or override a measured verdict, even when it contradicts
+it. The contradiction is kept visible in the decision instead. A relation with no measured evidence
+that decided stays ``UNRESOLVED`` however many statements assert it, and a policy that runs with no
+observation evidence at all decides exactly the same.
+
+For each candidate the evidence of the measured channels is read:
 
 * some channel supports the predicate and none contradicts it: ``SUPPORTED``;
 * some channel contradicts it and none supports it: ``REJECTED``;
@@ -40,6 +47,7 @@ from contextmap.spatial_relations._identity import directed_key
 from contextmap.spatial_relations.candidates import RelationCandidateSet
 from contextmap.spatial_relations.evidence import (
     RelationEvidence,
+    RelationEvidenceChannel,
     RelationEvidenceId,
     RelationEvidenceStatus,
 )
@@ -63,6 +71,8 @@ CONSERVATIVE_DECISION_POLICY_ID = "conservative-relation-decision-v1"
 
 _DECISIVE = (RelationEvidenceStatus.SUPPORTS, RelationEvidenceStatus.CONFLICTS)
 _UNDECIDED = (RelationEvidenceStatus.AMBIGUOUS, RelationEvidenceStatus.UNAVAILABLE)
+_MEASURED_CHANNELS = frozenset({RelationEvidenceChannel.GEOMETRY, RelationEvidenceChannel.CONTACT})
+"""The channels that can decide a relation; the others only corroborate."""
 
 
 class DecisionRule(Enum):
@@ -95,24 +105,33 @@ class EvidenceUse:
 
     Attributes:
         evidence_id: The evidence record.
-        status: ``AMBIGUOUS`` or ``UNAVAILABLE``: neither supports nor contradicts the predicate.
+        channel: The channel that produced it.
+        status: What the record said. It is ambiguous or unavailable when a measured channel did
+            not decide, and any status for a corroborating channel, which never decides.
+        contradicts_relation: Whether the record's status contradicts the state the relation ended
+            up with: an observation that denies a supported relation, or asserts a rejected one.
+            Such a contradiction is kept visible and never changes the state.
     """
 
     evidence_id: RelationEvidenceId
+    channel: RelationEvidenceChannel
     status: RelationEvidenceStatus
+    contradicts_relation: bool = False
 
     def __post_init__(self) -> None:
-        """Validate the identity and that the record did not decide.
+        """Validate the identity and that the record could not have decided.
 
         Raises:
-            ValueError: If the identity is empty or the status is decisive: ignored evidence is
-                ambiguous or unavailable.
+            ValueError: If the identity is empty, a measured channel's decisive record is listed
+                as ignored, or a record claims to contradict the relation without being decisive.
         """
         require_present(self, "evidence_id")
-        if self.status not in _UNDECIDED:
+        if self.status in _DECISIVE and self.channel in _MEASURED_CHANNELS:
             raise ValueError(
-                f"ignored evidence must be ambiguous or unavailable, got {self.status.value}"
+                "decisive evidence of a measured channel decides the relation and cannot be ignored"
             )
+        if self.contradicts_relation and self.status not in _DECISIVE:
+            raise ValueError("only decisive evidence can contradict the relation")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -302,10 +321,14 @@ def _group_evidence(
             )
         origin = record.provenance
         axes = origin.frame_conventions_fingerprint
+        # Evidência de observação não tem coordenadas: só as de canais medidos carregam o escopo.
         if (
             origin.taxonomy_version != provenance.taxonomy_version
-            or origin.map_frame != provenance.map_frame
-            or origin.geometric_map_id != provenance.geometric_map_id
+            or (origin.map_frame is not None and origin.map_frame != provenance.map_frame)
+            or (
+                origin.geometric_map_id is not None
+                and origin.geometric_map_id != provenance.geometric_map_id
+            )
             or (axes is not None and axes != provenance.frame_conventions_fingerprint)
         ):
             raise ValueError(
@@ -323,9 +346,11 @@ def _decide_from_channels(
     obj: ResolvedEntityReference,
     records: list[RelationEvidence],
 ) -> _Evaluated:
-    supporting = [item for item in records if item.status is RelationEvidenceStatus.SUPPORTS]
-    conflicting = [item for item in records if item.status is RelationEvidenceStatus.CONFLICTS]
-    undecided = [item for item in records if item.status in _UNDECIDED]
+    measured = [item for item in records if item.channel in _MEASURED_CHANNELS]
+    corroborating = [item for item in records if item.channel not in _MEASURED_CHANNELS]
+    supporting = [item for item in measured if item.status is RelationEvidenceStatus.SUPPORTS]
+    conflicting = [item for item in measured if item.status is RelationEvidenceStatus.CONFLICTS]
+    undecided = [item for item in measured if item.status in _UNDECIDED]
     uncertainty: tuple[RelationUncertainty, ...]
     if supporting and conflicting:
         state = RelationState.UNRESOLVED
@@ -351,15 +376,20 @@ def _decide_from_channels(
         state = RelationState.UNRESOLVED
         rule = DecisionRule.NO_DECISIVE_EVIDENCE
         detail = (
-            f"no channel decided: {_describe(undecided)}"
+            f"no measured channel decided: {_describe(undecided)}"
             if undecided
-            else "no evidence was produced for this candidate"
+            else "no measured evidence was produced for this candidate"
         )
+        if corroborating:
+            detail += (
+                f"; observation-level evidence ({_describe(corroborating)}) cannot decide "
+                f"a relation on its own"
+            )
         uncertainty = (
             RelationUncertainty(
                 kind=RelationUncertaintyKind.INSUFFICIENT_EVIDENCE,
                 detail=detail,
-                evidence_refs=_ids(undecided),
+                evidence_refs=_ids(undecided + corroborating),
             ),
         )
     return _Evaluated(
@@ -419,9 +449,22 @@ def _demote_inconsistent(evaluated: dict[_Key, _Evaluated]) -> None:
             RelationUncertainty(
                 kind=RelationUncertaintyKind.INCONSISTENT_STRUCTURE,
                 detail=detail,
-                evidence_refs=_ids([r for r in item.evidence if r.status in _DECISIVE]),
+                evidence_refs=_ids(_deciding(item.evidence)),
             ),
         )
+
+
+def _deciding(records: list[RelationEvidence]) -> list[RelationEvidence]:
+    """The records that decide a relation: decisive evidence of a measured channel."""
+    return [
+        item for item in records if item.status in _DECISIVE and item.channel in _MEASURED_CHANNELS
+    ]
+
+
+def _contradicts(state: RelationState, status: RelationEvidenceStatus) -> bool:
+    return (state is RelationState.SUPPORTED and status is RelationEvidenceStatus.CONFLICTS) or (
+        state is RelationState.REJECTED and status is RelationEvidenceStatus.SUPPORTS
+    )
 
 
 def _relation_of(item: _Evaluated) -> Relation:
@@ -449,16 +492,23 @@ def _provenance() -> RelationProvenance:
 
 
 def _decision_of(relation: Relation, item: _Evaluated) -> RelationDecision:
+    deciding = _deciding(item.evidence)
+    decided = {record.evidence_id for record in deciding}
     return RelationDecision(
         relation_id=relation.relation_id,
         rule=item.rule,
-        deciding_evidence_refs=_ids([r for r in item.evidence if r.status in _DECISIVE]),
+        deciding_evidence_refs=_ids(deciding),
         ignored=tuple(
             sorted(
                 (
-                    EvidenceUse(evidence_id=r.evidence_id, status=r.status)
-                    for r in item.evidence
-                    if r.status in _UNDECIDED
+                    EvidenceUse(
+                        evidence_id=record.evidence_id,
+                        channel=record.channel,
+                        status=record.status,
+                        contradicts_relation=_contradicts(item.state, record.status),
+                    )
+                    for record in item.evidence
+                    if record.evidence_id not in decided
                 ),
                 key=lambda use: use.evidence_id,
             )

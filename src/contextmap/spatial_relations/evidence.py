@@ -31,6 +31,7 @@ from contextmap.entity_resolution import ResolvedEntityReference
 from contextmap.geometric_mapping import GeometryReference, MapId
 from contextmap.spatial_relations._checks import require_canonical, require_finite, require_present
 from contextmap.spatial_relations._identity import candidate_digest, require_relatable_pair
+from contextmap.spatial_relations.statements import ObservationRelationStatement
 from contextmap.spatial_relations.taxonomy import RelationPredicate, predicate_spec
 
 RelationEvidenceId = NewType("RelationEvidenceId", str)
@@ -43,10 +44,13 @@ class RelationEvidenceChannel(Enum):
     Attributes:
         GEOMETRY: Bounds-based measurements of two entities: proximity, direction and topology.
         CONTACT: Point-level measurements of contact and support.
+        OBSERVATION: Upstream relational statements about two entities, held by reference. It
+            corroborates measured evidence and never decides a relation on its own.
     """
 
     GEOMETRY = "geometry"
     CONTACT = "contact"
+    OBSERVATION = "observation"
 
 
 class RelationEvidenceStatus(Enum):
@@ -76,12 +80,14 @@ class EvidenceCaveatKind(Enum):
         DEGENERATE_GEOMETRY: A measurement needs an extent the geometry does not have, such as a
             footprint with no area.
         MISSING_INPUT: An input the rule needs was not available.
+        CONFLICTING_STATEMENTS: Upstream statements about the candidate assert and deny it.
     """
 
     WITHIN_TOLERANCE = "within_tolerance"
     UNRELIABLE_GEOMETRY = "unreliable_geometry"
     DEGENERATE_GEOMETRY = "degenerate_geometry"
     MISSING_INPUT = "missing_input"
+    CONFLICTING_STATEMENTS = "conflicting_statements"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -253,9 +259,12 @@ class RelationEvidence:
         measurements: The exact measured numbers, sorted by name and unique.
         thresholds: The thresholds and tolerances the measurements were compared with, sorted by
             name and unique.
-        geometry: The geometry the measurements were taken over, sorted by role and unique.
+        geometry: The geometry the measurements were taken over, sorted by role and unique;
+            required for measured channels and absent for observation evidence.
         caveats: Why the record is not decisive, sorted and unique.
         provenance: The rule, configuration and frame behind the record.
+        statements: The upstream statements an observation record rests on, sorted and unique;
+            required for the observation channel and absent for measured ones.
     """
 
     evidence_id: RelationEvidenceId
@@ -269,6 +278,7 @@ class RelationEvidence:
     geometry: tuple[MeasuredGeometry, ...]
     provenance: RelationEvidenceProvenance
     caveats: tuple[EvidenceCaveat, ...] = ()
+    statements: tuple[ObservationRelationStatement, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate that the record is coherent and grounded.
@@ -296,6 +306,28 @@ class RelationEvidence:
             )
         if not self.measurements and self.status in _DECISIVE:
             raise ValueError(f"{self.status.value} evidence needs the measurements behind it")
+        if self.channel is RelationEvidenceChannel.OBSERVATION:
+            self._require_observation_shape()
+        else:
+            self._require_measured_shape()
+
+    def _require_observation_shape(self) -> None:
+        if not self.statements:
+            raise ValueError("observation evidence needs the upstream statements it rests on")
+        if self.geometry:
+            raise ValueError("observation evidence carries no geometry")
+        require_canonical("statements", self.statements, lambda item: item.sort_key)
+        pair = {self.subject_entity_ref, self.object_entity_ref}
+        for statement in self.statements:
+            if {statement.subject.entity_ref, statement.object.entity_ref} != pair:
+                raise ValueError(
+                    f"statement {statement.source.statement_id!r} is not about the entities of "
+                    f"this record"
+                )
+
+    def _require_measured_shape(self) -> None:
+        if self.statements:
+            raise ValueError("only observation evidence carries upstream statements")
         if not self.geometry:
             raise ValueError("evidence needs the geometry its measurements were taken over")
         if self.provenance.map_frame is None:

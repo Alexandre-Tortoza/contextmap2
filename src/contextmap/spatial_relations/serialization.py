@@ -36,6 +36,12 @@ from contextmap.spatial_relations.models import (
     RelationUncertainty,
     RelationUncertaintyKind,
 )
+from contextmap.spatial_relations.statements import (
+    EndpointLink,
+    ObservationRelationStatement,
+    StatementPolarity,
+    UpstreamStatementRef,
+)
 from contextmap.spatial_relations.taxonomy import RelationPredicate
 
 
@@ -142,6 +148,7 @@ def encode_relation_evidence(evidence: RelationEvidence) -> dict[str, Any]:
             for item in evidence.geometry
         ],
         "caveats": [{"kind": item.kind.value, "detail": item.detail} for item in evidence.caveats],
+        "statements": [_encode_statement(item) for item in evidence.statements],
         "provenance": {
             "rule_id": provenance.rule_id,
             "configuration_fingerprint": provenance.configuration_fingerprint,
@@ -200,6 +207,7 @@ def decode_relation_evidence(record: Mapping[str, Any]) -> RelationEvidence:
             )
             for item in _field(record, "caveats")
         ),
+        statements=tuple(_decode_statement(item) for item in _field(record, "statements")),
         provenance=RelationEvidenceProvenance(
             rule_id=_field(provenance, "rule_id"),
             configuration_fingerprint=_field(provenance, "configuration_fingerprint"),
@@ -231,7 +239,12 @@ def encode_relation_decision(decision: RelationDecision) -> dict[str, Any]:
         "rule": decision.rule.value,
         "deciding_evidence_refs": [str(item) for item in decision.deciding_evidence_refs],
         "ignored": [
-            {"evidence_id": str(item.evidence_id), "status": item.status.value}
+            {
+                "evidence_id": str(item.evidence_id),
+                "channel": item.channel.value,
+                "status": item.status.value,
+                "contradicts_relation": item.contradicts_relation,
+            }
             for item in decision.ignored
         ],
         "detail": decision.detail,
@@ -259,9 +272,55 @@ def decode_relation_decision(record: Mapping[str, Any]) -> RelationDecision:
         ignored=tuple(
             EvidenceUse(
                 evidence_id=RelationEvidenceId(_field(item, "evidence_id")),
+                channel=RelationEvidenceChannel(_field(item, "channel")),
                 status=RelationEvidenceStatus(_field(item, "status")),
+                contradicts_relation=_field(item, "contradicts_relation"),
             )
             for item in _field(record, "ignored")
         ),
         detail=_field(record, "detail"),
+    )
+
+
+def _encode_link(link: EndpointLink) -> dict[str, Any]:
+    return {
+        "upstream_ref": link.upstream_ref,
+        "entity_ref": encode_resolved_entity_reference(link.entity_ref),
+        "linked_through": link.linked_through,
+    }
+
+
+def _decode_link(record: Mapping[str, Any]) -> EndpointLink:
+    return EndpointLink(
+        upstream_ref=_field(record, "upstream_ref"),
+        entity_ref=decode_resolved_entity_reference(_field(record, "entity_ref")),
+        linked_through=_field(record, "linked_through"),
+    )
+
+
+def _encode_statement(statement: ObservationRelationStatement) -> dict[str, Any]:
+    return {
+        "source_run_id": statement.source.source_run_id,
+        "statement_id": statement.source.statement_id,
+        "physical_observation_id": statement.source.physical_observation_id,
+        "producer": statement.source.producer,
+        "subject": _encode_link(statement.subject),
+        "predicate_text": statement.predicate_text,
+        "object": _encode_link(statement.object),
+        "polarity": statement.polarity.value,
+    }
+
+
+def _decode_statement(record: Mapping[str, Any]) -> ObservationRelationStatement:
+    return ObservationRelationStatement(
+        source=UpstreamStatementRef(
+            source_run_id=_field(record, "source_run_id"),
+            statement_id=_field(record, "statement_id"),
+            physical_observation_id=_field(record, "physical_observation_id"),
+            producer=_field(record, "producer"),
+        ),
+        subject=_decode_link(_field(record, "subject")),
+        predicate_text=_field(record, "predicate_text"),
+        object=_decode_link(_field(record, "object")),
+        polarity=StatementPolarity(_field(record, "polarity")),
     )
