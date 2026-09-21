@@ -54,7 +54,7 @@ runtime
 
 ## Estado atual
 
-`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. Isso não significa que o pipeline esteja limitado a Visual Perception: Ingestion, Visual Perception, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion já possuem APIs públicas, serviços/policies próprios quando necessários e artifacts persistidos. O que permanece ausente é a **composition root global** que selecione e conecte essas capabilities em um DAG end-to-end, resolva configuração, reuse/recompute e lifecycle.
+`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. Isso não significa que o pipeline esteja limitado a Visual Perception: Ingestion, Visual Perception, State Estimation, Geometric Mapping, Sensor Association, Point Representation, Semantic Fusion e Semantic Mapping já possuem APIs públicas, serviços/policies próprios quando necessários e artifacts persistidos. O que permanece ausente é a **composition root global** que selecione e conecte essas capabilities em um DAG end-to-end, resolva configuração, reuse/recompute e lifecycle.
 
 Visual Perception já possui um **DAG interno da própria capability**. Ele materializa apenas a topologia de percepção e não deve ser promovido implicitamente a runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Semantic Interpretation também possui o port executável `semantic_interpreter`, request/output auditáveis e adapters Qwen/Gemini/Florence-2 atrás de runtime/client injetáveis. O preset `canonical/1` ainda conserva temporariamente os estágios semânticos legados porque a política de construção dos requests canônicos ainda não foi promovida para a topologia default. A futura composition root continua responsável por selecionar e construir esses adapters e por conectar os artifacts das demais capabilities explicitamente.
 
@@ -416,8 +416,9 @@ A divisão arquitetural materializada na `dev` é:
 - **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;
 - **Point Representation**, opcional, publica representações 3D locais e persiste `PointRepresentationRunArtifact`;
 - **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
+- **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, e persiste `SemanticMappingRunArtifact`;
 - **Runtime & Configuration**, ainda planejado, deverá compor esse conjunto em um DAG end-to-end, resolver configuração, reuse/recompute, CLI e lifecycle entre capabilities.
 
-Semantic Mapping e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
+Entity Resolution e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
 
 O runtime global deve reutilizar as APIs públicas e artifacts dessas capabilities, não reimplementar seus pipelines internos.
