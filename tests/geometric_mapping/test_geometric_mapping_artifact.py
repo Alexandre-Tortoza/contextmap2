@@ -38,10 +38,8 @@ from contextmap.geometric_mapping import (
     MotionCorrectionPolicy,
     ScanDisposition,
     ScanVoxelPolicy,
-    allocate_map_run_index,
     geometry_id_for,
     mapping_configuration_fingerprint,
-    rebuild_map_run_registry,
     transform_scans,
     verify_transform_trace,
 )
@@ -77,14 +75,9 @@ def _plan(
     )
 
 
-def _run_dir(workspace: Path, index: int = 1, *, profile: str = "baseline") -> Path:
-    return (
-        workspace
-        / "runs"
-        / "geometric-mapping"
-        / SEQUENCE
-        / f"run-{index:04d}__full-sequence__{profile}"
-    )
+def _run_dir(workspace: Path, index: int = 1) -> Path:
+    """Onde o writer grava: o chamador decide o diretório final, o writer não calcula caminho."""
+    return workspace / f"run-{index:04d}"
 
 
 def _writer(
@@ -92,15 +85,12 @@ def _writer(
     *,
     index: int = 1,
     debug_level: MapDebugLevel = MapDebugLevel.NONE,
-    profile: str = "baseline",
 ) -> GeometricMapArtifactWriter:
     return GeometricMapArtifactWriter(
-        workspace_root=workspace,
+        output_dir=_run_dir(workspace, index),
         sequence_name=SEQUENCE,
         run_id=GeometricMapRunId(f"run-{index:04d}"),
         run_index=index,
-        selection_label="full-sequence",
-        profile_label=profile,
         debug_level=debug_level,
     )
 
@@ -327,11 +317,11 @@ def test_the_mapping_metrics_report_counts_bounds_time_and_the_reduction(tmp_pat
 
 def test_runtime_and_memory_are_metrics_apart_from_the_geometry(tmp_path: Path) -> None:
     _write(tmp_path, runtime_s=1.5, peak_memory_bytes=123_456)
-    _write(tmp_path, index=2, profile="other")
+    _write(tmp_path, index=2)
 
     measured = _record(_run_dir(tmp_path), "metrics/runtime.json")
     assert measured == {"runtime_s": 1.5, "peak_memory_bytes": 123_456}
-    assert not (_run_dir(tmp_path, 2, profile="other") / "metrics" / "runtime.json").exists()
+    assert not (_run_dir(tmp_path, 2) / "metrics" / "runtime.json").exists()
     assert "runtime_s" not in _record(_run_dir(tmp_path), "metrics/mapping.json")
 
 
@@ -578,7 +568,7 @@ def test_warnings_list_rejected_scans_and_correction_warnings(tmp_path: Path) ->
     assert kinds.count("motion_correction") == 5 and kinds.count("rejected_scan") == 1
 
 
-# --- Immutability, atomicity and run indexes ---------------------------------------------------
+# --- Immutability, atomicity and run identity ---------------------------------------------------
 
 
 def test_a_finished_run_is_never_overwritten(tmp_path: Path) -> None:
@@ -605,30 +595,36 @@ def test_a_failed_run_leaves_no_run_and_no_temporary_directory(tmp_path: Path) -
     with pytest.raises(AccumulationError, match="no geometry"):
         _write(tmp_path, empty_plan)
 
-    sequence_dir = tmp_path / "runs" / "geometric-mapping" / SEQUENCE
     assert not _run_dir(tmp_path).exists()
-    assert not list(sequence_dir.glob(".tmp-*"))
+    assert not list(tmp_path.glob(".tmp-*"))
 
 
-def test_run_indexes_are_monotonic_and_ignore_incomplete_runs(tmp_path: Path) -> None:
-    assert allocate_map_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 1
-    _write(tmp_path)
-    _write(tmp_path, index=2, profile="other")
-    (tmp_path / "runs" / "geometric-mapping" / SEQUENCE / "run-0009__x__y").mkdir()
+def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "ws" / "corridor-02" / "run-0001" / "geometric_mapping"
 
-    assert allocate_map_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 3
+    GeometricMapArtifactWriter(
+        output_dir=target,
+        sequence_name=SEQUENCE,
+        run_id=GeometricMapRunId("map-run"),
+        run_index=1,
+    ).finalize(plan=_plan(), aggregation=None, code_version="test")
+
+    with GeometricMapArtifactReader(target) as reader:
+        assert reader.manifest.run_id == GeometricMapRunId("map-run")
+    # Sem registro `runs.json` e sem `runs/<capability>/<sequência>/`: só o diretório do artifact.
+    assert sorted(path.name for path in target.parent.iterdir()) == ["geometric_mapping"]
+    assert sorted(path.name for path in (tmp_path / "ws").iterdir()) == ["corridor-02"]
 
 
-def test_the_registry_lists_valid_runs_and_can_be_rebuilt(tmp_path: Path) -> None:
-    _write(tmp_path)
-    _write(tmp_path, index=2, profile="other")
-    sequence_dir = tmp_path / "runs" / "geometric-mapping" / SEQUENCE
-    (sequence_dir / "runs.json").unlink()
+def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+    tmp_path: Path,
+) -> None:
+    manifest = _write(tmp_path, index=7)
 
-    rebuild_map_run_registry(workspace_root=tmp_path, sequence_name=SEQUENCE)
-
-    registry = json.loads((sequence_dir / "runs.json").read_text())
-    assert [run["run_id"] for run in registry["runs"]] == ["run-0001", "run-0002"]
+    assert (manifest.run_id, manifest.run_index) == (GeometricMapRunId("run-0007"), 7)
+    assert not _run_dir(tmp_path, 1).exists()
 
 
 def test_the_manifest_describes_a_map_with_no_state_estimation_run_id(tmp_path: Path) -> None:

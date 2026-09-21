@@ -27,7 +27,6 @@ from contextmap.geometric_mapping import (
     MapDebugLevel,
     MotionCorrectionPolicy,
     ScanDisposition,
-    allocate_map_run_index,
     assemble_geometry_inputs_from_artifacts,
 )
 from contextmap.ingestion import (
@@ -223,17 +222,14 @@ def _map(
             raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.WARN
         ),
     )
-    index = allocate_map_run_index(workspace_root=workspace, sequence_name=SEQUENCE_NAME)
+    directory = workspace / "geometric_mapping"
     GeometricMapArtifactWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         run_id=GeometricMapRunId("map-run-0001"),
-        run_index=index,
-        selection_label="full-sequence",
-        profile_label="all-points",
+        run_index=1,
         debug_level=MapDebugLevel.NONE,
     ).finalize(plan=plan, aggregation=None, code_version="test")
-    directory = next((workspace / "runs" / "geometric-mapping" / SEQUENCE_NAME).glob("run-0001__*"))
     return GeometricMapArtifactReader(directory)
 
 
