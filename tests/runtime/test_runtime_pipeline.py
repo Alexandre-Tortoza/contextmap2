@@ -146,11 +146,15 @@ class TestCanonicalDag:
     ) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
 
-        stage = plan.stage("semantic_mapping")
+        stage = plan.stage("context_map")
 
         assert not stage.available
         assert "milestone" in stage.unavailable_reason
-        assert [item.source for item in stage.inputs] == ["semantic_fusion"]
+        assert [item.source for item in stage.inputs] == [
+            "geometric_mapping",
+            "entity_resolution",
+            "spatial_relations",
+        ]
 
 
 class TestPersistedTopology:
@@ -465,7 +469,7 @@ class TestScopeAndExecution:
 
         with pytest.raises(PreflightError) as error:
             run_plan(
-                plan.scope(targets=["semantic_mapping"]),
+                plan.scope(targets=["context_map"]),
                 executors,
                 environ={},
                 module_available=_ready,
@@ -473,7 +477,7 @@ class TestScopeAndExecution:
             )
 
         assert log == []
-        assert any("semantic_mapping" in problem.path for problem in error.value.report.problems)
+        assert any("context_map" in problem.path for problem in error.value.report.problems)
 
     def test_preflight_reports_missing_executors_backends_and_secrets_together(
         self, tmp_path: Path

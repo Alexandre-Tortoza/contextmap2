@@ -399,24 +399,21 @@ CANONICAL_PRESET = RuntimePreset(
             ),
             output=FUSION,
         ),
-        _unimplemented(
-            "semantic_mapping",
-            "semantic_mapping",
-            12,
+        StageDeclaration(
+            stage_id="semantic_mapping",
+            capability="semantic_mapping",
             inputs=(StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),),
             output=ENTITIES,
         ),
-        _unimplemented(
-            "entity_resolution",
-            "entity_resolution",
-            13,
+        StageDeclaration(
+            stage_id="entity_resolution",
+            capability="entity_resolution",
             inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
             output=RESOLUTION,
         ),
-        _unimplemented(
-            "spatial_relations",
-            "spatial_relations",
-            14,
+        StageDeclaration(
+            stage_id="spatial_relations",
+            capability="spatial_relations",
             inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
             output=RELATIONS,
         ),

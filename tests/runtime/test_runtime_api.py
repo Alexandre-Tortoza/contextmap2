@@ -149,7 +149,7 @@ def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> N
         "ingestion.source_adapter"
     ]
     assert [b.backend_id for b in ingestion.components[0].backends] == ["ros1_bag", "ros2_bag"]
-    unimplemented = by_stage["semantic_mapping"]
+    unimplemented = by_stage["context_map"]
     assert not unimplemented.implemented
     assert "not implemented yet" in unimplemented.reason
     assert unimplemented.components == ()
@@ -345,8 +345,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
     assert by_stage["point_representation"].optional
     assert by_stage["point_representation"].output == "PointRepresentationRunArtifact"
     assert by_stage["ingestion"].in_scope
-    assert not by_stage["semantic_mapping"].available
-    assert not by_stage["semantic_mapping"].in_scope
+    assert not by_stage["context_map"].available
+    assert not by_stage["context_map"].in_scope
     assert by_stage["ingestion"].config_digest
 
 
@@ -413,7 +413,7 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
     assert "components.ingestion.source_adapter.backend" in edits
     assert edits["components.ingestion.source_adapter.backend"].allowed == ("ros1_bag", "ros2_bag")
     assert edits["policies.debug_level"].allowed == ("none", "standard", "full")
-    assert "inputs.selections.semantic_mapping" not in edits  # capability ainda inexistente
+    assert "inputs.selections.context_map" not in edits  # capability ainda inexistente
     for edit in plan.editable:
         if edit.current is None:
             continue
@@ -454,11 +454,11 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     )
     config = _config(runtime, tmp_path)
 
-    report = runtime.preflight(config, targets=[*TARGET, "semantic_mapping", "nonexistent"])
+    report = runtime.preflight(config, targets=[*TARGET, "context_map", "nonexistent"])
 
     paths = [problem.path for problem in report.problems]
     assert not report.ok
-    assert "stages.semantic_mapping" in paths  # capability ainda inexistente
+    assert "stages.context_map" in paths  # capability ainda inexistente
     assert "targets.nonexistent" in paths
     assert "components.ingestion.source_adapter" in paths  # módulo opcional ausente
     assert any(
@@ -466,7 +466,7 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
         for problem in report.problems
     )
     assert "ingestion" in report.missing_executors
-    assert "semantic_mapping" not in report.missing_executors
+    assert "context_map" not in report.missing_executors
 
 
 def test_preflight_names_a_missing_secret_without_any_value(tmp_path: Path) -> None:
@@ -663,12 +663,12 @@ def test_a_blocked_run_is_a_result_and_nothing_executed(tmp_path: Path) -> None:
 def test_an_unimplemented_stage_blocks_the_run_explicitly(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
 
-    result = runtime.run(_config(runtime, tmp_path), targets=["semantic_mapping"])
+    result = runtime.run(_config(runtime, tmp_path), targets=["context_map"])
 
     assert result.status == "blocked"
     assert world.runs == []
     assert any(
-        problem.path == "stages.semantic_mapping" and "not implemented yet" in problem.message
+        problem.path == "stages.context_map" and "not implemented yet" in problem.message
         for problem in result.record.blocked_problems
     )
 
