@@ -420,7 +420,7 @@ def test_a_portable_bundle_opens_and_round_trips_after_relocation(world: World) 
     shutil.copytree(bundle, relocated)
     shutil.rmtree(world.root / "out")
     for directory in (
-        world.geometry_dir.parents[3],
+        world.geometry_dir,
         world.resolution_dir,
         world.relations_dir,
         world.fusion_dir,

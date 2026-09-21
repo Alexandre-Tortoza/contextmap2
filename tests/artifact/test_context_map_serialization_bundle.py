@@ -97,7 +97,7 @@ def _reference(index: int) -> GeometryReference:
 
 def _remove_upstream(world: World) -> None:
     for directory in (
-        world.geometry_dir.parents[3],
+        world.geometry_dir,
         world.resolution_dir,
         world.relations_dir,
         world.fusion_dir,
@@ -233,7 +233,7 @@ def test_a_selected_evidence_that_cannot_be_found_blocks_the_export(
 def test_a_missing_required_dependency_blocks_every_export(
     world: World, source: Path, policy: ClosurePolicy
 ) -> None:
-    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.geometry_dir)
 
     with pytest.raises(BundleError, match=r"dependency\.required_missing"):
         _export(world, source, policy)
@@ -382,7 +382,7 @@ def test_a_moved_source_is_exported_when_its_dependencies_are_told_where_they_ar
     for artifact_id, directory in world.structural_locations.items():
         moved[artifact_id] = world.root / "moved" / artifact_id
         shutil.copytree(directory, moved[artifact_id])
-    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.geometry_dir)
     shutil.rmtree(world.resolution_dir)
     shutil.rmtree(world.relations_dir)
 
