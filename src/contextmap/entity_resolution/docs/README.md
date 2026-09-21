@@ -29,6 +29,7 @@ Existem os **contratos** de identidade e de comparação:
 - `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
 - `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
 - `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve;
+- a **detecção de candidatos a divisão**, opcional (`detect_split_candidates`, `SplitCandidate`): só diagnóstico geométrico, nunca divide nem muta uma entidade ([`split-detection.md`](split-detection.md));
 - as **entidades resolvidas** (`materialize_resolved_entities`, `ResolvedEntity`, `ResolvedEntitySet`): a materialização determinística dos grupos de decisões `MATCH`, com linhagem de fusão, contradições de transitividade expostas (o componente não é fundido) e agregação exata que nunca inventa confiança ([`resolved-entities.md`](resolved-entities.md));
 - a **política de resolução baseline** (`decide`, `ConservativeResolutionPolicy`, `MatchEvidenceBuilder`, `resolve_candidate_pairs`): estágios explícitos (gates, elegibilidade, evidência, regras, decisão) sobre o status dos canais, sem soma ponderada, que prefere `UNRESOLVED` e tem um caminho só de geometria válido ([`resolution-policy.md`](resolution-policy.md));
 - a **comparação de representações 3D**, opcional (`RepresentationComparator`, `RunReaderRepresentationSource`): estrutura 3D comparada só dentro de um espaço de representação compatível, sem nunca interpretar componentes indefinidos, com ausência como `unavailable` ([`representation-comparison.md`](representation-comparison.md));
@@ -57,6 +58,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `GeometryComparisonPolicy`, `SupportDistancePolicy`, `GEOMETRY_COMPARISON_POLICY_ID`, `compare_geometry` — o canal de geometria.
 - `AppearanceComparisonPolicy`, `APPEARANCE_COMPARISON_POLICY_ID`, `APPEARANCE_AGGREGATION_ID`, `AppearanceComparator`, `FeatureVectorSource`, `LoadedFeature`, `FeatureStoreVectorSource` — o canal de aparência e a fronteira de carregamento de vetores.
 - `RepresentationComparisonPolicy`, `REPRESENTATION_COMPARISON_POLICY_ID`, `REPRESENTATION_AGGREGATION_ID`, `RepresentationComparator`, `RepresentationVectorSource`, `LoadedRepresentation`, `RunReaderRepresentationSource` — o canal opcional de representação 3D e sua fronteira de carregamento.
+- `SplitDetectionPolicy`, `SPLIT_DETECTION_POLICY_ID`, `detect_split_candidates`, `SplitCandidate`, `SplitPartition`, `SplitStatus` — a detecção opcional de candidatos a divisão.
 - `materialize_resolved_entities`, `ResolvedEntityMaterialization`, `ResolvedEntitySet`, `ResolvedEntity`, `ResolvedMember`, `ResolvedGeometry`, `ResolvedSemanticState`, `MemberAmbiguity`, `ResolvedEntityProvenance`, `TransitivityContradiction`, `MaterializationError`, `materialization_policy`, `resolved_entity_id_for`, `contradiction_id_for`, `derive_resolved_ambiguity`, `ForeignResolvedEntityReferenceError`, `UnknownResolvedEntityError` e as constantes de regra — a entidade resolvida e sua materialização.
 - `ConservativeResolutionPolicy`, `CONSERVATIVE_RESOLUTION_POLICY_ID`, `decide`, `ComparisonChannels`, `MatchEvidenceBuilder`, `PairResolution`, `resolve_candidate_pairs` — a política baseline, a coleta de evidência e o serviço de execução.
 - `PolicyRef` — política versionada e fingerprint da configuração, comum a canais, recuperação e políticas.
@@ -77,6 +79,7 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`split-detection.md`](split-detection.md) — sinais, estados e o que a detecção não faz.
 - [`resolved-entities.md`](resolved-entities.md) — agrupamento, identidade, contradições, agregação exata e linhagem.
 - [`resolution-policy.md`](resolution-policy.md) — estágios, regras de decisão, configuração e execução.
 - [`representation-comparison.md`](representation-comparison.md) — espaço de representação, componentes indefinidos e agregação.

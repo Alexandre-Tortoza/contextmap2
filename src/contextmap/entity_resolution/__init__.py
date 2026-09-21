@@ -149,6 +149,14 @@ from contextmap.entity_resolution.serialization import (
     encode_resolution_decision,
     encode_resolved_entity_reference,
 )
+from contextmap.entity_resolution.split_detection import (
+    SPLIT_DETECTION_POLICY_ID,
+    SplitCandidate,
+    SplitDetectionPolicy,
+    SplitPartition,
+    SplitStatus,
+    detect_split_candidates,
+)
 from contextmap.entity_resolution.temporal_comparison import (
     TEMPORAL_COMPATIBILITY_POLICY_ID,
     TemporalCompatibilityPolicy,
@@ -168,6 +176,7 @@ __all__ = [
     "REPRESENTATION_AGGREGATION_ID",
     "REPRESENTATION_COMPARISON_POLICY_ID",
     "SEMANTIC_COMPATIBILITY_POLICY_ID",
+    "SPLIT_DETECTION_POLICY_ID",
     "TEMPORAL_COMPATIBILITY_POLICY_ID",
     "TEMPORAL_UNION_RULE_ID",
     "AppearanceComparator",
@@ -235,6 +244,10 @@ __all__ = [
     "SemanticCompatibilityPolicy",
     "SemanticEvidence",
     "SemanticMeasurement",
+    "SplitCandidate",
+    "SplitDetectionPolicy",
+    "SplitPartition",
+    "SplitStatus",
     "SupportDistance",
     "SupportDistancePolicy",
     "TemporalCompatibilityPolicy",
@@ -260,6 +273,7 @@ __all__ = [
     "decode_resolution_decision",
     "decode_resolved_entity_reference",
     "derive_resolved_ambiguity",
+    "detect_split_candidates",
     "encode_candidate_set",
     "encode_match_evidence",
     "encode_resolution_decision",
