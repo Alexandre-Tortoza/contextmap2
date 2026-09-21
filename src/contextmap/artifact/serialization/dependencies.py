@@ -18,17 +18,33 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from contextmap.artifact.serialization.errors import UpstreamArtifactError
 from contextmap.artifact.serialization.layout import MANIFEST
-from contextmap.artifact.serialization.manifest import (
-    DependencyRecord,
-    inventory_digest,
-)
+from contextmap.artifact.serialization.manifest import DependencyRecord, run_artifact_digest
 from contextmap.shared import FileEntry, check_file_inventory
 
 GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
 """``artifact_type`` of the dependency that holds the authoritative geometry."""
+
+
+def _read_manifest_record(directory: Path) -> dict[str, Any]:
+    manifest_path = directory / MANIFEST
+    if not manifest_path.is_file():
+        raise UpstreamArtifactError(f"no {MANIFEST} in the upstream artifact {directory.name!r}")
+    try:
+        record = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError) as error:
+        raise UpstreamArtifactError(
+            f"the {MANIFEST} of the upstream artifact {directory.name!r} is not valid JSON "
+            f"({error})"
+        ) from error
+    if not isinstance(record, dict):
+        raise UpstreamArtifactError(
+            f"the {MANIFEST} of the upstream artifact {directory.name!r} is not a JSON object"
+        )
+    return record
 
 
 def read_inventory(directory: Path) -> tuple[FileEntry, ...]:
@@ -44,26 +60,51 @@ def read_inventory(directory: Path) -> tuple[FileEntry, ...]:
         UpstreamArtifactError: If there is no manifest, it is not JSON, or its inventory is
             missing or malformed.
     """
-    manifest_path = directory / MANIFEST
-    if not manifest_path.is_file():
-        raise UpstreamArtifactError(f"no {MANIFEST} in the upstream artifact {directory.name!r}")
+    record = _read_manifest_record(directory)
     try:
-        record = json.loads(manifest_path.read_text(encoding="utf-8"))
-        listed = record["file_inventory"]
         entries = tuple(
             FileEntry(
                 path=item["path"],
                 size_bytes=item["size_bytes"],
                 content_hash=item["content_hash"],
             )
-            for item in listed
+            for item in record["file_inventory"]
         )
-    except (ValueError, KeyError, TypeError) as error:
+    except (KeyError, TypeError) as error:
         raise UpstreamArtifactError(
             f"the {MANIFEST} of the upstream artifact {directory.name!r} has no readable "
             f"file_inventory ({error})"
         ) from error
     return tuple(sorted(entries, key=lambda entry: entry.path))
+
+
+def artifact_digest(directory: Path) -> str:
+    """Compute the digest that pins an upstream artifact, from its own manifest.
+
+    It is :func:`~contextmap.artifact.serialization.manifest.run_artifact_digest` applied to the
+    identity, the schema version and the inventory that the artifact's manifest records: the same
+    value the artifact's owner and its other consumers compute for it. A lineage entry of a map
+    carries this value as the ``content_identity`` of the artifact it cites.
+
+    Args:
+        directory: A run artifact directory.
+
+    Returns:
+        ``"sha256:<hex digest>"``.
+
+    Raises:
+        UpstreamArtifactError: If the manifest is missing, is not JSON, or lacks an identity
+            (``run_id`` or ``artifact_id``), a schema version or a readable inventory.
+    """
+    record = _read_manifest_record(directory)
+    identity = record.get("run_id", record.get("artifact_id"))
+    schema_version = record.get("schema_version")
+    if not isinstance(identity, str) or not isinstance(schema_version, str):
+        raise UpstreamArtifactError(
+            f"the {MANIFEST} of the upstream artifact {directory.name!r} records no run_id (or "
+            "artifact_id) and schema_version to pin it by"
+        )
+    return run_artifact_digest(identity, schema_version, read_inventory(directory))
 
 
 def verify_inventory(directory: Path, inventory: tuple[FileEntry, ...]) -> None:
@@ -165,7 +206,7 @@ def resolve_dependency(
             detail=f"the {what} is not at {candidate.name!r}: it holds no {MANIFEST}",
         )
     try:
-        found = inventory_digest(read_inventory(candidate))
+        found = artifact_digest(candidate)
     except UpstreamArtifactError as error:
         return DependencyResolution(
             record=record,

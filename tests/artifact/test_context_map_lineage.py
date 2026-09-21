@@ -14,10 +14,10 @@ from context_map_builders import (
     GEOMETRIC_MAP_ID,
     MODEL_IDENTITIES,
     PERCEPTION_ARTIFACT_ID,
-    SEMANTIC_MAP_ARTIFACT_ID,
     SEQUENCE_ARTIFACT_ID,
     SPATIAL_RELATIONS_ARTIFACT_ID,
     context_map,
+    decision_id,
     default_lineage,
     digest,
     entity,
@@ -28,6 +28,8 @@ from context_map_builders import (
     policy,
     populated_map,
     relation,
+    resolved_reference,
+    source_entity,
     upstream_artifact,
     upstream_record,
 )
@@ -46,6 +48,7 @@ from contextmap.artifact import (
     context_map_from_record,
     context_map_to_record,
 )
+from contextmap.spatial_relations import RelationPredicate, SpatialRelationsRunId
 
 FUSED = "fused-entity-0001"
 
@@ -173,7 +176,13 @@ def test_a_geometrically_derived_result_cites_geometry_or_relation_evidence() ->
     with pytest.raises(ProvenanceError, match="GEOMETRY_DERIVED"):
         populated_map(
             relations=(
-                relation("relation-0001", "entity-0001", "on", "entity-0002", origin=wrong),
+                relation(
+                    "relation-0001",
+                    "entity-0001",
+                    RelationPredicate.ON_TOP_OF,
+                    "entity-0002",
+                    origin=wrong,
+                ),
                 populated_map().relations[1],
             )
         )
@@ -198,7 +207,13 @@ def test_a_geometrically_derived_relation_is_never_a_direct_sensor_observation()
     with pytest.raises(ProvenanceError, match="relation"):
         populated_map(
             relations=(
-                relation("relation-0001", "entity-0001", "on", "entity-0002", origin=dishonest),
+                relation(
+                    "relation-0001",
+                    "entity-0001",
+                    RelationPredicate.ON_TOP_OF,
+                    "entity-0002",
+                    origin=dishonest,
+                ),
                 populated_map().relations[1],
             )
         )
@@ -430,19 +445,25 @@ def test_every_source_sequence_must_be_a_sequence_in_the_lineage() -> None:
 
 
 def test_an_entity_maps_to_an_entity_resolution_artifact() -> None:
-    wrong = upstream_record(FUSION_ARTIFACT_ID, "resolved-entity-0001")
+    wrong = resolved_reference("resolved-entity-0001", run_id=FUSION_ARTIFACT_ID)
 
     with pytest.raises(ReferenceIntegrityError, match="ENTITY_RESOLUTION_RUN"):
         _with_entity(source=wrong)
 
 
 def test_a_relation_maps_to_a_spatial_relations_artifact() -> None:
-    wrong = upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, "source-relation-0001")
+    wrong = SpatialRelationsRunId(ENTITY_RESOLUTION_ARTIFACT_ID)
 
     with pytest.raises(ReferenceIntegrityError, match="SPATIAL_RELATIONS_RUN"):
         populated_map(
             relations=(
-                relation("relation-0001", "entity-0001", "on", "entity-0002", source=wrong),
+                relation(
+                    "relation-0001",
+                    "entity-0001",
+                    RelationPredicate.ON_TOP_OF,
+                    "entity-0002",
+                    source_run_id=wrong,
+                ),
                 populated_map().relations[1],
             )
         )
@@ -452,11 +473,8 @@ def test_a_relation_maps_to_a_spatial_relations_artifact() -> None:
 
 
 def test_a_resolved_entity_keeps_the_source_entities_it_was_resolved_from() -> None:
-    members = (
-        upstream_record(SEMANTIC_MAP_ARTIFACT_ID, "semantic-a"),
-        upstream_record(SEMANTIC_MAP_ARTIFACT_ID, "semantic-b"),
-    )
-    decisions = (upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, "decision-a-b"),)
+    members = (source_entity("semantic-a"), source_entity("semantic-b"))
+    decisions = (decision_id("decision-a-b"),)
 
     merged = _with_entity(member_entities=members, resolution_decisions=decisions).entities[0]
 
@@ -470,20 +488,32 @@ def test_an_entity_is_resolved_from_at_least_one_source_entity() -> None:
 
 
 def test_merge_lineage_is_sorted_and_unique() -> None:
-    a = upstream_record(SEMANTIC_MAP_ARTIFACT_ID, "semantic-a")
-    b = upstream_record(SEMANTIC_MAP_ARTIFACT_ID, "semantic-b")
+    a, b = source_entity("semantic-a"), source_entity("semantic-b")
 
     with pytest.raises(ValueError, match="sorted"):
         entity(member_entities=(b, a))
     with pytest.raises(ValueError, match="unique"):
         entity(member_entities=(a, a))
+    with pytest.raises(ValueError, match="sorted"):
+        entity(resolution_decisions=(decision_id("b"), decision_id("a")))
+    with pytest.raises(ValueError, match="unique"):
+        entity(resolution_decisions=(decision_id("a"), decision_id("a")))
 
 
-def test_member_entities_come_from_a_semantic_map_and_decisions_from_resolution() -> None:
+def test_member_and_unresolved_source_entities_come_from_a_semantic_map() -> None:
+    foreign = source_entity("x", semantic_map_id=FUSION_ARTIFACT_ID)
+
     with pytest.raises(ReferenceIntegrityError, match="SEMANTIC_MAP"):
-        _with_entity(member_entities=(upstream_record(FUSION_ARTIFACT_ID, "x"),))
-    with pytest.raises(ReferenceIntegrityError, match="ENTITY_RESOLUTION_RUN"):
-        _with_entity(resolution_decisions=(upstream_record(FUSION_ARTIFACT_ID, "x"),))
+        _with_entity(member_entities=(foreign,))
+    with pytest.raises(ReferenceIntegrityError, match="SEMANTIC_MAP"):
+        _with_entity(unresolved_neighbors=(foreign,))
+
+
+def test_resolution_decisions_are_scoped_by_the_resolution_run_of_the_entity() -> None:
+    # Uma decisão é local ao run de resolução que a tomou: a fonte da entidade já a escopa.
+    decided = _with_entity(resolution_decisions=(decision_id("decision-a-b"),)).entities[0]
+
+    assert decided.source.resolution_run_id == ENTITY_RESOLUTION_ARTIFACT_ID
 
 
 # --- capabilities are backed by the lineage ---------------------------------------------------

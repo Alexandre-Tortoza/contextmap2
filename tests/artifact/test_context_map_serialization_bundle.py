@@ -14,8 +14,10 @@ from typing import Any
 
 import pytest
 from context_map_builders import (
+    ENTITY_RESOLUTION_ARTIFACT_ID,
     FUSION_ARTIFACT_ID,
     SEQUENCE_ARTIFACT_ID,
+    SPATIAL_RELATIONS_ARTIFACT_ID,
 )
 from context_map_serialization_builders import (
     MAP_ID,
@@ -40,10 +42,17 @@ from contextmap.artifact import (
 )
 from contextmap.artifact.serialization import bundle as bundle_module
 from contextmap.artifact.serialization.bundle import read_bundle_manifest
-from contextmap.artifact.serialization.dependencies import read_inventory
+from contextmap.artifact.serialization.dependencies import artifact_digest
 from contextmap.artifact.serialization.layout import BUNDLE_ARTIFACT_TYPE, MANIFEST
-from contextmap.artifact.serialization.manifest import decode_manifest, inventory_digest
-from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
+from contextmap.artifact.serialization.manifest import decode_manifest
+from contextmap.entity_resolution import EntityResolutionRunReader
+from contextmap.geometric_mapping import (
+    GeometricMapArtifactReader,
+    GeometryReference,
+    MapId,
+    geometry_id_for,
+)
+from contextmap.spatial_relations import SpatialRelationsRunReader
 
 NOW = datetime(2026, 9, 21, 15, 0, tzinfo=UTC)
 FUSION = ("semantic_fusion_run", FUSION_ARTIFACT_ID)
@@ -131,6 +140,7 @@ def test_a_required_closure_carries_the_structural_artifacts_and_opens_after_rel
     written = make_context_map(world)
     bundle = _export(world, source, ClosurePolicy.REQUIRED)
     relocated = world.root / "another-filesystem" / "moved-bundle"
+    carried = relocated / "dependencies"
     shutil.copytree(bundle, relocated)
     # Nada do workspace de origem sobrevive: a origem e todos os upstream originais somem.
     shutil.rmtree(world.root / "out")
@@ -142,6 +152,18 @@ def test_a_required_closure_carries_the_structural_artifacts_and_opens_after_rel
     report = validate_context_map_artifact(relocated / "artifact")
     assert report.status is ValidationStatus.VERIFIED
     assert verify_bundle(relocated) == ()
+    # Os runs reais copiados continuam íntegros para os leitores dos próprios donos.
+    resolution = EntityResolutionRunReader(
+        carried / "entity_resolution_run" / ENTITY_RESOLUTION_ARTIFACT_ID
+    )
+    relations = SpatialRelationsRunReader(
+        carried / "spatial_relations_run" / SPATIAL_RELATIONS_ARTIFACT_ID
+    )
+    assert resolution.verify_integrity() == []
+    assert relations.verify_integrity() == []
+    assert relations.validate_resolution(resolution) == ()
+    with GeometricMapArtifactReader(carried / "geometric_map" / MAP_ID) as geometry:
+        assert geometry.verify_integrity() == []
 
 
 def test_the_required_closure_leaves_optional_evidence_out_explicitly(
@@ -262,7 +284,7 @@ def test_identities_and_content_are_preserved_and_only_locators_change(
     assert manifest.source_content_identity == original.content_identity
     assert manifest.source_context_map_id == original.context_map_id
     embedded = next(item for item in manifest.embedded if item.artifact_id == MAP_ID)
-    assert embedded.content_identity == inventory_digest(read_inventory(world.geometry_dir))
+    assert embedded.content_identity == artifact_digest(world.geometry_dir)
 
 
 def test_only_contractual_files_are_carried_never_debug_or_strays(

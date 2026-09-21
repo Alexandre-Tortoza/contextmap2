@@ -1,0 +1,263 @@
+{
+  "annotations": [
+    {
+      "annotation_id": "ann-regions",
+      "content_hash": "sha256:eed068116300d06cab11c8c367c96b776a01720fb15c2f8d3e13f607b3d8ef51",
+      "path": "annotations/regions.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0001"
+      ],
+      "schema": "contextmap.reference.regions/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-semantics",
+      "content_hash": "sha256:4a757338cded87326272b77207b6719b1f8936fc4165dd176f27cd4bb7938610",
+      "path": "annotations/semantics.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000"
+      ],
+      "schema": "contextmap.reference.semantics/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-geometry",
+      "content_hash": "sha256:0d2f523e7c554b7b73a2a586a4eea497c385928e24da79f2f67bdbdc227becfb",
+      "path": "annotations/geometry.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0002"
+      ],
+      "schema": "contextmap.reference.geometry/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-identity",
+      "content_hash": "sha256:7c85ce3a84a144fd3fb5187c18b17ae18ff6645f2a277d0a9fed22c8a2889369",
+      "path": "annotations/identity.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0001",
+        "sample-0002"
+      ],
+      "schema": "contextmap.reference.identity/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-relations",
+      "content_hash": "sha256:7ea087d5fc027908570437a611ae0c435f7c73fe6887bf95e6d6941ebda3ce6d",
+      "path": "annotations/relations.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0001"
+      ],
+      "schema": "contextmap.reference.relations/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-visibility",
+      "content_hash": "sha256:5cb279cc4b4790c9546cfa0e431df0e80d72a7c6b93807d3a915c3c2ed099199",
+      "path": "annotations/visibility.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0002"
+      ],
+      "schema": "contextmap.reference.visibility/v1",
+      "trust": "trusted_ground_truth"
+    },
+    {
+      "annotation_id": "ann-scene-context",
+      "content_hash": "sha256:d59d0174d701575a3872af2741f0bc93e0a25e219025e92c731f55745750d270",
+      "path": "annotations/scene_context.json",
+      "provenance_id": "prov-synthetic",
+      "sample_ids": [
+        "sample-0000",
+        "sample-0001"
+      ],
+      "schema": "contextmap.reference.scene_context/v1",
+      "trust": "trusted_ground_truth"
+    }
+  ],
+  "calibrations": [
+    {
+      "calibration_id": "front_camera-calib",
+      "content_hash": "sha256:c6a03af3daba987c32d81c137fb0df44e59c1609e774af8478afb58f418ef31d",
+      "source_id": "ci-corridor"
+    }
+  ],
+  "digest": "sha256:752df30cbd3a5f85b6ab0ea1606c9071e602a83769bb8ebcecc93c0ceff62742",
+  "provenance": [
+    {
+      "annotator": "contextmap.evaluation.ci_fixtures",
+      "method": "analytic construction by the fixture generator; no model is involved",
+      "origin": "synthetic_generation",
+      "provenance_id": "prov-synthetic",
+      "review": null,
+      "seeded_from_artifacts": [],
+      "tool_version": "1.0.1"
+    }
+  ],
+  "reference_set_id": "contextmap-ci-subset",
+  "samples": [
+    {
+      "calibration_ids": [
+        "front_camera-calib"
+      ],
+      "content_hash": "sha256:36383c3fdf950b3cb3de36013f3a6f06a83acf441b971bd11060e79d1de9bf3f",
+      "groups": [
+        {
+          "key": "synthetic-corridor",
+          "unit": "scene"
+        }
+      ],
+      "observation_ids": [
+        "frame-0000",
+        "scan-0000",
+        "odom-0000"
+      ],
+      "sample_id": "sample-0000",
+      "source_id": "ci-corridor",
+      "strata": [
+        {
+          "name": "visibility",
+          "value": "clear"
+        }
+      ],
+      "time_span": {
+        "end": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 0
+        },
+        "start": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 0
+        }
+      }
+    },
+    {
+      "calibration_ids": [
+        "front_camera-calib"
+      ],
+      "content_hash": "sha256:93dc8ecdea39d3a8536947d96c62d336b631368a644f3096c6e98efc9ee3aa1b",
+      "groups": [
+        {
+          "key": "synthetic-corridor",
+          "unit": "scene"
+        }
+      ],
+      "observation_ids": [
+        "frame-0001",
+        "scan-0001",
+        "odom-0001"
+      ],
+      "sample_id": "sample-0001",
+      "source_id": "ci-corridor",
+      "strata": [
+        {
+          "name": "visibility",
+          "value": "clear"
+        }
+      ],
+      "time_span": {
+        "end": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 1
+        },
+        "start": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 1
+        }
+      }
+    },
+    {
+      "calibration_ids": [
+        "front_camera-calib"
+      ],
+      "content_hash": "sha256:77d5cd3471a4de2a916e4f3ad622a0c2e091d2cf5349dff2efe529f8bfd89b4f",
+      "groups": [
+        {
+          "key": "synthetic-corridor",
+          "unit": "scene"
+        }
+      ],
+      "observation_ids": [
+        "frame-0002",
+        "scan-0002",
+        "odom-0002"
+      ],
+      "sample_id": "sample-0002",
+      "source_id": "ci-corridor",
+      "strata": [
+        {
+          "name": "visibility",
+          "value": "clear"
+        }
+      ],
+      "time_span": {
+        "end": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 2
+        },
+        "start": {
+          "clock_id": "fixture:header",
+          "nanoseconds": 0,
+          "seconds": 2
+        }
+      }
+    }
+  ],
+  "schema": "contextmap.reference-set/v1",
+  "sources": [
+    {
+      "content_hash": "sha256:2c7e3a764b790174b21eddf160abc643f86dae328b2e656cd3b63c6097ac6f08",
+      "identity": "contextmap-ci-subset/1.0.1/sequence",
+      "kind": "synthetic_fixture",
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "source_id": "ci-corridor"
+    }
+  ],
+  "split_schemes": [
+    {
+      "adjacency_window_ns": null,
+      "rationale": "the subset is never tuned on: it only guards regressions, so it has a single held-out split over its one sequence",
+      "scheme_id": "ci-regression",
+      "splits": [
+        {
+          "name": "ci",
+          "role": "test",
+          "sample_ids": [
+            "sample-0000",
+            "sample-0001",
+            "sample-0002"
+          ]
+        }
+      ],
+      "task": "cross_module_regression",
+      "unit": "sequence"
+    }
+  ],
+  "stratum_definitions": [
+    {
+      "description": "occlusion level of the main subject, assigned by construction",
+      "name": "visibility",
+      "values": [
+        "clear",
+        "partially_occluded"
+      ]
+    }
+  ],
+  "version": "1.0.1"
+}

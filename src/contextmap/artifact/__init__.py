@@ -16,7 +16,6 @@ from contextmap.artifact.composition import (
     ContextRelation,
     ContextSemanticState,
     LabelHypothesis,
-    RelationState,
 )
 from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
 from contextmap.artifact.metadata import (
@@ -60,6 +59,7 @@ from contextmap.artifact.serialization.bundle import (
     export_bundle,
     verify_bundle,
 )
+from contextmap.artifact.serialization.dependencies import artifact_digest
 from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     ArtifactIntegrityError,
@@ -81,7 +81,6 @@ from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     DependencyRecord,
     Requirement,
-    inventory_digest,
 )
 from contextmap.artifact.serialization.reader import ContextMapArtifactReader
 from contextmap.artifact.serialization.validation import (
@@ -156,7 +155,6 @@ __all__ = [
     "ProvenanceError",
     "RecordTableError",
     "ReferenceIntegrityError",
-    "RelationState",
     "Requirement",
     "SchemaVersion",
     "Severity",
@@ -172,11 +170,11 @@ __all__ = [
     "ValidationLevel",
     "ValidationReport",
     "ValidationStatus",
+    "artifact_digest",
     "context_map_from_record",
     "context_map_to_record",
     "describe_schema",
     "export_bundle",
-    "inventory_digest",
     "require_supported_schema_version",
     "schema_fingerprint",
     "validate_context_map_artifact",

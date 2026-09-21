@@ -9,7 +9,7 @@ skipped, defaulted or repaired.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 
 from contextmap.artifact._checks import require_canonical
 from contextmap.artifact.composition import ContextEntity, ContextRelation
@@ -18,9 +18,9 @@ from contextmap.artifact.references import (
     ContextEntityId,
     ContextMapId,
     ReferenceIntegrityError,
-    UpstreamRecordRef,
 )
 from contextmap.geometric_mapping import MapId, geometry_index_of
+from contextmap.spatial_relations import RelationPredicate
 
 
 def check_entities(
@@ -100,7 +100,11 @@ def check_relations(
                     f"{endpoint.entity_id!r}, which is not an entity of the map"
                 )
     _require_distinct_sources(
-        [(relation.relation_id, relation.source) for relation in relations], kind="relation"
+        [
+            (relation.relation_id, (relation.source_run_id, relation.source_relation_id))
+            for relation in relations
+        ],
+        kind="relation",
     )
 
 
@@ -132,17 +136,21 @@ def check_declared_capabilities(
             f"the map has relations but does not declare {MapCapability.RELATIONS.name}"
         )
     if MapCapability.RELATIONS in capabilities.content:
-        present = tuple(sorted({relation.predicate for relation in relations}))
+        present = tuple(
+            sorted({relation.predicate for relation in relations}, key=_predicate_order)
+        )
         if present != capabilities.relation_predicates:
             raise ValueError(
-                f"relation_predicates {list(capabilities.relation_predicates)} differ from the "
-                f"predicates present {list(present)}"
+                f"relation_predicates {[item.value for item in capabilities.relation_predicates]} "
+                f"differ from the predicates present {[item.value for item in present]}"
             )
 
 
-def _require_distinct_sources(
-    records: Sequence[tuple[str, UpstreamRecordRef]], *, kind: str
-) -> None:
+def _predicate_order(predicate: RelationPredicate) -> str:
+    return predicate.value
+
+
+def _require_distinct_sources(records: Sequence[tuple[str, Hashable]], *, kind: str) -> None:
     """Require that no upstream record is mapped by two records of the map.
 
     Args:
@@ -153,11 +161,11 @@ def _require_distinct_sources(
         ReferenceIntegrityError: If two records share an upstream record, which would make the
             identity mapping ambiguous.
     """
-    seen: dict[UpstreamRecordRef, str] = {}
+    seen: dict[Hashable, str] = {}
     for identity, source in records:
         if source in seen:
             raise ReferenceIntegrityError(
                 f"{kind} {identity!r} and {seen[source]!r} map to the same upstream record "
-                f"{source.record_id!r} of {source.artifact_id!r}"
+                f"{source!r}"
             )
         seen[source] = identity

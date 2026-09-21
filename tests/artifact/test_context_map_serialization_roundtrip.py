@@ -9,6 +9,7 @@ import json
 import pathlib
 import shutil
 import tracemalloc
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from contextmap.artifact import (
     UnsupportedFormatVersionError,
     ValidationLevel,
     ValidationStatus,
+    artifact_digest,
     context_map_to_record,
     export_bundle,
     validate_context_map_artifact,
@@ -60,6 +62,7 @@ from contextmap.artifact.serialization.manifest import (
     decode_manifest,
     encode_manifest,
 )
+from contextmap.entity_resolution import EntityResolutionRunReader, resolution_artifact_digest
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometryReference,
@@ -67,9 +70,14 @@ from contextmap.geometric_mapping import (
     geometry_id_for,
 )
 from contextmap.shared import file_entry
+from contextmap.spatial_relations import (
+    RelationPredicate,
+    RelationState,
+    SpatialRelationsRunReader,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "context_map_artifact" / "v0.1.0"
-FIXTURE_CONTENT_IDENTITY = "sha256:a2be8fdd3668bb05f31639154db31e636783bca282a638ee795da41c5cc43f40"
+FIXTURE_CONTENT_IDENTITY = "sha256:7ba7df7c5d165bdac6f5700ed0b4249278ee4cbd4bb4761e10f4ec3b919c52d7"
 
 
 @pytest.fixture
@@ -137,17 +145,22 @@ def test_uncertainty_and_provenance_survive_the_round_trip(world: World) -> None
     artifact, _ = write_artifact(world, context_map=written)
 
     with ContextMapArtifactReader.open(artifact) as reader:
-        ambiguous = reader.entity(entity_reference("entity-0002"))
-        insufficient = reader.entity(entity_reference("entity-0003"))
-        unresolved = reader.relation("relation-0002")
+        entities = {str(item.entity_id): item for item in reader.entities()}
+        relations = tuple(reader.relations())
 
     original = {str(item.entity_id): item for item in written.entities}
-    assert ambiguous.semantic_state == original["entity-0002"].semantic_state
-    assert len(ambiguous.semantic_state.hypotheses) == 2
-    assert insufficient.semantic_state.hypotheses == ()
-    assert insufficient.origin == original["entity-0003"].origin
-    assert unresolved.state is written.relations[1].state
-    assert unresolved.origin == written.relations[1].origin
+    assert entities == original
+    assert len(entities["entity-0002"].semantic_state.hypotheses) == 2
+    assert entities["entity-0003"].semantic_state.hypotheses == ()
+    # O que a resolução real decidiu sobrevive: o entity fundido guarda os dois membros e a decisão,
+    # e o que ficou sem par guarda o vizinho que nenhuma decisão resolveu.
+    assert len(entities["entity-0001"].member_entities) == 2
+    assert len(entities["entity-0001"].resolution_decisions) == 1
+    assert entities["entity-0003"].unresolved_neighbors
+    # Os estados que as relações espaciais reais decidiram sobrevivem, com a origem de cada uma.
+    assert relations == written.relations
+    assert {item.state for item in relations} == {RelationState.SUPPORTED, RelationState.REJECTED}
+    assert all(item.origin.derived_from for item in relations)
 
 
 def test_the_round_trip_is_repeatable_across_repeated_writes(world: World) -> None:
@@ -202,14 +215,19 @@ def test_one_entity_of_a_large_map_is_read_without_reading_the_others(
         entity(f"entity-{n:05d}", geometry=(n % 990, n % 990 + 1, n % 990 + 2)) for n in range(2000)
     )
     chain = tuple(
-        relation(f"relation-{n:05d}", f"entity-{n:05d}", "on", f"entity-{n + 1:05d}")
+        relation(
+            f"relation-{n:05d}",
+            f"entity-{n:05d}",
+            RelationPredicate.ON_TOP_OF,
+            f"entity-{n + 1:05d}",
+        )
         for n in range(0, 1998, 2)
     )
     large = pinned(
         populated_map(
             entities=entities,
             relations=chain,
-            metadata=metadata(capabilities=entity_capabilities("on")),
+            metadata=metadata(capabilities=entity_capabilities(RelationPredicate.ON_TOP_OF)),
         ),
         world,
     )
@@ -288,16 +306,35 @@ def test_a_deleted_truncated_or_altered_contractual_file_is_never_valid(
             ContextMapArtifactReader.open(artifact, verify_hashes=True)
 
 
-def test_an_altered_upstream_file_is_reported_by_the_validator_and_refused_by_the_writer(
+def test_the_digest_that_pins_an_upstream_artifact_is_the_one_its_owner_computes(
     world: World,
 ) -> None:
-    artifact, _ = write_artifact(world)
-    payload = world.relations_dir / "outputs/records.jsonl"
+    written = make_context_map(world)
+    resolution = EntityResolutionRunReader(world.resolution_dir)
+    relations = SpatialRelationsRunReader(world.relations_dir)
+
+    digest = artifact_digest(world.resolution_dir)
+
+    assert digest == resolution_artifact_digest(resolution.manifest)
+    assert digest == relations.manifest.lineage.entity_resolution_artifact_digest
+    cited = {item.artifact_id: item.content_identity for item in written.lineage}
+    assert cited[str(resolution.run_id)] == digest
+    assert cited[str(relations.manifest.run_id)] == artifact_digest(world.relations_dir)
+
+
+@pytest.mark.parametrize("run", ["resolution_dir", "relations_dir"])
+def test_an_altered_upstream_file_is_reported_by_the_validator_and_refused_by_the_writer(
+    world: World, run: str
+) -> None:
+    written = make_context_map(world)
+    artifact, _ = write_artifact(world, context_map=written)
+    directory = getattr(world, run)
+    payload = next(directory.glob("outputs/*.jsonl"))
     payload.write_bytes(payload.read_bytes() + b"x")
 
     assert "dependency.upstream_damaged" in _errors(artifact)
     with pytest.raises(ContextMapArtifactError):
-        write_artifact(world, name="another")
+        write_artifact(world, name="another", context_map=written)
 
 
 def test_a_directory_left_by_an_interrupted_write_is_never_an_artifact(
@@ -406,32 +443,35 @@ def test_the_versions_promised_readable_by_v0_1_0_are_the_ones_the_fixture_uses(
     assert manifest.format_version in SUPPORTED_FORMAT_VERSIONS
     assert manifest.schema_version == CONTEXT_MAP_SCHEMA_VERSION == "0.1.0"
     assert manifest.content_identity == FIXTURE_CONTENT_IDENTITY, (
-        "the v0.1.0 fixture must never be regenerated: it proves old artifacts stay readable"
+        "the v0.1.0 fixture is regenerated only with a schema change made before the release"
     )
 
 
-def test_the_v0_1_0_fixture_is_still_readable_and_says_what_it_depends_on() -> None:
-    expected = populated_map()
+def test_the_v0_1_0_fixture_is_still_readable_and_says_what_it_depends_on(
+    tmp_path: Path,
+) -> None:
+    rebuilt = make_context_map(make_world(tmp_path))
 
     with ContextMapArtifactReader.open(FIXTURE, verify_hashes=True) as reader:
+        stored = reader.context_map()
+        # A identidade de conteúdo das dependências depende dos bytes de arquivos gerados com
+        # ponto flutuante (a geometria), que variam entre bibliotecas matemáticas: a fixture é
+        # comparada com o mapa reconstruído com a **linhagem que ela mesma guarda**, e a
+        # linhagem só precisa concordar em quais artifacts cita e de que tipo.
+        expected = replace(rebuilt, lineage=stored.lineage)
+        assert stored == expected
         assert reader.metadata() == expected.metadata
         assert reader.geometry_link() == expected.geometry_ref
         assert tuple(reader.entities()) == expected.entities
         assert tuple(reader.relations()) == expected.relations
-        assert [item.artifact_id for item in reader.lineage()] == [
-            item.artifact_id for item in expected.lineage
+        assert [(item.artifact_id, item.kind) for item in reader.lineage()] == [
+            (item.artifact_id, item.kind) for item in rebuilt.lineage
         ]
-        assert {
-            item.relation_id for item in reader.relations_for(entity_reference("entity-0002"))
-        } == {
-            "relation-0001",
-            "relation-0002",
-        }
+        reference = entity_reference("entity-0003")
+        assert reader.relations_for(reference) == expected.relations_for(reference)
 
 
-def test_the_v0_1_0_fixture_validates_completely_except_for_the_upstream_it_does_not_carry() -> (
-    None
-):
+def test_the_v0_1_0_fixture_validates_except_for_the_upstream_it_does_not_carry() -> None:
     report = validate_context_map_artifact(FIXTURE)
 
     assert {item.code for item in report.findings if item.severity is Severity.ERROR} == {

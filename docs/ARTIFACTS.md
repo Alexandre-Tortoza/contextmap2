@@ -58,7 +58,7 @@ Pode conter os produtos finais `ContextMapArtifact` ou bundles finais, conforme 
 
 ### `experiments/`
 
-Pode conter manifests/reports que referenciam runs imutáveis usados em comparações e ablations.
+Contém os manifests/reports que referenciam runs imutáveis usados em comparações e ablations: o run de um experimento (`experiment.json`, um run manifest e um relatório por arm e `comparison.json`) e a evidência/decisão sobre uma técnica opcional. Os formatos estão em [Artefatos de avaliação](#artefatos-de-avaliação).
 
 ### `tmp/`
 
@@ -100,7 +100,7 @@ flowchart TD
 
 ## Artefatos materializados hoje
 
-Na `dev`, sete formatos já existem e são integrados:
+Na `dev`, oito formatos já existem e são integrados:
 
 ```mermaid
 flowchart LR
@@ -136,11 +136,15 @@ flowchart LR
     SFU --> SFW["SemanticFusionRunWriter"]
     SFW --> SFA["SemanticFusionRunArtifact"]
     SFA --> SFR["SemanticFusionRunReader"]
+    SFA --> SMP["Semantic Mapping"]
+    SMP --> SMW["SemanticMappingRunWriter"]
+    SMW --> SMA["SemanticMappingRunArtifact"]
+    SMA --> SMRD["SemanticMappingRunReader"]
 ```
 
-`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. `SemanticFusionRunArtifact` é o artifact imutável dos suportes de fusão e da evidência fundida. Os artifacts downstream do diagrama anterior permanecem planejados.
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. `SemanticFusionRunArtifact` é o artifact imutável dos suportes de fusão e da evidência fundida. `SemanticMappingRunArtifact` é o artifact imutável das entidades semânticas. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact`, `SemanticMappingRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -302,6 +306,35 @@ workspace/runs/semantic-fusion/<sequence-name>/
 
 O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenções e evidência não pontuada (`None`, nunca zero), e mantém frames físicos e resultados de inferência distintos. Nada a montante é duplicado: claims, scores, features, qualidade e estrutura 3D são referenciados, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, mapa, runs de associação, percepção e Point Representation), as políticas com fingerprint e as identidades que alimentaram cada canal. Um run é escrito em fluxo e publicado de forma atômica, e o leitor abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo, lendo um suporte sem carregar os outros. Semantic Mapping não pode depender de `debug/`. Detalhes: [Semantic Fusion artifact](../src/contextmap/semantic_fusion/docs/artifact.md).
 
+### `SemanticMappingRunArtifact` atual
+
+```text
+workspace/runs/semantic-mapping/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<policy>/
+    ├── README.md
+    ├── manifest.json                          # identidade, linhagem do run de fusão, política e inventário
+    ├── outputs/
+    │   ├── entities.jsonl                     # uma Entity canônica por linha (autocontida, autoritativa)
+    │   ├── entity-index.jsonl                 # entidade → deslocamento e tamanho
+    │   ├── entity-geometry-index.jsonl        # entidade → mapa, frame, pontos, limites, centroide, diagnósticos
+    │   ├── entity-evidence-index.jsonl        # entidade → evidência fundida e contagens
+    │   ├── entity-observation-index.jsonl     # uma linha por (entidade, frame físico)
+    │   ├── entity-semantic-state.jsonl        # entidade → ambiguidade, primária, labels, atributos, incerteza
+    │   ├── entity-temporal-state.jsonl        # entidade → first/last seen, contagens, ciclo de vida
+    │   └── rejected-candidates.jsonl          # candidatos que não viraram entidade, com o motivo
+    ├── metrics/
+    │   ├── counts.json  distributions.json  payload.json
+    │   └── runtime.json                       # somente quando medido
+    └── debug/                                 # somente standard/full; nunca inventariado
+```
+
+O artifact guarda **todas** as hipóteses, conflitos, abstenções e sinais sem score de cada entidade, mantém frames físicos e resultados de inferência distintos e **não** contém estado de merge, split ou resolução. Nada a montante é duplicado: a evidência é referenciada com a identidade, a versão do schema e o digest do inventário do artifact de fusão, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (o run de fusão selecionado, o mapa geométrico e, pela linhagem da fusão, as runs de associação, percepção e Point Representation), a política de materialização e o fingerprint da configuração; um run guarda uma política. O leitor abre sem NumPy, sem runtime de percepção, de fusão ou de modelo, resolve uma `EntityReference` sem carregar as demais e recusa uma referência de outro semantic map. Entity Resolution e Spatial Relations não podem depender de `debug/`. Detalhes: [Semantic Mapping artifact](../src/contextmap/semantic_mapping/docs/artifact.md).
+
+### SpatialRelationsRunArtifact
+
+O `SpatialRelationsRunArtifact` guarda as relações de um run com a evidência de cada uma, a decisão por trás dela, os candidatos avaliados e descartados e um índice das relações de cada entidade resolvida, para a montagem do Context Map reutilizá-las sem recalcular avaliações de par. O escritor grava num **`output_dir` explícito** (o diretório final, com `AtomicRunDirectory`): não há contador de runs, `runs.json` nem caminho `run-NNNN` calculado dentro, e a identidade do run vem de quem chama. `outputs/` traz `relations`, `relation-evidence`, `relation-candidates`, `relation-decisions` e `entity-relation-index`; `manifest.json` traz a linhagem (run de Entity Resolution, versão e digest, e o mapa geométrico), a versão da taxonomia, cada política efetiva com id, fingerprint e parâmetros, os eixos declarados e o inventário com SHA-256. Relações `SUPPORTED`, `REJECTED` e `UNRESOLVED` são todas persistidas e distinguíveis, e nada de entidade ou geometria é copiado. O leitor só precisa do diretório do run, lê por identidade e pelo índice, detecta corrupção e recusa `debug/` como fonte. A linhagem, as políticas e a configuração ficam no manifest, seguindo os artifacts irmãos, em vez de `config.yaml`, `lineage.json`, `environment.json` e `events.jsonl` separados. Detalhes: [Spatial Relations artifact](../src/contextmap/spatial_relations/docs/artifact.md).
+
 ### `ContextMapArtifact` atual
 
 ```text
@@ -316,7 +349,7 @@ O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenç
 └── lineage/lineage.json                # os artifacts a montante que o mapa cita
 ```
 
-O diretório é o artifact canônico; um arquivo compactado seria só transporte. Os formatos são JSON e JSON Lines com índice de deslocamentos, sem dependência além da instalação base, e a geometria nunca é copiada: é referenciada pelo `GeometricMapArtifact`, fixado pelo digest do seu inventário. O manifest separa a `format_version` (layout) da `schema_version` (semântica), classifica cada dependência como `required` (as estruturais do schema: mapa geométrico e runs de Entity Resolution e Spatial Relations) ou `optional` (evidência), e sua `content_identity` ignora o horário de escrita e as dicas de localização, então o mesmo mapa escrito duas vezes tem a mesma identidade. Não há `debug/`, `runs.json` nem índice de run: quem chama informa o diretório final, publicado por `AtomicRunDirectory`.
+O diretório é o artifact canônico; um arquivo compactado seria só transporte. Os formatos são JSON e JSON Lines com índice de deslocamentos, sem dependência além da instalação base, e a geometria nunca é copiada: é referenciada pelo `GeometricMapArtifact`, fixado pelo digest de artifact que os irmãos já usam (identidade, versão do schema e hash de cada arquivo). O manifest separa a `format_version` (layout) da `schema_version` (semântica), classifica cada dependência como `required` (as estruturais do schema: mapa geométrico e runs de Entity Resolution e Spatial Relations) ou `optional` (evidência), e sua `content_identity` ignora o horário de escrita e as dicas de localização, então o mesmo mapa escrito duas vezes tem a mesma identidade. Não há `debug/`, `runs.json` nem índice de run: quem chama informa o diretório final, publicado por `AtomicRunDirectory`.
 
 O `ContextMapArtifactReader` abre pelo próprio diretório, lê metadados, entidades e relações um registro por vez e abre a geometria só sob demanda (por `mmap`), sem mutação e sem fallback para `debug/`. O `validate_context_map_artifact` devolve um relatório determinístico legível por máquina, em nível estrutural (`structurally_valid` no máximo) ou completo (hashes, registros, referências, índices reconstruídos e arquivos a montante; só ele responde `verified`). `export_bundle` gera um diretório portátil com a política de fechamento explícita (`core-only`, `core+required`, `core+selected-evidence`). Detalhes: [Layout e formatos](../src/contextmap/artifact/docs/storage-layout.md), [writer](../src/contextmap/artifact/docs/writer.md), [leitor](../src/contextmap/artifact/docs/reader.md), [validação de integridade](../src/contextmap/artifact/docs/integrity-validation.md) e [bundle](../src/contextmap/artifact/docs/bundle.md).
 
@@ -372,6 +405,32 @@ Detalhes específicos permanecem nos owners:
 
 - [Ingestion artifact](../src/contextmap/ingestion/docs/artifact.md);
 - [Visual Perception run artifact](../src/contextmap/visual_perception/docs/run_artifact.md).
+
+### Artefatos de avaliação
+
+A capability `evaluation` persiste documentos JSON imutáveis, escritos por publicação atômica (recusam sobrescrever) e com digest `sha256` verificado na leitura. Não são artifacts de run do pipeline e não alteram nenhum artifact avaliado.
+
+```text
+<reference-set>/<versão>/
+├── manifest.json            # ReferenceSetManifest (contextmap.reference-set/v1), com digest
+└── annotations/<família>.json  # contextmap.reference.<família>/v1, hash declarado no manifesto
+
+<experimento>/<run>/         # diretório novo por execução
+├── experiment.json          # ExperimentManifest (contextmap.experiment/v1)
+├── arms/<arm>/run.json      # topologia resolvida, artifacts por estágio, resultado (…-arm-run/v1)
+├── arms/<arm>/report.json   # EvaluationReport (contextmap.evaluation-report/v1), só arms concluídos
+└── comparison.json          # ComparisonManifest (…-comparison/v1): métricas lado a lado, artifacts compartilhados
+
+evidence.json                # TechniqueEvidence por métrica e estrato (contextmap.technique-evidence/v1)
+decision.json                # TechniqueDecision, presa ao digest da evidência (…-decision/v1)
+```
+
+- `ReferenceSetManifest` amarra fontes, amostras (por `SourceObservationId`, nunca por saída de percepção), calibrações, anotações com `trust` e proveniência declarados, estratos e splits; a versão muda quando o conteúdo muda.
+- Um arm indisponível ou com resultado inconsistente é registrado como tal e não tem `report.json`; a comparação fica `complete: false`.
+- Reexecutar um experimento cria outro diretório de run; nunca sobrescreve.
+- Há um subconjunto sintético de CI versionado em `tests/fixtures/ci_subset/<versão>/` (manifesto, anotações e catálogo). Não existe reference set real versionado nem execução real de experimento registrada.
+
+Detalhes: [reference set](../src/contextmap/evaluation/docs/reference-set.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
 
 ## Immutability
 
@@ -822,9 +881,11 @@ debug dependency
 ## Lineage de entidade
 
 Esta seção e as seções de lineage de relação e `ContextMapArtifact` abaixo
-descrevem artifacts **planejados**. As capabilities `semantic_mapping`,
-`entity_resolution` e `spatial_relations` ainda não existem na `dev`; da capability
-`artifact` existe apenas o **schema** `ContextMap` (sem escrita, leitura nem artifact persistido).
+descrevem artifacts **planejados**, exceto pelo trecho de entidade
+(`Source Entity → FusedEvidence → SpatialObservation → PerceptionResult →
+SourceObservation`), que o `SemanticMappingRunArtifact` já persiste e que
+`trace_entity_evidence` percorre por identidade. As capabilities
+`entity_resolution` ainda não persiste artifacts; `spatial_relations` já persiste o `SpatialRelationsRunArtifact`. Da capability `artifact` existe apenas o **schema** `ContextMap` (sem escrita, leitura nem artifact persistido).
 
 ```mermaid
 flowchart RL

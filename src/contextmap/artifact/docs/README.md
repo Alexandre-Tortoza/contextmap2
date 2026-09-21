@@ -35,8 +35,8 @@ Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (c
 - `GeometricMapLink` — a geometria autoritativa, referenciada por identidade e tamanho.
 - `ContextEntity`, `ContextEntityId`, `ContextEntityReference` — a entidade resolvida, seu escopo de identidade e sua referência estável.
 - `ContextSemanticState`, `LabelHypothesis`, `AmbiguityStatus` — o estado semântico, que nunca colapsa incerteza.
-- `ContextRelation`, `ContextRelationId`, `RelationState` — a relação direcionada entre entidades e seu estado (`SUPPORTED`, `UNRESOLVED`, `CONFLICTING`).
-- `UpstreamRecordRef` — o registro exato, no artifact exato, a que algo do mapa corresponde.
+- `ContextRelation`, `ContextRelationId` — a relação direcionada entre entidades, com o predicado, o estado e a incerteza **de Spatial Relations** (`RelationPredicate`, `RelationState`, `RelationUncertaintyKind`).
+- `UpstreamRecordRef` — o registro exato, no artifact exato, que uma `EvidenceOrigin` cita como evidência.
 - `EvidenceOrigin`, `DerivationKind` — como um resultado foi produzido (sensor, modelo, geometria, fusão, humano, conhecimento prévio) e **toda** a evidência de que deriva; proveniência, nunca confiança.
 - `UpstreamArtifact`, `ArtifactKind`, `ProvenanceError` — a linhagem: cada artifact citado, com identidade de conteúdo, configuração, código e modelos.
 - `ReferenceIntegrityError`, `ForeignContextEntityReferenceError`, `UnknownContextEntityError` — referências que não resolvem, referência a outro mapa e entidade inexistente.
@@ -48,10 +48,11 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 
 ## Módulos consumidos
 
-- `contextmap.geometric_mapping`: `MapId`, reutilizado como identidade do mapa geométrico referenciado, e `Bounds3D`, reutilizado como extensão espacial.
+- `contextmap.geometric_mapping`: `MapId`, reutilizado como identidade do mapa geométrico referenciado, `Bounds3D`, reutilizado como extensão espacial, e `GeometryReference`.
+- `contextmap.entity_resolution`, `contextmap.semantic_mapping` e `contextmap.spatial_relations`: as referências, o estado e o predicado listados abaixo.
 - `contextmap.shared`: `SourceTimestamp` (janela temporal) e `Vector3` (direção "para cima").
 
-Entity Resolution e Spatial Relations ainda não existem na `dev`; até lá o schema usa registros de referência próprios (`UpstreamRecordRef`: artifact de origem + identidade local), sem importar módulos que não existem. Quando esses contratos existirem, a adoção troca esses registros por referências das capabilities donas, sem mudar o escopo de identidade do mapa.
+Entidades e relações usam os **contratos reais** das capabilities donas, sempre pela API pública: `ResolvedEntityReference` e `ResolutionDecisionId` (Entity Resolution), `EntityReference` (Semantic Mapping), `RelationPredicate`, `RelationState`, `RelationUncertaintyKind`, `RelationId` e `SpatialRelationsRunId` (Spatial Relations). Essas três dependências já estavam declaradas em `tests/architecture/test_boundaries.py`; nenhuma fronteira foi ampliada.
 
 ## Módulos que consomem este
 

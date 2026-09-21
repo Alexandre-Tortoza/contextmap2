@@ -53,10 +53,31 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "point_representation",
         }
     ),
-    "semantic_mapping": frozenset({"shared", "geometric_mapping", "semantic_fusion"}),
+    # Além da API pública de semantic_fusion, Semantic Mapping usa identidades de ingestion
+    # (FrameId, SourceObservationId), visual_perception (BackendProvenance, ClaimId, FeatureId...),
+    # sensor_association (SpatialObservationId), point_representation (PointRepresentationId) e
+    # state_estimation (TimeBounds) apenas como tipos: as evidências das hipóteses e as
+    # referências à evidência fundida chegam com esses tipos e são preservadas, sem usar a
+    # lógica dessas capabilities.
+    "semantic_mapping": frozenset(
+        {
+            "shared",
+            "ingestion",
+            "visual_perception",
+            "state_estimation",
+            "geometric_mapping",
+            "sensor_association",
+            "point_representation",
+            "semantic_fusion",
+        }
+    ),
+    # Entity Resolution usa a identidade de ingestion (SourceObservationId) apenas como tipo: as
+    # entidades listam os frames físicos que as observaram e o feature store é indexado por eles,
+    # como já acontece em semantic_mapping. Nenhuma lógica de ingestion é usada.
     "entity_resolution": frozenset(
         {
             "shared",
+            "ingestion",
             "geometric_mapping",
             "visual_perception",
             "point_representation",
@@ -369,3 +390,27 @@ def test_runtime_can_import_concrete_backend_for_composition() -> None:
         "from contextmap.visual_perception.backends.sam3 import Sam3RegionDiscovery\n",
     )
     assert violations == []
+
+
+def test_entity_resolution_may_import_ingestion_identity_types_through_the_public_api() -> None:
+    violations = _fixture_violations(
+        "src/contextmap/entity_resolution/appearance_comparison.py",
+        "from contextmap.ingestion import SourceObservationId\n",
+    )
+    assert violations == []
+
+
+def test_entity_resolution_still_cannot_reach_into_ingestion_internals() -> None:
+    violations = _fixture_violations(
+        "src/contextmap/entity_resolution/appearance_comparison.py",
+        "from contextmap.ingestion.models import SourceObservation\n",
+    )
+    assert {violation.rule for violation in violations} == {"public-api-boundary"}
+
+
+def test_ingestion_still_cannot_depend_on_entity_resolution() -> None:
+    violations = _fixture_violations(
+        "src/contextmap/ingestion/models.py",
+        "from contextmap.entity_resolution import ResolvedEntityReference\n",
+    )
+    assert {violation.rule for violation in violations} == {"dependency-direction"}

@@ -4,7 +4,7 @@
       "artifact_id": "corridor-02--map-run-0001",
       "code_version": "a1b2c3d",
       "configuration_fingerprint": "sha256:174e26cb6d24e49b842d446b96630c51bbe1c339617d19d20d533ae4704c17f3",
-      "content_identity": "sha256:a2991835437488a5ab8378c3faefa0e6afd3ef3fd1fd44f80953ad1bc96af7ef",
+      "content_identity": "sha256:5a4434e2000332f299619fd0585c50f8c4c3eefaade28819bf3f6ce156ba339f",
       "kind": "geometric_map",
       "model_identities": []
     },
@@ -12,7 +12,7 @@
       "artifact_id": "entity-resolution--run-0001",
       "code_version": "a1b2c3d",
       "configuration_fingerprint": "sha256:dbef3973cf3796f35efac3bceaa682b6e32f4fb49f05e5edc061aa8cc3369473",
-      "content_identity": "sha256:da7092f70ea3fb99fc2c5c7e06032bd2712851eb4364e2af16fd43a2b032e363",
+      "content_identity": "sha256:35093371bd3c7548cd370335466c82366c97067509678017e2777bbe1cb788ca",
       "kind": "entity_resolution_run",
       "model_identities": []
     },
@@ -31,7 +31,7 @@
       "artifact_id": "semantic-fusion--run-0001",
       "code_version": "a1b2c3d",
       "configuration_fingerprint": "sha256:dd366e71293ae4670040dbf998c603ea6443b36e18d309cd4ff35b67c00b895c",
-      "content_identity": "sha256:898c3338eb4e248466326fea522275f544011fd0735cfc1d3fcb8bae99cc4d93",
+      "content_identity": "sha256:1d45ffcb1b703ae62ab517a61cd14ec02d2e355d9014f07618f2934847a0aa5e",
       "kind": "semantic_fusion_run",
       "model_identities": []
     },
@@ -55,7 +55,7 @@
       "artifact_id": "spatial-relations--run-0001",
       "code_version": "a1b2c3d",
       "configuration_fingerprint": "sha256:8111bafca0a28cc9cc78dcbeb40c6d67b1acbae1a9567390f3be8b97be98585c",
-      "content_identity": "sha256:7bf9b1bdba1befe46054de9d496a17824c38a4a51269bc6a942943d41bb0d5a8",
+      "content_identity": "sha256:89a2e053e0f9271be3820e33c5bf731d17aaa1bd11917313c466d8e15b60352d",
       "kind": "spatial_relations_run",
       "model_identities": []
     }

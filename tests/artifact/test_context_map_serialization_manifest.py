@@ -6,6 +6,7 @@ tabular payload (dtype, shape, unit, frame, semantics) and lists the artifacts t
 on. These tests pin what is inspectable and what is identity.
 """
 
+import hashlib
 import json
 from dataclasses import replace
 from typing import Any
@@ -29,8 +30,8 @@ from contextmap.artifact.serialization.manifest import (
     create_manifest,
     decode_manifest,
     encode_manifest,
-    inventory_digest,
     manifest_content_identity,
+    run_artifact_digest,
 )
 from contextmap.shared import FileEntry, file_entry
 
@@ -214,12 +215,35 @@ def test_a_tampered_manifest_no_longer_matches_its_recorded_identity() -> None:
     assert manifest_content_identity(tampered) != tampered.content_identity
 
 
-def test_inventory_digest_depends_on_content_not_on_order() -> None:
+def test_the_artifact_digest_is_the_recipe_the_sibling_capabilities_use() -> None:
     inventory = _inventory()
+    expected = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    "run_id": "run-0001",
+                    "schema_version": "0.1.0",
+                    "files": sorted([entry.path, entry.content_hash] for entry in inventory),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
 
-    assert inventory_digest(inventory) == inventory_digest(tuple(reversed(inventory)))
+    assert run_artifact_digest("run-0001", "0.1.0", inventory) == expected
+
+
+def test_the_artifact_digest_depends_on_identity_version_and_content_not_on_order() -> None:
+    inventory = _inventory()
+    digest = run_artifact_digest("run-0001", "0.1.0", inventory)
+
+    assert digest == run_artifact_digest("run-0001", "0.1.0", tuple(reversed(inventory)))
+    assert digest != run_artifact_digest("run-0002", "0.1.0", inventory)
+    assert digest != run_artifact_digest("run-0001", "0.2.0", inventory)
     changed = (*inventory[:-1], file_entry("map-metadata.json", b"other"))
-    assert inventory_digest(changed) != inventory_digest(inventory)
+    assert digest != run_artifact_digest("run-0001", "0.1.0", changed)
 
 
 @pytest.mark.parametrize("version", ["0.0.1", "1.0.0", "", "not-a-version"])

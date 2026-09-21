@@ -275,9 +275,9 @@ class DependencyRecord:
         artifact_type: Kind of the upstream artifact, for example ``"geometric_map"``.
         artifact_id: Identity of the artifact inside its own capability; it is what a person or
             a resolver looks for, and is not verified on its own.
-        content_identity: Digest of the upstream artifact's contractual inventory
-            (:func:`inventory_digest`). It is what makes the reference exact: an artifact found
-            by any path is only the dependency if its digest matches.
+        content_identity: Digest of the upstream artifact (:func:`run_artifact_digest`, the
+            recipe its owner and its other consumers use). It is what makes the reference exact:
+            an artifact found by any path is only the dependency if its digest matches.
         requirement: Whether the map needs it to be resolved or only to inspect evidence.
         locator: A hint where to look, relative to the artifact directory. It is transport
             information: never trusted, never part of the identity, and rewritten when the
@@ -456,20 +456,33 @@ def create_manifest(
     return replace(provisional, content_identity=manifest_content_identity(provisional))
 
 
-def inventory_digest(entries: Iterable[FileEntry]) -> str:
-    """Digest an inventory of files, independent of the order of its entries.
+def run_artifact_digest(run_id: str, schema_version: str, entries: Iterable[FileEntry]) -> str:
+    """Digest the identity, the schema version and the file hashes of an upstream artifact.
 
-    It identifies the contractual content of an artifact that has an inventory, which is how a
-    dependency is pinned to exact bytes.
+    This is the recipe the sibling capabilities already use to pin the artifact they were built
+    from (Semantic Fusion, Semantic Mapping, Entity Resolution, Spatial Relations): the digest of
+    the run identity, its schema version and the path and hash of every contractual file, in a
+    canonical order. It ignores the sizes, the moment of writing and everything that is not
+    contractual, so the same contractual content has the same digest, and a downstream artifact
+    that cites an upstream one carries exactly the value the upstream's owner and its other
+    consumers carry.
 
     Args:
-        entries: The ``(path, size, hash)`` entries.
+        run_id: The identity the artifact's manifest records (``run_id``, or ``artifact_id`` for a
+            canonical sequence).
+        schema_version: The schema version the artifact's manifest records.
+        entries: The contractual files of the artifact.
 
     Returns:
         ``"sha256:<hex digest>"``.
     """
-    rows = sorted([entry.path, entry.size_bytes, entry.content_hash] for entry in entries)
-    return _digest({"kind": "file-inventory", "files": rows})
+    return _digest(
+        {
+            "run_id": run_id,
+            "schema_version": schema_version,
+            "files": sorted([entry.path, entry.content_hash] for entry in entries),
+        }
+    )
 
 
 def manifest_content_identity(manifest: ContextMapArtifactManifest) -> str:

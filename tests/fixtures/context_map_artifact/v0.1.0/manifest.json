@@ -2,20 +2,20 @@
   "artifact_type": "context_map",
   "code_version": "a1b2c3d",
   "configuration_fingerprint": "sha256:cfg-0001",
-  "content_identity": "sha256:a2be8fdd3668bb05f31639154db31e636783bca282a638ee795da41c5cc43f40",
+  "content_identity": "sha256:7ba7df7c5d165bdac6f5700ed0b4249278ee4cbd4bb4761e10f4ec3b919c52d7",
   "context_map_id": "context-map--corridor-02--0001",
   "dependencies": [
     {
       "artifact_id": "entity-resolution--run-0001",
       "artifact_type": "entity_resolution_run",
-      "content_identity": "sha256:da7092f70ea3fb99fc2c5c7e06032bd2712851eb4364e2af16fd43a2b032e363",
+      "content_identity": "sha256:35093371bd3c7548cd370335466c82366c97067509678017e2777bbe1cb788ca",
       "locator": "../../entity-resolution",
       "requirement": "required"
     },
     {
       "artifact_id": "corridor-02--map-run-0001",
       "artifact_type": "geometric_map",
-      "content_identity": "sha256:a2991835437488a5ab8378c3faefa0e6afd3ef3fd1fd44f80953ad1bc96af7ef",
+      "content_identity": "sha256:5a4434e2000332f299619fd0585c50f8c4c3eefaade28819bf3f6ce156ba339f",
       "locator": "../../geometry-workspace/runs/geometric-mapping/corridor-02/run-0001__full__baseline",
       "requirement": "required"
     },
@@ -29,7 +29,7 @@
     {
       "artifact_id": "semantic-fusion--run-0001",
       "artifact_type": "semantic_fusion_run",
-      "content_identity": "sha256:898c3338eb4e248466326fea522275f544011fd0735cfc1d3fcb8bae99cc4d93",
+      "content_identity": "sha256:1d45ffcb1b703ae62ab517a61cd14ec02d2e355d9014f07618f2934847a0aa5e",
       "locator": "../../semantic-fusion",
       "requirement": "optional"
     },
@@ -50,7 +50,7 @@
     {
       "artifact_id": "spatial-relations--run-0001",
       "artifact_type": "spatial_relations_run",
-      "content_identity": "sha256:7bf9b1bdba1befe46054de9d496a17824c38a4a51269bc6a942943d41bb0d5a8",
+      "content_identity": "sha256:89a2e053e0f9271be3820e33c5bf731d17aaa1bd11917313c466d8e15b60352d",
       "locator": "../../spatial-relations",
       "requirement": "required"
     }
@@ -58,9 +58,9 @@
   "entity_count": 3,
   "file_inventory": [
     {
-      "content_hash": "sha256:10554b22c85c9c774b7d5f78ef7fe1ca85a2498176f7dfa8e7bcc9975fd6e42b",
+      "content_hash": "sha256:c7ce0238ae662dda30fbd553730752ec1196fcb58322c8b6d66a122d7d6ac72c",
       "path": "entities/entities.jsonl",
-      "size_bytes": 2657
+      "size_bytes": 5472
     },
     {
       "content_hash": "sha256:fa54e273edd22fb85249238d6f0beb012442098d0dfd2a9b385b87237c7dcfcd",
@@ -68,34 +68,34 @@
       "size_bytes": 67
     },
     {
-      "content_hash": "sha256:1ca163b9bf87a8a4780ee802f23d341ca1028bb898f64488658cc4efa0b126ca",
+      "content_hash": "sha256:1c20f60c5ccf66417f2f72bce96e841dcbef8dc9f2433f3e6834f9e425f5d965",
       "path": "indexes/entity-index.jsonl",
-      "size_bytes": 144
+      "size_bytes": 147
     },
     {
-      "content_hash": "sha256:c3927df086c8cde150ee14a4ce2be57c71f1ec1ae321de0301f91f9e125eca44",
+      "content_hash": "sha256:344a93f4f3e8c07d101c8ac295708300e2d13a7dd3c3d65efa7aef994f1de9e6",
       "path": "indexes/entity-relation-index.jsonl",
-      "size_bytes": 219
+      "size_bytes": 473
     },
     {
-      "content_hash": "sha256:18090d2f3f0b1a36ba084d937ee00f00643f7adfae731869014741ff9e1d7f32",
+      "content_hash": "sha256:fd91e0515ed577f2618af824a68a907e31990a395c2edde30fa9f5edfaad7eb6",
       "path": "indexes/relation-index.jsonl",
-      "size_bytes": 98
+      "size_bytes": 506
     },
     {
-      "content_hash": "sha256:2c2050d97801d543fe8e583c31541d7a99de2175367d69efc7074a7e198d8288",
+      "content_hash": "sha256:f310ddcc708fcc4bf071b468e86164a034d9218ceb41cd6dfcc4ebe7c2542638",
       "path": "lineage/lineage.json",
       "size_bytes": 2688
     },
     {
-      "content_hash": "sha256:2d20a30e82770bc0497ef111d0dd8d76b1fb81c22c506370b61dbb61292a007c",
+      "content_hash": "sha256:4cf132a064a05a72ce5db99268a6ee1d352a0704508db014ac04bf8dfe0a36e0",
       "path": "map-metadata.json",
-      "size_bytes": 1238
+      "size_bytes": 1260
     },
     {
-      "content_hash": "sha256:4cb8e3449a4b1797af10d246e6ecfadb7594d3351b7c4b4150fb86249f2f65af",
+      "content_hash": "sha256:5141a9a9be879b87fecf1828d43ed5c351e665b1a65ff57cfc0a61a7a6d458a1",
       "path": "relations/relations.jsonl",
-      "size_bytes": 1388
+      "size_bytes": 7334
     }
   ],
   "format_version": "0.1.0",
@@ -135,7 +135,7 @@
       ],
       "encoding": "jsonl",
       "path": "indexes/relation-index.jsonl",
-      "record_count": 2,
+      "record_count": 10,
       "role": "derived_index",
       "semantics": "Relation key to byte offset and length of its line in relations.jsonl."
     },
@@ -143,12 +143,12 @@
       "derived_from": [],
       "encoding": "jsonl",
       "path": "relations/relations.jsonl",
-      "record_count": 2,
+      "record_count": 10,
       "role": "authoritative",
       "semantics": "One relation per line as {key, subject, object, record}, ordered by key; subject and object are entity ids and record is the schema's canonical relation record."
     }
   ],
-  "relation_count": 2,
+  "relation_count": 10,
   "schema_version": "0.1.0",
   "written_at": "2026-09-21T12:00:00+00:00"
 }

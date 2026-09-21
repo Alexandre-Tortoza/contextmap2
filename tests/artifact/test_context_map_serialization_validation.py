@@ -236,13 +236,18 @@ def test_an_index_that_points_at_another_record_is_detected_by_full_verification
     assert "index.broken" in _errors(full)
 
 
-def test_a_relation_that_names_an_unknown_entity_is_a_broken_reference(artifact: Path) -> None:
-    _replace_in(
-        artifact,
-        "relations/relations.jsonl",
-        b'"subject":"entity-0002"',
-        b'"subject":"entity-0009"',
+def test_a_relation_whose_endpoint_is_not_an_entity_of_the_map_is_a_broken_reference(
+    world: World, artifact: Path
+) -> None:
+    first = make_context_map(world).relations[0]
+    old = f'"subject":"{first.subject.entity_id}"'.encode()
+    unknown = b"entity-9999"[: len(old) - len(b'"subject":""')].ljust(
+        len(old) - len(b'"subject":""'), b"9"
     )
+    path = artifact / "relations/relations.jsonl"
+    data = path.read_bytes()
+    assert old in data and len(unknown) == len(first.subject.entity_id)
+    path.write_bytes(data.replace(old, b'"subject":"' + unknown + b'"', 1))
     _reseal(artifact)
 
     report = validate_context_map_artifact(artifact)
@@ -252,17 +257,19 @@ def test_a_relation_that_names_an_unknown_entity_is_a_broken_reference(artifact:
     finding = next(
         item for item in report.findings if item.code == "reference.relation_endpoint_missing"
     )
-    assert finding.subject == "relation-0002"
-    assert "entity-0009" in finding.message
+    assert finding.subject == str(first.relation_id)
+    assert unknown.decode() in finding.message
 
 
-def test_a_stale_traversal_index_is_detected_by_rebuilding_it(artifact: Path) -> None:
-    _replace_in(
-        artifact,
-        "indexes/entity-relation-index.jsonl",
-        b'"as_object":["relation-0001"]',
-        b'"as_object":["relation-0009"]',
-    )
+def test_a_stale_traversal_index_is_detected_by_rebuilding_it(world: World, artifact: Path) -> None:
+    written = make_context_map(world)
+    stale = str(written.relations[0].relation_id).encode()
+    path = artifact / "indexes/entity-relation-index.jsonl"
+    data = path.read_bytes()
+    marker = b'"as_object":["' + stale
+    assert marker in data or b'"as_subject":["' + stale in data
+    other = b"relation-9999"[: len(stale)].ljust(len(stale), b"9")
+    path.write_bytes(data.replace(stale, other, 1))
     _reseal(artifact)
 
     report = validate_context_map_artifact(artifact)
@@ -280,7 +287,7 @@ def test_a_record_that_the_schema_refuses_is_found_by_full_verification_only(
     _replace_in(
         artifact,
         "entities/entities.jsonl",
-        b"corridor-02--map-run-0001--geom-000000020",
+        b"corridor-02--map-run-0001--geom-000000107",
         b"corridor-02--map-run-0001--geom-000009999",
     )
     _reseal(artifact)
