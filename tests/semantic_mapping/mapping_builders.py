@@ -181,6 +181,7 @@ def make_fused_evidence_ref(
         fusion_run_id=fusion_run_id,
         fusion_schema_version="0.1.0",
         fusion_artifact_digest="sha256:artifact",
+        sequence_artifact_id="sequence-0001",
         fused_evidence_id=fused_evidence_id,
         fusion_support_id=fusion_support_id,
     )

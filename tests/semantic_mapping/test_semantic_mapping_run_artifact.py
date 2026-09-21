@@ -560,6 +560,17 @@ class TestWriterRefusals:
         with pytest.raises(MappingRunArtifactError, match="not the run the lineage names"):
             _writer(tmp_path / "m", fusion, lineage=lineage).write(result.entities)
 
+    def test_an_entity_materialized_over_another_sequence_than_the_lineage_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        fusion, result = self._fusion(tmp_path)
+        lineage = dataclasses.replace(
+            lineage_from_fusion_manifest(fusion.manifest), sequence_artifact_id="sequence-9999"
+        )
+
+        with pytest.raises(MappingRunArtifactError, match="sequence 'sequence-0001'"):
+            _writer(tmp_path / "m", fusion, lineage=lineage).write(result.entities)
+
     def test_one_run_keeps_one_policy(self, tmp_path: Path) -> None:
         fusion, result = self._fusion(tmp_path)
         first, second, third = result.entities

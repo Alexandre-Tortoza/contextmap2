@@ -466,6 +466,7 @@ def _encode_evidence(evidence: EntityEvidenceLinks) -> dict[str, Any]:
                 "fusion_run_id": str(ref.fusion_run_id),
                 "fusion_schema_version": ref.fusion_schema_version,
                 "fusion_artifact_digest": ref.fusion_artifact_digest,
+                "sequence_artifact_id": ref.sequence_artifact_id,
                 "fused_evidence_id": str(ref.fused_evidence_id),
                 "fusion_support_id": str(ref.fusion_support_id),
             }
@@ -503,6 +504,7 @@ def _decode_evidence(record: Mapping[str, Any]) -> EntityEvidenceLinks:
                 fusion_run_id=SemanticFusionRunId(item["fusion_run_id"]),
                 fusion_schema_version=item["fusion_schema_version"],
                 fusion_artifact_digest=item["fusion_artifact_digest"],
+                sequence_artifact_id=item["sequence_artifact_id"],
                 fused_evidence_id=FusedEvidenceId(item["fused_evidence_id"]),
                 fusion_support_id=FusionSupportId(item["fusion_support_id"]),
             )

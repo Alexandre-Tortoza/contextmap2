@@ -699,6 +699,12 @@ class _Tally:
                     f"entity {entity.entity_id!r} references fusion run {ref.fusion_run_id!r}, "
                     f"which is not the run the lineage names, {self._lineage.fusion_run_id!r}"
                 )
+            if ref.sequence_artifact_id != self._lineage.sequence_artifact_id:
+                raise MappingRunArtifactError(
+                    f"entity {entity.entity_id!r} was materialized over sequence "
+                    f"{ref.sequence_artifact_id!r}, but the run's lineage names "
+                    f"{self._lineage.sequence_artifact_id!r}"
+                )
         for feature in entity.evidence.visual_feature_refs:
             if feature.perception_run_id not in self._lineage.perception_run_ids:
                 raise MappingRunArtifactError(

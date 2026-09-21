@@ -467,6 +467,7 @@ def _contract_checks(
                 ref.fusion_run_id != lineage.fusion_run_id
                 or ref.fusion_schema_version != lineage.fusion_schema_version
                 or ref.fusion_artifact_digest != lineage.fusion_artifact_digest
+                or ref.sequence_artifact_id != lineage.sequence_artifact_id
             ):
                 provenance.append(
                     f"{entity.entity_id}: its fused evidence is not from the lineage's run"

@@ -263,6 +263,28 @@ class TestDetectsRealDefects:
 
         assert "geometry_valid_and_authoritative" in _failed(report)
 
+    def test_an_entity_that_names_another_sequence_than_the_lineage_breaks_provenance(
+        self, tmp_path: Path, fusion: FusionRun
+    ) -> None:
+        run_dir = write_mapping_run(tmp_path / "mapping", fusion, _entities(fusion))
+        table = run_dir / "outputs" / "entities.jsonl"
+        # Mesmo comprimento, para que os deslocamentos do índice continuem válidos.
+        table.write_text(
+            table.read_text(encoding="utf-8").replace(
+                '"sequence_artifact_id":"sequence-0001"', '"sequence_artifact_id":"sequence-0002"'
+            ),
+            encoding="utf-8",
+        )
+
+        report = evaluate_semantic_mapping(
+            SemanticMappingRunReader(run_dir),
+            fusion=SemanticFusionRunReader(fusion.run_dir),
+            geometry=fusion.geometry,
+            policy=POLICY,
+        )
+
+        assert "provenance_complete" in _failed(report)
+
     def test_evaluating_with_another_policy_than_the_one_used_is_detected(
         self, tmp_path: Path, fusion: FusionRun
     ) -> None:

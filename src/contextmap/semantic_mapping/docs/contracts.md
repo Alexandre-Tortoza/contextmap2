@@ -78,10 +78,10 @@ Onde está a evidência que suporta a entidade; detalhes em [`evidence.md`](evid
 
 | Campo | Significado |
 | --- | --- |
-| `fused_evidence` | `FusedEvidenceRef` (run, versão do schema, digest do artifact, evidência e suporte); **nunca vazio**. |
+| `fused_evidence` | `FusedEvidenceRef` (run, versão do schema, digest do artifact, sequência canônica, evidência e suporte); **nunca vazio**. |
 | `spatial_observation_ids` | `SpatialObservationId` que contribuíram, ordenados e únicos. |
 | `physical_observation_ids` | `SourceObservationId` dos frames físicos que contribuíram, ordenados e únicos. |
-| `visual_feature_refs` | `EntityFeatureRef` (`perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope`, `region_id`); vazio se o canal está ausente. |
+| `visual_feature_refs` | `EntityFeatureRef` (`perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope`, `region_id`), identificada pela tripla run, resultado e feature e ordenada nessa ordem; vazio se o canal está ausente. |
 | `point_representation_refs` | `PointRepresentationRef` das representações 3D do suporte; vazio se o canal está ausente. |
 
 Nada aqui copia imagens, máscaras, embeddings nem payloads de fusão. Uma representação 3D ancorada fora do suporte geométrico da entidade é recusada por `Entity`.

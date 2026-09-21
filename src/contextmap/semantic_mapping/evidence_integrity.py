@@ -94,7 +94,8 @@ class EvidenceIntegrityKind(Enum):
         STALE_REFERENCE: The run's content is not what the entity was materialized from.
         CORRUPT_ARTIFACT: The run fails its own integrity check.
         MISSING_REFERENCE: The fused evidence is not in the run, or is another one.
-        INCOMPATIBLE_LINEAGE: The run was built over another geometric map than the entity's.
+        INCOMPATIBLE_LINEAGE: The run was built over another geometric map than the entity's, or
+            over another sequence than the one the entity was materialized from.
         OBSERVATION_MISMATCH: The observations listed differ from the fused evidence's.
         FEATURE_MISMATCH: The visual features listed differ from the fused evidence's.
         POINT_REPRESENTATION_MISMATCH: The 3D representations listed differ from the fused
@@ -258,6 +259,13 @@ class _Checker:
                 f"fusion run {ref.fusion_run_id!r} was built over map "
                 f"{manifest.lineage.geometric_map_id!r}, but the entity's geometry is in "
                 f"{self._entity.geometry.geometric_map_id!r}",
+            )
+        if manifest.lineage.sequence_artifact_id != ref.sequence_artifact_id:
+            self._issue(
+                EvidenceIntegrityKind.INCOMPATIBLE_LINEAGE,
+                f"fusion run {ref.fusion_run_id!r} was built over sequence "
+                f"{manifest.lineage.sequence_artifact_id!r}, but the entity was materialized from "
+                f"sequence {ref.sequence_artifact_id!r}",
             )
         self._collect(ref, source)
 
