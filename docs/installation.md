@@ -67,7 +67,9 @@ A versão vem exclusivamente da tag Git `vMAJOR.MINOR.PATCH` (setuptools-scm): u
 
 ## Linha de comando
 
-O entry point `contextmap` e `python -m contextmap` pertencem à capability `runtime`, que ainda não está em `origin/dev` (branch `milestone/runtime-configuration`). Ao integrá-la, o `pyproject.toml` deve declarar `[project.scripts] contextmap = "contextmap.runtime.cli:main"`. Os testes de `tests/packaging/test_release_metadata.py` já estão preparados: ficam pulados enquanto o módulo não existe e passam a exigir a declaração assim que ele existir.
+O pacote declara o entry point `contextmap` (`contextmap.runtime.cli:main`), e `python -m contextmap` executa o mesmo CLI. Ambos funcionam na instalação base, sem extras: `contextmap --help` lista `run`, `stage`, `ingest`, `inspect` e `validate`, e `contextmap --version` reporta a versão do pacote instalado.
+
+Os executores das capabilities reais ainda não vêm embutidos na runtime: sem eles, um run real é bloqueado no preflight com uma mensagem explícita e um dry run não precisa deles (`src/contextmap/runtime/docs/cli.md`). `tests/packaging/test_release_metadata.py` cobre a declaração e o smoke de instalação executa `--help` e `--version` a partir do venv novo.
 
 ## Erros de dependência opcional
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-import importlib.util
 import subprocess
 import sys
 import tomllib
@@ -22,13 +21,6 @@ PYPROJECT: dict[str, Any] = tomllib.loads(
 PROJECT: dict[str, Any] = PYPROJECT["project"]
 
 REPOSITORY_URL = "https://github.com/Alexandre-Tortoza/contextmap2"
-
-# A CLI de runtime só existe em ``milestone/runtime-configuration``. Enquanto o
-# módulo não faz parte desta árvore, o ponto de entrada não pode ser declarado
-# (apontaria para um módulo inexistente); depois do merge, os testes abaixo
-# passam a valer e exigem a declaração.
-_RUNTIME_CLI_MISSING = importlib.util.find_spec("contextmap.runtime") is None
-_RUNTIME_CLI_REASON = "contextmap.runtime is not on this branch yet; enabled by the runtime merge"
 
 
 def test_version_comes_from_the_git_tag_only() -> None:
@@ -73,7 +65,6 @@ def test_python_classifiers_start_at_the_supported_floor() -> None:
     assert versions == sorted(versions, key=lambda v: int(v.split(".")[1]))
 
 
-@pytest.mark.skipif(_RUNTIME_CLI_MISSING, reason=_RUNTIME_CLI_REASON)
 def test_console_script_points_to_the_runtime_cli() -> None:
     assert PROJECT["scripts"] == {"contextmap": "contextmap.runtime.cli:main"}
 
@@ -82,7 +73,6 @@ def test_console_script_points_to_the_runtime_cli() -> None:
     assert callable(cli.main)
 
 
-@pytest.mark.skipif(_RUNTIME_CLI_MISSING, reason=_RUNTIME_CLI_REASON)
 def test_module_entry_point_runs_the_cli() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "contextmap", "--help"],
@@ -94,3 +84,10 @@ def test_module_entry_point_runs_the_cli() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "contextmap" in result.stdout.lower()
+
+
+def test_cli_reports_the_package_version(capsys: pytest.CaptureFixture[str]) -> None:
+    cli = importlib.import_module("contextmap.runtime.cli")
+
+    assert cli.main(["--version"]) == 0
+    assert capsys.readouterr().out.strip() == f"contextmap {contextmap.__version__}"
