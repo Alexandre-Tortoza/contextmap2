@@ -930,11 +930,7 @@ def decode_catalogue(document: Mapping[str, Any]) -> FixtureCatalogue:
         catalogue = FixtureCatalogue(
             catalogue_id=document["catalogue_id"],
             version=document["version"],
-            reference_set=ReferenceSetIdentity(
-                reference_set_id=identity["reference_set_id"],
-                version=identity["version"],
-                digest=identity["digest"],
-            ),
+            reference_set=ReferenceSetIdentity.from_record(identity),
             cases=tuple(FixtureCase.from_record(item) for item in document["cases"]),
             coverage=tuple(CoverageEntry.from_record(item) for item in document["coverage"]),
         )
