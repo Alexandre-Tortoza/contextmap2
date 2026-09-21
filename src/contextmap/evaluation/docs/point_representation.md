@@ -69,7 +69,7 @@ Esses números mostram o que o relatório reporta para o **controle geométrico*
   Representation como canal opcional, mas nenhum resultado downstream foi
   medido; Entity Resolution ainda não existe. O harness já carrega e compara as
   condições, sem transformar essa capacidade estrutural em evidência de ganho.
-- **Checagem em dados reais pendente**: não há aqui uma fonte real de Geometric Mapping do corredor; a validação usa geometria sintética.
+- **Checagem em dados reais parcial**: a validação deste harness usa geometria sintética. O descritor determinístico teve uma execução real sobre o mapa LiDAR de `corridor-02` (189 âncoras, todas representadas), como insumo do canal 3D da fusão (ver [Semantic Fusion](semantic_fusion.md)); nenhuma comparação contra `off` nem ablação downstream sobre dados reais foi registrada.
 
 ## Restrições
 
