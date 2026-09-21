@@ -33,43 +33,65 @@ flowchart LR
 
 ## Workspace local
 
-O canonical pipeline usa filesystem local como storage primário.
+O canonical pipeline usa filesystem local como storage primário. O workspace é organizado por **dataset** e por **run**:
 
 ```text
 workspace/
-├── sequences/
-├── runs/
-├── runtime/
-├── maps/
-├── experiments/
-└── tmp/
+├── <dataset>/                       # a sequência física (`inputs.sequence`), por exemplo `corridor-02`
+│   └── <run>/                       # um run do runtime: `run-NNNN`
+│       ├── effective_config.json    # ┐
+│       ├── plan.json                # │ o diário do run, na raiz do run
+│       ├── status.json              # │ (ver "Registros de execução do runtime")
+│       ├── events.jsonl             # │
+│       ├── execution.json           # │
+│       ├── run.lock                 # ┘
+│       ├── ingestion/               # ┐
+│       ├── visual_perception/       # │
+│       ├── state_estimation/        # │
+│       ├── geometric_mapping/       # │ um diretório por estágio executado,
+│       ├── sensor_association/      # │ com o id do estágio da runtime
+│       ├── point_representation/    # │ (opcional)
+│       ├── semantic_fusion/         # │
+│       ├── semantic_mapping/        # │
+│       ├── entity_resolution/       # │
+│       ├── spatial_relations/       # │
+│       └── context_map/             # ┘ o `ContextMapArtifact` (capability `artifact`)
+├── experiments/                     # relatórios e manifests de avaliação, fora de qualquer run
+└── tmp/                             # conteúdo efêmero
 ```
 
-### `sequences/`
+Regras do layout:
 
-Contém canonical sensor sequences produzidas por Ingestion.
-
-### `runs/`
-
-Contém artifacts das capabilities executáveis, separados por capability e sequence.
-
-### `runtime/`
-
-Contém os **registros de execução do runtime** (`runtime/run-NNNN/`): configuração efetiva, plano, estado, eventos e, para um run concluído, as entradas e saídas exatas de cada estágio. Eles **referenciam** os artifacts por id e hash; não os contêm nem os substituem.
-
-### `maps/`
-
-Pode conter os produtos finais `ContextMapArtifact` ou bundles finais, conforme o schema consolidado.
-
-### `experiments/`
-
-Contém os manifests/reports que referenciam runs imutáveis usados em comparações e ablations: o run de um experimento (`experiment.json`, um run manifest e um relatório por arm e `comparison.json`) e a evidência/decisão sobre uma técnica opcional. Os formatos estão em [Artefatos de avaliação](#artefatos-de-avaliação).
-
-### `tmp/`
-
-Conteúdo efêmero. Nada em `tmp/` pode ser dependência contratual de um artifact válido.
+- **Um diretório por estágio, nomeado pelo id do estágio da runtime.** O diretório é o artifact: `manifest.json`, `outputs/`, `metrics/` e `debug/` ficam direto dentro dele. O estágio final se chama `context_map` mesmo sendo implementado pela capability `artifact`.
+- **O diário fica na raiz do run**, ao lado das pastas dos estágios. Os nomes do diário e os ids dos estágios nunca colidem.
+- **O run é dono do que executou.** Um estágio reutilizado de um run anterior **não tem pasta** no run novo: ele é **referenciado** por `ArtifactRef` (identidade e hash de conteúdo), nunca copiado. A sequência ingerida pode ter dezenas de GB; copiar seria um erro, e a referência é o que torna a cadeia de reuso auditável.
+- **Não há contadores nem registros por capability.** Não existem `runs/<capability>/<sequência>/run-NNNN__...` nem `runs.json`: o único índice de runs é a própria listagem dos diretórios `<dataset>/run-NNNN` (`Runtime.list_runs()`).
+- **Um artifact nunca é modificado depois de finalizado**, e um run reexecutado é outro `run-NNNN`.
+- `tmp/` nunca é dependência contratual de um artifact válido, e o debug de um artifact nunca é dependência de outro estágio.
 
 Remote storage, S3, MinIO, database ou distributed registry não são requisitos do canonical pipeline.
+
+### Contrato dos writers de estágio
+
+Todo writer de artifact de capability segue o mesmo contrato; o runtime só decide **onde** o estágio grava e o writer nunca calcula um caminho.
+
+**Assinatura.** `output_dir` é o diretório final do artifact, obrigatório e *keyword-only*. Ficam na assinatura o que é identidade ou entrada da capability (`sequence_name`, `run_id`, `run_index`, `debug_level` e os parâmetros próprios, como a linhagem da fusão ou o `artifact_id` da ingestion). Saem `workspace_root` e todo rótulo que só existia para montar o nome do diretório (`selection_label`, `backend_label`, `profile_label`, `channel_label`, `policy_label`):
+
+```python
+class StateEstimationRunWriter:
+    def __init__(self, *, output_dir: Path, sequence_name: str, run_id: StateEstimationRunId,
+                 run_index: int, debug_level: StateEstimationDebugLevel = ...) -> None: ...
+```
+
+**Finalização.** O writer cria `output_dir` com `AtomicRunDirectory` (diretório temporário irmão, publicado por rename depois da checagem do inventário), recusa um `output_dir` que já exista e não deixa nada em caso de falha. Ele não cria registro, não escreve `runs.json` e não toca em nenhum outro diretório.
+
+**Identidade.** O writer **nunca aloca** identidade: `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos. `run_index` é um ordinal do chamador (a runtime usa o número de `run-NNNN`) que serve para ordenar candidatos, por exemplo na seleção `latest`; não substitui identidade nem hash. Ids derivados do `run_id`, como `map_id = <sequência>--<run_id>`, continuam iguais, então manifests, leitores e linhagem não mudam. Um executor da runtime deriva `run_id` da identidade do estágio (id do estágio, `config_digest` e hashes de conteúdo das entradas), de modo que execuções idênticas produzem o mesmo id e o mesmo conteúdo, o que mantém o reuso válido entre runs; nos testes, o id é um texto fixo e legível.
+
+**O que se apaga** quando o writer migra: `_sequence_dir`, `allocate_*_run_index`, `rebuild_*_registry`, os helpers que só serviam a eles (`_valid_run_index`, `_registry_record`), a chamada do registro dentro de `finalize()` e os imports de `next_run_index` e `write_run_registry`. Os símbolos saem do `__init__` e do `__all__` da capability. `contextmap.shared.run_directory` **não** muda no PR de uma capability: os helpers de registro só deixam de ter uso quando todas migrarem, e uma limpeza final os remove.
+
+**Leitura.** Os leitores abrem o diretório do artifact diretamente e não mudam: manifests, `manifest.json` e o schema continuam iguais.
+
+**Padrão de teste.** O teste escolhe `output_dir` sob `tmp_path` (por exemplo `tmp_path / "run-0001"`, ou `tmp_path / "state_estimation"`) e abre o leitor **nesse mesmo caminho**, sem procurar `run-0001__...` por glob. Um helper `_run_dir(workspace, index)` centraliza o caminho quando o teste grava vários runs. Testes de alocação de índice e de registro são substituídos por testes de que (1) o artifact aparece exatamente em `output_dir` e nada mais é criado ao redor, (2) `run_id` e `run_index` são gravados como recebidos, (3) um segundo run no mesmo `output_dir` é recusado sem alterar o primeiro.
 
 ## Artefatos principais
 
@@ -104,6 +126,8 @@ flowchart TD
 ```
 
 ## Artefatos materializados hoje
+
+> **Transição de layout.** O layout `<run>/<estágio>/` e o contrato dos writers acima valem para todas as capabilities; cada bloco "atual" abaixo migra junto com o writer da sua capability. Um bloco que ainda mostra `workspace/runs/<capability>/<sequência>/run-000N__...` descreve um writer que **ainda não migrou** para `output_dir`, e um bloco que mostra `<run>/<estágio>/` descreve um que já migrou (`StateEstimationRunArtifact`).
 
 Na `dev`, sete formatos já existem e são integrados:
 
@@ -190,23 +214,21 @@ No schema atual, `manifest.json` também persiste `pipeline_preset` e `configura
 ### `StateEstimationRunArtifact` atual
 
 ```text
-workspace/runs/state-estimation/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<backend>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/
-    │   ├── trajectory.json        # metadados da trajetória
-    │   ├── poses.jsonl            # uma pose por linha
-    │   ├── pose-index.jsonl       # leitura de uma pose por identidade ou tempo
-    │   ├── frame-summary.json
-    │   └── quality.json
-    ├── metrics/
-    │   ├── preflight.json
-    │   ├── motion.json
-    │   ├── runtime.json           # somente quando medido
-    │   └── diagnostics.jsonl      # somente quando há eventos
-    └── debug/                     # somente standard/full; nunca inventariado
+<run>/state_estimation/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json
+├── outputs/
+│   ├── trajectory.json        # metadados da trajetória
+│   ├── poses.jsonl            # uma pose por linha
+│   ├── pose-index.jsonl       # leitura de uma pose por identidade ou tempo
+│   ├── frame-summary.json
+│   └── quality.json
+├── metrics/
+│   ├── preflight.json
+│   ├── motion.json
+│   ├── runtime.json           # somente quando medido
+│   └── diagnostics.jsonl      # somente quando há eventos
+└── debug/                     # somente standard/full; nunca inventariado
 ```
 
 `manifest.json` traz a linhagem (sequência, seleção, backend e fingerprint de configuração, identidade da calibração, versão do código, frames, clock, contagens) e o inventário dos arquivos contratuais. `debug/` fica fora do inventário, então removê-lo não invalida o run. Um run com preflight de geometria `BLOCKED` nunca é persistido. Detalhes: [State Estimation artifact](../src/contextmap/state_estimation/docs/artifact.md).
@@ -388,16 +410,17 @@ Detalhes: [reference set](../src/contextmap/evaluation/docs/reference-set.md), [
 
 ### Registros de execução do runtime
 
-Uma execução do runtime deixa um registro em `<workspace>/runtime/run-NNNN/`. Ele não é um artifact de capability (tem formato próprio e não passa por `contextmap.shared.run_directory`), mas registra a linhagem exata da execução. O número é alocado de forma atômica, então execuções concorrentes nunca compartilham um diretório.
+Uma execução do runtime deixa um registro em `<workspace>/<dataset>/run-NNNN/`, o diretório do run, e cada estágio que ela executa grava o seu artifact numa pasta ao lado do diário (`<run>/<estágio>/`). Ele não é um artifact de capability (tem formato próprio e não passa por `contextmap.shared.run_directory`), mas registra a linhagem exata da execução. O número é alocado de forma atômica, então execuções concorrentes nunca compartilham um diretório.
 
 ```text
-runtime/run-0001/
+<dataset>/run-0001/
 ├── effective_config.json   # configuração efetiva, digest e camadas; sem segredos
 ├── plan.json               # topologia resolvida, com digest (só sem problema estrutural)
 ├── status.json             # estado atual, reescrito atomicamente
 ├── events.jsonl            # eventos append-only, numerados sem lacuna
 ├── execution.json          # entradas e saídas exatas por estágio (só run concluído)
-└── run.lock                # pid do processo dono, só enquanto o run está vivo
+├── run.lock                # pid do processo dono, só enquanto o run está vivo
+└── <estágio>/              # o artifact de cada estágio executado neste run (não copiado quando reutilizado)
 ```
 
 `status.json` e `events.jsonl` mudam enquanto o run executa; depois de um estado terminal nada é reescrito, e retomar um run cria um run **novo**. Um processo que morre deixa um registro consistente e inspecionável (`interrupted`). O registro é a autoridade sobre a linhagem de uma execução: os estágios são referenciados por `ArtifactRef` (id e hash) e a inspeção nunca infere o que o registro não contém.
@@ -423,18 +446,16 @@ run-0004  # nova execução com configuração diferente
 
 ## Identidade de run
 
-Artifacts de execução devem usar índices monotônicos por capability + sequence quando aplicável.
-
-Exemplo:
+A identidade de um artifact de estágio é entregue pelo chamador (`run_id`), nunca alocada pelo writer ([Contrato dos writers de estágio](#contrato-dos-writers-de-estágio)). Cada execução da runtime é um `run-NNNN` próprio dentro do dataset, e cada estágio executado vive em `<run>/<estágio>/`:
 
 ```text
-workspace/runs/visual-perception/corridor-02/
-├── run-0001__frames-0120-0260__sam3-dinov2-gemini/
-├── run-0002__frames-0120-0260__sam3-dinov2-qwen/
-└── run-0003__frames-0120-0260__sam3-dinov2-gemini-prompt-v2/
+workspace/corridor-02/
+├── run-0001/state_estimation/    # ExternalPose, versão A
+├── run-0002/state_estimation/    # ExternalPose, versão B da configuração
+└── run-0003/                     # só o diário: tudo reutilizado por ArtifactRef
 ```
 
-O run index é conveniente e legível, mas não substitui artifact identity, hashes e manifest.
+O `run_index` gravado no manifest é um ordinal legível fornecido pelo chamador, mas não substitui artifact identity, hashes e manifest.
 
 Timestamp de criação pertence ao manifest. Ele não precisa ser o identificador principal do diretório.
 
@@ -781,7 +802,7 @@ Nenhum payload precisa ser copiado para construir essa view.
 
 ## Registry local
 
-Um `runs.json` ou índice equivalente pode ajudar discovery, mas deve ser reconstruível.
+Não há registro por capability: o discovery é a listagem dos diretórios `<dataset>/run-NNNN` (`Runtime.list_runs()`), e o índice de reuso e o catálogo de seleção da runtime são insumos explícitos e reconstruíveis.
 
 O artifact individual é self-describing através do próprio manifest.
 
