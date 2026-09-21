@@ -45,13 +45,14 @@ O que **um canal** mediu sobre **um candidato dirigido**.
 | Campo | Significado |
 | --- | --- |
 | `evidence_id` | Identidade, local ao artifact; derivada de `(canal, sujeito, predicado, objeto)` por `evidence_id_for()`. |
-| `channel` | `RelationEvidenceChannel`: `GEOMETRY` (limites) ou `CONTACT` (pontos). |
+| `channel` | `RelationEvidenceChannel`: `GEOMETRY` (limites), `CONTACT` (pontos) ou `OBSERVATION` (afirmações upstream, corroborante; ver [observation-evidence.md](observation-evidence.md)). |
 | `subject_entity_ref`, `predicate`, `object_entity_ref` | O candidato. O predicado é sempre o sentido **avaliado**: o inverso de um predicado derivado (`BELOW`, `BEHIND`, `CONTAINS`) é gerado, nunca medido. |
 | `status` | `RelationEvidenceStatus`. |
 | `measurements` | `Quantity` (nome, valor finito, unidade) medidas, ordenadas por nome e únicas. |
 | `thresholds` | Os limiares e tolerâncias com que foram comparadas, ordenados por nome e únicos. |
 | `geometry` | `MeasuredGeometry`: sobre qual geometria se mediu, ordenada por papel. |
 | `caveats` | `EvidenceCaveat`: por que o registro não é decisivo. |
+| `statements` | Só no canal `OBSERVATION`: as `ObservationRelationStatement` em que o registro se apoia, ordenadas; os canais medidos as recusam, e o canal de observação recusa `geometry`. |
 | `provenance` | `RelationEvidenceProvenance`: regra versionada, fingerprint da configuração, versão da taxonomia, frame e mapa geométrico das coordenadas, fingerprint dos eixos declarados e versão do código. |
 
 ### Status
@@ -67,7 +68,7 @@ Invariantes: `AMBIGUOUS` e `UNAVAILABLE` **precisam** de uma ressalva que diga p
 
 ### `EvidenceCaveat`
 
-`kind` (`WITHIN_TOLERANCE`, `UNRELIABLE_GEOMETRY`, `DEGENERATE_GEOMETRY` ou `MISSING_INPUT`) e `detail` (explicação determinística).
+`kind` (`WITHIN_TOLERANCE`, `UNRELIABLE_GEOMETRY`, `DEGENERATE_GEOMETRY`, `MISSING_INPUT` ou `CONFLICTING_STATEMENTS`) e `detail` (explicação determinística).
 
 ### `MeasuredGeometry`
 

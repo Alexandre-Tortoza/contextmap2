@@ -27,6 +27,7 @@ from contextmap.spatial_relations import (
     RelationDecisionResult,
     RelationEvidence,
     RelationEvidenceChannel,
+    RelationEvidenceId,
     RelationEvidenceStatus,
     RelationPredicate,
     RelationState,
@@ -423,7 +424,14 @@ def test_decisions_round_trip_through_json_and_are_revalidated() -> None:
         assert decode_relation_decision(record) == decision
     unresolved = next(item for item in result.decisions if item.ignored)
     record = encode_relation_decision(unresolved)
-    record["ignored"] = [{"evidence_id": "evidence--x", "status": "supports"}]
+    record["ignored"] = [
+        {
+            "evidence_id": "evidence--x",
+            "channel": "geometry",
+            "status": "supports",
+            "contradicts_relation": False,
+        }
+    ]
     with pytest.raises(ValueError, match="ignored"):
         decode_relation_decision(record)
     record = encode_relation_decision(result.decisions[0])
@@ -434,11 +442,22 @@ def test_decisions_round_trip_through_json_and_are_revalidated() -> None:
 
 def test_evidence_that_decided_cannot_also_be_ignored() -> None:
     decision = _decide([(1, P.ABOVE, 2)], [_evidence(1, P.ABOVE, 2)]).decisions[0]
-    overlap = EvidenceUse(evidence_id=decision.deciding_evidence_refs[0], status=AMBIGUOUS)
+    overlap = EvidenceUse(
+        evidence_id=decision.deciding_evidence_refs[0], channel=GEOMETRY, status=AMBIGUOUS
+    )
     with pytest.raises(ValueError, match="both"):
         dataclasses.replace(decision, ignored=(overlap,))
     with pytest.raises(ValueError, match="ignored"):
-        EvidenceUse(evidence_id=decision.deciding_evidence_refs[0], status=SUPPORTS)
+        EvidenceUse(
+            evidence_id=decision.deciding_evidence_refs[0], channel=GEOMETRY, status=SUPPORTS
+        )
+    with pytest.raises(ValueError, match="contradict"):
+        EvidenceUse(
+            evidence_id=RelationEvidenceId("evidence--x"),
+            channel=GEOMETRY,
+            status=AMBIGUOUS,
+            contradicts_relation=True,
+        )
 
 
 # --- against the real evaluators ---
