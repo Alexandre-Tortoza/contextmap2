@@ -29,6 +29,7 @@ Existem os **contratos** de identidade e de comparação:
 - `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
 - `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
 - `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve;
+- a **comparação de aparência** (`AppearanceComparator`, `FeatureStoreVectorSource`): features visuais comparadas só dentro de um espaço de embedding compatível, um voto por observação física, com ausência como `unavailable` ([`appearance-comparison.md`](appearance-comparison.md));
 - a **comparação semântica e temporal** (`compare_semantics`, `compare_temporal`): compatibilidade de labels, hipóteses e atributos, e do histórico de observações, sem ontologia, sem senso comum e sem tratar ausência como evidência negativa ([`semantic-temporal-comparison.md`](semantic-temporal-comparison.md));
 - a **comparação geométrica** (`compare_geometry`, `GeometryComparisonPolicy`): o canal de geometria, com sinais próprios e regras versionadas, sem semântica e sem decisão ([`geometry-comparison.md`](geometry-comparison.md));
 - a **recuperação de candidatos** (`retrieve_candidate_sets`, `EntitySpatialIndex`): para cada entidade, os alvos plausíveis de comparação, de forma permissiva e determinística, sem all-pairs e sem decidir nada ([`candidate-retrieval.md`](candidate-retrieval.md)).
@@ -51,6 +52,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `CandidateRetrievalPolicy`, `CANDIDATE_RETRIEVAL_POLICY_ID`, `retrieve_candidate_sets`, `EntitySpatialIndex`, `EntityCandidateSet`, `EntityCandidate`, `RetrievalDiagnostics`, `RetrievalReason`, `ExclusionReason`, `CandidacyAssessment`, `explain_candidacy`, `candidate_pairs` — a recuperação de candidatos.
 - `SemanticCompatibilityPolicy`, `SEMANTIC_COMPATIBILITY_POLICY_ID`, `BASELINE_REFINEMENT_MODIFIERS`, `compare_semantics`, `compare_labels`, `normalize_label`; `TemporalCompatibilityPolicy`, `TEMPORAL_COMPATIBILITY_POLICY_ID`, `compare_temporal` — os canais semântico e temporal.
 - `GeometryComparisonPolicy`, `SupportDistancePolicy`, `GEOMETRY_COMPARISON_POLICY_ID`, `compare_geometry` — o canal de geometria.
+- `AppearanceComparisonPolicy`, `APPEARANCE_COMPARISON_POLICY_ID`, `APPEARANCE_AGGREGATION_ID`, `AppearanceComparator`, `FeatureVectorSource`, `LoadedFeature`, `FeatureStoreVectorSource` — o canal de aparência e a fronteira de carregamento de vetores.
 - `PolicyRef` — política versionada e fingerprint da configuração, comum a canais, recuperação e políticas.
 - `encode_*` e `decode_*` de referência resolvida, evidência de comparação, decisão e conjunto de candidatos — o codec JSON, que revalida todas as invariantes.
 
@@ -60,6 +62,8 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 
 - `contextmap.semantic_mapping`: `Entity`, `EntityGeometry`, `EntityReference`, `EntityFeatureRef`, `EntitySemanticState`, `AmbiguityState`, `AttributeOrigin`, `CLASS_ATTRIBUTE_DERIVATION_ID` e `resolve_geometry`, o que é comparado e referenciado.
 - `contextmap.geometric_mapping`: `GeometryReference`, `MapId`, `Bounds3D` e `GeometrySource`, o suporte 3D referenciado, as caixas e a leitura opcional dos pontos.
+- `contextmap.visual_perception`: `VisualFeature`, `FeatureStoreReader`, `FeatureScope`, `EmbeddingSpaceMismatchError`, `ensure_compatible_features` e `perception_result_id_for`, o carregamento e a compatibilidade das features.
+- `contextmap.ingestion`: `SourceObservationId`, só como identidade dos frames físicos que observaram uma entidade e que indexam o feature store; nenhuma lógica de ingestion é usada.
 - `contextmap.point_representation`: `PointRepresentationId` e `PointRepresentationRunId`, as representações referenciadas.
 
 As dependências estão declaradas em `tests/architecture/test_boundaries.py` e são sempre feitas pela API pública.
@@ -67,6 +71,7 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`appearance-comparison.md`](appearance-comparison.md) — espaço de embedding, agregação por observação física e fonte de vetores.
 - [`semantic-temporal-comparison.md`](semantic-temporal-comparison.md) — regras de label, atributos e histórico de observações.
 - [`geometry-comparison.md`](geometry-comparison.md) — sinais geométricos, regras, casos explícitos e custo.
 - [`candidate-retrieval.md`](candidate-retrieval.md) — política de recuperação, diagnóstico de exclusão, índice espacial e linha de base de desempenho.

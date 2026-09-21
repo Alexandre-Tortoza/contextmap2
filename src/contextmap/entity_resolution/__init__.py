@@ -7,6 +7,15 @@ never mutates a source entity and never turns a single score into an identity. S
 ``src/contextmap/entity_resolution/docs/README.md`` for the full capability documentation.
 """
 
+from contextmap.entity_resolution.appearance_comparison import (
+    APPEARANCE_AGGREGATION_ID,
+    APPEARANCE_COMPARISON_POLICY_ID,
+    AppearanceComparator,
+    AppearanceComparisonPolicy,
+    FeatureStoreVectorSource,
+    FeatureVectorSource,
+    LoadedFeature,
+)
 from contextmap.entity_resolution.channels import (
     AppearanceEvidence,
     AppearanceMeasurement,
@@ -102,12 +111,16 @@ from contextmap.entity_resolution.temporal_comparison import (
 )
 
 __all__ = [
+    "APPEARANCE_AGGREGATION_ID",
+    "APPEARANCE_COMPARISON_POLICY_ID",
     "BASELINE_REFINEMENT_MODIFIERS",
     "CANDIDATE_RETRIEVAL_POLICY_ID",
     "COMPARISON_GATES_POLICY_ID",
     "GEOMETRY_COMPARISON_POLICY_ID",
     "SEMANTIC_COMPATIBILITY_POLICY_ID",
     "TEMPORAL_COMPATIBILITY_POLICY_ID",
+    "AppearanceComparator",
+    "AppearanceComparisonPolicy",
     "AppearanceEvidence",
     "AppearanceMeasurement",
     "AttributeComparison",
@@ -124,6 +137,8 @@ __all__ = [
     "EvidenceStatus",
     "ExclusionReason",
     "FeatureContribution",
+    "FeatureStoreVectorSource",
+    "FeatureVectorSource",
     "Finding",
     "GateResult",
     "GeometryComparisonPolicy",
@@ -131,6 +146,7 @@ __all__ = [
     "GeometryMeasurement",
     "LabelComparison",
     "LabelRelation",
+    "LoadedFeature",
     "MatchChannel",
     "MatchEvidenceProvenance",
     "PointRepresentationEvidence",
