@@ -188,12 +188,21 @@ def test_reports_compare_same_requests_and_expose_failure_kind() -> None:
                 annotation=SemanticAnnotation(acceptable_hypotheses=("wooden pallet",)),
             ),
         ),
+        failures=(
+            SemanticEvaluationFailure(
+                request_id="parser-broken",
+                evidence_variant_id="masked-subject",
+                failure_kind="backend",
+                message="provider timeout",
+            ),
+        ),
     )
 
     comparison = compare_semantic_backends((first, second))
 
     assert first.failures[0].failure_kind == "parser"
-    assert comparison.request_ids == ("region-request-0001",)
+    # Uma falha é um resultado da tentativa: os dois backends tentaram as duas requests.
+    assert comparison.request_ids == ("parser-broken", "region-request-0001")
     assert second.quality.unsupported_claim_rate == 1.0
 
     with pytest.raises(SemanticEvaluationError, match="same request"):
