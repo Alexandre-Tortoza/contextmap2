@@ -267,7 +267,7 @@ O parser interno pode produzir box, máscara opcional, score opcional, texto par
 O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e texto parseado ficam
 como provenance/metadata de descoberta; não geram `SemanticClaim`.
 `Florence2SemanticInterpreter` já implementa interpretação semântica por outro
-port e outro adapter, mesmo que uma composition root futura possa compartilhar o
+port e outro adapter, mesmo que a composition root possa compartilhar o
 lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
