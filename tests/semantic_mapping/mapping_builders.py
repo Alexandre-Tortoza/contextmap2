@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
+from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import (
     EvidenceContributionId,
     EvidenceStance,
@@ -14,6 +15,7 @@ from contextmap.semantic_fusion import (
     FusedHypothesisId,
     FusionSupportId,
     HypothesisEvidence,
+    PointRepresentationRef,
     SemanticFusionRunId,
     SupportSignal,
     SupportSignalKind,
@@ -22,6 +24,7 @@ from contextmap.semantic_mapping import (
     Entity,
     EntityAttribute,
     EntityEvidenceLinks,
+    EntityFeatureRef,
     EntityGeometry,
     EntityHypothesis,
     EntityHypothesisRef,
@@ -37,6 +40,7 @@ from contextmap.semantic_mapping import (
     derive_ambiguity_state,
     summarize_geometry,
 )
+from contextmap.sensor_association import SpatialObservationId
 from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
 
@@ -164,17 +168,40 @@ def make_semantic_state(
     )
 
 
+def make_fused_evidence_ref(
+    *,
+    fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID,
+    fusion_support_id: FusionSupportId = FUSION_SUPPORT_ID,
+    fusion_run_id: SemanticFusionRunId = FUSION_RUN_ID,
+) -> FusedEvidenceRef:
+    return FusedEvidenceRef(
+        fusion_run_id=fusion_run_id,
+        fusion_schema_version="0.1.0",
+        fusion_artifact_digest="sha256:artifact",
+        fused_evidence_id=fused_evidence_id,
+        fusion_support_id=fusion_support_id,
+    )
+
+
 def make_evidence_links(
-    *, fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID
+    *,
+    fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID,
+    fusion_support_id: FusionSupportId = FUSION_SUPPORT_ID,
+    spatial: tuple[str, ...] = ("spatial--run-a--frame-0120--region-0001",),
+    physical: tuple[str, ...] = ("frame-0120",),
+    features: tuple[EntityFeatureRef, ...] = (),
+    representations: tuple[PointRepresentationRef, ...] = (),
 ) -> EntityEvidenceLinks:
     return EntityEvidenceLinks(
         fused_evidence=(
-            FusedEvidenceRef(
-                fusion_run_id=FUSION_RUN_ID,
-                fused_evidence_id=fused_evidence_id,
-                fusion_support_id=FUSION_SUPPORT_ID,
+            make_fused_evidence_ref(
+                fused_evidence_id=fused_evidence_id, fusion_support_id=fusion_support_id
             ),
-        )
+        ),
+        spatial_observation_ids=tuple(SpatialObservationId(item) for item in spatial),
+        physical_observation_ids=tuple(SourceObservationId(item) for item in physical),
+        visual_feature_refs=features,
+        point_representation_refs=representations,
     )
 
 

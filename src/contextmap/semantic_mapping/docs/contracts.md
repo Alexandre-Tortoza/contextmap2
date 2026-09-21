@@ -72,9 +72,19 @@ O estado semântico, sem colapso; detalhes em [`semantic-state.md`](semantic-sta
 
 Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado e exige uma derivação documentada. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
 
-## `EntityEvidenceLinks` e `FusedEvidenceRef`
+## `EntityEvidenceLinks` e seus tipos
 
-`FusedEvidenceRef(fusion_run_id, fused_evidence_id, fusion_support_id)` aponta para a evidência fundida dentro de um `SemanticFusionRunArtifact`. `EntityEvidenceLinks.fused_evidence` nunca é vazio: uma entidade sem evidência por trás não pode ser auditada.
+Onde está a evidência que suporta a entidade; detalhes em [`evidence.md`](evidence.md).
+
+| Campo | Significado |
+| --- | --- |
+| `fused_evidence` | `FusedEvidenceRef` (run, versão do schema, digest do artifact, evidência e suporte); **nunca vazio**. |
+| `spatial_observation_ids` | `SpatialObservationId` que contribuíram, ordenados e únicos. |
+| `physical_observation_ids` | `SourceObservationId` dos frames físicos que contribuíram, ordenados e únicos. |
+| `visual_feature_refs` | `EntityFeatureRef` (`perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope`, `region_id`); vazio se o canal está ausente. |
+| `point_representation_refs` | `PointRepresentationRef` das representações 3D do suporte; vazio se o canal está ausente. |
+
+Nada aqui copia imagens, máscaras, embeddings nem payloads de fusão. Uma representação 3D ancorada fora do suporte geométrico da entidade é recusada por `Entity`.
 
 ## `EntityTemporalState`
 

@@ -54,10 +54,20 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         }
     ),
     # Além da API pública de semantic_fusion, Semantic Mapping usa identidades de ingestion
-    # (FrameId) e de visual_perception (BackendProvenance, ClaimId, HypothesisRole) apenas
-    # como tipos: as evidências das hipóteses chegam com esses tipos e são preservadas.
+    # (FrameId, SourceObservationId), visual_perception (BackendProvenance, ClaimId, FeatureId...),
+    # sensor_association (SpatialObservationId) e point_representation (PointRepresentationId)
+    # apenas como tipos: as evidências das hipóteses e as referências à evidência fundida
+    # chegam com esses tipos e são preservadas, sem usar a lógica dessas capabilities.
     "semantic_mapping": frozenset(
-        {"shared", "ingestion", "visual_perception", "geometric_mapping", "semantic_fusion"}
+        {
+            "shared",
+            "ingestion",
+            "visual_perception",
+            "geometric_mapping",
+            "sensor_association",
+            "point_representation",
+            "semantic_fusion",
+        }
     ),
     "entity_resolution": frozenset(
         {
