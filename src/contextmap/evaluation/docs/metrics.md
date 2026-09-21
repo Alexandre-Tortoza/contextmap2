@@ -55,7 +55,7 @@ As definições de Entity Resolution e Spatial Relations existem para que os rel
 
 `EvaluationReport` traz o estágio, os `ReproducibilityMetadata`, as métricas de **qualidade** e as de **performance** em campos separados, e o relatório do próprio estágio (`stage_report`) intocado.
 
-`ReproducibilityMetadata` reúne: evaluator e versão, identidade do reference set (`id`, `version`, `digest`), schemas de anotação disponíveis, artifacts de entrada, digest da configuração, versão do código e identidade do registro de métricas.
+`ReproducibilityMetadata` reúne: evaluator e versão, identidade do reference set (`id`, `version`, `digest`), schemas de anotação disponíveis, artifacts de entrada, digest da configuração, versão do código e identidade do registro de métricas. Cada artifact de entrada é um `ArtifactIdentity` (`kind`, `artifact_id`, `digest`); o `digest`, quando presente, é `sha256:<64 hex>` e é validado na construção, porque a topologia e o runner de experimentos o tratam como prova de que o artifact é o mesmo imutável. `None` significa que o artifact não foi fixado por conteúdo.
 
 Cada `MetricResult` tem `status`:
 
