@@ -123,6 +123,15 @@ from contextmap.evaluation.semantic_interpretation import (
     compare_semantic_backends,
     evaluate_semantic_interpretation,
 )
+from contextmap.evaluation.semantic_mapping import (
+    SemanticMappingEvaluationError,
+    SemanticMappingEvaluationLineage,
+    SemanticMappingEvaluationReport,
+    SemanticMappingValidationCheck,
+    SemanticMappingValidationLayer,
+    encode_semantic_mapping_report,
+    evaluate_semantic_mapping,
+)
 from contextmap.evaluation.sensor_association import (
     FeaturePathReport,
     ReprojectionReport,
@@ -261,6 +270,11 @@ __all__ = [
     "SemanticFusionComparison",
     "SemanticFusionEvaluationError",
     "SemanticFusionEvaluationReport",
+    "SemanticMappingEvaluationError",
+    "SemanticMappingEvaluationLineage",
+    "SemanticMappingEvaluationReport",
+    "SemanticMappingValidationCheck",
+    "SemanticMappingValidationLayer",
     "SemanticQualityReport",
     "SemanticSampleReport",
     "SensorAssociationComparison",
@@ -296,6 +310,7 @@ __all__ = [
     "encode_representation_arm_report",
     "encode_semantic_fusion_comparison",
     "encode_semantic_fusion_report",
+    "encode_semantic_mapping_report",
     "encode_sensor_association_comparison",
     "encode_sensor_association_report",
     "encode_state_estimation_report",
@@ -305,6 +320,7 @@ __all__ = [
     "evaluate_round_trip",
     "evaluate_semantic_fusion",
     "evaluate_semantic_interpretation",
+    "evaluate_semantic_mapping",
     "evaluate_sensor_association",
     "evaluate_state_estimation",
     "noise_variation",
