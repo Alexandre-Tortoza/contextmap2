@@ -161,7 +161,7 @@ def test_default_definitions_are_machine_readable_and_consistent() -> None:
 
 def test_the_registry_identity_changes_with_its_content() -> None:
     registry = default_metric_registry()
-    other = replace(registry, registry_version="2")
+    other = replace(registry, registry_version="9")
 
     assert registry.identity().digest != other.identity().digest
     assert registry.identity().registry_id == registry.registry_id
@@ -185,3 +185,29 @@ def test_evaluators_reject_incompatible_annotation_versions() -> None:
         maximum=None,
     )
     require_annotation_compatibility(no_annotations, set())
+
+
+def test_the_registry_carries_the_metrics_the_optional_technique_protocols_need() -> None:
+    registry = default_metric_registry()
+
+    assert registry.registry_version == "2"
+    expected = {
+        "association.feature_anchoring.rate": EvaluationStage.SENSOR_ASSOCIATION,
+        "fusion.view_consistency.rate": EvaluationStage.SEMANTIC_FUSION,
+        "entity.semantic_accuracy.rate": EvaluationStage.ENTITY_RESOLUTION,
+    }
+    for name, stage in expected.items():
+        definition = registry.get(name, "1")
+        assert definition.stage is stage
+        assert definition.kind is MetricKind.QUALITY
+        assert (definition.minimum, definition.maximum) == (0.0, 1.0)
+    accuracy = registry.get("entity.semantic_accuracy.rate", "1")
+    assert set(accuracy.required_annotations) == {
+        AnnotationFamily.SEMANTICS.schema,
+        AnnotationFamily.IDENTITY.schema,
+    }
+    failure = registry.get("runtime.failure_rate", "1")
+    assert failure.kind is MetricKind.PERFORMANCE
+    assert failure.maximum == 1.0
+    assert failure.direction is MetricDirection.LOWER_IS_BETTER
+    assert not failure.required_annotations

@@ -414,7 +414,7 @@ def test_metrics_must_exist_belong_to_the_stage_and_have_their_annotations(refer
 
 def test_the_manifest_must_cite_the_registry_it_is_validated_against(reference) -> None:  # type: ignore[no-untyped-def]
     manifest = backend_experiment(reference)
-    other_registry = replace(REGISTRY, registry_version="2")
+    other_registry = replace(REGISTRY, registry_version="9")
 
     with pytest.raises(ExperimentError, match="registry"):
         validate_experiment_manifest(manifest, reference_set=reference, registry=other_registry)
