@@ -84,29 +84,32 @@ Além disso: precisão e revocação **por par** (`pairwise_precision`, `pairwis
 
 ## Ablação de canais
 
-`evaluate_channel_ablation()` roda um `ResolutionArm` por conjunto de canais habilitados sobre as **mesmas** entidades de origem, os mesmos candidatos, a mesma referência e os mesmos vínculos: só os canais mudam (uma variável por vez). Cada `ArmEvaluation` traz as decisões por resultado, a `IdentityEvaluation` completa do braço e o tempo de resolução e de materialização, medido e reportado à parte da qualidade. Nomes de braço repetidos são recusados. Modelo de braços para o CI, sobre o mesmo run de entidades:
+`evaluate_channel_ablation()` roda um `ResolutionArm` por conjunto de canais habilitados sobre as **mesmas** entidades de origem, os mesmos candidatos, a mesma referência e os mesmos vínculos: só os canais mudam (uma variável por vez). Cada `ArmEvaluation` traz as decisões por resultado, a `IdentityEvaluation` completa do braço e o tempo de resolução e de materialização, medido e reportado à parte da qualidade. Nomes de braço repetidos são recusados. Modelo de braços (o da issue), sobre o mesmo run de entidades; o harness aceita qualquer conjunto de canais, então os braços E e F só diferem no `RepresentationComparator` e no run de Point Representation que o alimenta:
 
 | Braço | Canais |
 | --- | --- |
 | A | geometria |
-| B | geometria + semântica |
-| C | geometria + temporal |
-| D | geometria + aparência |
-| E | geometria + representação 3D (opcional) |
-| F | todos os canais disponíveis |
+| B | geometria + compatibilidade semântica |
+| C | geometria + aparência visual |
+| D | geometria + semântica + aparência |
+| E | a linha de base escolhida + Point Representation determinística (opcional) |
+| F | a linha de base escolhida + Point Representation aprendida (opcional) |
 
-Um canal indisponível não vota nem é zero: o braço que o habilita apenas o registra como não medido. Um braço mais rápido não é automaticamente melhor para o mapa.
+Os testes exercitam A e B sobre cenas sintéticas (uma paleta e uma pessoa que se sobrepõem em geometria: só geometria as funde, com a semântica não); C, D, E e F não têm run de referência ainda. Um canal indisponível não vota nem é zero: o braço que o habilita apenas o registra como não medido. Um braço mais rápido não é automaticamente melhor para o mapa.
 
 ## Divisão
 
 `evaluate_splits()` julga `SplitCandidate`s sobre entidades rotuladas (`SplitReference`) como de um ou de vários objetos, à parte da qualidade de fusão: `suggested_recall` nas de vários objetos e `false_suggestion_rate` nas de um. A divisão é apenas diagnóstico; nada é dividido.
 
-## Desempenho medido
+## Desempenho
 
-Recuperação de candidatos sobre 20 mil entidades sintéticas: 2,88 s. Distância de suporte entre representações 3D: de 58 ms a 1,2 s por par, para 500 a 5000 pontos por lado. São medidas locais de CPU, sem GPU, e servem de linha de base, não de meta.
+O relatório traz, em separado e sem virar score: candidatos por entidade (média e máximo), pares comparados, tamanho do artifact em bytes e, por braço, o tempo de resolução e o de materialização. **Não mede** a memória de pico nem o custo de carregar features ou representações à parte; isso fica como lacuna.
+
+Linhas de base medidas localmente (CPU, sem GPU, dados sintéticos): recuperação de candidatos sobre 20 mil entidades, 2,88 s; distância de suporte entre representações 3D, de 58 ms a 1,2 s por par, para 500 a 5000 pontos por lado. Servem de referência, não de meta.
 
 ## Limites
 
-- **Só há evidência sintética.** Todos os testes usam entidades e runs construídos; o formato das anotações é exercitado contra o de `tests/fixtures/ci_subset/1.0.1/annotations/identity.json`, mas não há run real de Entity Resolution sobre dado real. Nada aqui é evidência de qualidade em dado real.
+- **Só há evidência sintética.** Todos os testes usam entidades e runs construídos; o formato das anotações é exercitado contra o de `tests/fixtures/ci_subset/1.0.1/annotations/identity.json`, mas não há run real de Entity Resolution sobre dado real. Nada aqui é evidência de qualidade em dado real, e por isso este harness ainda **não** basta para escolher limiares em dado real: só demonstra que a escolha pode ser feita, com cada falha visível.
+- O relatório não mede memória de pico nem o custo de carregar features ou representações em separado.
 - As políticas não podem ser calibradas na mesma referência usada no relatório final sem dizê-lo; o relatório registra qual referência e quais políticas foram usadas.
 - A referência de identidade cobre só o que a anotação declara `COMPLETE`.
