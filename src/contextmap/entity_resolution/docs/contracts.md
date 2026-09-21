@@ -5,7 +5,7 @@ Referência de campos e invariantes dos contratos públicos de `contextmap.entit
 ## Princípios
 
 - **Sem score único.** Nenhum contrato oferece um número que resuma os canais. Distância em metros, cosseno entre embeddings visuais e relação entre labels não se somam, não se fazem média e não recebem um limiar conjunto sem uma regra documentada e testável.
-- **Evidência, decisão e conhecimento separados.** `EntityMatchEvidence` é evidência de uma comparação; `ResolutionDecision` é o veredito de uma política versionada sobre essa evidência; a entidade resolvida (issue #137) é a estrutura derivada das decisões `MATCH`.
+- **Evidência, decisão e conhecimento separados.** `EntityMatchEvidence` é evidência de uma comparação; `ResolutionDecision` é o veredito de uma política versionada sobre essa evidência; a entidade resolvida ([`resolved-entities.md`](resolved-entities.md)) é a estrutura derivada das decisões `MATCH`.
 - **Ausente não é zero.** Um canal que não pôde comparar o par é `unavailable`, com o motivo, e nunca vira zero nem voto por `DISTINCT`.
 - **`UNRESOLVED` é resultado válido.** Nunca é forçado a match nem a não-match.
 - **Nada muta uma entidade de origem.** Contratos só guardam `EntityReference`.

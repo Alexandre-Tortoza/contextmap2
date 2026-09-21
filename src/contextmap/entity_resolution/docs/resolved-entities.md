@@ -41,4 +41,4 @@ Por membro (`ResolvedMember`): a `EntityReference` original (com o `semantic_map
 
 ## O que este módulo não faz
 
-Nenhuma relação espacial, nenhum rastreamento de objetos dinâmicos, nenhuma remoção ou alteração de entidade de origem e nenhuma fusão fora de uma decisão `MATCH` explícita. A divisão de entidades (over-merge) é a issue #138 e fica desligada por padrão.
+Nenhuma relação espacial, nenhum rastreamento de objetos dinâmicos, nenhuma remoção ou alteração de entidade de origem e nenhuma fusão fora de uma decisão `MATCH` explícita. A detecção de candidatos a divisão (over-merge) é só diagnóstico, opcional e desligada por padrão ([`split-detection.md`](split-detection.md)).
