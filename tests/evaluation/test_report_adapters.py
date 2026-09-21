@@ -1,6 +1,7 @@
 """Adapters from the existing stage reports into the common envelope."""
 
 import json
+from dataclasses import asdict
 
 import pytest
 from reference_set_builders import make_valid_manifest
@@ -34,7 +35,9 @@ from contextmap.evaluation.semantic_interpretation import (
     SemanticEvaluationContext,
     SemanticEvaluationReport,
     SemanticQualityReport,
+    SemanticSampleReport,
 )
+from contextmap.visual_perception import BackendProvenance
 
 REGISTRY = default_metric_registry()
 
@@ -164,8 +167,52 @@ def test_unannotated_frames_are_not_applicable_never_zero() -> None:
     assert peak.status is MetricStatus.UNSUPPORTED
 
 
+def _sample(request_id: str, *, ambiguity_preserved: bool | None) -> SemanticSampleReport:
+    return SemanticSampleReport(
+        request_id=request_id,
+        source_observation_id=f"frame-{request_id}",
+        perception_result_id=f"result-{request_id}",
+        region_id=f"region-{request_id}",
+        evidence_variant_id="tight-crop",
+        backend=BackendProvenance(
+            backend_id="qwen_semantic",
+            capability="semantic_interpreter",
+            provider="qwen",
+            model="qwen-3b",
+            version="1",
+            configuration_fingerprint="sha256:" + "e" * 64,
+        ),
+        prompt_template_id="region/v1",
+        prompt_fingerprint="sha256:" + "f" * 64,
+        acceptable_claim_count=1,
+        unsupported_claim_count=0,
+        alternative_claim_count=0 if ambiguity_preserved is not True else 1,
+        ambiguity_preserved=ambiguity_preserved,
+        abstained=False,
+        duplicate_claim_count=0,
+        latency_ms=400.0,
+        retries=0,
+        input_tokens=10,
+        output_tokens=5,
+        peak_memory_bytes=1024,
+    )
+
+
+# Duas requisições ambíguas (uma preservou, outra não) e uma não ambígua: a taxa de
+# preservação é 1/2 sobre 2 requisições, embora o relatório tenha 3 requisições.
+MIXED_POPULATION = (
+    _sample("r1", ambiguity_preserved=True),
+    _sample("r2", ambiguity_preserved=False),
+    _sample("r3", ambiguity_preserved=None),
+)
+
+
 def _semantic_report(
-    *, claim_count: int = 4, ambiguity: float | None = 0.5, peak: int | None = 2048
+    *,
+    claim_count: int = 4,
+    ambiguity: float | None = 0.5,
+    peak: int | None = 2048,
+    samples: tuple[SemanticSampleReport, ...] = MIXED_POPULATION,
 ) -> SemanticEvaluationReport:
     return SemanticEvaluationReport(
         context=SemanticEvaluationContext(
@@ -178,7 +225,7 @@ def _semantic_report(
             evaluator_version="semantic-evaluator/1",
         ),
         matching_policy="casefold-exact/1",
-        samples=(),
+        samples=samples,
         failures=(),
         quality=SemanticQualityReport(
             claim_count=claim_count,
@@ -189,7 +236,7 @@ def _semantic_report(
             duplicate_claim_count=0,
         ),
         cost=SemanticCostReport(
-            request_count=2,
+            request_count=len(samples),
             total_latency_ms=800.0,
             retry_count=0,
             input_tokens=10,
@@ -218,9 +265,47 @@ def test_semantic_report_becomes_quality_and_performance_metrics() -> None:
     assert lifted.reproducibility.evaluator.evaluator_version == "semantic-evaluator/1"
 
 
+def test_ambiguity_preservation_is_counted_over_ambiguous_requests_only() -> None:
+    report = _semantic_report()
+
+    lifted = semantic_interpretation_evaluation_report(
+        report, registry=REGISTRY, reference_set=_reference()
+    )
+
+    ambiguity = _by_metric(lifted.quality_metrics)["semantic.ambiguity_preservation_rate"]
+    assert report.cost.request_count == 3
+    assert ambiguity.value == 0.5
+    assert ambiguity.sample_count == 2
+    # a população dos custos continua sendo todas as requisições
+    wall_time = _by_metric(lifted.performance_metrics)["runtime.wall_time"]
+    assert wall_time.sample_count == 3
+
+
+def test_semantic_report_preserves_the_per_request_samples_json_safe() -> None:
+    report = _semantic_report()
+
+    lifted = semantic_interpretation_evaluation_report(
+        report, registry=REGISTRY, reference_set=_reference()
+    )
+
+    assert lifted.stage_report is not None
+    assert lifted.stage_report["samples"] == [asdict(item) for item in report.samples]
+    assert [item["request_id"] for item in lifted.stage_report["samples"]] == ["r1", "r2", "r3"]
+    first = lifted.stage_report["samples"][0]
+    assert first["backend"]["backend_id"] == "qwen_semantic"
+    assert first["prompt_fingerprint"] == "sha256:" + "f" * 64
+    document = json.loads(json.dumps(encode_evaluation_report(lifted)))
+    assert decode_evaluation_report(document, REGISTRY) == lifted
+
+
 def test_semantic_report_without_ambiguous_annotations_or_claims_stays_not_applicable() -> None:
     lifted = semantic_interpretation_evaluation_report(
-        _semantic_report(claim_count=0, ambiguity=None, peak=None),
+        _semantic_report(
+            claim_count=0,
+            ambiguity=None,
+            peak=None,
+            samples=(_sample("r1", ambiguity_preserved=None),),
+        ),
         registry=REGISTRY,
         reference_set=_reference(),
     )

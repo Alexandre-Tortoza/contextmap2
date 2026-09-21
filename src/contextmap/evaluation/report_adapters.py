@@ -150,8 +150,10 @@ def semantic_interpretation_evaluation_report(
 ) -> EvaluationReport:
     """Lift a Semantic Interpretation report into the envelope.
 
-    Rates are over claims; the ambiguity-preservation rate is ``NOT_APPLICABLE``
-    when no request had an ambiguous annotation.
+    Rates are over claims; the ambiguity-preservation rate is over the requests
+    with an ambiguous annotation and is ``NOT_APPLICABLE`` when there were none.
+    The per-request samples travel in the stage report to keep request-level
+    traceability (observation, result, region, backend, prompt and cost).
     """
     quality = report.quality
     context = report.context
@@ -172,8 +174,11 @@ def semantic_interpretation_evaluation_report(
             _unavailable("semantic.unsupported_claim_rate", MetricStatus.NOT_APPLICABLE),
         ]
     ambiguity = quality.ambiguity_preservation_rate
+    # A população é só a das requisições cujo alvo tem registro ambíguo (as que têm
+    # `ambiguity_preserved`), não o total de requisições: ver o registro de métricas.
+    ambiguous_request_count = sum(item.ambiguity_preserved is not None for item in report.samples)
     quality_metrics.append(
-        _value("semantic.ambiguity_preservation_rate", ambiguity, report.cost.request_count)
+        _value("semantic.ambiguity_preservation_rate", ambiguity, ambiguous_request_count)
         if ambiguity is not None
         else _unavailable("semantic.ambiguity_preservation_rate", MetricStatus.NOT_APPLICABLE)
     )
@@ -209,6 +214,7 @@ def semantic_interpretation_evaluation_report(
         stage_report={
             "matching_policy": report.matching_policy,
             "context": asdict(context),
+            "samples": [asdict(item) for item in report.samples],
             "quality": asdict(quality),
             "cost": asdict(cost),
             "failures": [asdict(item) for item in report.failures],
