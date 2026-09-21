@@ -19,6 +19,13 @@ from contextmap.spatial_relations.candidates import (
     SkippedPredicate,
     generate_relation_candidates,
 )
+from contextmap.spatial_relations.contact_predicates import (
+    CONTACT_POLICY_ID,
+    CONTACT_PREDICATES,
+    ContactPredicatePolicy,
+    evaluate_contact_candidates,
+    evaluate_contact_predicate,
+)
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
     EvidenceCaveatKind,
@@ -73,6 +80,8 @@ from contextmap.spatial_relations.taxonomy import (
 
 __all__ = [
     "CANDIDATE_POLICY_ID",
+    "CONTACT_POLICY_ID",
+    "CONTACT_PREDICATES",
     "FRAME_CONVENTIONS_POLICY_ID",
     "GEOMETRIC_POLICY_ID",
     "GEOMETRIC_PREDICATES",
@@ -84,6 +93,7 @@ __all__ = [
     "CandidatePolicy",
     "CandidateProvenance",
     "CandidateReason",
+    "ContactPredicatePolicy",
     "EvidenceCaveat",
     "EvidenceCaveatKind",
     "FrameConventionError",
@@ -115,6 +125,8 @@ __all__ = [
     "decode_relation_evidence",
     "encode_relation",
     "encode_relation_evidence",
+    "evaluate_contact_candidates",
+    "evaluate_contact_predicate",
     "evaluate_geometric_candidates",
     "evaluate_geometric_predicate",
     "evidence_id_for",
