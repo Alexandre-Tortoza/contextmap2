@@ -8,16 +8,22 @@ dynamic = ["version"]
 description = "Research implementation for generating persistent 3D contextual map artifacts from robotic sensor data."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+# Expressão SPDX (PEP 639) no lugar da tabela ``{ file = ... }`` e do classifier
+# ``License ::``, ambos depreciados: o setuptools deixa de aceitá-los em 2027-02-18.
+# O texto do LICENSE é o do AGPL v3 e o classifier antigo dizia "v3" sem "or later".
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
   { name = "Alexandre Tortoza" }
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: GNU Affero General Public License v3",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # numpy is pinned below 2.4 because 2.4+ ships stub files using PEP 695
@@ -28,9 +34,34 @@ dependencies = [
   "numpy<2.4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Alexandre-Tortoza/contextmap2"
+Repository = "https://github.com/Alexandre-Tortoza/contextmap2"
+Issues = "https://github.com/Alexandre-Tortoza/contextmap2/issues"
+
+# Cada extra instala apenas o que o código empacotado importa de fato (verificado
+# por tests/packaging/test_dependencies.py). O que o PyPI não distribui (SAM 2,
+# AlphaCLIP, Pointcept/PTv3, o binário do FAST-LIO) não tem extra: fica em
+# docs/installation.md.
 [project.optional-dependencies]
+# ``rosbags`` lê bags ROS 1 e ROS 2 sem instalar o ROS. Serve aos adapters de
+# ingestion e ao wrapper de bag do FAST-LIO; ``ros2`` só nomeia a fonte.
 ros1 = [
   "rosbags>=0.9,<1",
+]
+ros2 = [
+  "rosbags>=0.9,<1",
+]
+# Adapters DINOv2, DINOv3 e CLIP (Hugging Face transformers) e a autocast do SAM 3.
+# ``transformers`` 5.x exige ``torchvision`` para o image processor; os pisos vêm do
+# que o transformers 5.x declara (torch>=2.5, Pillow>=10.0.1) e a validação real
+# (2026-09-20) usou torch 2.14, torchvision 0.29, transformers 5.17 e Pillow 12.3.
+# A escolha do build CUDA do torch é do usuário: instale-o antes, do índice da PyTorch.
+vision = [
+  "torch>=2.5",
+  "torchvision",
+  "transformers>=5.17,<6",
+  "Pillow>=10.0.1",
 ]
 dev = [
   "build>=1.6.1",
