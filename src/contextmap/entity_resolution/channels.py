@@ -705,6 +705,10 @@ class RepresentationMeasurement:
         representations_a: The representations of ``a`` that contributed, sorted and unique; never
             empty.
         representations_b: The same for ``b``.
+        dimension: Components of a vector of the space.
+        compared_components: Components the similarity was computed over: those defined in both
+            entities' prototypes. An undefined component holds a placeholder that is never
+            interpreted, so it is left out instead of being read as zero.
     """
 
     representation_space_id: str
@@ -715,18 +719,23 @@ class RepresentationMeasurement:
     pair_similarity_max: float
     representations_a: tuple[RepresentationRef, ...]
     representations_b: tuple[RepresentationRef, ...]
+    dimension: int
+    compared_components: int
 
     def __post_init__(self) -> None:
         """Validate identities, figures and that every representation lives in the declared space.
 
         Raises:
             ValueError: If an identity is empty, a figure is not finite, the pair range is
-                inverted, a side has no representation, or one belongs to another space.
+                inverted, no component was compared, a side has no representation, or one belongs
+                to another space.
         """
         require_present(self, "representation_space_id", "metric", "aggregation_id")
         require_finite(self, "similarity", "pair_similarity_min", "pair_similarity_max")
         if self.pair_similarity_min > self.pair_similarity_max:
             raise ValueError("pair_similarity_min cannot exceed pair_similarity_max")
+        if not 1 <= self.compared_components <= self.dimension:
+            raise ValueError("compared_components must be within [1, dimension]")
         for name in ("representations_a", "representations_b"):
             representations: tuple[RepresentationRef, ...] = getattr(self, name)
             if not representations:

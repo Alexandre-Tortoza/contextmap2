@@ -218,6 +218,7 @@ def entity_over(
     seconds: Sequence[int] = (10, 12),
     semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
     policy: GeometrySummaryPolicy = SUMMARY_POLICY,
+    representations: tuple[PointRepresentationRef, ...] = (),
 ) -> Entity:
     """A real entity supported by the given points of a shared scene, so supports can overlap."""
     map_id = source.geometric_map.map_id
@@ -231,7 +232,8 @@ def entity_over(
         geometry=summarize_geometry(references, source=source, policy=policy),
         semantic_state=make_semantic_state((make_hypothesis(),)),
         evidence=make_evidence_links(
-            physical=tuple(f"frame-{second:04d}" for second in sorted(seconds))
+            physical=tuple(f"frame-{second:04d}" for second in sorted(seconds)),
+            representations=representations,
         ),
         temporal_state=temporal_state_at(seconds),
         provenance=make_provenance(),
