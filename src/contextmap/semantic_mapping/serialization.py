@@ -68,6 +68,7 @@ from contextmap.semantic_mapping.semantic_state import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticStateProvenance,
 )
 from contextmap.semantic_mapping.temporal import (
@@ -372,6 +373,15 @@ def _encode_attribute(attribute: EntityAttribute) -> dict[str, Any]:
         "derivation_id": attribute.derivation_id,
         "evidence": [_encode_reference(ref) for ref in attribute.evidence],
         "support": _encode_signals(attribute.support),
+        "external_source": (
+            None
+            if attribute.external_source is None
+            else {
+                "source_id": attribute.external_source.source_id,
+                "source_version": attribute.external_source.source_version,
+                "entry_id": attribute.external_source.entry_id,
+            }
+        ),
     }
 
 
@@ -383,6 +393,15 @@ def _decode_attribute(record: Mapping[str, Any]) -> EntityAttribute:
         derivation_id=record["derivation_id"],
         evidence=tuple(_decode_reference(ref) for ref in record["evidence"]),
         support=_decode_signals(record["support"]),
+        external_source=(
+            None
+            if record["external_source"] is None
+            else ExternalKnowledgeSource(
+                source_id=record["external_source"]["source_id"],
+                source_version=record["external_source"]["source_version"],
+                entry_id=record["external_source"]["entry_id"],
+            )
+        ),
     )
 
 

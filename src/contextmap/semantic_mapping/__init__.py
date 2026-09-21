@@ -87,6 +87,7 @@ from contextmap.semantic_mapping.semantic_state import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticStateProvenance,
     derive_ambiguity_state,
 )
@@ -149,6 +150,7 @@ __all__ = [
     "EvidenceIntegrityIssue",
     "EvidenceIntegrityKind",
     "EvidenceTraceError",
+    "ExternalKnowledgeSource",
     "ForeignEntityReferenceError",
     "FusedEvidenceRef",
     "FusedEvidenceSource",

@@ -70,7 +70,7 @@ O estado semântico, sem colapso; detalhes em [`semantic-state.md`](semantic-sta
 
 `EntityHypothesis` guarda `fused_evidence_id`, `hypothesis_id`, o `label` verbatim (equivalência entre labels é decisão de política, nunca suposta) e a `evidence` (`HypothesisEvidence` de Semantic Fusion: claim, stance, papel e sinais tipados). Uma hipótese exige ao menos uma evidência que a suporte, e um label não se repete dentro da mesma evidência fundida.
 
-Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado e exige uma derivação documentada. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
+Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado, exige uma derivação documentada **e** uma `ExternalKnowledgeSource` (`external_source`: fonte, versão e entrada consultada), e só ele pode nomear uma: sem a fonte, um conhecimento externo não passaria de uma afirmação sem origem dentro do estado da entidade, misturando Knowledge com Belief. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
 
 ## `EntityEvidenceLinks` e seus tipos
 

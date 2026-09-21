@@ -16,7 +16,8 @@ Several distinctions are preserved on purpose:
 * an **abstention** (``unknown``) is neither support nor evidence against, and **unscored**
   (``None``) is not a low score;
 * an **observed** property comes from explicit evidence; **external knowledge** never does, and
-  is only accepted when a documented reasoning stage derived it.
+  is only accepted when a documented reasoning stage derived it *and* it names the external
+  source it was taken from, so it can never pass for evidence about this map.
 """
 
 from __future__ import annotations
@@ -67,8 +68,9 @@ class AttributeOrigin(Enum):
     Attributes:
         OBSERVED: Stated by explicit evidence, such as a claim.
         DERIVED: Computed by a documented rule from other evidence-backed state.
-        EXTERNAL_KNOWLEDGE: Inferred by a documented reasoning stage; never observed. It is
-            distinct on purpose so it cannot be mistaken for evidence.
+        EXTERNAL_KNOWLEDGE: Taken from a named external source by a documented reasoning
+            stage; never observed. It is distinct on purpose so it cannot be mistaken for
+            evidence, and it must name that source in ``external_source``.
     """
 
     OBSERVED = "observed"
@@ -142,6 +144,33 @@ class EntityHypothesis:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ExternalKnowledgeSource:
+    """The external source an ``EXTERNAL_KNOWLEDGE`` attribute was taken from.
+
+    External knowledge is not evidence about this map (Belief keeps it apart from Evidence), so
+    it is only accepted when it points to something outside the map that can be found again:
+    the source, its version and the entry that was consulted.
+
+    Attributes:
+        source_id: The knowledge source, such as an ontology, a database or a document set.
+        source_version: Its version or snapshot, so the entry can be found again.
+        entry_id: The entry consulted inside that source.
+    """
+
+    source_id: str
+    source_version: str
+    entry_id: str
+
+    def __post_init__(self) -> None:
+        """Require the whole reference.
+
+        Raises:
+            ValueError: If the source, its version or the entry is empty.
+        """
+        require_present(self, "source_id", "source_version", "entry_id")
+
+
+@dataclass(frozen=True, kw_only=True)
 class EntityAttribute:
     """A structured property of an entity, with the evidence and the rule behind its value.
 
@@ -157,6 +186,8 @@ class EntityAttribute:
             the origin is external knowledge.
         support: Typed signals of its own, when the producer emitted any, sorted by kind and
             producer and unique; empty means it carries no signal, not that the support is zero.
+        external_source: The external source the value was taken from; required for, and only
+            for, external knowledge.
     """
 
     name: str
@@ -165,13 +196,15 @@ class EntityAttribute:
     derivation_id: str
     evidence: tuple[EvidenceReference, ...] = ()
     support: tuple[SupportSignal, ...] = ()
+    external_source: ExternalKnowledgeSource | None = None
 
     def __post_init__(self) -> None:
         """Validate the text, the ordering and that the value is traceable.
 
         Raises:
             ValueError: If the name, value or derivation is empty, the evidence or support is
-                not sorted and unique, or an observed or derived attribute has no evidence.
+                not sorted and unique, an observed or derived attribute has no evidence, or the
+                external source is missing from external knowledge or named by anything else.
         """
         require_present(self, "name", "value", "derivation_id")
         require_canonical(
@@ -194,6 +227,13 @@ class EntityAttribute:
             raise ValueError(
                 f"attribute {self.name!r} is {self.origin.value} but cites no evidence: only "
                 f"external knowledge may be accepted without it"
+            )
+        if (self.origin is AttributeOrigin.EXTERNAL_KNOWLEDGE) != (
+            self.external_source is not None
+        ):
+            raise ValueError(
+                f"attribute {self.name!r}: external_source is required for, and only for external "
+                f"knowledge"
             )
 
 

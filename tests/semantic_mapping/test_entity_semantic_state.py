@@ -36,6 +36,7 @@ from contextmap.semantic_mapping import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticStateProvenance,
     derive_ambiguity_state,
     semantic_state_from_fused_evidence,
@@ -382,6 +383,7 @@ def _attribute(
     *,
     origin: AttributeOrigin = AttributeOrigin.OBSERVED,
     evidence: tuple[EvidenceReference, ...] | None = None,
+    external_source: ExternalKnowledgeSource | None = None,
 ) -> EntityAttribute:
     item = make_evidence_item()
     return EntityAttribute(
@@ -394,6 +396,13 @@ def _attribute(
             if evidence is None
             else evidence
         ),
+        external_source=external_source,
+    )
+
+
+def _source() -> ExternalKnowledgeSource:
+    return ExternalKnowledgeSource(
+        source_id="warehouse-ontology", source_version="2026.1", entry_id="pallet/usual_use"
     )
 
 
@@ -406,13 +415,54 @@ class TestAttributes:
         with pytest.raises(ValueError, match="cites no evidence"):
             _attribute("class", "pallet", origin=AttributeOrigin.DERIVED, evidence=())
 
-    def test_external_knowledge_is_accepted_without_evidence_but_stays_labeled(self) -> None:
+    def test_external_knowledge_is_accepted_without_evidence_when_its_source_is_named(self) -> None:
         attribute = _attribute(
-            "usual_use", "storage", origin=AttributeOrigin.EXTERNAL_KNOWLEDGE, evidence=()
+            "usual_use",
+            "storage",
+            origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+            evidence=(),
+            external_source=_source(),
         )
 
         assert attribute.origin is AttributeOrigin.EXTERNAL_KNOWLEDGE
         assert attribute.derivation_id == "test-rule-v1"
+        assert attribute.external_source == _source()
+
+    def test_external_knowledge_without_a_named_source_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="external_source is required"):
+            _attribute(
+                "usual_use", "storage", origin=AttributeOrigin.EXTERNAL_KNOWLEDGE, evidence=()
+            )
+
+    @pytest.mark.parametrize("origin", [AttributeOrigin.OBSERVED, AttributeOrigin.DERIVED])
+    def test_only_external_knowledge_may_name_an_external_source(
+        self, origin: AttributeOrigin
+    ) -> None:
+        with pytest.raises(ValueError, match="only for external knowledge"):
+            _attribute("material", "wood", origin=origin, external_source=_source())
+
+    @pytest.mark.parametrize("missing", ["source_id", "source_version", "entry_id"])
+    def test_a_source_needs_every_identity(self, missing: str) -> None:
+        identities = {"source_id": "ontology", "source_version": "1", "entry_id": "entry"}
+        identities[missing] = " "
+
+        with pytest.raises(ValueError, match=missing):
+            ExternalKnowledgeSource(**identities)
+
+    def test_the_source_of_external_knowledge_survives_persistence(self) -> None:
+        attribute = _attribute(
+            "usual_use",
+            "storage",
+            origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+            evidence=(),
+            external_source=_source(),
+        )
+        entity = make_entity(semantic_state=make_semantic_state(attributes=(attribute,)))
+
+        decoded = decode_entity(json.loads(json.dumps(encode_entity(entity))))
+
+        assert decoded.semantic_state.attributes[0].external_source == _source()
+        assert decoded == entity
 
     def test_a_derivation_is_always_required(self) -> None:
         with pytest.raises(ValueError, match="derivation_id"):
