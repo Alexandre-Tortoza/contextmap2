@@ -10,7 +10,18 @@ Nada a montante define uma afirmação relacional (`visual_perception` não tem 
 - `EndpointLink` (`upstream_ref`, `entity_ref`, `linked_through`): o vínculo **explícito** de uma ponta da afirmação a uma entidade resolvida. `upstream_ref` é o que a afirmação nomeou (uma região, uma claim), `entity_ref` é a `ResolvedEntityReference` e `linked_through` é a evidência por onde o vínculo passou (por exemplo a evidência fundida ou a observação espacial que liga os dois). Sem `linked_through` o vínculo é um palpite e é recusado.
 - `ObservationRelationStatement` (`source`, `subject`, `predicate_text`, `object`, `polarity`): o texto do predicado **exatamente como o upstream o disse** e se a afirmação o **afirma** ou o **nega** (`StatementPolarity`). Ela não relaciona uma entidade consigo mesma.
 
-Como a capability não importa `visual_perception` nem `ingestion` (ver `tests/architecture/test_boundaries.py`), os identificadores upstream são textos opacos; quem integra os runs preenche os vínculos.
+Como a capability não importa `visual_perception` nem `ingestion` (ver `tests/architecture/test_boundaries.py`), os identificadores upstream são textos opacos.
+
+## Vínculo a partir de um run de Entity Resolution
+
+Uma afirmação upstream nomeia coisas como a percepção as viu, isto é, **regiões de um frame projetadas no mapa como observações espaciais**; ela não sabe em qual entidade resolvida elas foram parar. Isso está em Entity Resolution: a entidade resolvida traz na sua evidência as observações espaciais de **todos** os membros e lista os membros que fundiu; o leitor do run responde quais entidades resolvidas uma observação espacial sustenta (`EntityResolutionRunReader.resolved_of_spatial_observation`), devolvendo nenhuma ou várias e **nunca escolhendo uma**. `link_statements(afirmações, resolution=leitor)` deriva o vínculo só dessa resposta:
+
+- `UpstreamRelationStatement` (`source`, `subject_spatial_observation_id`, `predicate_text`, `object_spatial_observation_id`, `polarity`) é a afirmação como o upstream a fez, ainda sem entidade;
+- uma ponta é ligada à **única** entidade resolvida que o leitor diz que a sua observação espacial sustenta, e o `EndpointLink` resultante registra a observação, a entidade resolvida e os membros (`linked_through`: "spatial observation … is in the evidence of resolved entity … (members: …)");
+- afirmações de **membros diferentes** da mesma entidade fundida caem na mesma entidade resolvida e, depois, viram um só registro de evidência;
+- uma observação que **nenhuma** entidade tem (`NOT_IN_ANY_ENTITY`), que **várias** têm (`IN_SEVERAL_ENTITIES`, ponta ambígua) ou duas pontas na **mesma** entidade (`BOTH_ENDS_IN_ONE_ENTITY`, que não é uma relação entre duas entidades) **não** são ligadas: vão para `unlinked` com a razão e os identificadores, nunca por proximidade, label ou palpite.
+
+O resultado (`LinkedStatements(linked, unlinked)`, em ordem canônica e independente da ordem de entrada) alimenta `observation_evidence_from_statements`. Uma afirmação sem vínculo é neutra: não produz evidência, e fica listada para que a perda seja visível.
 
 ## De afirmação a evidência
 
@@ -40,6 +51,6 @@ Assim o conflito entre canais é **preservado** (a evidência de observação co
 
 ## Limites conhecidos
 
-- O vínculo entre o que o upstream nomeou e uma entidade resolvida é uma **entrada**: esta milestone não o deriva. A ligação automática (afirmação → claim/região → evidência fundida → entidade → entidade resolvida) precisa do contrato de `ResolvedEntity` de Entity Resolution e fica para a integração.
+- O vínculo usa **observações espaciais** como nome upstream da ponta. Quem transforma a região de um frame numa observação espacial (a projeção de Sensor Association) fica a montante desta capability, que não importa `sensor_association`.
 - A fusão de várias afirmações é a mais simples possível (unânime ou ambígua); não há peso por produtor nem por qualidade.
 - Sem execução real: os testes são de contrato com afirmações sintéticas; nenhuma afirmação de VLM real foi usada.

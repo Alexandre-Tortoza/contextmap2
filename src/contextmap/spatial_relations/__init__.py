@@ -92,7 +92,6 @@ from contextmap.spatial_relations.run_artifact import (
     SpatialRelationsRunReader,
     SpatialRelationsRunWriter,
     lineage_from_resolution_manifest,
-    resolution_artifact_digest,
 )
 from contextmap.spatial_relations.serialization import (
     decode_candidate_set,
@@ -103,6 +102,13 @@ from contextmap.spatial_relations.serialization import (
     encode_relation,
     encode_relation_decision,
     encode_relation_evidence,
+)
+from contextmap.spatial_relations.statement_linking import (
+    LinkedStatements,
+    LinkFailure,
+    UnlinkedStatement,
+    UpstreamRelationStatement,
+    link_statements,
 )
 from contextmap.spatial_relations.statements import (
     EndpointLink,
@@ -152,6 +158,8 @@ __all__ = [
     "IncompatibleFrameError",
     "IncompatibleLineageError",
     "IncompleteRelationsRunArtifactError",
+    "LinkFailure",
+    "LinkedStatements",
     "MeasuredGeometry",
     "ObservationEvidenceResult",
     "ObservationRelationStatement",
@@ -186,6 +194,8 @@ __all__ = [
     "StatementPolarity",
     "UndeclaredAxisError",
     "UnlinkedEndpointError",
+    "UnlinkedStatement",
+    "UpstreamRelationStatement",
     "UpstreamStatementRef",
     "canonical_predicate",
     "decide_relations",
@@ -205,10 +215,10 @@ __all__ = [
     "evidence_id_for",
     "generate_relation_candidates",
     "lineage_from_resolution_manifest",
+    "link_statements",
     "observation_evidence_fingerprint",
     "observation_evidence_from_statements",
     "predicate_spec",
     "relation_id_for",
-    "resolution_artifact_digest",
     "resolved_entity_geometries",
 ]
