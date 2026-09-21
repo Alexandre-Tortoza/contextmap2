@@ -1,0 +1,185 @@
+"""Deterministic builders for Semantic Mapping tests."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
+from contextmap.ingestion import FrameId
+from contextmap.semantic_fusion import (
+    EvidenceContributionId,
+    EvidenceStance,
+    FusedEvidenceId,
+    FusedHypothesisId,
+    FusionSupportId,
+    HypothesisEvidence,
+    SemanticFusionRunId,
+    SupportSignal,
+    SupportSignalKind,
+)
+from contextmap.semantic_mapping import (
+    Entity,
+    EntityEvidenceLinks,
+    EntityGeometry,
+    EntityHypothesis,
+    EntityId,
+    EntityProvenance,
+    EntitySemanticState,
+    EntityTemporalState,
+    FusedEvidenceRef,
+    SemanticMapId,
+)
+from contextmap.shared import SourceTimestamp
+from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
+
+MAP_ID = MapId("map-0001")
+SEMANTIC_MAP_ID = SemanticMapId("semantic-map-0001")
+FUSION_RUN_ID = SemanticFusionRunId("fusion-run-0001")
+FUSED_EVIDENCE_ID = FusedEvidenceId("fused--support-000001")
+FUSION_SUPPORT_ID = FusionSupportId("support-000001")
+CLOCK_ID = "fixture:header"
+
+
+def timestamp(seconds: int, nanoseconds: int = 0, *, clock_id: str = CLOCK_ID) -> SourceTimestamp:
+    return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=clock_id)
+
+
+def geometry_refs(
+    indexes: Sequence[int], *, map_id: MapId = MAP_ID
+) -> tuple[GeometryReference, ...]:
+    return tuple(
+        GeometryReference(map_id=map_id, geometry_id=geometry_id_for(map_id=map_id, index=index))
+        for index in indexes
+    )
+
+
+def make_interpreter() -> BackendProvenance:
+    return BackendProvenance(
+        backend_id="qwen_vl",
+        capability="semantic_interpreter",
+        provider="alibaba",
+        model="qwen3-vl",
+        version="1",
+    )
+
+
+def make_scorer() -> BackendProvenance:
+    return BackendProvenance(
+        backend_id="clip_scorer",
+        capability="semantic_scorer",
+        provider="openai",
+        model="clip-vit-l14",
+        version="1",
+    )
+
+
+def claim_signal(value: float | None) -> SupportSignal:
+    return SupportSignal(
+        kind=SupportSignalKind.CLAIM_CONFIDENCE, producer=make_interpreter(), value=value
+    )
+
+
+def scorer_signal(value: float | None) -> SupportSignal:
+    return SupportSignal(kind=SupportSignalKind.SCORER_SUPPORT, producer=make_scorer(), value=value)
+
+
+def make_evidence_item(
+    *,
+    contribution: str = "contribution--support-000001--spatial-a",
+    claim: str = "claim-0001",
+    stance: EvidenceStance = EvidenceStance.SUPPORTING,
+    role: HypothesisRole = HypothesisRole.PRIMARY,
+    signals: tuple[SupportSignal, ...] | None = None,
+) -> HypothesisEvidence:
+    return HypothesisEvidence(
+        contribution_id=EvidenceContributionId(contribution),
+        claim_id=ClaimId(claim),
+        stance=stance,
+        role=role,
+        signals=(claim_signal(0.8),) if signals is None else signals,
+    )
+
+
+def make_hypothesis(
+    hypothesis_id: str = "hypothesis-0001",
+    label: str = "pallet",
+    *,
+    fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID,
+    evidence: tuple[HypothesisEvidence, ...] | None = None,
+) -> EntityHypothesis:
+    return EntityHypothesis(
+        fused_evidence_id=fused_evidence_id,
+        hypothesis_id=FusedHypothesisId(hypothesis_id),
+        label=label,
+        evidence=(make_evidence_item(),) if evidence is None else evidence,
+    )
+
+
+def make_geometry(
+    indexes: Sequence[int] = (0, 1, 2, 3), *, map_id: MapId = MAP_ID, frame: str = "map"
+) -> EntityGeometry:
+    return EntityGeometry(
+        geometry_refs=geometry_refs(indexes, map_id=map_id), map_frame=FrameId(frame)
+    )
+
+
+def make_semantic_state(
+    hypotheses: tuple[EntityHypothesis, ...] | None = None,
+) -> EntitySemanticState:
+    return EntitySemanticState(
+        hypotheses=(make_hypothesis(),) if hypotheses is None else hypotheses
+    )
+
+
+def make_evidence_links(
+    *, fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID
+) -> EntityEvidenceLinks:
+    return EntityEvidenceLinks(
+        fused_evidence=(
+            FusedEvidenceRef(
+                fusion_run_id=FUSION_RUN_ID,
+                fused_evidence_id=fused_evidence_id,
+                fusion_support_id=FUSION_SUPPORT_ID,
+            ),
+        )
+    )
+
+
+def make_temporal_state(
+    *, first: int = 10, last: int = 12, physical: int = 2, inference: int = 3
+) -> EntityTemporalState:
+    return EntityTemporalState(
+        first_seen=timestamp(first),
+        last_seen=timestamp(last),
+        physical_observation_count=physical,
+        inference_result_count=inference,
+    )
+
+
+def make_provenance() -> EntityProvenance:
+    return EntityProvenance(
+        materialization_policy_id="one-support-one-entity-v1",
+        identity_policy_id="support-derived-entity-id-v1",
+        configuration_fingerprint="sha256:cfg",
+        code_version="test",
+    )
+
+
+def make_entity(
+    entity_id: str = "entity--support-000001",
+    *,
+    semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
+    geometry: EntityGeometry | None = None,
+    semantic_state: EntitySemanticState | None = None,
+    evidence: EntityEvidenceLinks | None = None,
+    temporal_state: EntityTemporalState | None = None,
+) -> Entity:
+    return Entity(
+        entity_id=EntityId(entity_id),
+        semantic_map_id=semantic_map_id,
+        geometry=geometry or make_geometry(),
+        semantic_state=semantic_state or make_semantic_state(),
+        evidence=evidence or make_evidence_links(),
+        temporal_state=temporal_state or make_temporal_state(),
+        provenance=make_provenance(),
+    )
