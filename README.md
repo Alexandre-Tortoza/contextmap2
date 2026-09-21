@@ -153,7 +153,7 @@ Tags Git usam Semantic Versioning no formato `vMAJOR.MINOR.PATCH`. Durante a fas
 
 Uma tag válida deve apontar para `main` e dispara o pipeline de release.
 
-Consulte [docs/versioning.md](docs/versioning.md) para a política completa.
+Consulte [docs/versioning.md](docs/versioning.md) para a política completa. As mudanças por versão ficam em [CHANGELOG.md](CHANGELOG.md).
 
 ## Licença
 
