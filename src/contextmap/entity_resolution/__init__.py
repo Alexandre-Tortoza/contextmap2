@@ -72,6 +72,12 @@ from contextmap.entity_resolution.models import (
     ResolvedEntityReference,
     reference_order,
 )
+from contextmap.entity_resolution.pair_resolution import (
+    ComparisonChannels,
+    MatchEvidenceBuilder,
+    PairResolution,
+    resolve_candidate_pairs,
+)
 from contextmap.entity_resolution.representation_comparison import (
     REPRESENTATION_AGGREGATION_ID,
     REPRESENTATION_COMPARISON_POLICY_ID,
@@ -80,6 +86,11 @@ from contextmap.entity_resolution.representation_comparison import (
     RepresentationComparisonPolicy,
     RepresentationVectorSource,
     RunReaderRepresentationSource,
+)
+from contextmap.entity_resolution.resolution_policy import (
+    CONSERVATIVE_RESOLUTION_POLICY_ID,
+    ConservativeResolutionPolicy,
+    decide,
 )
 from contextmap.entity_resolution.retrieval import (
     CANDIDATE_RETRIEVAL_POLICY_ID,
@@ -125,6 +136,7 @@ __all__ = [
     "BASELINE_REFINEMENT_MODIFIERS",
     "CANDIDATE_RETRIEVAL_POLICY_ID",
     "COMPARISON_GATES_POLICY_ID",
+    "CONSERVATIVE_RESOLUTION_POLICY_ID",
     "GEOMETRY_COMPARISON_POLICY_ID",
     "REPRESENTATION_AGGREGATION_ID",
     "REPRESENTATION_COMPARISON_POLICY_ID",
@@ -138,7 +150,9 @@ __all__ = [
     "CandidacyAssessment",
     "CandidateRetrievalPolicy",
     "ChannelEvidence",
+    "ComparisonChannels",
     "ComparisonId",
+    "ConservativeResolutionPolicy",
     "DecisionProvenance",
     "EntityCandidate",
     "EntityCandidateSet",
@@ -160,7 +174,9 @@ __all__ = [
     "LoadedFeature",
     "LoadedRepresentation",
     "MatchChannel",
+    "MatchEvidenceBuilder",
     "MatchEvidenceProvenance",
+    "PairResolution",
     "PointRepresentationEvidence",
     "PolicyRef",
     "PolicyStage",
@@ -195,6 +211,7 @@ __all__ = [
     "compare_semantics",
     "compare_temporal",
     "comparison_id_for",
+    "decide",
     "decision_id_for",
     "decode_candidate_set",
     "decode_match_evidence",
@@ -208,5 +225,6 @@ __all__ = [
     "explain_candidacy",
     "normalize_label",
     "reference_order",
+    "resolve_candidate_pairs",
     "retrieve_candidate_sets",
 ]

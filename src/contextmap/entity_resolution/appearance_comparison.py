@@ -280,6 +280,11 @@ class AppearanceComparator:
         self._policy = policy
         self._profiles: dict[EntityReference, _Profile] = {}
 
+    @property
+    def policy(self) -> AppearanceComparisonPolicy:
+        """The policy this comparator applies."""
+        return self._policy
+
     def compare(self, entity_a: Entity, entity_b: Entity) -> AppearanceEvidence:
         """Compare the appearance of two entities.
 
