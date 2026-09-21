@@ -65,7 +65,6 @@ from contextmap.sensor_association import (
     SpatialObservation,
     SpatialObservationId,
 )
-from contextmap.sensor_association import allocate_run_index as allocate_association_index
 from contextmap.sensor_association.service import AssociationFrameInput
 from contextmap.state_estimation import (
     BODY_ENDPOINT,
@@ -164,8 +163,9 @@ class SyntheticChain:
 
 def _ingest(workspace: Path) -> SequenceArtifactReader:
     sequence = build_synthetic_sequence()
+    directory = workspace / "ingestion"
     with SequenceArtifactWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         artifact_id=SEQUENCE_ARTIFACT_ID,
     ) as writer:
@@ -173,7 +173,7 @@ def _ingest(workspace: Path) -> SequenceArtifactReader:
         for observation in sequence.observations:
             writer.add_observation(observation)
         writer.finalize()
-    return SequenceArtifactReader(workspace / "sequences" / SEQUENCE_NAME / "ci-fixture")
+    return SequenceArtifactReader(directory)
 
 
 def _estimate(workspace: Path, sequence: SequenceArtifactReader) -> StateEstimationRunReader:
@@ -328,6 +328,7 @@ def _associate(
     geometry: GeometricMapArtifactReader,
     results: dict[PerceptionResultId, PerceptionResult],
     run: PerceptionRunId,
+    run_index: int,
 ) -> tuple[SensorAssociationOutcome, SensorAssociationRunReader]:
     """Associate the regions of one perception run; a frame appears once per association run."""
     # O subconjunto de CI grava as imagens sem `calibration_id`, e a associação recusa uma imagem
@@ -365,18 +366,15 @@ def _associate(
         code_version="test",
     )
     outcome = SensorAssociationService().run(request)
-    index = allocate_association_index(workspace_root=workspace, sequence_name=SEQUENCE_NAME)
+    # A cadeia sintética tem uma associação por run de percepção, então cada uma ganha o seu
+    # diretório; no runtime há um único `<run>/sensor_association/` por execução.
+    directory = workspace / f"sensor_association-{run}"
     SensorAssociationRunWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId(f"association-{run}"),
-        run_index=index,
-        selection_label=str(run),
-        channel_label="geometry-only",
+        run_index=run_index,
     ).finalize(outcome)
-    directory = next(
-        (workspace / "runs" / "sensor-association" / SEQUENCE_NAME).glob(f"run-{index:04d}__*")
-    )
     return outcome, SensorAssociationRunReader(directory)
 
 
@@ -469,8 +467,8 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
             for position, run in enumerate((RUN_A, RUN_B))
         )
         associations = tuple(
-            _associate(workspace, sequence, trajectory, geometry, results, run)
-            for run in (RUN_A, RUN_B)
+            _associate(workspace, sequence, trajectory, geometry, results, run, run_index)
+            for run_index, run in enumerate((RUN_A, RUN_B), start=1)
         )
         fusion_outcomes, excluded, fusion = _fuse(
             workspace, sequence, geometry, associations, results, runs
