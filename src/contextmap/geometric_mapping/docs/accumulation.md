@@ -68,4 +68,4 @@ Nenhum campo de label, `SemanticClaim`, embedding, entidade ou relação existe 
 ## Limitações
 
 - A consulta espacial e o índice derivado estão em [`spatial-access.md`](spatial-access.md).
-- A escrita exige NumPy (extras `dev` e `ros1`, não as dependências base).
+- A escrita exige NumPy, que é dependência base do pacote (`numpy<2.4`).
