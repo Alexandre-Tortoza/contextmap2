@@ -22,8 +22,7 @@ belongs to the integrity validation that consumes this manifest.
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -34,6 +33,7 @@ from contextmap.evaluation._persistence import (
     file_digest,
     write_immutable_json,
 )
+from contextmap.evaluation._validation import require_sha256, require_text, require_unique
 from contextmap.ingestion import CalibrationReferenceId, SourceObservationId
 from contextmap.shared import SourceTimestamp
 
@@ -45,8 +45,6 @@ MANIFEST_FILENAME = "manifest.json"
 
 ReferenceSampleId = NewType("ReferenceSampleId", str)
 """Stable identity of one evaluation sample inside a reference set."""
-
-_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class ReferenceSetError(ValueError):
@@ -125,10 +123,10 @@ class ReferenceSource:
 
     def __post_init__(self) -> None:
         """Require identity, a valid hash and an explicit license."""
-        _text("source_id", self.source_id)
-        _text("source identity", self.identity)
-        _text("source license", self.license)
-        _sha256("source content_hash", self.content_hash)
+        require_text("source_id", self.source_id)
+        require_text("source identity", self.identity)
+        require_text("source license", self.license)
+        require_sha256("source content_hash", self.content_hash)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -171,9 +169,9 @@ class CalibrationIdentity:
 
     def __post_init__(self) -> None:
         """Require identity and a valid hash."""
-        _text("calibration_id", self.calibration_id)
-        _text("calibration source_id", self.source_id)
-        _sha256("calibration content_hash", self.content_hash)
+        require_text("calibration_id", self.calibration_id)
+        require_text("calibration source_id", self.source_id)
+        require_sha256("calibration content_hash", self.content_hash)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -209,13 +207,13 @@ class StratumDefinition:
 
     def __post_init__(self) -> None:
         """Require a name, a description and unique non-empty values."""
-        _text("stratum name", self.name)
-        _text("stratum description", self.description)
+        require_text("stratum name", self.name)
+        require_text("stratum description", self.description)
         if not self.values:
             raise ValueError(f"stratum {self.name!r} needs at least one value")
         for value in self.values:
-            _text("stratum value", value)
-        _unique(f"value of stratum {self.name!r}", self.values)
+            require_text("stratum value", value)
+        require_unique(f"value of stratum {self.name!r}", self.values)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -240,8 +238,8 @@ class SampleStratum:
 
     def __post_init__(self) -> None:
         """Require a factor name and a value."""
-        _text("stratum name", self.name)
-        _text("stratum value", self.value)
+        require_text("stratum name", self.name)
+        require_text("stratum value", self.value)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -262,7 +260,7 @@ class SampleGroup:
 
     def __post_init__(self) -> None:
         """Require a key."""
-        _text("group key", self.key)
+        require_text("group key", self.key)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -331,15 +329,15 @@ class ReferenceSample:
 
     def __post_init__(self) -> None:
         """Require identity, physical observations and unique assignments."""
-        _text("sample_id", self.sample_id)
-        _text("sample source_id", self.source_id)
-        _sha256("sample content_hash", self.content_hash)
+        require_text("sample_id", self.sample_id)
+        require_text("sample source_id", self.source_id)
+        require_sha256("sample content_hash", self.content_hash)
         if not self.observation_ids:
             raise ValueError(f"sample {self.sample_id!r} needs at least one source observation")
-        _unique(f"observation id of sample {self.sample_id!r}", self.observation_ids)
-        _unique(f"calibration id of sample {self.sample_id!r}", self.calibration_ids)
-        _unique(f"stratum of sample {self.sample_id!r}", (item.name for item in self.strata))
-        _unique(
+        require_unique(f"observation id of sample {self.sample_id!r}", self.observation_ids)
+        require_unique(f"calibration id of sample {self.sample_id!r}", self.calibration_ids)
+        require_unique(f"stratum of sample {self.sample_id!r}", (item.name for item in self.strata))
+        require_unique(
             f"group of sample {self.sample_id!r}",
             (f"{item.unit.value}:{item.key}" for item in self.groups),
         )
@@ -384,8 +382,8 @@ class ProvenanceReview:
 
     def __post_init__(self) -> None:
         """Require who reviewed and how."""
-        _text("reviewer", self.reviewer)
-        _text("review method", self.method)
+        require_text("reviewer", self.reviewer)
+        require_text("review method", self.method)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -423,12 +421,12 @@ class AnnotationProvenance:
 
     def __post_init__(self) -> None:
         """Require identity, annotator and method."""
-        _text("provenance_id", self.provenance_id)
-        _text("annotator", self.annotator)
-        _text("annotation method", self.method)
+        require_text("provenance_id", self.provenance_id)
+        require_text("annotator", self.annotator)
+        require_text("annotation method", self.method)
         for artifact in self.seeded_from_artifacts:
-            _text("seeding artifact", artifact)
-        _unique("seeding artifact", self.seeded_from_artifacts)
+            require_text("seeding artifact", artifact)
+        require_unique("seeding artifact", self.seeded_from_artifacts)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -481,16 +479,16 @@ class AnnotationFileEntry:
 
     def __post_init__(self) -> None:
         """Require identity, schema, a contained relative path and a valid hash."""
-        _text("annotation_id", self.annotation_id)
-        _text("annotation schema", self.schema)
-        _text("annotation provenance_id", self.provenance_id)
-        _sha256("annotation content_hash", self.content_hash)
+        require_text("annotation_id", self.annotation_id)
+        require_text("annotation schema", self.schema)
+        require_text("annotation provenance_id", self.provenance_id)
+        require_sha256("annotation content_hash", self.content_hash)
         pure = PurePosixPath(self.path)
         if not pure.parts or pure.is_absolute() or ".." in pure.parts or "\\" in self.path:
             raise ValueError(
                 f"annotation path must be a contained relative POSIX path, got {self.path!r}"
             )
-        _unique(f"sample id of annotation {self.annotation_id!r}", self.sample_ids)
+        require_unique(f"sample id of annotation {self.annotation_id!r}", self.sample_ids)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -528,8 +526,8 @@ class ReferenceSplit:
 
     def __post_init__(self) -> None:
         """Require a name, and a selection without repeated samples."""
-        _text("split name", self.name)
-        _unique(f"sample id of split {self.name!r}", self.sample_ids)
+        require_text("split name", self.name)
+        require_unique(f"sample id of split {self.name!r}", self.sample_ids)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -569,10 +567,12 @@ class SplitScheme:
 
     def __post_init__(self) -> None:
         """Require an explicit unit rationale and unique split names."""
-        _text("scheme_id", self.scheme_id)
-        _text("scheme task", self.task)
-        _text("scheme rationale", self.rationale)
-        _unique(f"split name of scheme {self.scheme_id!r}", (item.name for item in self.splits))
+        require_text("scheme_id", self.scheme_id)
+        require_text("scheme task", self.task)
+        require_text("scheme rationale", self.rationale)
+        require_unique(
+            f"split name of scheme {self.scheme_id!r}", (item.name for item in self.splits)
+        )
         if self.adjacency_window_ns is not None and self.adjacency_window_ns < 0:
             raise ValueError("adjacency_window_ns must not be negative")
 
@@ -645,19 +645,19 @@ class ReferenceSetManifest:
 
     def __post_init__(self) -> None:
         """Require unique identities and references that resolve inside the manifest."""
-        _text("reference_set_id", self.reference_set_id)
-        _text("reference-set version", self.version)
+        require_text("reference_set_id", self.reference_set_id)
+        require_text("reference-set version", self.version)
         if not self.sources:
             raise ValueError("a reference set needs at least one source")
         if not self.samples:
             raise ValueError("a reference set needs at least one sample")
-        _unique("source id", (item.source_id for item in self.sources))
-        _unique("calibration id", (item.calibration_id for item in self.calibrations))
-        _unique("stratum name", (item.name for item in self.stratum_definitions))
-        _unique("sample id", (item.sample_id for item in self.samples))
-        _unique("provenance id", (item.provenance_id for item in self.provenance))
-        _unique("annotation id", (item.annotation_id for item in self.annotations))
-        _unique("split scheme id", (item.scheme_id for item in self.split_schemes))
+        require_unique("source id", (item.source_id for item in self.sources))
+        require_unique("calibration id", (item.calibration_id for item in self.calibrations))
+        require_unique("stratum name", (item.name for item in self.stratum_definitions))
+        require_unique("sample id", (item.sample_id for item in self.samples))
+        require_unique("provenance id", (item.provenance_id for item in self.provenance))
+        require_unique("annotation id", (item.annotation_id for item in self.annotations))
+        require_unique("split scheme id", (item.scheme_id for item in self.split_schemes))
         self._check_references()
 
     def _check_references(self) -> None:
@@ -881,21 +881,3 @@ def require_version_bump_on_change(
             f"reference set {current.reference_set_id!r} changed content without a new version "
             f"({current.version!r})"
         )
-
-
-def _text(name: str, value: str) -> None:
-    if not value or not value.strip():
-        raise ValueError(f"{name} must not be empty")
-
-
-def _sha256(name: str, value: str) -> None:
-    if not _SHA256.fullmatch(value):
-        raise ValueError(f"{name} must be 'sha256:<64 hex digits>', got {value!r}")
-
-
-def _unique(name: str, values: Iterable[str]) -> None:
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            raise ValueError(f"{name} must be unique; {value!r} is repeated")
-        seen.add(value)
