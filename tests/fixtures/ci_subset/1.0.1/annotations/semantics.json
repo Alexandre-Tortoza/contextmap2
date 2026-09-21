@@ -1,0 +1,49 @@
+{
+  "normalization": {
+    "aliases": [],
+    "policy_id": "casefold-exact/1"
+  },
+  "records": [
+    {
+      "attributes": [
+        {
+          "name": "material",
+          "value": "wood"
+        }
+      ],
+      "concepts": [
+        "wooden pallet",
+        "pallet"
+      ],
+      "observation_id": "frame-0000",
+      "region_id": "region-a",
+      "rejected_concepts": [
+        "shelf"
+      ],
+      "sample_id": "sample-0000",
+      "status": "labeled"
+    },
+    {
+      "attributes": [],
+      "concepts": [
+        "crate",
+        "box"
+      ],
+      "observation_id": "frame-0000",
+      "region_id": "region-b",
+      "rejected_concepts": [],
+      "sample_id": "sample-0000",
+      "status": "ambiguous"
+    },
+    {
+      "attributes": [],
+      "concepts": [],
+      "observation_id": "frame-0000",
+      "region_id": null,
+      "rejected_concepts": [],
+      "sample_id": "sample-0000",
+      "status": "unknown"
+    }
+  ],
+  "schema": "contextmap.reference.semantics/v1"
+}

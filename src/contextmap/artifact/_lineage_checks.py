@@ -91,19 +91,19 @@ def check_lineage(
 def _check_entity(entity: ContextEntity, by_id: Mapping[str, UpstreamArtifact]) -> None:
     owner = f"entity {entity.entity_id!r}"
     _require_kind(
-        by_id, entity.source.artifact_id, ArtifactKind.ENTITY_RESOLUTION_RUN, f"{owner} source"
+        by_id,
+        entity.source.resolution_run_id,
+        ArtifactKind.ENTITY_RESOLUTION_RUN,
+        f"{owner} source",
     )
-    for member in entity.member_entities:
-        _require_kind(
-            by_id, member.artifact_id, ArtifactKind.SEMANTIC_MAP, f"{owner} member_entities"
-        )
-    for decision in entity.resolution_decisions:
-        _require_kind(
-            by_id,
-            decision.artifact_id,
-            ArtifactKind.ENTITY_RESOLUTION_RUN,
-            f"{owner} resolution_decisions",
-        )
+    for name, references in (
+        ("member_entities", entity.member_entities),
+        ("unresolved_neighbors", entity.unresolved_neighbors),
+    ):
+        for reference in references:
+            _require_kind(
+                by_id, reference.semantic_map_id, ArtifactKind.SEMANTIC_MAP, f"{owner} {name}"
+            )
     _check_origin(entity.origin, by_id, owner=owner)
     for hypothesis in entity.semantic_state.hypotheses:
         _check_origin(hypothesis.origin, by_id, owner=f"{owner} hypothesis {hypothesis.label!r}")
@@ -112,7 +112,7 @@ def _check_entity(entity: ContextEntity, by_id: Mapping[str, UpstreamArtifact]) 
 def _check_relation(relation: ContextRelation, by_id: Mapping[str, UpstreamArtifact]) -> None:
     owner = f"relation {relation.relation_id!r}"
     _require_kind(
-        by_id, relation.source.artifact_id, ArtifactKind.SPATIAL_RELATIONS_RUN, f"{owner} source"
+        by_id, relation.source_run_id, ArtifactKind.SPATIAL_RELATIONS_RUN, f"{owner} source"
     )
     if relation.origin.kind is DerivationKind.SENSOR_OBSERVED:
         raise ProvenanceError(

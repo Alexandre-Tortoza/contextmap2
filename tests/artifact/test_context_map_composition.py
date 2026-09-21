@@ -11,6 +11,7 @@ from context_map_builders import (
     ENTITY_RESOLUTION_ARTIFACT_ID,
     GEOMETRIC_MAP_ID,
     POINT_COUNT,
+    SEMANTIC_MAP_ARTIFACT_ID,
     context_map,
     entity,
     entity_capabilities,
@@ -20,22 +21,31 @@ from context_map_builders import (
     metadata,
     populated_map,
     relation,
+    resolved_reference,
     semantic_state,
+    source_entity,
     upstream_record,
 )
 
 from contextmap.artifact import (
     AmbiguityStatus,
     ContextEntity,
+    ContextMapRecordError,
     ContextRelation,
     ForeignContextEntityReferenceError,
     ReferenceIntegrityError,
-    RelationState,
     UnknownContextEntityError,
     context_map_from_record,
     context_map_to_record,
 )
 from contextmap.geometric_mapping import GeometryId, GeometryReference, MapId, geometry_id_for
+from contextmap.spatial_relations import (
+    RelationId,
+    RelationPredicate,
+    RelationState,
+    RelationUncertaintyKind,
+    SpatialRelationsRunId,
+)
 
 # --- entities: identity scope and authoritative geometry ---------------------------------------
 
@@ -138,21 +148,20 @@ def test_two_entities_may_share_geometry_support() -> None:
 def test_every_entity_states_the_upstream_record_it_maps_to() -> None:
     found = populated_map().entity(entity_reference("entity-0001"))
 
-    assert found.source == upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, "resolved-entity-0001")
+    assert found.source == resolved_reference("resolved-entity-0001")
 
 
 def test_a_source_identity_is_mapped_explicitly_never_rewritten_silently() -> None:
     # O id no mapa pode diferir do id de origem; o mapeamento é o registro `source`.
-    renamed = entity(
-        "entity-0001", source=upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, "resolved-entity-77")
-    )
+    renamed = entity("entity-0001", source=resolved_reference("resolved-entity-77"))
 
-    assert renamed.entity_id != renamed.source.record_id
-    assert renamed.source.record_id == "resolved-entity-77"
+    assert renamed.entity_id != renamed.source.resolved_entity_id
+    assert renamed.source.resolved_entity_id == "resolved-entity-77"
+    assert renamed.source.resolution_run_id == ENTITY_RESOLUTION_ARTIFACT_ID
 
 
-def test_two_entities_cannot_map_to_the_same_upstream_record() -> None:
-    twin_source = upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, "resolved-shared")
+def test_two_entities_cannot_map_to_the_same_resolved_entity() -> None:
+    twin_source = resolved_reference("resolved-shared")
     twins = (
         entity("entity-0001", source=twin_source),
         entity("entity-0002", source=twin_source),
@@ -163,14 +172,42 @@ def test_two_entities_cannot_map_to_the_same_upstream_record() -> None:
 
 
 @pytest.mark.parametrize("field", ["artifact_id", "record_id"])
-def test_an_upstream_record_reference_needs_both_identities(field: str) -> None:
+def test_an_evidence_record_reference_needs_both_identities(field: str) -> None:
     with pytest.raises(ValueError, match=field):
         upstream_record(**{"artifact_id": "a", "record_id": "r", field: " "})
 
 
-def test_an_upstream_artifact_identity_is_not_a_path() -> None:
+def test_an_evidence_artifact_identity_is_not_a_path() -> None:
     with pytest.raises(ValueError, match="path"):
         upstream_record("workspace/run-0001/entities", "r")
+
+
+# --- identity uncertainty: unresolved neighbors ------------------------------------------------
+
+
+def test_an_entity_keeps_the_source_entities_its_resolution_left_unresolved() -> None:
+    neighbor = source_entity("semantic-elsewhere")
+
+    result = entity("entity-0001", unresolved_neighbors=(neighbor,))
+
+    assert result.unresolved_neighbors == (neighbor,)
+    assert entity().unresolved_neighbors == ()
+
+
+def test_an_unresolved_neighbor_is_never_also_a_member() -> None:
+    member = source_entity("semantic-entity-0001")
+
+    with pytest.raises(ValueError, match="member"):
+        entity("entity-0001", unresolved_neighbors=(member,))
+
+
+def test_unresolved_neighbors_are_sorted_and_unique() -> None:
+    first, second = source_entity("semantic-a"), source_entity("semantic-b")
+
+    with pytest.raises(ValueError, match="sorted"):
+        entity(unresolved_neighbors=(second, first))
+    with pytest.raises(ValueError, match="unique"):
+        entity(unresolved_neighbors=(first, first))
 
 
 # --- semantic state: unresolved and conflicting states are preserved --------------------------
@@ -229,7 +266,7 @@ def test_a_relation_names_an_ordered_subject_and_object() -> None:
     found = populated_map().relations[0]
 
     assert found.subject == entity_reference("entity-0001")
-    assert found.predicate == "on"
+    assert found.predicate is RelationPredicate.ON_TOP_OF
     assert found.object == entity_reference("entity-0002")
 
 
@@ -242,7 +279,9 @@ def test_every_relation_resolves_to_valid_entities() -> None:
 
 
 def test_a_relation_to_an_unknown_entity_is_rejected() -> None:
-    dangling = (relation("relation-0001", "entity-0001", "on", "entity-9999"),)
+    dangling = (
+        relation("relation-0001", "entity-0001", RelationPredicate.ON_TOP_OF, "entity-9999"),
+    )
 
     with pytest.raises(ReferenceIntegrityError, match="entity-9999"):
         populated_map(relations=dangling)
@@ -252,7 +291,7 @@ def test_a_relation_to_an_entity_of_another_map_is_rejected() -> None:
     foreign = relation(
         "relation-0001",
         "entity-0001",
-        "on",
+        RelationPredicate.ON_TOP_OF,
         "entity-0002",
         object=entity_reference("entity-0002", context_map_id="context-map--other--0001"),
     )
@@ -263,17 +302,20 @@ def test_a_relation_to_an_entity_of_another_map_is_rejected() -> None:
 
 def test_a_relation_cannot_relate_an_entity_to_itself() -> None:
     with pytest.raises(ValueError, match="itself"):
-        relation("relation-0001", "entity-0001", "on", "entity-0001")
+        relation("relation-0001", "entity-0001", RelationPredicate.ON_TOP_OF, "entity-0001")
 
 
-def test_a_relation_needs_a_predicate() -> None:
-    with pytest.raises(ValueError, match="predicate"):
-        relation(predicate=" ")
+def test_a_predicate_is_one_of_the_spatial_relations_taxonomy() -> None:
+    record = context_map_to_record(populated_map())
+    record["relations"][0]["predicate"] = "adjacent"
+
+    with pytest.raises(ContextMapRecordError, match="RelationPredicate"):
+        context_map_from_record(record)
 
 
 def test_relations_are_unique_and_sorted_by_id() -> None:
-    first = relation("relation-0001", "entity-0001", "on", "entity-0002")
-    second = relation("relation-0002", "entity-0002", "next_to", "entity-0003")
+    first = relation("relation-0001", "entity-0001", RelationPredicate.ON_TOP_OF, "entity-0002")
+    second = relation("relation-0002", "entity-0002", RelationPredicate.NEXT_TO, "entity-0003")
 
     with pytest.raises(ValueError, match="sorted"):
         populated_map(relations=(second, first))
@@ -281,25 +323,84 @@ def test_relations_are_unique_and_sorted_by_id() -> None:
         populated_map(relations=(first, first))
 
 
-def test_two_relations_cannot_map_to_the_same_upstream_record() -> None:
-    same = upstream_record("spatial-relations--run-0001", "source-shared")
-    first = relation("relation-0001", "entity-0001", "on", "entity-0002", source=same)
-    second = relation("relation-0002", "entity-0002", "next_to", "entity-0003", source=same)
+def test_two_relations_cannot_map_to_the_same_spatial_relation() -> None:
+    run, shared = SpatialRelationsRunId("spatial-relations--run-0001"), RelationId("source-shared")
+    first = relation(
+        "relation-0001",
+        "entity-0001",
+        RelationPredicate.ON_TOP_OF,
+        "entity-0002",
+        source_run_id=run,
+        source_relation_id=shared,
+    )
+    second = relation(
+        "relation-0002",
+        "entity-0002",
+        RelationPredicate.NEXT_TO,
+        "entity-0003",
+        source_run_id=run,
+        source_relation_id=shared,
+    )
 
     with pytest.raises(ReferenceIntegrityError, match="source-shared"):
         populated_map(relations=(first, second))
 
 
-def test_unresolved_and_conflicting_relations_are_preserved_with_their_state() -> None:
+def test_supported_unresolved_and_rejected_relations_keep_their_state() -> None:
     result = populated_map()
 
     assert result.relations[0].state is RelationState.SUPPORTED
     assert result.relations[1].state is RelationState.UNRESOLVED
-    conflicting = relation(
-        "relation-0003", "entity-0001", "next_to", "entity-0003", state=RelationState.CONFLICTING
+    rejected = relation(
+        "relation-0003",
+        "entity-0001",
+        RelationPredicate.NEXT_TO,
+        "entity-0003",
+        state=RelationState.REJECTED,
     )
-    both = populated_map(relations=(*result.relations, conflicting))
-    assert both.relations[2].state is RelationState.CONFLICTING
+    both = populated_map(relations=(*result.relations, rejected))
+    assert both.relations[2].state is RelationState.REJECTED
+
+
+def test_an_unresolved_relation_says_why_and_conflicting_evidence_stays_distinct() -> None:
+    result = populated_map()
+    assert result.relations[1].uncertainty_kinds == (RelationUncertaintyKind.INSUFFICIENT_EVIDENCE,)
+
+    conflicting = relation(
+        "relation-0002",
+        "entity-0002",
+        RelationPredicate.NEXT_TO,
+        "entity-0003",
+        state=RelationState.UNRESOLVED,
+        uncertainty_kinds=(RelationUncertaintyKind.CONFLICTING_EVIDENCE,),
+    )
+
+    assert conflicting.uncertainty_kinds != result.relations[1].uncertainty_kinds
+
+
+def test_an_unresolved_relation_without_a_reason_is_rejected() -> None:
+    with pytest.raises(ValueError, match="says why"):
+        relation(state=RelationState.UNRESOLVED, uncertainty_kinds=())
+
+
+@pytest.mark.parametrize("state", [RelationState.SUPPORTED, RelationState.REJECTED])
+def test_a_decided_relation_carries_no_uncertainty(state: RelationState) -> None:
+    with pytest.raises(ValueError, match="no uncertainty"):
+        relation(state=state, uncertainty_kinds=(RelationUncertaintyKind.CONFLICTING_EVIDENCE,))
+
+
+def test_uncertainty_kinds_are_sorted_and_unique() -> None:
+    kinds = (
+        RelationUncertaintyKind.CONFLICTING_EVIDENCE,
+        RelationUncertaintyKind.INSUFFICIENT_EVIDENCE,
+    )
+    unresolved = RelationState.UNRESOLVED
+
+    assert relation(state=unresolved, uncertainty_kinds=kinds).uncertainty_kinds == kinds
+    with pytest.raises(ValueError, match="sorted"):
+        relation(state=unresolved, uncertainty_kinds=tuple(reversed(kinds)))
+    with pytest.raises(ValueError, match="unique"):
+        relation(state=unresolved, uncertainty_kinds=(kinds[0], kinds[0]))
 
 
 # --- traversal ---------------------------------------------------------------------------------
@@ -360,10 +461,16 @@ def test_relations_require_the_relations_capability() -> None:
 
 def test_the_declared_predicates_must_match_the_relations_present() -> None:
     with pytest.raises(ValueError, match="relation_predicates"):
-        populated_map(metadata=metadata(capabilities=entity_capabilities("on")))
+        populated_map(
+            metadata=metadata(capabilities=entity_capabilities(RelationPredicate.ON_TOP_OF))
+        )
     with pytest.raises(ValueError, match="relation_predicates"):
         populated_map(
-            metadata=metadata(capabilities=entity_capabilities("on", "next_to", "inside"))
+            metadata=metadata(
+                capabilities=entity_capabilities(
+                    RelationPredicate.ON_TOP_OF, RelationPredicate.NEXT_TO, RelationPredicate.INSIDE
+                )
+            )
         )
 
 
@@ -394,15 +501,18 @@ def test_the_record_carries_references_and_identity_mappings() -> None:
 
     first = record["entities"][0]
     assert first["source"] == {
-        "artifact_id": ENTITY_RESOLUTION_ARTIFACT_ID,
-        "record_id": "resolved-entity-0001",
+        "resolution_run_id": ENTITY_RESOLUTION_ARTIFACT_ID,
+        "resolved_entity_id": "resolved-entity-0001",
     }
     assert first["geometry_refs"][0]["map_id"] == GEOMETRIC_MAP_ID
     assert record["relations"][0]["subject"] == {
         "context_map_id": CONTEXT_MAP_ID,
         "entity_id": "entity-0001",
     }
+    assert record["relations"][0]["predicate"] == "on_top_of"
     assert record["relations"][1]["state"] == "unresolved"
+    assert record["relations"][1]["uncertainty_kinds"] == ["insufficient_evidence"]
+    assert first["member_entities"][0]["semantic_map_id"] == SEMANTIC_MAP_ARTIFACT_ID
 
 
 def test_a_dangling_reference_in_a_record_is_not_repaired_on_decode() -> None:

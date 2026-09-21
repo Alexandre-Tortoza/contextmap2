@@ -67,6 +67,7 @@ from contextmap.geometric_mapping import (
     geometry_id_for,
 )
 from contextmap.shared import file_entry
+from contextmap.spatial_relations import RelationPredicate
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "context_map_artifact" / "v0.1.0"
 FIXTURE_CONTENT_IDENTITY = "sha256:a2be8fdd3668bb05f31639154db31e636783bca282a638ee795da41c5cc43f40"
@@ -202,14 +203,19 @@ def test_one_entity_of_a_large_map_is_read_without_reading_the_others(
         entity(f"entity-{n:05d}", geometry=(n % 990, n % 990 + 1, n % 990 + 2)) for n in range(2000)
     )
     chain = tuple(
-        relation(f"relation-{n:05d}", f"entity-{n:05d}", "on", f"entity-{n + 1:05d}")
+        relation(
+            f"relation-{n:05d}",
+            f"entity-{n:05d}",
+            RelationPredicate.ON_TOP_OF,
+            f"entity-{n + 1:05d}",
+        )
         for n in range(0, 1998, 2)
     )
     large = pinned(
         populated_map(
             entities=entities,
             relations=chain,
-            metadata=metadata(capabilities=entity_capabilities("on")),
+            metadata=metadata(capabilities=entity_capabilities(RelationPredicate.ON_TOP_OF)),
         ),
         world,
     )

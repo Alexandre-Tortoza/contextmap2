@@ -16,7 +16,6 @@ from contextmap.artifact.composition import (
     ContextRelation,
     ContextSemanticState,
     LabelHypothesis,
-    RelationState,
 )
 from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
 from contextmap.artifact.metadata import (
@@ -156,7 +155,6 @@ __all__ = [
     "ProvenanceError",
     "RecordTableError",
     "ReferenceIntegrityError",
-    "RelationState",
     "Requirement",
     "SchemaVersion",
     "Severity",

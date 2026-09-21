@@ -36,14 +36,27 @@ from contextmap.artifact import (
     MapFrame,
     ObservationWindow,
     PolicyRef,
-    RelationState,
     SourceSequence,
     UpstreamArtifact,
     UpstreamRecordRef,
 )
+from contextmap.entity_resolution import (
+    EntityResolutionRunId,
+    ResolutionDecisionId,
+    ResolvedEntityId,
+    ResolvedEntityReference,
+)
 from contextmap.geometric_mapping import Bounds3D, GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import FrameId
+from contextmap.semantic_mapping import EntityId, EntityReference, SemanticMapId
 from contextmap.shared import SourceTimestamp
+from contextmap.spatial_relations import (
+    RelationId,
+    RelationPredicate,
+    RelationState,
+    RelationUncertaintyKind,
+    SpatialRelationsRunId,
+)
 
 CONTEXT_MAP_ID = ContextMapId("context-map--corridor-02--0001")
 GEOMETRIC_MAP_ID = MapId("corridor-02--map-run-0001")
@@ -168,6 +181,24 @@ def upstream_record(artifact_id: str, record_id: str) -> UpstreamRecordRef:
     return UpstreamRecordRef(artifact_id=artifact_id, record_id=record_id)
 
 
+def resolved_reference(
+    name: str, *, run_id: str = ENTITY_RESOLUTION_ARTIFACT_ID
+) -> ResolvedEntityReference:
+    """Build the reference to the resolved entity a context entity maps to."""
+    return ResolvedEntityReference(
+        resolution_run_id=EntityResolutionRunId(run_id), resolved_entity_id=ResolvedEntityId(name)
+    )
+
+
+def source_entity(name: str, *, semantic_map_id: str = SEMANTIC_MAP_ARTIFACT_ID) -> EntityReference:
+    """Build the reference to a source entity of a semantic map."""
+    return EntityReference(semantic_map_id=SemanticMapId(semantic_map_id), entity_id=EntityId(name))
+
+
+def decision_id(name: str) -> ResolutionDecisionId:
+    return ResolutionDecisionId(name)
+
+
 def entity_reference(
     entity_id: str, *, context_map_id: str = CONTEXT_MAP_ID
 ) -> ContextEntityReference:
@@ -272,9 +303,10 @@ def entity(
     return replace(
         ContextEntity(
             entity_id=ContextEntityId(entity_id),
-            source=upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, f"resolved-{entity_id}"),
-            member_entities=(upstream_record(SEMANTIC_MAP_ARTIFACT_ID, f"semantic-{entity_id}"),),
+            source=resolved_reference(f"resolved-{entity_id}"),
+            member_entities=(source_entity(f"semantic-{entity_id}"),),
             resolution_decisions=(),
+            unresolved_neighbors=(),
             geometry_refs=tuple(geometry_ref(index) for index in geometry),
             semantic_state=semantic_state(),
             origin=fused_origin(entity_id),
@@ -286,25 +318,27 @@ def entity(
 def relation(
     relation_id: str = "relation-0001",
     subject: str = "entity-0001",
-    predicate: str = "on",
+    predicate: RelationPredicate = RelationPredicate.ON_TOP_OF,
     object_: str = "entity-0002",
     **overrides: Any,
 ) -> ContextRelation:
     return replace(
         ContextRelation(
             relation_id=ContextRelationId(relation_id),
-            source=upstream_record(SPATIAL_RELATIONS_ARTIFACT_ID, f"source-{relation_id}"),
+            source_run_id=SpatialRelationsRunId(SPATIAL_RELATIONS_ARTIFACT_ID),
+            source_relation_id=RelationId(f"source-{relation_id}"),
             subject=entity_reference(subject),
             predicate=predicate,
             object=entity_reference(object_),
             state=RelationState.SUPPORTED,
+            uncertainty_kinds=(),
             origin=geometric_origin(relation_id),
         ),
         **overrides,
     )
 
 
-def entity_capabilities(*predicates: str) -> DeclaredCapabilities:
+def entity_capabilities(*predicates: RelationPredicate) -> DeclaredCapabilities:
     """Declare geometry and entities, and relations when predicates are given."""
     if not predicates:
         return DeclaredCapabilities(
@@ -312,7 +346,7 @@ def entity_capabilities(*predicates: str) -> DeclaredCapabilities:
         )
     return DeclaredCapabilities(
         content=(MapCapability.ENTITIES, MapCapability.GEOMETRY, MapCapability.RELATIONS),
-        relation_predicates=tuple(sorted(set(predicates))),
+        relation_predicates=tuple(sorted(set(predicates), key=lambda item: item.value)),
     )
 
 
@@ -350,17 +384,20 @@ def populated_map(**overrides: Any) -> ContextMap:
         ),
     )
     relations = (
-        relation("relation-0001", "entity-0001", "on", "entity-0002"),
+        relation("relation-0001", "entity-0001", RelationPredicate.ON_TOP_OF, "entity-0002"),
         relation(
             "relation-0002",
             "entity-0002",
-            "next_to",
+            RelationPredicate.NEXT_TO,
             "entity-0003",
             state=RelationState.UNRESOLVED,
+            uncertainty_kinds=(RelationUncertaintyKind.INSUFFICIENT_EVIDENCE,),
         ),
     )
     defaults: dict[str, Any] = {
-        "metadata": metadata(capabilities=entity_capabilities("on", "next_to")),
+        "metadata": metadata(
+            capabilities=entity_capabilities(RelationPredicate.ON_TOP_OF, RelationPredicate.NEXT_TO)
+        ),
         "entities": entities,
         "relations": relations,
     }
