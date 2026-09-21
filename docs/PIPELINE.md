@@ -631,7 +631,7 @@ Opcional/experimental:
 
 PTv3 não é requisito automático do canonical pipeline. Seu uso deve ser justificado por avaliação/ablation.
 
-No estado atual, o descritor determinístico está implementado e o PTv3 tem apenas a **fronteira** (`PTv3PointEncoder` atrás de um `PTv3Runtime` injetável, sem torch nem pesos no ambiente de desenvolvimento): nenhuma execução real foi feita e a comparação contra `off` e contra o descritor, com custo e VRAM reais, continua pendente.
+No estado atual, o descritor determinístico está implementado (e já foi avaliado sobre geometria real do corredor-02) e o PTv3 tem a **fronteira** (`PTv3PointEncoder` atrás de um `PTv3Runtime` injetável) e um **runtime real sobre o Pointcept** (`PointceptPTv3Runtime`, só o backbone, num ambiente CUDA 12.6 separado): a passagem real por ele, com tempo e VRAM medidos, e a comparação contra `off` e contra o descritor continuam pendentes.
 
 ### Saída
 
