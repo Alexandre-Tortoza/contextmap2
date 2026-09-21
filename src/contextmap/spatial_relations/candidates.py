@@ -16,7 +16,8 @@ and a sweep only pairs boxes whose gap along that axis is within the largest rea
 actually near each other. Pairs the sweep proves farther apart than every reach are not enumerated
 and are only counted, which keeps the exclusion record bounded and honest.
 
-Every precondition is a *necessary* condition of the corresponding evaluator, on the assumption
+Every precondition is a *necessary* condition for the corresponding evaluator to *support* the
+relation, on the assumption
 that the reaches of the policy cover the distance tolerances of the evaluators. If they do not, a
 true relation can be lost before it is measured; that loss is a candidate-retrieval failure and is
 measured separately from predicate quality.

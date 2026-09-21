@@ -27,7 +27,7 @@ generate_relation_candidates(
 
 ## Pré-condições
 
-Cada uma é uma condição **necessária** do avaliador correspondente. São verificadas em ordem fixa, e a primeira que falha é a razão registrada:
+Cada uma é uma condição **necessária** para que o avaliador correspondente **sustente** a relação (um caso que só seria ambíguo pode ser descartado antes de ser medido). São verificadas em ordem fixa, e a primeira que falha é a razão registrada:
 
 | # | Pré-condição | Predicados | Razão de exclusão |
 | --- | --- | --- | --- |

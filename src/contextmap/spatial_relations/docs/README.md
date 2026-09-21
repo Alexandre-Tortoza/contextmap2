@@ -22,7 +22,7 @@ flowchart LR
 
 ## Estado implementado
 
-Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio), a **taxonomia de predicados** versionada, as **convenções de frame** declaradas pela execução e a **geração de candidatos** determinística. Avaliadores geométricos, política de decisão, artifact e avaliação chegam nas demais issues da milestone "Spatial Relations" (#143 a #148).
+Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio), a **taxonomia de predicados** versionada, as **convenções de frame** declaradas pela execução a **geração de candidatos** determinística e os **avaliadores geométricos** de proximidade, direção e topologia. Contato e apoio, política de decisão, evidência semântica, artifact e avaliação chegam nas demais issues da milestone "Spatial Relations" (#144 a #148).
 
 ## Contratos públicos
 
@@ -32,6 +32,7 @@ Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio),
 - `RelationPredicate`, `PredicateFamily`, `FrameRequirement`, `PredicateSpec`, `PREDICATE_SPECS`, `predicate_spec()`, `TAXONOMY_VERSION` — o vocabulário e a semântica de cada predicado.
 - `FrameConventions`, `AxisDirection`, `FRAME_CONVENTIONS_POLICY_ID`, `FrameConventionError`, `IncompatibleFrameError`, `UndeclaredAxisError` — os eixos que a execução declara para o frame do mapa e a recusa explícita quando faltam ou não servem.
 - `generate_relation_candidates()`, `CandidatePolicy`, `RelationCandidate`, `RelationCandidateSet`, `CandidateExclusion`, `CandidateReason`, `CandidateExclusionReason`, `SkippedPredicate`, `CandidateProvenance`, `CANDIDATE_POLICY_ID` — a redução determinística dos pares a avaliar, com as razões de exclusão inspecionáveis.
+- `evaluate_geometric_predicate()`, `evaluate_geometric_candidates()`, `GeometricPredicatePolicy`, `GEOMETRIC_PREDICATES`, `GEOMETRIC_POLICY_ID` — os avaliadores de `NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE` e `INTERSECTS` sobre os limites das entidades.
 - `encode_relation()`, `decode_relation()`, `encode_relation_evidence()`, `decode_relation_evidence()` — o codec JSON, que revalida todas as invariantes.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e [`taxonomy.md`](taxonomy.md) para a semântica dos predicados.
@@ -50,3 +51,4 @@ Todas as dependências são pela API pública e estão declaradas em `tests/arch
 - [`contracts.md`](contracts.md) — contratos, estados, invariantes e serialização.
 - [`taxonomy.md`](taxonomy.md) — vocabulário, direção, simetria, inverso e convenções de frame.
 - [`candidates.md`](candidates.md) — geração de candidatos, pré-condições, razões de exclusão e escala.
+- [`geometric-predicates.md`](geometric-predicates.md) — definições, limiares, faixa de tolerância, ressalvas e consistência dos predicados geométricos.
