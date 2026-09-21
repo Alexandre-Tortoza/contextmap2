@@ -117,6 +117,7 @@ flowchart TD
     M --> PR[src/contextmap/point_representation/docs/README.md]
     M --> SF[src/contextmap/semantic_fusion/docs/README.md]
     M --> EV[src/contextmap/evaluation/docs/README.md]
+    M --> ART[src/contextmap/artifact/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]
@@ -183,6 +184,7 @@ Módulos com documentação própria:
 - [`semantic_fusion`](../src/contextmap/semantic_fusion/docs/README.md) — acumulação de evidência multi-vista sobre suporte espacial, sem identidade de objeto: `FusionSupport`, `FusedEvidence`, agrupamento por observação física, política baseline e ciente de qualidade, canais tipados e o artifact de run.
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
+- [`artifact`](../src/contextmap/artifact/docs/README.md) — o schema do produto final: `ContextMap` (metadados de frame, unidades, âncora e capacidades; geometria referenciada; entidades e relações por referência; linhagem e proveniência; versionamento). Somente schema: sem layout, serializador, ROS nem modelos.
 
 ## Integração da documentação
 

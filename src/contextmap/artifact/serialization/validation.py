@@ -26,15 +26,25 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from contextmap.artifact.dependencies import (
+from contextmap.artifact.metadata import ContextMapMetadata, MapCapability
+from contextmap.artifact.models import GeometricMapLink
+from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
+from contextmap.artifact.serialization.decoding import (
+    ENTITY_LINE_FIELDS,
+    RELATION_LINE_FIELDS,
+    decode_geometry_link,
+    decode_metadata,
+    decode_upstream_artifacts,
+)
+from contextmap.artifact.serialization.dependencies import (
     GEOMETRIC_MAP_ARTIFACT_TYPE,
     DependencyResolution,
     DependencyStatus,
     read_inventory,
     resolve_dependency,
 )
-from contextmap.artifact.directory import load_manifest
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.directory import load_manifest
+from contextmap.artifact.serialization.errors import (
     ArtifactIntegrityError,
     ContextMapArtifactError,
     IncompleteContextMapArtifactError,
@@ -44,7 +54,7 @@ from contextmap.artifact.errors import (
     UnsupportedFormatVersionError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.layout import (
     CONTRACTUAL_FILES,
     DEBUG_DIRECTORY,
     ENTITIES,
@@ -58,17 +68,14 @@ from contextmap.artifact.layout import (
     RELATION_INDEX,
     RELATIONS,
 )
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     DependencyRecord,
     PayloadRole,
     RecordPayload,
     Requirement,
 )
-from contextmap.artifact.metadata import MapCapability
-from contextmap.artifact.models import ContextMap
-from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
-from contextmap.artifact.tables import (
+from contextmap.artifact.serialization.tables import (
     RecordTable,
     encode_entity_relation_index,
     rebuild_index,
@@ -327,15 +334,15 @@ _CHECK_ORDER = (
     "file_hashes",
     "payload_descriptors",
     "index_structure",
-    "map_record",
+    "documents",
     "capabilities",
     "lineage",
     "dependencies",
     "geometry_consistency",
     "reference_integrity",
     "index_rebuild",
+    "schema_invariants",
     "dependency_integrity",
-    "entity_geometry_support",
     "unlisted_files",
 )
 
@@ -396,7 +403,10 @@ class _Validation:
         self._manifest: ContextMapArtifactManifest | None = None
         self._files: dict[str, CheckedFile] = {}
         self._usable: set[str] = set()
-        self._context_map: ContextMap | None = None
+        self._metadata: ContextMapMetadata | None = None
+        self._link: GeometricMapLink | None = None
+        self._entity_records: list[dict[str, Any]] | None = None
+        self._relation_records: list[dict[str, Any]] | None = None
         self._resolutions: list[DependencyResolution] = []
         self._entity_keys: set[str] | None = None
         self._endpoints: list[tuple[str, str, str]] | None = None
@@ -413,18 +423,15 @@ class _Validation:
             self._at_full("file_hashes", self._check_hashes)
             self._check("payload_descriptors", self._check_descriptors)
             self._check("index_structure", self._check_index_structure)
-            self._check("map_record", self._check_map_record)
+            self._check("documents", self._check_documents)
             self._check("capabilities", self._check_capabilities)
             self._check("lineage", self._check_lineage)
             self._check("dependencies", self._check_dependencies)
             self._check("geometry_consistency", self._check_geometry)
             self._at_full("reference_integrity", self._check_references)
             self._at_full("index_rebuild", self._check_index_rebuild)
+            self._at_full("schema_invariants", self._check_schema_invariants)
             self._at_full("dependency_integrity", self._check_upstream_files)
-            self._skip(
-                "entity_geometry_support",
-                "entity records are opaque to the artifact until the schema types them",
-            )
             self._check("unlisted_files", self._check_unlisted)
         return self._report()
 
@@ -639,31 +646,31 @@ class _Validation:
                     ENTITY_RELATION_INDEX,
                 )
 
-    def _check_map_record(self) -> None:
-        manifest = self._manifest_required()
+    def _check_documents(self) -> None:
         if not {MAP_METADATA, GEOMETRY_REFERENCE} <= self._usable:
             raise _Skip(f"{MAP_METADATA} or {GEOMETRY_REFERENCE} is not intact")
         try:
-            self._context_map = context_map_from_record(
-                {
-                    "context_map_id": manifest.context_map_id,
-                    "schema_version": manifest.schema_version,
-                    "metadata": self._document(MAP_METADATA),
-                    "geometry_ref": self._document(GEOMETRY_REFERENCE),
-                }
-            )
+            self._metadata = decode_metadata(self._document(MAP_METADATA))
         except (ContextMapRecordError, ValueError) as error:
             self._error(
                 "map.invalid",
-                f"the map record is not valid under the schema: {error}",
+                f"the metadata is not valid under the schema: {error}",
                 MAP_METADATA,
+            )
+        try:
+            self._link = decode_geometry_link(self._document(GEOMETRY_REFERENCE))
+        except (ContextMapRecordError, ValueError) as error:
+            self._error(
+                "map.invalid",
+                f"the geometry reference is not valid under the schema: {error}",
+                GEOMETRY_REFERENCE,
             )
 
     def _check_capabilities(self) -> None:
         manifest = self._manifest_required()
-        if self._context_map is None:
-            raise _Skip("the map record could not be read")
-        declared = self._context_map.metadata.capabilities.content
+        if self._metadata is None:
+            raise _Skip("the metadata could not be read")
+        declared = self._metadata.capabilities.content
         for capability, count, code in (
             (MapCapability.ENTITIES, manifest.entity_count, "capabilities.undeclared_entities"),
             (MapCapability.RELATIONS, manifest.relation_count, "capabilities.undeclared_relations"),
@@ -681,21 +688,28 @@ class _Validation:
         if LINEAGE not in self._usable:
             raise _Skip(f"{LINEAGE} is not intact")
         try:
-            recorded = self._document(LINEAGE)["upstream_artifacts"]
-            found = sorted(
-                (
-                    item["artifact_type"],
-                    item["artifact_id"],
-                    item["content_identity"],
-                    item["requirement"],
-                )
-                for item in recorded
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            self._error("lineage.malformed", f"{LINEAGE} is not a valid lineage ({error})", LINEAGE)
+            upstream = decode_upstream_artifacts(self._document(LINEAGE).get("upstream_artifacts"))
+        except (ContextMapRecordError, ValueError) as error:
+            self._error("lineage.malformed", f"{LINEAGE} is not a valid lineage: {error}", LINEAGE)
             return
+        found = sorted(
+            (
+                item.kind.value,
+                item.artifact_id,
+                item.content_identity,
+                Requirement.REQUIRED.value
+                if item.kind.is_structural
+                else Requirement.OPTIONAL.value,
+            )
+            for item in upstream
+        )
         expected = sorted(
-            (item.artifact_type, item.artifact_id, item.content_identity, item.requirement.value)
+            (
+                item.artifact_type,
+                item.artifact_id,
+                item.content_identity,
+                item.requirement.value,
+            )
             for item in manifest.dependencies
         )
         if found != expected:
@@ -733,9 +747,9 @@ class _Validation:
         )
 
     def _check_geometry(self) -> None:
-        if self._context_map is None:
-            raise _Skip("the map record could not be read")
-        link = self._context_map.geometry_ref
+        if self._link is None or self._metadata is None:
+            raise _Skip("the metadata or the geometry reference could not be read")
+        link = self._link
         record = self._geometry_record()
         if record is None:
             self._error("geometry.dependency_missing", "the manifest records no geometric map")
@@ -773,7 +787,7 @@ class _Validation:
                 f"has {upstream.point_count}",
                 link.map_id,
             )
-        frame = self._context_map.metadata.frame.frame_id
+        frame = self._metadata.frame.frame_id
         if upstream.map_frame != frame:
             self._error(
                 "geometry.frame_mismatch",
@@ -799,19 +813,42 @@ class _Validation:
                 record_count=manifest.relation_count,
             )
             keys: set[str] = set()
+            entity_records: list[dict[str, Any]] = []
             for line in entities.iter_lines():
-                if line.keys() != {"key", "record"}:
+                if line.keys() != ENTITY_LINE_FIELDS:
                     raise RecordTableError(f"the entity {line['key']!r} has the wrong fields")
+                record = line["record"]
+                if not isinstance(record, dict) or record.get("entity_id") != line["key"]:
+                    self._error(
+                        "reference.key_mismatch",
+                        f"the entity line {line['key']!r} holds another entity id",
+                        line["key"],
+                    )
                 keys.add(line["key"])
+                entity_records.append(record)
             endpoints: list[tuple[str, str, str]] = []
+            relation_records: list[dict[str, Any]] = []
             for line in relations.iter_lines():
-                if line.keys() != {"key", "subject", "object", "record"}:
+                if line.keys() != RELATION_LINE_FIELDS:
                     raise RecordTableError(f"the relation {line['key']!r} has the wrong fields")
+                record = line["record"]
+                if not isinstance(record, dict) or (
+                    record.get("relation_id") != line["key"]
+                    or _entity_of(record.get("subject")) != line["subject"]
+                    or _entity_of(record.get("object")) != line["object"]
+                ):
+                    self._error(
+                        "reference.key_mismatch",
+                        f"the relation line {line['key']!r} disagrees with its record",
+                        line["key"],
+                    )
                 endpoints.append((line["key"], line["subject"], line["object"]))
+                relation_records.append(record)
         except ContextMapArtifactError as error:
             self._error("index.broken", str(error), ENTITY_INDEX)
             return
         self._entity_keys, self._endpoints = keys, endpoints
+        self._entity_records, self._relation_records = entity_records, relation_records
         for relation_key, subject, obj in endpoints:
             for role, key in (("subject", subject), ("object", obj)):
                 if key not in keys:
@@ -852,6 +889,33 @@ class _Validation:
                     ENTITY_RELATION_INDEX,
                 )
 
+    def _check_schema_invariants(self) -> None:
+        manifest = self._manifest_required()
+        if (
+            self._entity_records is None
+            or self._relation_records is None
+            or not {MAP_METADATA, GEOMETRY_REFERENCE, LINEAGE} <= self._usable
+        ):
+            raise _Skip("the records of the map are not intact")
+        try:
+            context_map_from_record(
+                {
+                    "context_map_id": manifest.context_map_id,
+                    "schema_version": manifest.schema_version,
+                    "metadata": self._document(MAP_METADATA),
+                    "geometry_ref": self._document(GEOMETRY_REFERENCE),
+                    "entities": self._entity_records,
+                    "relations": self._relation_records,
+                    "lineage": self._document(LINEAGE).get("upstream_artifacts"),
+                }
+            )
+        except (ContextMapRecordError, ValueError) as error:
+            self._error(
+                "map.invalid",
+                f"the stored records do not form a valid map under the schema: {error}",
+                manifest.context_map_id,
+            )
+
     def _check_upstream_files(self) -> None:
         for resolution in self._resolutions:
             if resolution.status is not DependencyStatus.FOUND or resolution.location is None:
@@ -891,6 +955,11 @@ class _Validation:
                     "and is never read",
                     relative,
                 )
+
+
+def _entity_of(reference: object) -> object:
+    """The entity id of a stored ``{context_map_id, entity_id}`` reference, or ``None``."""
+    return reference.get("entity_id") if isinstance(reference, dict) else None
 
 
 def _checked(entry: FileEntry, status: FileStatus) -> CheckedFile:

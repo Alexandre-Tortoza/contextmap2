@@ -1,8 +1,8 @@
 """The lightweight ContextMapArtifact reader (issue #157).
 
-It opens an artifact from its own directory, reads entities, relations and metadata lazily,
-resolves geometry through the real GeometricMapArtifactReader and never mutates anything. Every
-damaged or unsupported input is an explicit, typed error.
+It opens an artifact from its own directory, reads entities, relations and metadata lazily as the
+schema's own types, resolves geometry through the real GeometricMapArtifactReader and never
+mutates anything. Every damaged or unsupported input is an explicit, typed error.
 """
 
 import json
@@ -16,34 +16,47 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from context_map_builders import (
+    CONTEXT_MAP_ID,
+    ENTITY_RESOLUTION_ARTIFACT_ID,
+    FUSION_ARTIFACT_ID,
+    entity_reference,
+)
 from context_map_serialization_builders import (
-    default_entities,
-    default_relations,
-    entity,
+    MAP_ID,
+    World,
     make_context_map,
-    make_evidence,
-    make_geometry,
-    relation,
+    make_world,
     tree_snapshot,
     write_artifact,
 )
 
 from contextmap.artifact import (
     ArtifactIntegrityError,
+    ContextEntityReference,
     ContextMapArtifactError,
     ContextMapArtifactReader,
     DependencyMismatchError,
-    EntityEntry,
-    IncompleteContextMapArtifactError,
+    ForeignContextEntityReferenceError,
+    ManifestError,
     MissingDependencyError,
-    RelationEntry,
+    UnknownContextEntityError,
     UnresolvedReferenceError,
     UnsupportedArtifactSchemaError,
     UnsupportedFormatVersionError,
     UnsupportedSchemaVersionError,
 )
-from contextmap.artifact.errors import BrokenIndexError, MissingPayloadError, RecordNotFoundError
-from contextmap.artifact.manifest import create_manifest, decode_manifest, encode_manifest
+from contextmap.artifact.serialization.errors import (
+    BrokenIndexError,
+    IncompleteContextMapArtifactError,
+    MissingPayloadError,
+    RecordNotFoundError,
+)
+from contextmap.artifact.serialization.manifest import (
+    create_manifest,
+    decode_manifest,
+    encode_manifest,
+)
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometryReference,
@@ -52,17 +65,17 @@ from contextmap.geometric_mapping import (
 )
 from contextmap.shared import file_entry
 
-MAP = MapId("corridor-02--run-0001")
+MAP = MapId(MAP_ID)
 
 
 @pytest.fixture
-def geometry_dir(tmp_path: Path) -> Path:
-    return make_geometry(tmp_path)
+def world(tmp_path: Path) -> World:
+    return make_world(tmp_path)
 
 
 @pytest.fixture
-def artifact(tmp_path: Path, geometry_dir: Path) -> Path:
-    return write_artifact(tmp_path, geometry_dir)[0]
+def artifact(world: World) -> Path:
+    return write_artifact(world)[0]
 
 
 @pytest.fixture
@@ -82,83 +95,118 @@ def _rewrite_manifest(artifact: Path, **changes: Any) -> None:
     path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _reseal(artifact: Path, *, drop: tuple[str, ...] = ()) -> None:
+    """Recompute the inventory and identity from the disk, so only what a test changed is wrong."""
+    manifest = decode_manifest(json.loads((artifact / "manifest.json").read_text()))
+    resealed = create_manifest(
+        context_map_id=manifest.context_map_id,
+        schema_version=manifest.schema_version,
+        written_at=manifest.written_at,
+        code_version=manifest.code_version,
+        configuration_fingerprint=manifest.configuration_fingerprint,
+        entity_count=manifest.entity_count,
+        relation_count=manifest.relation_count,
+        payloads=manifest.payloads,
+        dependencies=manifest.dependencies,
+        file_inventory=[
+            file_entry(entry.path, (artifact / entry.path).read_bytes())
+            for entry in manifest.file_inventory
+            if entry.path not in drop
+        ],
+    )
+    (artifact / "manifest.json").write_text(json.dumps(encode_manifest(resealed)))
+
+
 def test_the_reader_returns_the_map_that_was_written(
-    tmp_path: Path, geometry_dir: Path, reader: ContextMapArtifactReader
+    world: World, reader: ContextMapArtifactReader
 ) -> None:
-    assert reader.context_map() == make_context_map()
-    assert reader.metadata() == make_context_map().metadata
+    written = make_context_map(world)
+
+    assert reader.context_map() == written
+    assert reader.metadata() == written.metadata
+    assert reader.geometry_link() == written.geometry_ref
+    assert reader.lineage() == written.lineage
     assert reader.manifest.entity_count == 3
 
 
 def test_map_bounds_are_the_declared_extent_in_the_map_frame(
-    reader: ContextMapArtifactReader,
+    world: World, reader: ContextMapArtifactReader
 ) -> None:
-    bounds = reader.map_bounds()
+    written = make_context_map(world)
 
-    assert bounds == make_context_map().metadata.bounds
-    assert bounds.frame_id == make_context_map().metadata.frame.frame_id
-
-
-def test_entities_round_trip_and_stream_in_key_order(reader: ContextMapArtifactReader) -> None:
-    assert reader.entity_keys() == ("entity-a", "entity-b", "entity-c")
-    assert list(reader.entities()) == sorted(default_entities(), key=lambda entry: entry.key)
-    assert reader.entity("entity-b") == EntityEntry(
-        key="entity-b", record={"entity_id": "entity-b", "label": "label-of-entity-b"}
-    )
+    assert reader.map_bounds() == written.metadata.bounds
+    assert reader.map_bounds().frame_id == written.metadata.frame.frame_id
 
 
-def test_relations_round_trip_with_their_endpoints(reader: ContextMapArtifactReader) -> None:
-    assert reader.relation_keys() == ("relation-1", "relation-2")
-    assert list(reader.relations()) == sorted(default_relations(), key=lambda entry: entry.key)
-    assert reader.relation("relation-2") == RelationEntry(
-        key="relation-2",
-        subject_key="entity-c",
-        object_key="entity-a",
-        record={
-            "relation_id": "relation-2",
-            "predicate": "next_to",
-            "subject": "entity-c",
-            "object": "entity-a",
-        },
-    )
+def test_entities_round_trip_as_schema_types_and_stream_in_id_order(
+    world: World, reader: ContextMapArtifactReader
+) -> None:
+    written = make_context_map(world)
+
+    assert reader.entity_ids() == ("entity-0001", "entity-0002", "entity-0003")
+    assert tuple(reader.entities()) == written.entities
+    reference = entity_reference("entity-0002")
+    assert reader.entity(reference) == written.entity(reference)
+
+
+def test_relations_round_trip_as_schema_types(
+    world: World, reader: ContextMapArtifactReader
+) -> None:
+    written = make_context_map(world)
+
+    assert reader.relation_ids() == ("relation-0001", "relation-0002")
+    assert tuple(reader.relations()) == written.relations
+    assert reader.relation("relation-0002") == written.relations[1]
 
 
 def test_relations_for_an_entity_lists_those_it_takes_part_in(
-    reader: ContextMapArtifactReader,
+    world: World, reader: ContextMapArtifactReader
 ) -> None:
-    assert [item.key for item in reader.relations_for("entity-a")] == ["relation-1", "relation-2"]
-    assert [item.key for item in reader.relations_for("entity-b")] == ["relation-1"]
-    assert [item.key for item in reader.relations_for("entity-c")] == ["relation-2"]
+    written = make_context_map(world)
+
+    for entity_id in ("entity-0001", "entity-0002", "entity-0003"):
+        reference = entity_reference(entity_id)
+        assert {item.relation_id for item in reader.relations_for(reference)} == {
+            item.relation_id for item in written.relations_for(reference)
+        }
+    assert [item.relation_id for item in reader.relations_for(entity_reference("entity-0002"))] == [
+        "relation-0001",
+        "relation-0002",
+    ]
 
 
-def test_an_entity_without_relations_has_an_empty_traversal(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    artifact, _ = write_artifact(
-        tmp_path,
-        geometry_dir,
-        entities=(*default_entities(), entity("entity-lonely")),
-        relations=(relation("relation-1", "entity-a", "entity-b"),),
-    )
+def test_a_map_without_entities_reads_as_empty(tmp_path: Path) -> None:
+    workspace = make_world(tmp_path / "geometry-only")
+    written = make_context_map(workspace, kind="geometry-only")
+    artifact, _ = write_artifact(workspace, context_map=written)
+
     with ContextMapArtifactReader.open(artifact) as opened:
-        assert opened.relations_for("entity-lonely") == ()
+        assert opened.entity_ids() == ()
+        assert opened.relation_ids() == ()
+        assert list(opened.entities()) == []
+        assert opened.context_map() == written
 
 
-def test_unknown_entities_and_relations_are_explicit_errors(
+def test_unknown_and_foreign_references_are_explicit_errors(
     reader: ContextMapArtifactReader,
 ) -> None:
-    with pytest.raises(RecordNotFoundError, match="entity-zzz"):
-        reader.entity("entity-zzz")
-    with pytest.raises(RecordNotFoundError, match="relation-9"):
-        reader.relation("relation-9")
-    with pytest.raises(RecordNotFoundError, match="entity-zzz"):
-        reader.relations_for("entity-zzz")
+    with pytest.raises(UnknownContextEntityError, match="entity-9999"):
+        reader.entity(entity_reference("entity-9999"))
+    with pytest.raises(UnknownContextEntityError, match="entity-9999"):
+        reader.relations_for(entity_reference("entity-9999"))
+    with pytest.raises(RecordNotFoundError, match="relation-9999"):
+        reader.relation("relation-9999")
+    foreign = entity_reference("entity-0001", context_map_id="another-map")
+    with pytest.raises(ForeignContextEntityReferenceError, match="another-map"):
+        reader.entity(foreign)
+    with pytest.raises(ForeignContextEntityReferenceError):
+        reader.relations_for(foreign)
 
 
 def test_geometry_resolves_through_the_geometric_map_reader(
-    geometry_dir: Path, reader: ContextMapArtifactReader
+    world: World, reader: ContextMapArtifactReader
 ) -> None:
-    with GeometricMapArtifactReader(geometry_dir) as direct:
+    with GeometricMapArtifactReader(world.geometry_dir) as direct:
         expected = direct.geometry().get(_reference(5))
 
     point = reader.geometry(_reference(5))
@@ -166,7 +214,7 @@ def test_geometry_resolves_through_the_geometric_map_reader(
     assert point == expected
     assert point.reference == _reference(5)
     assert reader.geometry_source().geometric_map.map_id == MAP
-    assert sum(1 for _ in reader.geometry_source().iter_geometry()) == 24
+    assert sum(1 for _ in reader.geometry_source().iter_geometry()) == 1000
 
 
 def test_the_geometry_is_opened_only_when_it_is_asked_for(
@@ -180,11 +228,13 @@ def test_the_geometry_is_opened_only_when_it_is_asked_for(
             opened.append(run_dir)
             super().__init__(run_dir)
 
-    monkeypatch.setattr("contextmap.artifact.reader.GeometricMapArtifactReader", Counting)
+    monkeypatch.setattr(
+        "contextmap.artifact.serialization.reader.GeometricMapArtifactReader", Counting
+    )
 
     with ContextMapArtifactReader.open(artifact) as reader:
         reader.metadata()
-        reader.entity("entity-a")
+        reader.entity(entity_reference("entity-0001"))
         list(reader.relations())
         assert opened == []
         reader.geometry(_reference(0))
@@ -193,82 +243,72 @@ def test_the_geometry_is_opened_only_when_it_is_asked_for(
 
 
 def test_references_are_validated_against_the_map_without_loading_geometry(
-    artifact: Path, reader: ContextMapArtifactReader
+    reader: ContextMapArtifactReader,
 ) -> None:
     reader.validate_reference(_reference(0))
-    reader.validate_reference(_reference(23))
+    reader.validate_reference(_reference(999))
 
     with pytest.raises(UnresolvedReferenceError, match="another-map"):
         reader.validate_reference(_reference(0, MapId("another-map")))
-    with pytest.raises(UnresolvedReferenceError, match="24"):
-        reader.validate_reference(_reference(24))
+    with pytest.raises(UnresolvedReferenceError, match="1000"):
+        reader.validate_reference(_reference(1000))
     with pytest.raises(UnresolvedReferenceError, match="canonical"):
         reader.validate_reference(
             GeometryReference(map_id=MAP, geometry_id=geometry_id_for(map_id=MAP, index=1) + "x")  # type: ignore[arg-type]
         )
 
 
-def test_a_reference_outside_the_geometry_is_not_resolved(
-    reader: ContextMapArtifactReader,
-) -> None:
-    with pytest.raises(UnresolvedReferenceError):
-        reader.geometry(_reference(99))
-
-
 def test_a_moved_artifact_opens_and_reads_everything_that_needs_no_geometry(
-    tmp_path: Path, artifact: Path
+    tmp_path: Path, world: World, artifact: Path
 ) -> None:
+    written = make_context_map(world)
     elsewhere = tmp_path / "another-machine" / "copy"
     shutil.copytree(artifact, elsewhere)
-    shutil.rmtree(tmp_path / "geometry-workspace")
+    for directory in (
+        world.geometry_dir.parents[3],
+        world.resolution_dir,
+        world.relations_dir,
+        world.fusion_dir,
+    ):
+        shutil.rmtree(directory)
 
     with ContextMapArtifactReader.open(elsewhere) as reader:
-        assert reader.context_map() == make_context_map()
-        assert reader.entity("entity-a").key == "entity-a"
-        assert [item.key for item in reader.relations_for("entity-a")] == [
-            "relation-1",
-            "relation-2",
-        ]
-        with pytest.raises(MissingDependencyError, match="corridor-02--run-0001"):
+        assert reader.context_map() == written
+        assert reader.entity(entity_reference("entity-0001")).entity_id == "entity-0001"
+        assert len(reader.relations_for(entity_reference("entity-0001"))) == 1
+        with pytest.raises(MissingDependencyError, match=MAP_ID):
             reader.geometry(_reference(0))
 
 
 def test_a_moved_artifact_finds_its_geometry_when_told_where_it_is(
-    tmp_path: Path, artifact: Path, geometry_dir: Path
+    tmp_path: Path, world: World, artifact: Path
 ) -> None:
     elsewhere = tmp_path / "another-machine" / "copy"
     shutil.copytree(artifact, elsewhere)
     moved_geometry = tmp_path / "another-machine" / "maps" / "geometry"
-    shutil.copytree(geometry_dir, moved_geometry)
-    shutil.rmtree(tmp_path / "geometry-workspace")
+    shutil.copytree(world.geometry_dir, moved_geometry)
+    shutil.rmtree(world.geometry_dir.parents[3])
 
-    with ContextMapArtifactReader.open(
-        elsewhere, dependency_paths={"corridor-02--run-0001": moved_geometry}
-    ) as reader:
-        assert reader.geometry(_reference(3)).reference == _reference(3)
+    with ContextMapArtifactReader.open(elsewhere, dependency_paths={MAP_ID: moved_geometry}) as r:
+        assert r.geometry(_reference(3)).reference == _reference(3)
 
 
 def test_the_relative_hint_finds_the_geometry_when_the_workspace_moves_as_a_whole(
-    tmp_path: Path, geometry_dir: Path
+    tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    shutil.move(tmp_path / "geometry-workspace", workspace / "geometry-workspace")
-    geometry_moved = (
-        workspace / "geometry-workspace" / geometry_dir.relative_to(tmp_path / "geometry-workspace")
-    )
-    artifact, _ = write_artifact(workspace, geometry_moved)
-    relocated = tmp_path / "relocated"
-    shutil.move(workspace, relocated)
+    workspace = make_world(tmp_path / "workspace")
+    write_artifact(workspace)
+    shutil.move(tmp_path / "workspace", tmp_path / "relocated")
 
-    with ContextMapArtifactReader.open(relocated / "out" / "context_map") as reader:
+    with ContextMapArtifactReader.open(tmp_path / "relocated" / "out" / "context_map") as reader:
         assert reader.geometry(_reference(2)).reference == _reference(2)
-    assert artifact.name == "context_map"
+        assert reader.dependency_location(ENTITY_RESOLUTION_ARTIFACT_ID).name == "entity-resolution"
 
 
 def test_a_dependency_that_is_not_the_recorded_artifact_is_a_mismatch(
-    tmp_path: Path, artifact: Path, geometry_dir: Path
+    world: World, artifact: Path
 ) -> None:
-    manifest_path = geometry_dir / "manifest.json"
+    manifest_path = world.geometry_dir / "manifest.json"
     record = json.loads(manifest_path.read_text())
     for entry in record["file_inventory"]:
         if entry["path"] == "outputs/geometry.bin":
@@ -277,7 +317,7 @@ def test_a_dependency_that_is_not_the_recorded_artifact_is_a_mismatch(
 
     with (
         ContextMapArtifactReader.open(artifact) as reader,
-        pytest.raises(DependencyMismatchError, match="corridor-02--run-0001"),
+        pytest.raises(DependencyMismatchError, match=MAP_ID),
     ):
         reader.geometry(_reference(0))
 
@@ -288,29 +328,23 @@ def test_an_explicit_dependency_path_never_falls_back_to_the_hint(
     nowhere = tmp_path / "does-not-exist"
 
     with (
-        ContextMapArtifactReader.open(
-            artifact, dependency_paths={"corridor-02--run-0001": nowhere}
-        ) as reader,
+        ContextMapArtifactReader.open(artifact, dependency_paths={MAP_ID: nowhere}) as reader,
         pytest.raises(MissingDependencyError),
     ):
         reader.geometry(_reference(0))
 
 
 def test_the_optional_evidence_is_located_and_verified_on_request(
-    tmp_path: Path, geometry_dir: Path
+    world: World, artifact: Path
 ) -> None:
-    evidence = make_evidence(tmp_path)
-    artifact, _ = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
-
     with ContextMapArtifactReader.open(artifact) as reader:
-        assert (
-            reader.dependency_location("semantic_fusion_run", "run-0003")
-            == evidence.location.resolve()
-        )
-        shutil.rmtree(evidence.location)
-        with pytest.raises(MissingDependencyError, match="run-0003"):
-            reader.dependency_location("semantic_fusion_run", "run-0003")
-        assert reader.entity("entity-a").key == "entity-a"
+        assert reader.dependency_location(FUSION_ARTIFACT_ID) == world.fusion_dir.resolve()
+        shutil.rmtree(world.fusion_dir)
+        with pytest.raises(MissingDependencyError, match=FUSION_ARTIFACT_ID):
+            reader.dependency_location(FUSION_ARTIFACT_ID)
+        with pytest.raises(RecordNotFoundError, match="nothing-like-this"):
+            reader.dependency_location("nothing-like-this")
+        assert reader.entity(entity_reference("entity-0001")).entity_id == "entity-0001"
 
 
 def test_a_directory_without_a_manifest_is_incomplete(tmp_path: Path) -> None:
@@ -383,28 +417,6 @@ def test_a_change_of_the_same_size_needs_the_hash_check_to_be_seen(artifact: Pat
         ContextMapArtifactReader.open(artifact, verify_hashes=True)
 
 
-def _reseal(artifact: Path, *, drop: tuple[str, ...] = ()) -> None:
-    """Recompute the inventory and identity from the disk, so only what a test changed is wrong."""
-    manifest = decode_manifest(json.loads((artifact / "manifest.json").read_text()))
-    resealed = create_manifest(
-        context_map_id=manifest.context_map_id,
-        schema_version=manifest.schema_version,
-        written_at=manifest.written_at,
-        code_version=manifest.code_version,
-        configuration_fingerprint=manifest.configuration_fingerprint,
-        entity_count=manifest.entity_count,
-        relation_count=manifest.relation_count,
-        payloads=manifest.payloads,
-        dependencies=manifest.dependencies,
-        file_inventory=[
-            file_entry(entry.path, (artifact / entry.path).read_bytes())
-            for entry in manifest.file_inventory
-            if entry.path not in drop
-        ],
-    )
-    (artifact / "manifest.json").write_text(json.dumps(encode_manifest(resealed)))
-
-
 def test_a_required_file_the_manifest_does_not_inventory_is_never_trusted(artifact: Path) -> None:
     _reseal(artifact, drop=("lineage/lineage.json",))
 
@@ -419,9 +431,21 @@ def test_a_broken_index_fails_explicitly_when_the_table_is_used(artifact: Path) 
     _reseal(artifact)
 
     with ContextMapArtifactReader.open(artifact) as reader:
-        assert reader.metadata() == make_context_map().metadata
+        assert reader.geometry_link().point_count == 1000
         with pytest.raises(BrokenIndexError, match="sorted"):
-            reader.entity("entity-a")
+            reader.entity(entity_reference("entity-0001"))
+
+
+def test_a_stored_entity_that_is_not_a_valid_entity_is_an_explicit_error(artifact: Path) -> None:
+    path = artifact / "entities/entities.jsonl"
+    path.write_bytes(path.read_bytes().replace(b'"entity_id"', b'"entity_ix"', 1))
+    _reseal(artifact)
+
+    with (
+        ContextMapArtifactReader.open(artifact) as reader,
+        pytest.raises(ContextMapArtifactError, match="not a valid entity"),
+    ):
+        reader.entity(entity_reference("entity-0001"))
 
 
 def test_the_debug_directory_is_never_a_fallback(artifact: Path) -> None:
@@ -435,33 +459,32 @@ def test_the_debug_directory_is_never_a_fallback(artifact: Path) -> None:
         ContextMapArtifactReader.open(artifact)
 
 
-def test_reading_never_changes_the_artifact(
-    tmp_path: Path, artifact: Path, geometry_dir: Path
-) -> None:
+def test_reading_never_changes_the_artifact(world: World, artifact: Path) -> None:
     before = tree_snapshot(artifact)
-    geometry_before = tree_snapshot(geometry_dir)
+    geometry_before = tree_snapshot(world.geometry_dir)
 
     with ContextMapArtifactReader.open(artifact, verify_hashes=True) as reader:
         reader.context_map()
         list(reader.entities())
         list(reader.relations())
-        reader.relations_for("entity-a")
+        reader.relations_for(entity_reference("entity-0001"))
         reader.map_bounds()
+        reader.lineage()
         reader.geometry(_reference(4))
         list(reader.geometry_source().iter_geometry())
 
     assert tree_snapshot(artifact) == before
-    assert tree_snapshot(geometry_dir) == geometry_before
+    assert tree_snapshot(world.geometry_dir) == geometry_before
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
-def test_a_read_only_artifact_can_be_read(tmp_path: Path, artifact: Path) -> None:
+def test_a_read_only_artifact_can_be_read(world: World, artifact: Path) -> None:
     for path in [*artifact.rglob("*"), artifact]:
         path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
     try:
         with ContextMapArtifactReader.open(artifact, verify_hashes=True) as reader:
-            assert reader.entity("entity-a").key == "entity-a"
-            assert reader.context_map() == make_context_map()
+            assert reader.entity(entity_reference("entity-0001")).entity_id == "entity-0001"
+            assert reader.context_map() == make_context_map(world)
     finally:
         for path in [artifact, *artifact.rglob("*")]:
             path.chmod(path.stat().st_mode | stat.S_IWUSR)
@@ -477,7 +500,7 @@ def test_the_reader_has_no_search_query_or_planning_behavior() -> None:
 def test_the_reader_needs_no_model_or_robotics_runtime() -> None:
     program = (
         "import sys\n"
-        "import contextmap.artifact.reader\n"
+        "import contextmap.artifact.serialization.reader\n"
         "blocked = ('torch', 'transformers', 'rclpy', 'rosbags', 'cv2', 'PIL')\n"
         "found = [name for name in blocked if name in sys.modules]\n"
         "assert not found, found\n"
@@ -499,4 +522,18 @@ def test_a_closed_reader_refuses_to_read(artifact: Path) -> None:
     with pytest.raises(ContextMapArtifactError, match="closed"):
         reader.geometry(_reference(0))
     with pytest.raises(ContextMapArtifactError, match="closed"):
-        reader.entity("entity-a")
+        reader.entity(entity_reference("entity-0001"))
+
+
+def test_a_manifest_that_is_not_a_context_map_manifest_is_rejected(artifact: Path) -> None:
+    _rewrite_manifest(artifact, artifact_type="geometric_map")
+
+    with pytest.raises(ManifestError, match="artifact_type"):
+        ContextMapArtifactReader.open(artifact)
+
+
+def test_entity_references_are_the_schemas_own_references() -> None:
+    reference = entity_reference("entity-0001")
+
+    assert isinstance(reference, ContextEntityReference)
+    assert str(reference.context_map_id) == str(CONTEXT_MAP_ID)

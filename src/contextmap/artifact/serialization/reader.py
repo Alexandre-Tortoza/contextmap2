@@ -1,10 +1,11 @@
 """Lightweight, read-only reader of a ContextMapArtifact.
 
 The reader opens an artifact from its own directory and answers what a consumer needs to
-understand the map: its metadata and bounds, its entities and relations, the relations an entity
-takes part in, and the geometry its references point at. Entities and relations are read one at
-a time through the byte-offset indexes, and the geometry is opened only when it is asked for, as
-a memory map through the existing ``GeometricMapArtifactReader``; nothing large is loaded.
+understand the map: its metadata and bounds, its entities and relations as the schema's own types,
+the relations an entity takes part in, and the geometry its references point at. Entities and
+relations are read one at a time through the byte-offset indexes, and the geometry is opened only
+when it is asked for, as a memory map through the existing ``GeometricMapArtifactReader``;
+nothing large is loaded.
 
 The reader is a data reader, not a query engine. It has no search, no language, no planning, no
 navigation and no inference: it loads, validates, resolves and round-trips the public artifact.
@@ -21,40 +22,52 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from contextmap.artifact.dependencies import (
-    GEOMETRIC_MAP_ARTIFACT_TYPE,
+from contextmap.artifact.composition import ContextEntity, ContextRelation
+from contextmap.artifact.metadata import ContextMapMetadata
+from contextmap.artifact.models import ContextMap, GeometricMapLink
+from contextmap.artifact.provenance import UpstreamArtifact
+from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
+from contextmap.artifact.references import (
+    ContextEntityReference,
+    ForeignContextEntityReferenceError,
+    UnknownContextEntityError,
+)
+from contextmap.artifact.serialization.decoding import (
+    decode_entity,
+    decode_geometry_link,
+    decode_metadata,
+    decode_relation,
+    decode_upstream_artifacts,
+)
+from contextmap.artifact.serialization.dependencies import (
     DependencyResolution,
     DependencyStatus,
     read_inventory,
     resolve_dependency,
     verify_inventory,
 )
-from contextmap.artifact.directory import check_files_present, load_manifest
-from contextmap.artifact.entries import EntityEntry, RelationEntry
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.directory import check_files_present, load_manifest
+from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
     ContextMapArtifactError,
     DependencyMismatchError,
     MissingDependencyError,
     RecordNotFoundError,
-    RecordTableError,
     UnresolvedReferenceError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.layout import (
     ENTITIES,
     ENTITY_INDEX,
     ENTITY_RELATION_INDEX,
     GEOMETRY_REFERENCE,
+    LINEAGE,
     MAP_METADATA,
     RELATION_INDEX,
     RELATIONS,
 )
-from contextmap.artifact.manifest import ContextMapArtifactManifest, DependencyRecord
-from contextmap.artifact.metadata import ContextMapMetadata
-from contextmap.artifact.models import ContextMap
-from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
-from contextmap.artifact.tables import RecordTable
+from contextmap.artifact.serialization.manifest import ContextMapArtifactManifest
+from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.geometric_mapping import (
     Bounds3D,
     GeometricMapArtifactReader,
@@ -65,8 +78,6 @@ from contextmap.geometric_mapping import (
     geometry_index_of,
 )
 
-_ENTITY_LINE_FIELDS = frozenset({"key", "record"})
-_RELATION_LINE_FIELDS = frozenset({"key", "subject", "object", "record"})
 _TRAVERSAL_FIELDS = frozenset({"key", "as_subject", "as_object"})
 
 
@@ -90,6 +101,8 @@ class ContextMapArtifactReader:
         self._dependency_paths = dict(dependency_paths)
         self._verify_hashes = verify_hashes
         self._context_map: ContextMap | None = None
+        self._metadata: ContextMapMetadata | None = None
+        self._link: GeometricMapLink | None = None
         self._entities: RecordTable | None = None
         self._relations: RecordTable | None = None
         self._traversal: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] | None = None
@@ -178,15 +191,18 @@ class ContextMapArtifactReader:
             raise ContextMapArtifactError(f"{relative_path} must hold a JSON object")
         return record
 
+    # -- the map ---------------------------------------------------------------------------
+
     def context_map(self) -> ContextMap:
-        """Rebuild the schema object from the artifact.
+        """Rebuild the whole schema object from the artifact.
+
+        This reads every entity and relation; use the per-record methods to read less.
 
         Returns:
-            The map, fully validated by the schema's own decoding.
+            The map, revalidated in full by the schema's own strict decoding.
 
         Raises:
-            ContextMapArtifactError: If the metadata or the geometry reference is not a valid
-                record of the schema.
+            ContextMapArtifactError: If the stored records do not form a valid map.
         """
         self._ensure_open()
         if self._context_map is None:
@@ -195,22 +211,58 @@ class ContextMapArtifactReader:
                 "schema_version": self._manifest.schema_version,
                 "metadata": self._document(MAP_METADATA),
                 "geometry_ref": self._document(GEOMETRY_REFERENCE),
+                "entities": [line["record"] for line in self._entity_table().iter_lines()],
+                "relations": [line["record"] for line in self._relation_table().iter_lines()],
+                "lineage": self._document(LINEAGE).get("upstream_artifacts"),
             }
             try:
                 self._context_map = context_map_from_record(record)
             except (ContextMapRecordError, ValueError) as error:
                 raise ContextMapArtifactError(
-                    f"{MAP_METADATA} and {GEOMETRY_REFERENCE} do not hold a valid map: {error}"
+                    f"the stored records do not form a valid map: {error}"
                 ) from error
         return self._context_map
 
     def metadata(self) -> ContextMapMetadata:
-        """What the map is: creation, sources, frame, bounds, time and declared capabilities."""
-        return self.context_map().metadata
+        """What the map is: creation, sources, frame, bounds, time and declared capabilities.
+
+        Only the metadata document is read; no entity or relation is.
+        """
+        self._ensure_open()
+        if self._metadata is None:
+            try:
+                self._metadata = decode_metadata(self._document(MAP_METADATA))
+            except (ContextMapRecordError, ValueError) as error:
+                raise ContextMapArtifactError(
+                    f"{MAP_METADATA} is not valid metadata: {error}"
+                ) from error
+        return self._metadata
 
     def map_bounds(self) -> Bounds3D:
         """The spatial extent of the map, expressed in the map frame it declares."""
         return self.metadata().bounds
+
+    def geometry_link(self) -> GeometricMapLink:
+        """The geometric map the map refers to, by identity and number of elements."""
+        self._ensure_open()
+        if self._link is None:
+            try:
+                self._link = decode_geometry_link(self._document(GEOMETRY_REFERENCE))
+            except (ContextMapRecordError, ValueError) as error:
+                raise ContextMapArtifactError(
+                    f"{GEOMETRY_REFERENCE} is not a valid geometry reference: {error}"
+                ) from error
+        return self._link
+
+    def lineage(self) -> tuple[UpstreamArtifact, ...]:
+        """Every upstream artifact the map cites, with the identities needed to audit it."""
+        self._ensure_open()
+        try:
+            return decode_upstream_artifacts(self._document(LINEAGE).get("upstream_artifacts"))
+        except (ContextMapRecordError, ValueError) as error:
+            raise ContextMapArtifactError(f"{LINEAGE} is not a valid lineage: {error}") from error
+
+    # -- entities and relations -------------------------------------------------------------
 
     def _entity_table(self) -> RecordTable:
         self._ensure_open()
@@ -232,80 +284,122 @@ class ContextMapArtifactReader:
             )
         return self._relations
 
-    def entity_keys(self) -> tuple[str, ...]:
-        """The key of every entity, in file order."""
+    def _own(self, reference: ContextEntityReference) -> str:
+        if str(reference.context_map_id) != self._manifest.context_map_id:
+            raise ForeignContextEntityReferenceError(
+                f"the reference names the map {reference.context_map_id!r} but this artifact "
+                f"holds {self._manifest.context_map_id!r}"
+            )
+        return str(reference.entity_id)
+
+    def entity_ids(self) -> tuple[str, ...]:
+        """The id of every entity, in file order."""
         return self._entity_table().keys
 
-    def entity(self, key: str) -> EntityEntry:
+    def entity(self, reference: ContextEntityReference) -> ContextEntity:
         """Read one entity without reading the others.
 
         Args:
-            key: The entity key.
+            reference: The entity, as ``(context_map_id, entity_id)``.
 
         Returns:
-            The entity as it was written.
+            The entity as the schema defines it, revalidated by the schema's decoding.
 
         Raises:
-            RecordNotFoundError: If the map has no such entity.
+            ForeignContextEntityReferenceError: If the reference names another map.
+            UnknownContextEntityError: If the map has no such entity.
             BrokenIndexError: If the index does not lead to that entity's line.
+            ContextMapArtifactError: If the stored record is not a valid entity.
         """
-        return _entity_of(self._entity_table().read(key))
+        key = self._own(reference)
+        try:
+            line = self._entity_table().read(key)
+        except RecordNotFoundError as error:
+            raise UnknownContextEntityError(f"the map has no entity {key!r}") from error
+        return self._entity_of(line, key)
 
-    def entities(self) -> Iterator[EntityEntry]:
-        """Stream every entity in key order, one line at a time."""
+    def entities(self) -> Iterator[ContextEntity]:
+        """Stream every entity in id order, one line at a time."""
         for line in self._entity_table().iter_lines():
-            yield _entity_of(line)
+            yield self._entity_of(line, line["key"])
 
-    def relation_keys(self) -> tuple[str, ...]:
-        """The key of every relation, in file order."""
+    def _entity_of(self, line: Mapping[str, Any], key: str) -> ContextEntity:
+        try:
+            entity = decode_entity(line)
+        except (ContextMapRecordError, ValueError) as error:
+            raise ContextMapArtifactError(
+                f"the stored entity {key!r} is not a valid entity: {error}"
+            ) from error
+        if str(entity.entity_id) != key:
+            raise BrokenIndexError(f"the line of {key!r} holds the entity {entity.entity_id!r}")
+        return entity
+
+    def relation_ids(self) -> tuple[str, ...]:
+        """The id of every relation, in file order."""
         return self._relation_table().keys
 
-    def relation(self, key: str) -> RelationEntry:
+    def relation(self, relation_id: str) -> ContextRelation:
         """Read one relation without reading the others.
 
         Args:
-            key: The relation key.
+            relation_id: The relation id.
 
         Returns:
-            The relation as it was written.
+            The relation as the schema defines it.
 
         Raises:
             RecordNotFoundError: If the map has no such relation.
             BrokenIndexError: If the index does not lead to that relation's line.
+            ContextMapArtifactError: If the stored record is not a valid relation.
         """
-        return _relation_of(self._relation_table().read(key))
+        return self._relation_of(self._relation_table().read(relation_id), relation_id)
 
-    def relations(self) -> Iterator[RelationEntry]:
-        """Stream every relation in key order, one line at a time."""
+    def relations(self) -> Iterator[ContextRelation]:
+        """Stream every relation in id order, one line at a time."""
         for line in self._relation_table().iter_lines():
-            yield _relation_of(line)
+            yield self._relation_of(line, line["key"])
 
-    def relations_for(self, entity_key: str) -> tuple[RelationEntry, ...]:
+    def _relation_of(self, line: Mapping[str, Any], key: str) -> ContextRelation:
+        try:
+            relation = decode_relation(line)
+        except (ContextMapRecordError, ValueError) as error:
+            raise ContextMapArtifactError(
+                f"the stored relation {key!r} is not a valid relation: {error}"
+            ) from error
+        if str(relation.relation_id) != key:
+            raise BrokenIndexError(
+                f"the line of {key!r} holds the relation {relation.relation_id!r}"
+            )
+        return relation
+
+    def relations_for(self, reference: ContextEntityReference) -> tuple[ContextRelation, ...]:
         """List the relations in which an entity is the subject or the object.
 
         This is traversal through the derived index, not a query: it reads the relations the
         index names and interprets none of them.
 
         Args:
-            entity_key: The entity key.
+            reference: The entity, as ``(context_map_id, entity_id)``.
 
         Returns:
-            The relations, ordered by key; empty when the entity takes part in none.
+            The relations, ordered by id; empty when the entity takes part in none.
 
         Raises:
-            RecordNotFoundError: If the map has no such entity.
+            ForeignContextEntityReferenceError: If the reference names another map.
+            UnknownContextEntityError: If the map has no such entity.
             BrokenIndexError: If the index names a relation that does not exist.
         """
-        if entity_key not in self._entity_table():
-            raise RecordNotFoundError(f"no entity with key {entity_key!r} in the map")
-        as_subject, as_object = self._traversal_index().get(entity_key, ((), ()))
+        key = self._own(reference)
+        if key not in self._entity_table():
+            raise UnknownContextEntityError(f"the map has no entity {key!r}")
+        as_subject, as_object = self._traversal_index().get(key, ((), ()))
         relations = []
-        for key in sorted({*as_subject, *as_object}):
+        for relation_id in sorted({*as_subject, *as_object}):
             try:
-                relations.append(self.relation(key))
+                relations.append(self.relation(relation_id))
             except RecordNotFoundError as error:
                 raise BrokenIndexError(
-                    f"{ENTITY_RELATION_INDEX} names the relation {key!r}, which the map "
+                    f"{ENTITY_RELATION_INDEX} names the relation {relation_id!r}, which the map "
                     "does not have"
                 ) from error
         return tuple(relations)
@@ -330,6 +424,8 @@ class ContextMapArtifactReader:
             self._traversal = index
         return self._traversal
 
+    # -- geometry and dependencies ----------------------------------------------------------
+
     def validate_reference(self, reference: GeometryReference) -> None:
         """Check that a geometry reference belongs to this map and lies inside its geometry.
 
@@ -343,7 +439,7 @@ class ContextMapArtifactReader:
             UnresolvedReferenceError: If the reference names another geometric map, is not the
                 canonical identity of an element, or is outside the range of the map.
         """
-        link = self.context_map().geometry_ref
+        link = self.geometry_link()
         if reference.map_id != link.map_id:
             raise UnresolvedReferenceError(
                 f"the reference is into the geometric map {reference.map_id!r} but this map "
@@ -399,12 +495,11 @@ class ContextMapArtifactReader:
         self.validate_reference(reference)
         return self.geometry_source().get(reference)
 
-    def dependency_location(self, artifact_type: str, artifact_id: str) -> Path:
+    def dependency_location(self, artifact_id: str) -> Path:
         """Locate one recorded upstream artifact and check that it is the recorded one.
 
         Args:
-            artifact_type: The kind of dependency, for example ``"semantic_fusion_run"``.
-            artifact_id: Its identity.
+            artifact_id: The identity of the upstream artifact, as the lineage names it.
 
         Returns:
             The directory that holds it.
@@ -416,16 +511,15 @@ class ContextMapArtifactReader:
         """
         self._ensure_open()
         for record in self._manifest.dependencies:
-            if record.key == (artifact_type, artifact_id):
-                return self._require_found(self._resolve(record))
-        raise RecordNotFoundError(
-            f"the manifest records no dependency {artifact_type} {artifact_id!r}"
-        )
-
-    def _resolve(self, record: DependencyRecord) -> DependencyResolution:
-        return resolve_dependency(
-            record, artifact_root=self._root, dependency_paths=self._dependency_paths
-        )
+            if record.artifact_id == artifact_id:
+                return self._require_found(
+                    resolve_dependency(
+                        record,
+                        artifact_root=self._root,
+                        dependency_paths=self._dependency_paths,
+                    )
+                )
+        raise RecordNotFoundError(f"the manifest records no dependency {artifact_id!r}")
 
     @staticmethod
     def _require_found(resolution: DependencyResolution) -> Path:
@@ -438,44 +532,14 @@ class ContextMapArtifactReader:
 
     def _geometry_reader(self) -> GeometricMapArtifactReader:
         if self._geometry is None:
-            record = next(
-                (
-                    item
-                    for item in self._manifest.dependencies
-                    if item.artifact_type == GEOMETRIC_MAP_ARTIFACT_TYPE
-                ),
-                None,
-            )
-            if record is None:
-                raise MissingDependencyError("the manifest records no geometric map")
-            location = self._require_found(self._resolve(record))
+            link = self.geometry_link()
+            location = self.dependency_location(str(link.map_id))
             try:
                 if self._verify_hashes:
                     verify_inventory(location, read_inventory(location))
                 self._geometry = GeometricMapArtifactReader(location)
             except (UpstreamArtifactError, MapArtifactError) as error:
                 raise UpstreamArtifactError(
-                    f"the geometric map {record.artifact_id!r} cannot be opened: {error}"
+                    f"the geometric map {link.map_id!r} cannot be opened: {error}"
                 ) from error
         return self._geometry
-
-
-def _entity_of(line: Mapping[str, Any]) -> EntityEntry:
-    if line.keys() != _ENTITY_LINE_FIELDS:
-        raise RecordTableError(
-            f"an entity line must have exactly the fields {sorted(_ENTITY_LINE_FIELDS)}"
-        )
-    return EntityEntry(key=line["key"], record=line["record"])
-
-
-def _relation_of(line: Mapping[str, Any]) -> RelationEntry:
-    if line.keys() != _RELATION_LINE_FIELDS:
-        raise RecordTableError(
-            f"a relation line must have exactly the fields {sorted(_RELATION_LINE_FIELDS)}"
-        )
-    return RelationEntry(
-        key=line["key"],
-        subject_key=line["subject"],
-        object_key=line["object"],
-        record=line["record"],
-    )

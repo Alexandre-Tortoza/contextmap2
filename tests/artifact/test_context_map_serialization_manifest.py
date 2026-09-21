@@ -12,13 +12,13 @@ from typing import Any
 
 import pytest
 
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.errors import (
     ContextMapArtifactError,
     ManifestError,
     UnsupportedFormatVersionError,
 )
-from contextmap.artifact.layout import ARTIFACT_TYPE, FORMAT_VERSION
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.layout import ARTIFACT_TYPE, FORMAT_VERSION
+from contextmap.artifact.serialization.manifest import (
     COLUMN_DTYPES,
     ColumnPayload,
     ContextMapArtifactManifest,

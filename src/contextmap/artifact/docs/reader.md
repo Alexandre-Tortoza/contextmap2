@@ -1,17 +1,17 @@
 # Leitor do `ContextMapArtifact`
 
-Este documento descreve `src/contextmap/artifact/reader.py`, `directory.py` e `dependencies.py` (issue #157). O layout está em [`storage-layout.md`](storage-layout.md) e a escrita em [`writer.md`](writer.md).
+Este documento descreve `src/contextmap/artifact/serialization/reader.py`, `directory.py` e `dependencies.py` (issue #157). O layout está em [`storage-layout.md`](storage-layout.md) e a escrita em [`writer.md`](writer.md).
 
-O leitor abre um artifact **só pelo próprio diretório** e responde o que um consumidor precisa para entender o mapa. Ele é um leitor de dados, não um motor de consulta: não faz busca, linguagem natural, planejamento, navegação, inferência de relações nem resolução de entidades. Só instalação base (Python e NumPy): importar `contextmap.artifact.reader` não importa `torch`, `transformers`, `rclpy`, `rosbags`, `cv2` nem `PIL`, e há um teste que garante isso.
+O leitor abre um artifact **só pelo próprio diretório** e responde o que um consumidor precisa para entender o mapa, devolvendo os **tipos do schema** (`ContextEntity`, `ContextRelation`, `ContextMapMetadata`, `UpstreamArtifact`…). Ele é um leitor de dados, não um motor de consulta: não faz busca, linguagem natural, planejamento, navegação, inferência de relações nem resolução de entidades. Só instalação base (Python e NumPy): importar `contextmap.artifact.serialization.reader` não importa `torch`, `transformers`, `rclpy`, `rosbags`, `cv2` nem `PIL`, e há um teste que garante isso.
 
 ## Uso
 
 ```python
 with ContextMapArtifactReader.open(path) as reader:
-    reader.metadata()  # ContextMapMetadata
+    reader.metadata()  # ContextMapMetadata; lê só o documento de metadados
     reader.map_bounds()  # Bounds3D no frame do mapa
-    reader.entity("entity-a")  # EntityEntry, sem ler as outras
-    reader.relations_for("entity-a")  # relações em que participa, por chave
+    reader.entity(reference)  # ContextEntity, sem ler as outras
+    reader.relations_for(reference)  # ContextRelation em que a entidade participa
     reader.geometry(geometry_reference)  # GeometryPoint autoritativo
     reader.validate_reference(geometry_reference)
 ```
@@ -19,18 +19,21 @@ with ContextMapArtifactReader.open(path) as reader:
 | Operação | O que faz |
 | --- | --- |
 | `open(path, dependency_paths=None, verify_hashes=False)` | Lê o manifest e confere versões, identidade e o inventário (presença e tamanho). Não lê registro nem geometria. |
-| `manifest`, `context_map()`, `metadata()`, `map_bounds()` | O schema reconstruído dos arquivos, com a decodificação estrita do próprio schema. |
-| `entity_keys()`, `entity(key)`, `entities()` | Uma entidade por chave, pelo índice de deslocamentos; ou todas, em fluxo, uma linha por vez. |
-| `relation_keys()`, `relation(key)`, `relations()` | Idem para relações. |
-| `relations_for(entity_key)` | Travessia pelo índice derivado: relações em que a entidade é sujeito ou objeto. Não interpreta a relação. |
+| `manifest`, `metadata()`, `map_bounds()`, `geometry_link()`, `lineage()` | Cada documento pequeno, decodificado pelo decoder estrito do schema. |
+| `context_map()` | O `ContextMap` inteiro, reconstruído dos arquivos e revalidado pelo schema. Lê todas as entidades e relações. |
+| `entity_ids()`, `entity(reference)`, `entities()` | Uma entidade por `ContextEntityReference`, pelo índice de deslocamentos; ou todas, em fluxo, uma linha por vez. |
+| `relation_ids()`, `relation(id)`, `relations()` | Idem para relações. |
+| `relations_for(reference)` | Travessia pelo índice derivado: relações em que a entidade é sujeito ou objeto. Não interpreta a relação. |
 | `geometry_source()`, `geometry(reference)` | A geometria pelo `GeometricMapArtifactReader` (mapeada em memória, não lida). |
-| `validate_reference(reference)` | Confere que a referência é deste mapa, é a identidade canônica de um elemento e está dentro do número de pontos. Não abre a geometria. |
-| `dependency_location(tipo, id)` | Localiza e verifica uma dependência registrada (por exemplo, evidência opcional). |
+| `validate_reference(reference)` | Confere que a `GeometryReference` é deste mapa, é a identidade canônica de um elemento e está dentro do número de pontos. Não abre a geometria. |
+| `dependency_location(artifact_id)` | Localiza e verifica uma dependência registrada (por exemplo, evidência opcional). |
 | `close()` | Libera o mapeamento da geometria; depois, o leitor recusa ler. |
+
+Uma `ContextEntityReference` de **outro** mapa levanta `ForeignContextEntityReferenceError`; uma entidade inexistente, `UnknownContextEntityError` (ambos do schema). Um registro guardado que não é uma entidade ou relação válida do schema, ou cuja linha traz outro id, é erro explícito (`ContextMapArtifactError`, `BrokenIndexError`), nunca um valor confiado.
 
 ## Carregamento preguiçoso
 
-Abrir um artifact custa um `stat` por arquivo. As tabelas só são abertas no primeiro acesso, e abrir uma tabela lê apenas o **índice** (proporcional ao número de registros) e o confere contra o tamanho do payload; um registro é lido, e só então interpretado, quando é pedido. A geometria só é aberta na primeira chamada de `geometry_source()` ou `geometry()`, como `mmap`; nada é carregado por inteiro.
+Abrir um artifact custa um `stat` por arquivo. As tabelas só são abertas no primeiro acesso, e abrir uma tabela lê apenas o **índice** (proporcional ao número de registros) e o confere contra o tamanho do payload; um registro é lido, e só então decodificado, quando é pedido. A geometria só é aberta na primeira chamada de `geometry_source()` ou `geometry()`, como `mmap`; nada é carregado por inteiro.
 
 ## Referências e dependências
 
@@ -52,14 +55,14 @@ Nada é lido parcialmente:
 | Situação | Erro |
 | --- | --- |
 | não é um diretório, ou não tem `manifest.json` (uma escrita interrompida nunca tem) | `IncompleteContextMapArtifactError` |
-| `manifest.json` ilegível, com campo ausente ou desconhecido | `ManifestError` |
+| `manifest.json` ilegível, com campo ausente ou desconhecido, ou de um bundle | `ManifestError` |
 | versão de formato não suportada (a mensagem lista as suportadas) | `UnsupportedFormatVersionError` |
 | versão de schema ilegível (verificada antes de qualquer outro campo) | `UnsupportedArtifactSchemaError`, que também é a `UnsupportedSchemaVersionError` do schema |
 | manifest editado (identidade de conteúdo não confere) | `ArtifactIntegrityError` |
 | arquivo do inventário ausente, ou um arquivo obrigatório que o inventário não lista | `MissingPayloadError` / `IncompleteContextMapArtifactError` |
 | tamanho diferente (truncado ou alterado) ou, com `verify_hashes`, hash diferente | `ArtifactIntegrityError` |
 | índice desordenado, com lacuna, com contagem errada ou que aponta para outro registro | `BrokenIndexError` |
-| entidade, relação ou referência que não resolve | `RecordNotFoundError` / `UnresolvedReferenceError` |
+| relação, dependência ou referência que não resolve | `RecordNotFoundError` / `UnresolvedReferenceError` |
 
 ## Sem mutação e sem fallback
 
@@ -67,4 +70,4 @@ O leitor só abre arquivos para leitura: não escreve índice, cache nem lock, e
 
 ## Limites
 
-Entidades e relações são devolvidas como `EntityEntry`/`RelationEntry` (chave, extremos e o registro canônico opaco); quando o schema (#150) as tipar, o leitor as decodifica com ele. A conferência de hash de um artifact e de referências entre registros pertence ao validador ([`validation.md`](validation.md)).
+O leitor decodifica cada registro com o decoder do schema por meio de `contextmap.artifact.records._decode`, que é privado ao pacote `artifact` (o schema só expõe a decodificação do mapa inteiro). Se o schema passar a expor a decodificação por parte, o leitor deve usá-la. A conferência de hash do artifact inteiro e de referências entre registros pertence ao validador ([`integrity-validation.md`](integrity-validation.md)).

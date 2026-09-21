@@ -19,31 +19,16 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from contextmap.artifact.errors import UpstreamArtifactError
-from contextmap.artifact.layout import MANIFEST
-from contextmap.artifact.manifest import DependencyRecord, Requirement, inventory_digest
+from contextmap.artifact.serialization.errors import UpstreamArtifactError
+from contextmap.artifact.serialization.layout import MANIFEST
+from contextmap.artifact.serialization.manifest import (
+    DependencyRecord,
+    inventory_digest,
+)
 from contextmap.shared import FileEntry, check_file_inventory
 
 GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
 """``artifact_type`` of the dependency that holds the authoritative geometry."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class UpstreamArtifact:
-    """An upstream artifact, on disk, that a map is written against.
-
-    Attributes:
-        artifact_type: Kind of the artifact, for example ``"semantic_fusion_run"``.
-        artifact_id: Identity of the artifact inside its own capability.
-        location: Where it is now. The location is used to read and verify it and to compute a
-            relative hint; it is never recorded as an identity.
-        requirement: Whether the map needs it to be resolved or only to inspect evidence.
-    """
-
-    artifact_type: str
-    artifact_id: str
-    location: Path
-    requirement: Requirement
 
 
 def read_inventory(directory: Path) -> tuple[FileEntry, ...]:

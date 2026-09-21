@@ -1,62 +1,63 @@
-# Validação do `ContextMapArtifact`
+# Invariantes, integridade de referências e fixture representativa
 
-Este documento descreve `src/contextmap/artifact/validation.py` (issue #158). Ele é independente da runtime de mapeamento e de qualquer runtime de modelo ou ROS (há um teste de importação em subprocesso), lê só os arquivos que recebe e **nunca repara nada**.
+Este documento descreve a validação do **schema em si**, feita em memória sobre os contratos públicos e sobre a visão canônica em registros. Ela independe de serializador, de layout de arquivos, de ROS e de bibliotecas de modelo, então continua válida qualquer que seja o serializador do artifact. A validação de arquivos (inventário, hashes, payloads ausentes, índices em disco) pertence ao validador do `ContextMapArtifact` (milestone Context Map Serialization).
 
-```python
-report = validate_context_map_artifact(path, level=ValidationLevel.FULL, dependency_paths=None)
-report.status  # invalid | structurally_valid | verified
-report.to_json()  # relatório determinístico legível por máquina
-```
+## Onde cada invariante é aplicada
 
-O validador **não levanta exceção** para um artifact danificado: todo dano vira um achado (`Finding`) no relatório.
+Uma invariante é validada **na fronteira mais próxima que a possui** e falha na construção, nunca depois de o dado circular: cada registro valida o que só ele precisa (identidade, ordem canônica, coerência interna) e o `ContextMap` valida o que envolve mais de um registro.
 
-## Níveis e o que cada resposta significa
-
-| Nível | O que lê | Melhor resposta |
+| Invariante | Onde | Erro |
 | --- | --- | --- |
-| `STRUCTURAL` | manifest e versões, um `stat` por arquivo, descritores de payload, estrutura dos índices, documentos pequenos e onde estão as dependências | `structurally_valid` |
-| `FULL` | tudo acima, mais o hash de cada arquivo, cada registro, as referências entre registros, os índices reconstruídos e os arquivos das dependências | `verified` |
+| identidade presente e que não é caminho; ids únicos e ordem canônica | cada registro; `ContextMap` para entidades, relações e linhagem | `ValueError` |
+| versão do schema legível | `ContextMap` e `context_map_from_record` (antes de qualquer campo) | `UnsupportedSchemaVersionError` |
+| frame, unidade, âncora e `up_direction` completos e coerentes; bounds no frame do mapa; janela em um relógio | `MapFrame`, `MapAnchor`, `ContextMapMetadata`, `ObservationWindow` | `ValueError` |
+| geometria da entidade pertence ao mapa referenciado, com identidade canônica e dentro do intervalo | `ContextMap` | `ReferenceIntegrityError` |
+| sujeito e objeto de uma relação resolvem a entidades do mesmo mapa e são distintos | `ContextRelation`, `ContextMap` | `ValueError`, `ReferenceIntegrityError` |
+| identidade de origem mapeada uma única vez | `ContextMap` | `ReferenceIntegrityError` |
+| estado semântico concorda com as hipóteses (incerteza não colapsa) | `ContextSemanticState` | `ValueError` |
+| capacidades declaradas concordam com o conteúdo e com a linhagem | `ContextMap` | `ValueError` |
+| fechamento de proveniência: todo artifact citado está na linhagem com o tipo certo | `ContextMap` | `ReferenceIntegrityError` |
+| a categoria de derivação é sustentada pela evidência citada | `EvidenceOrigin`, `ContextMap` | `ProvenanceError` |
+| forma do registro: campo ausente, desconhecido ou de tipo errado | `context_map_from_record` | `ContextMapRecordError` |
 
-Um artifact **nunca é chamado de válido sem ter sido verificado**: com o nível estrutural a resposta é `structurally_valid`, que diz explicitamente que conteúdo, referências e arquivos a montante não foram lidos, e o relatório lista cada verificação pulada com o motivo. `verified` significa que toda verificação que este validador implementa rodou e passou; as que ele ainda não sabe fazer aparecem como `skipped` (hoje só `entity_geometry_support`: o suporte geométrico de cada entidade só pode ser conferido quando o schema tipar as entidades, #150).
+Nada é reparado em silêncio: um registro inválido **nunca** vira um mapa "corrigido".
 
-## Verificações
+## Cobertura
 
-Em ordem fixa; cada uma termina `passed`, `failed` ou `skipped` (com `detail`).
+`tests/artifact/test_context_map_invariants.py` cobre cada linha da tabela sobre a fixture, com uma matriz de mutações do registro. Cada caso aplica **uma** mutação ao registro válido e exige o erro exato:
 
-| Verificação | O que confere | Códigos de erro |
-| --- | --- | --- |
-| `manifest` | legível, formato e schema suportados, identidade de conteúdo recomputada | `artifact.incomplete`, `manifest.malformed`, `manifest.unsupported_format_version`, `manifest.unsupported_schema_version`, `manifest.identity_mismatch` |
-| `inventory` | todo arquivo obrigatório inventariado; cada arquivo presente com o tamanho registrado | `inventory.required_file_missing`, `file.missing`, `file.size_mismatch` |
-| `file_hashes` (FULL) | SHA-256 de cada arquivo | `file.hash_mismatch` |
-| `payload_descriptors` | os cinco payloads descritos, com papel, origem e contagem esperados | `payload.descriptor_missing`, `payload.descriptor_mismatch`, `payload.count_mismatch` |
-| `index_structure` | os índices abrem: ordenados, contíguos, contagem certa, cobrindo exatamente o payload | `index.broken` |
-| `map_record` | metadados e referência de geometria formam um mapa válido pelo schema | `map.invalid` |
-| `capabilities` | conteúdo presente só se declarado (uma capability declarada pode estar vazia) | `capabilities.undeclared_entities`, `capabilities.undeclared_relations` |
-| `lineage` | `lineage.json` lista exatamente as dependências do manifest | `lineage.malformed`, `lineage.mismatch` |
-| `dependencies` | cada dependência é achada e é a registrada | `dependency.required_missing`, `dependency.mismatch` (avisos: `dependency.optional_missing`) |
-| `geometry_consistency` | o mapa geométrico é o que o mapa nomeia: identidade, número de pontos e frame | `geometry.reference_mismatch`, `geometry.map_id_mismatch`, `geometry.point_count_mismatch`, `geometry.frame_mismatch` |
-| `reference_integrity` (FULL) | lê cada entidade e relação; toda relação aponta para entidades existentes | `reference.relation_endpoint_missing`, `index.broken` |
-| `index_rebuild` (FULL) | cada índice é byte a byte o que os registros produzem (identidade do índice reconstruível, chaves únicas e ordenadas) | `index.mismatch`, `records.invalid` |
-| `dependency_integrity` (FULL) | os arquivos de cada dependência batem com o próprio inventário | `dependency.upstream_damaged` |
-| `entity_geometry_support` | (pulada; ver acima) | |
-| `unlisted_files` | arquivos fora do inventário | avisos `file.unlisted`, `debug.present` |
+- versão: maior e menor não suportados, versão malformada;
+- frame, unidades, âncora e extensão: unidade desconhecida, frame vazio, `up_direction` que não é unitário, origem local que reivindica referência externa, origem externa sem referência, bounds em outro frame, janela com relógios distintos, nenhuma sequência de origem;
+- referências: mapa geométrico vazio, geometria de outro mapa, geometria além do intervalo, mapa geométrico ausente da linhagem;
+- entidades: id duplicado, ordem, duas entidades para o mesmo registro de origem, entidade sem geometria, entidade resolvida a partir de nada;
+- relações: entidade inexistente, entidade de outro mapa, relação consigo mesma, predicado vazio, artifact de origem do tipo errado;
+- estado: estado inequívoco com duas hipóteses, conflito reduzido a um rótulo, abstenção com hipótese;
+- capacidades: entidades, relações e evidência de representação 3D fora da declaração, tipos de relação divergentes do conteúdo;
+- linhagem e proveniência: artifact citado fora da linhagem, tipo errado, linhagem fora de ordem, identidade de conteúdo que não é digest, resultado fundido sem política, origem sem evidência, saída de VLM marcada como observada, relação marcada como observação direta, categoria desconhecida;
+- forma do registro: campo desconhecido, campo ausente e tipo errado.
 
-Se o manifest não pode ser lido, as demais verificações ficam `skipped` ("o manifest não pôde ser lido"). Uma verificação que só falha porque outra já reportou o dano (por exemplo, tabelas de registro quando o arquivo sumiu) fica `skipped`, sem erro em cascata.
+Também há testes de **ausência de conteúdo opcional** (mapa só com geometria, entidades sem relações, relações declaradas porém vazias versus ausentes, evidência opcional ausente) e um teste que garante que o pacote do schema **não faz E/S de arquivo nem possui formato** (nenhum import de `os`, `pathlib`, `json`, `pickle`, `io`, `shutil`, `tempfile`, `glob` ou `sqlite3`).
 
-### Obrigatório versus opcional
+## Fixture representativa
 
-Uma dependência **obrigatória** ausente é erro (`dependency.required_missing`); uma **opcional** ausente é aviso (`dependency.optional_missing`) e não invalida o artifact, porque o núcleo do mapa continua legível sem ela. Uma dependência **presente mas que não é a registrada** (digest diferente: velha ou de outro mapa) é sempre erro, obrigatória ou não: algo que finge ser a evidência é pior que a ausência.
+`tests/fixtures/context_map/corridor.json` é um mapa pequeno e legível a olho: geometria por referência, quatro entidades, três relações e a proveniência completa. Foi gerada **só a partir de contratos públicos** por `tests/artifact/context_map_fixture_builder.py`, sem backend de runtime, e todas as identidades e digests são sintéticos e determinísticos.
 
-## O relatório
+| Parte | O que demonstra |
+| --- | --- |
+| `entity-0001` (`chair`, `UNAMBIGUOUS`) | entidade **resolvida a partir de duas entidades de origem** (`member_entities`) com uma decisão de resolução; origem `MULTIVIEW_FUSED` citando fusão, **observações físicas** e evidência 3D opcional; hipótese `MODEL_INFERRED` |
+| `entity-0002` (`desk` / `table`, `AMBIGUOUS`) | hipóteses concorrentes preservadas, sem ranking |
+| `entity-0003` (`bin` / `box`, `CONFLICTING`) | conflito preservado: as duas hipóteses continuam no mapa |
+| `entity-0004` (`INSUFFICIENT_EVIDENCE`) | abstenção: nenhuma hipótese afirmada, o que não é evidência negativa |
+| `relation-0001` (`next_to`, `SUPPORTED`) | relação confirmada, `GEOMETRY_DERIVED` com a política versionada |
+| `relation-0002` (`on`, `UNRESOLVED`) | relação candidata que **não** vira confirmada |
+| `relation-0003` (`near`, `CONFLICTING`) | evidência que apoia e contradiz |
+| `metadata.frame` | frame local de estimador com `up_direction` **desconhecida** (`null` explícito) |
+| `lineage` | sequência, percepção (com modelos), fusão, mapa semântico, mapa geométrico, representação 3D, resolução e relações, cada um com digest de conteúdo |
 
-`ValidationReport` (`to_record()` / `to_json()`) traz: `validator_version`, `level`, `status`, as identidades (`artifact_type`, `format_version`, `schema_version`, `context_map_id`, `content_identity`), `checks` (todas, na ordem fixa), `files` (o inventário conferido, por caminho, com `status`: `verified`, `size_ok`, `missing`, `size_mismatch` ou `hash_mismatch`), `dependencies` (cada uma com `requirement` e `status` `found`/`missing`/`mismatch`) e `findings`.
+Os testes verificam que a fixture é válida, que reconstrói exatamente o mesmo mapa **qualquer que seja o layout do JSON** (compacto, indentado, chaves ordenadas), que a travessia relação → entidade → geometria → evidência usa apenas tipos públicos e que o arquivo versionado é exatamente a renderização atual dos contratos: se o contrato mudar, o teste falha e a mensagem indica como regenerar (`python tests/artifact/context_map_fixture_builder.py`).
 
-O relatório é **determinístico e inspecionável**: sem horário, sem caminho absoluto e sem dado da máquina (o assunto de um achado é um caminho relativo, uma chave ou um id de artifact), com chaves ordenadas, achados em ordem (erros antes de avisos, depois por código e assunto) e sem achados repetidos. Validar duas vezes, ou validar uma cópia do artifact, dá os mesmos bytes.
+## Fora do escopo
 
-## Sem reparo e sem fallback
-
-O validador só lê. Um teste compara o conteúdo e o `mtime` de todo arquivo antes e depois de validar. Um arquivo fora do inventário nunca é lido (`debug/` inclusive): vira aviso. Nada é reconstruído a partir de `debug/`.
-
-## Validação
-
-`tests/artifact/test_context_map_serialization_validation.py` valida artifacts reais (com o `GeometricMapArtifact` real): artifact intacto, cada nível, alteração que mantém o tamanho (só o nível completo vê), arquivo ausente e truncado, índice quebrado, índice que aponta para outro registro, relação com entidade inexistente, índice de travessia velho, linhagem incompatível, geometria diferente da nomeada, conteúdo não declarado, dependências obrigatória e opcional ausentes, dependência que não é a registrada, artifact movido, arquivos a montante danificados, versões não suportadas, manifest adulterado, diretório incompleto, arquivos fora do contrato, determinismo do relatório e ausência de mutação.
+- integridade de arquivos, hashes e payloads: validador do artifact;
+- verificação contra o `GeometricMap` real (frame, tamanho e bounds do artifact de geometria): feita por quem abre os dois artifacts, como o validador;
+- `entity_resolution` e `spatial_relations` reais: enquanto seus contratos não existem na `dev`, a fixture usa `UpstreamRecordRef` para as identidades de origem.

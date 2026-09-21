@@ -23,7 +23,7 @@ O **schema** não depende do layout em disco, de um serializador, de ROS nem de 
 
 ## Estado implementado
 
-Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (criação, sequências de origem, frame, unidades, âncora, extensão espacial e temporal e capacidades declaradas), a referência à geometria (`GeometricMapLink`), a versão do schema com a regra de leitura, e a **visão canônica em registros** (`context_map_to_record` / `context_map_from_record`), que é a forma serializável do contrato sem escolher um formato de arquivo.
+Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (criação, sequências de origem, frame, unidades, âncora, extensão espacial e temporal e capacidades declaradas), a referência à geometria (`GeometricMapLink`), a composição de **entidades e relações** por referência (`ContextEntity`, `ContextRelation`) com integridade de referências validada em construção, a **linhagem** e a proveniência (`EvidenceOrigin`, `UpstreamArtifact`), a versão do schema com a janela de leitura e as regras de evolução, a impressão digital estrutural, e a **visão canônica em registros** (`context_map_to_record` / `context_map_from_record`), que é a forma serializável do contrato sem escolher um formato de arquivo.
 
 ## Contratos públicos
 
@@ -33,17 +33,25 @@ Existem, até agora, os contratos de topo: `ContextMap`, `ContextMapMetadata` (c
 - `ObservationWindow` — a janela temporal das observações, em um único domínio de relógio.
 - `DeclaredCapabilities`, `MapCapability` — o conteúdo opcional que o mapa declara, sem implicá-lo pelo layout.
 - `GeometricMapLink` — a geometria autoritativa, referenciada por identidade e tamanho.
-- `CONTEXT_MAP_SCHEMA_VERSION`, `SchemaVersion`, `require_supported_schema_version()`, `UnsupportedSchemaVersionError` — a versão do schema e a rejeição explícita de uma versão ilegível.
+- `ContextEntity`, `ContextEntityId`, `ContextEntityReference` — a entidade resolvida, seu escopo de identidade e sua referência estável.
+- `ContextSemanticState`, `LabelHypothesis`, `AmbiguityStatus` — o estado semântico, que nunca colapsa incerteza.
+- `ContextRelation`, `ContextRelationId`, `RelationState` — a relação direcionada entre entidades e seu estado (`SUPPORTED`, `UNRESOLVED`, `CONFLICTING`).
+- `UpstreamRecordRef` — o registro exato, no artifact exato, a que algo do mapa corresponde.
+- `EvidenceOrigin`, `DerivationKind` — como um resultado foi produzido (sensor, modelo, geometria, fusão, humano, conhecimento prévio) e **toda** a evidência de que deriva; proveniência, nunca confiança.
+- `UpstreamArtifact`, `ArtifactKind`, `ProvenanceError` — a linhagem: cada artifact citado, com identidade de conteúdo, configuração, código e modelos.
+- `ReferenceIntegrityError`, `ForeignContextEntityReferenceError`, `UnknownContextEntityError` — referências que não resolvem, referência a outro mapa e entidade inexistente.
+- `CONTEXT_MAP_SCHEMA_VERSION`, `SchemaVersion`, `require_supported_schema_version()`, `UnsupportedSchemaVersionError` — a versão do schema, a janela de leitura e a rejeição explícita de uma versão ilegível.
+- `schema_fingerprint()`, `describe_schema()` — a impressão digital estrutural do schema, que impede uma mudança estrutural sem uma decisão de versão.
 - `context_map_to_record()`, `context_map_from_record()`, `ContextMapRecordError` — a visão canônica em registros, estrita e independente de formato.
 
-Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, e [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades.
+Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes, [`metadata.md`](metadata.md) para a semântica de frame, origem, extensão e capacidades, [`composition.md`](composition.md) para geometria, entidades e relações, [`lineage.md`](lineage.md) para linhagem, origens e o fechamento de proveniência , [`versioning.md`](versioning.md) para versão, compatibilidade e evolução e [`validation.md`](validation.md) para invariantes e a fixture representativa.
 
 ## Módulos consumidos
 
 - `contextmap.geometric_mapping`: `MapId`, reutilizado como identidade do mapa geométrico referenciado, e `Bounds3D`, reutilizado como extensão espacial.
 - `contextmap.shared`: `SourceTimestamp` (janela temporal) e `Vector3` (direção "para cima").
 
-Entity Resolution e Spatial Relations ainda não existem na `dev`; até lá o schema usa registros de referência próprios (artifact de origem + identidade local), sem importar módulos que não existem.
+Entity Resolution e Spatial Relations ainda não existem na `dev`; até lá o schema usa registros de referência próprios (`UpstreamRecordRef`: artifact de origem + identidade local), sem importar módulos que não existem. Quando esses contratos existirem, a adoção troca esses registros por referências das capabilities donas, sem mudar o escopo de identidade do mapa.
 
 ## Módulos que consomem este
 
@@ -53,10 +61,14 @@ Nenhum dentro do Solution 1 hoje. O serializador (Context Map Serialization) e a
 
 - [`contracts.md`](contracts.md) — campos, identidades e invariantes.
 - [`metadata.md`](metadata.md) — frame, unidades, âncora, extensão e capacidades declaradas.
+- [`composition.md`](composition.md) — geometria, entidades e relações: escopos de identidade, referências e índices.
+- [`lineage.md`](lineage.md) — linhagem, referências de evidência, categorias de derivação e fechamento de proveniência.
+- [`versioning.md`](versioning.md) — versão do schema, compatibilidade, evolução, descontinuação, migração e impressão digital.
+- [`validation.md`](validation.md) — invariantes do schema, integridade de referências e a fixture representativa.
 - [`storage-layout.md`](storage-layout.md) — layout do `ContextMapArtifact` em disco, formatos escolhidos, manifest, identidade e dependências.
 - [`writer.md`](writer.md) — escrita determinística e publicação atômica.
 - [`reader.md`](reader.md) — leitor leve, acesso preguiçoso, resolução de referências e dependências.
-- [`validation.md`](validation.md) — validação de integridade, níveis, relatório legível por máquina.
+- [`integrity-validation.md`](integrity-validation.md) — validação de integridade do artifact em disco, níveis, relatório legível por máquina.
 - [`bundle.md`](bundle.md) — bundle portátil e fechamento explícito de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `ContextMap` no contexto global de contratos.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — o `ContextMapArtifact` no fluxo de artifacts.

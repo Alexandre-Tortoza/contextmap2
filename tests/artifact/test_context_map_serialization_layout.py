@@ -2,8 +2,8 @@
 
 import pytest
 
-from contextmap.artifact.errors import ManifestError
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.errors import ManifestError
+from contextmap.artifact.serialization.layout import (
     ARTIFACT_TYPE,
     CONTRACTUAL_FILES,
     FORMAT_VERSION,

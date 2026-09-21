@@ -1,7 +1,7 @@
 """The deterministic, atomic ContextMapArtifact writer (issue #156).
 
-The tests use the real schema, a real GeometricMapArtifact and small upstream artifacts; they
-need no perception, robotics or model runtime, which is part of the acceptance criteria.
+The tests use the real schema, a real GeometricMapArtifact and small real upstream artifacts;
+they need no perception, robotics or model runtime, which is part of the acceptance criteria.
 """
 
 import hashlib
@@ -15,75 +15,76 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from context_map_builders import (
+    ENTITY_RESOLUTION_ARTIFACT_ID,
+    FUSION_ARTIFACT_ID,
+    SEQUENCE_ARTIFACT_ID,
+    entity_capabilities,
+    metadata,
+)
+from context_map_builders import context_map as schema_context_map
 from context_map_serialization_builders import (
+    MAP_ID,
     WRITTEN_AT,
-    declared_without,
-    default_entities,
-    default_relations,
-    entity,
+    World,
     make_context_map,
-    make_evidence,
-    make_geometry,
-    relation,
+    make_world,
+    pinned,
     tree_files,
     write_artifact,
 )
 
 from contextmap.artifact import (
-    MapCapability,
+    ContextMapArtifactError,
     Requirement,
     context_map_from_record,
+    context_map_to_record,
     inventory_digest,
 )
-from contextmap.artifact.dependencies import UpstreamArtifact, read_inventory
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.dependencies import read_inventory
+from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
-    ContextMapArtifactError,
     InvalidContentError,
-    RecordTableError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import CONTRACTUAL_FILES, FORMAT_VERSION, MANIFEST, README
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.layout import (
+    CONTRACTUAL_FILES,
+    FORMAT_VERSION,
+    MANIFEST,
+    README,
+)
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     PayloadRole,
     RecordPayload,
     decode_manifest,
     manifest_content_identity,
 )
-from contextmap.artifact.tables import RecordTable
-from contextmap.geometric_mapping import GeometricMapArtifactReader, MapId
+from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.ingestion import FrameId
 from contextmap.shared import check_file_inventory
 
 
 @pytest.fixture
-def geometry_dir(tmp_path: Path) -> Path:
-    return make_geometry(tmp_path)
-
-
-@pytest.fixture
-def evidence(tmp_path: Path) -> UpstreamArtifact:
-    return make_evidence(tmp_path)
+def world(tmp_path: Path) -> World:
+    return make_world(tmp_path)
 
 
 def _read_manifest(output_dir: Path) -> ContextMapArtifactManifest:
     return decode_manifest(json.loads((output_dir / MANIFEST).read_text(encoding="utf-8")))
 
 
-def test_the_writer_publishes_exactly_the_documented_layout(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    output_dir, _ = write_artifact(tmp_path, geometry_dir)
+def test_the_writer_publishes_exactly_the_documented_layout(world: World) -> None:
+    output_dir, _ = write_artifact(world)
 
     assert set(tree_files(output_dir)) == {MANIFEST, README, *CONTRACTUAL_FILES}
     assert not (output_dir / "debug").exists()
 
 
 def test_the_manifest_inventories_every_contractual_file_with_matching_hashes(
-    tmp_path: Path, geometry_dir: Path
+    world: World,
 ) -> None:
-    output_dir, manifest = write_artifact(tmp_path, geometry_dir)
+    output_dir, manifest = write_artifact(world)
 
     assert {entry.path for entry in manifest.file_inventory} == set(CONTRACTUAL_FILES)
     assert check_file_inventory(output_dir, manifest.file_inventory) == []
@@ -95,10 +96,10 @@ def test_the_manifest_inventories_every_contractual_file_with_matching_hashes(
 
 
 def test_the_manifest_records_schema_format_code_and_configuration_identities(
-    tmp_path: Path, geometry_dir: Path
+    world: World,
 ) -> None:
-    context_map = make_context_map()
-    _, manifest = write_artifact(tmp_path, geometry_dir, context_map=context_map)
+    context_map = make_context_map(world)
+    _, manifest = write_artifact(world, context_map=context_map)
 
     creation = context_map.metadata.creation
     assert manifest.context_map_id == str(context_map.context_map_id)
@@ -111,11 +112,19 @@ def test_the_manifest_records_schema_format_code_and_configuration_identities(
     assert manifest.content_identity == manifest_content_identity(manifest)
 
 
-def test_the_schema_record_is_recoverable_from_the_artifacttree_files(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    context_map = make_context_map()
-    output_dir, manifest = write_artifact(tmp_path, geometry_dir, context_map=context_map)
+def test_the_schema_record_is_recoverable_from_the_artifact_files(world: World) -> None:
+    context_map = make_context_map(world)
+    output_dir, manifest = write_artifact(world, context_map=context_map)
+    table = RecordTable(
+        output_dir / "entities/entities.jsonl",
+        output_dir / "indexes/entity-index.jsonl",
+        record_count=manifest.entity_count,
+    )
+    relations = RecordTable(
+        output_dir / "relations/relations.jsonl",
+        output_dir / "indexes/relation-index.jsonl",
+        record_count=manifest.relation_count,
+    )
 
     rebuilt = context_map_from_record(
         {
@@ -125,16 +134,19 @@ def test_the_schema_record_is_recoverable_from_the_artifacttree_files(
             "geometry_ref": json.loads(
                 (output_dir / "geometry/geometry-reference.json").read_text()
             ),
+            "entities": [line["record"] for line in table.iter_lines()],
+            "relations": [line["record"] for line in relations.iter_lines()],
+            "lineage": json.loads((output_dir / "lineage/lineage.json").read_text())[
+                "upstream_artifacts"
+            ],
         }
     )
 
     assert rebuilt == context_map
 
 
-def test_the_tables_are_written_ordered_with_indexes_that_describe_them(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    output_dir, manifest = write_artifact(tmp_path, geometry_dir)
+def test_the_tables_are_written_ordered_with_indexes_that_describe_them(world: World) -> None:
+    output_dir, manifest = write_artifact(world)
 
     entities = RecordTable(
         output_dir / "entities/entities.jsonl",
@@ -146,33 +158,34 @@ def test_the_tables_are_written_ordered_with_indexes_that_describe_them(
         output_dir / "indexes/relation-index.jsonl",
         record_count=manifest.relation_count,
     )
-    assert entities.keys == ("entity-a", "entity-b", "entity-c")
-    assert relations.keys == ("relation-1", "relation-2")
-    assert entities.read("entity-b")["record"]["label"] == "label-of-entity-b"
-    assert relations.read("relation-2")["subject"] == "entity-c"
-    assert relations.read("relation-2")["object"] == "entity-a"
+    assert entities.keys == ("entity-0001", "entity-0002", "entity-0003")
+    assert relations.keys == ("relation-0001", "relation-0002")
+    assert entities.read("entity-0002")["record"]["entity_id"] == "entity-0002"
+    line = relations.read("relation-0002")
+    assert (line["subject"], line["object"]) == ("entity-0002", "entity-0003")
+    assert line["record"]["predicate"] == "next_to"
 
 
-def test_the_traversal_index_lists_the_relations_of_every_entity(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    output_dir, _ = write_artifact(tmp_path, geometry_dir)
+def test_the_traversal_index_lists_the_relations_of_every_entity(world: World) -> None:
+    output_dir, _ = write_artifact(world)
 
     lines = [
         json.loads(line)
         for line in (output_dir / "indexes/entity-relation-index.jsonl").read_bytes().splitlines()
     ]
     assert lines == [
-        {"key": "entity-a", "as_subject": ["relation-1"], "as_object": ["relation-2"]},
-        {"key": "entity-b", "as_subject": [], "as_object": ["relation-1"]},
-        {"key": "entity-c", "as_subject": ["relation-2"], "as_object": []},
+        {"key": "entity-0001", "as_subject": ["relation-0001"], "as_object": []},
+        {
+            "key": "entity-0002",
+            "as_subject": ["relation-0002"],
+            "as_object": ["relation-0001"],
+        },
+        {"key": "entity-0003", "as_subject": [], "as_object": ["relation-0002"]},
     ]
 
 
-def test_payloads_are_described_with_their_role_counts_and_sources(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    _, manifest = write_artifact(tmp_path, geometry_dir)
+def test_payloads_are_described_with_their_role_counts_and_sources(world: World) -> None:
+    _, manifest = write_artifact(world)
 
     payloads = {payload.path: payload for payload in manifest.payloads}
     assert set(payloads) == {
@@ -194,61 +207,48 @@ def test_payloads_are_described_with_their_role_counts_and_sources(
     )
 
 
-def test_the_geometry_is_referenced_by_identity_and_never_copied(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    output_dir, _ = write_artifact(tmp_path, geometry_dir)
+def test_the_geometry_is_referenced_by_identity_and_never_copied(world: World) -> None:
+    output_dir, _ = write_artifact(world)
 
     reference = json.loads((output_dir / "geometry/geometry-reference.json").read_text())
-    assert reference == {"map_id": "corridor-02--run-0001", "point_count": 24}
+    assert reference == {"map_id": MAP_ID, "point_count": 1000}
     assert not any(path.endswith(".bin") for path in tree_files(output_dir))
-    assert sum(len(data) for data in tree_files(output_dir).values()) < 20_000
+    assert sum(len(data) for data in tree_files(output_dir).values()) < 150_000
 
 
-def test_dependencies_are_pinned_by_content_and_located_by_a_relative_hint(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
-) -> None:
-    output_dir, manifest = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
+def test_dependencies_follow_the_lineage_and_its_structural_kinds(world: World) -> None:
+    output_dir, manifest = write_artifact(world)
 
-    by_type = {dependency.artifact_type: dependency for dependency in manifest.dependencies}
-    geometry, fusion = by_type["geometric_map"], by_type["semantic_fusion_run"]
-    assert geometry.requirement is Requirement.REQUIRED
-    assert fusion.requirement is Requirement.OPTIONAL
-    assert geometry.artifact_id == "corridor-02--run-0001"
-    assert fusion.artifact_id == "run-0003"
-    with GeometricMapArtifactReader(geometry_dir) as reader:
-        assert geometry.content_identity == inventory_digest(reader.manifest.file_inventory)
-    assert fusion.content_identity == inventory_digest(read_inventory(evidence.location))
-    for record, directory in ((geometry, geometry_dir), (fusion, evidence.location)):
-        assert record.locator is not None and not record.locator.startswith("/")
-        assert (output_dir / record.locator).resolve() == directory.resolve()
+    by_id = {item.artifact_id: item for item in manifest.dependencies}
+    lineage = {item.artifact_id: item for item in make_context_map(world).lineage}
+    assert set(by_id) == set(lineage)
+    for artifact_id in (MAP_ID, ENTITY_RESOLUTION_ARTIFACT_ID):
+        assert by_id[artifact_id].requirement is Requirement.REQUIRED
+    assert by_id[FUSION_ARTIFACT_ID].requirement is Requirement.OPTIONAL
+    assert by_id[SEQUENCE_ARTIFACT_ID].requirement is Requirement.OPTIONAL
+    for artifact_id, record in by_id.items():
+        assert record.artifact_type == lineage[artifact_id].kind.value
+        assert record.content_identity == lineage[artifact_id].content_identity
+    for artifact_id, directory in world.locations.items():
+        locator = by_id[artifact_id].locator
+        assert locator is not None and not locator.startswith("/")
+        assert (output_dir / locator).resolve() == directory.resolve()
+        assert by_id[artifact_id].content_identity == inventory_digest(read_inventory(directory))
+    assert by_id[SEQUENCE_ARTIFACT_ID].locator is None
 
 
-def test_the_lineage_lists_the_exact_upstream_identities_without_paths(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
-) -> None:
-    output_dir, manifest = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
+def test_the_lineage_document_is_the_schema_lineage(world: World) -> None:
+    context_map = make_context_map(world)
+    output_dir, _ = write_artifact(world, context_map=context_map)
 
     lineage = json.loads((output_dir / "lineage/lineage.json").read_text())
-    assert lineage == {
-        "upstream_artifacts": [
-            {
-                "artifact_type": item.artifact_type,
-                "artifact_id": item.artifact_id,
-                "content_identity": item.content_identity,
-                "requirement": item.requirement.value,
-            }
-            for item in manifest.dependencies
-        ]
-    }
+    assert lineage == {"upstream_artifacts": context_map_to_record(context_map)["lineage"]}
 
 
-def test_repeated_writes_are_semantically_equal_with_a_stable_identity(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    first_dir, first = write_artifact(tmp_path, geometry_dir, name="first")
+def test_repeated_writes_are_semantically_equal_with_a_stable_identity(world: World) -> None:
+    first_dir, first = write_artifact(world, name="first")
     second_dir, second = write_artifact(
-        tmp_path, geometry_dir, name="second", written_at=datetime(2030, 1, 1, tzinfo=UTC)
+        world, name="second", written_at=datetime(2030, 1, 1, tzinfo=UTC)
     )
 
     assert first.content_identity == second.content_identity
@@ -259,44 +259,23 @@ def test_repeated_writes_are_semantically_equal_with_a_stable_identity(
     assert differing <= {MANIFEST}
 
 
-def test_the_artifact_does_not_depend_on_the_order_the_parts_arrive_in(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    first_dir, first = write_artifact(tmp_path, geometry_dir, name="ordered")
-    second_dir, second = write_artifact(
-        tmp_path,
-        geometry_dir,
-        name="shuffled",
-        entities=tuple(reversed(default_entities())),
-        relations=tuple(reversed(default_relations())),
+def test_a_different_map_has_a_different_identity(world: World) -> None:
+    _, populated = write_artifact(world, name="populated")
+    _, geometry_only = write_artifact(
+        world,
+        name="geometry-only",
+        context_map=make_context_map(world, kind="geometry-only"),
+        locations={MAP_ID: world.geometry_dir},
     )
 
-    assert first.content_identity == second.content_identity
-    for path in CONTRACTUAL_FILES:
-        assert (first_dir / path).read_bytes() == (second_dir / path).read_bytes()
+    assert populated.content_identity != geometry_only.content_identity
 
 
-def test_a_different_map_has_a_different_identity(tmp_path: Path, geometry_dir: Path) -> None:
-    _, first = write_artifact(tmp_path, geometry_dir, name="first")
-    _, second = write_artifact(
-        tmp_path,
-        geometry_dir,
-        name="second",
-        entities=(*default_entities(), entity("entity-d")),
-    )
-
-    assert first.content_identity != second.content_identity
-
-
-def test_a_map_without_entities_or_relations_is_valid_and_explicit(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
+def test_a_geometry_only_map_is_valid_and_explicit(world: World) -> None:
     output_dir, manifest = write_artifact(
-        tmp_path,
-        geometry_dir,
-        context_map=make_context_map(entities=False, relations=False),
-        entities=(),
-        relations=(),
+        world,
+        context_map=make_context_map(world, kind="geometry-only"),
+        locations={MAP_ID: world.geometry_dir},
     )
 
     assert (manifest.entity_count, manifest.relation_count) == (0, 0)
@@ -305,38 +284,42 @@ def test_a_map_without_entities_or_relations_is_valid_and_explicit(
     assert (output_dir / "entities/entities.jsonl").read_bytes() == b""
 
 
-def test_a_declared_capability_may_be_empty(tmp_path: Path, geometry_dir: Path) -> None:
-    _, manifest = write_artifact(tmp_path, geometry_dir, entities=(), relations=())
+def test_a_declared_capability_may_be_empty(world: World) -> None:
+    declared_only = pinned(
+        schema_context_map(metadata=metadata(capabilities=entity_capabilities())), world
+    )
+
+    _, manifest = write_artifact(world, context_map=declared_only)
 
     assert (manifest.entity_count, manifest.relation_count) == (0, 0)
 
 
-def test_an_existing_artifact_is_never_overwritten(tmp_path: Path, geometry_dir: Path) -> None:
-    output_dir, _ = write_artifact(tmp_path, geometry_dir)
+def test_an_existing_artifact_is_never_overwritten(world: World) -> None:
+    output_dir, _ = write_artifact(world)
     before = tree_files(output_dir)
 
     with pytest.raises(ArtifactExistsError, match="already exists"):
-        write_artifact(tmp_path, geometry_dir)
+        write_artifact(world)
 
     assert tree_files(output_dir) == before
 
 
-def test_a_failure_never_leaves_a_partial_artifact_or_temporarytree_files(
-    tmp_path: Path, geometry_dir: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_failure_never_leaves_a_partial_artifact_or_temporary_files(
+    world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def interrupted(self: Any, **_: Any) -> None:
         raise OSError("disk went away")
 
     monkeypatch.setattr("contextmap.shared.run_directory.AtomicRunDirectory.publish", interrupted)
     with pytest.raises(OSError, match="disk went away"):
-        write_artifact(tmp_path, geometry_dir)
+        write_artifact(world)
 
-    assert not (tmp_path / "out" / "context_map").exists()
-    assert list((tmp_path / "out").iterdir()) == []
+    assert not (world.root / "out" / "context_map").exists()
+    assert list((world.root / "out").iterdir()) == []
 
 
 def test_a_crash_leaves_a_directory_that_cannot_be_mistaken_for_an_artifact(
-    tmp_path: Path, geometry_dir: Path, monkeypatch: pytest.MonkeyPatch
+    world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def crash(self: Any, **_: Any) -> None:
         raise KeyboardInterrupt
@@ -345,163 +328,103 @@ def test_a_crash_leaves_a_directory_that_cannot_be_mistaken_for_an_artifact(
     # Simula um processo morto: a limpeza do diretório temporário não roda.
     monkeypatch.setattr("contextmap.shared.run_directory.shutil.rmtree", lambda *a, **k: None)
     with pytest.raises(KeyboardInterrupt):
-        write_artifact(tmp_path, geometry_dir)
+        write_artifact(world)
 
-    assert not (tmp_path / "out" / "context_map").exists()
-    leftovers = list((tmp_path / "out").iterdir())
+    assert not (world.root / "out" / "context_map").exists()
+    leftovers = list((world.root / "out").iterdir())
     assert len(leftovers) == 1 and leftovers[0].name.startswith(".tmp-")
     assert not (leftovers[0] / MANIFEST).exists()
 
 
-def test_a_relation_with_an_unknown_endpoint_is_refused_not_dropped(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    with pytest.raises(InvalidContentError, match=r"relation-1.*'entity-zzz'"):
-        write_artifact(
-            tmp_path,
-            geometry_dir,
-            relations=(relation("relation-1", "entity-a", "entity-zzz"),),
-        )
+def test_a_structural_dependency_without_a_location_is_refused(world: World) -> None:
+    without_resolution = {
+        key: value for key, value in world.locations.items() if key != ENTITY_RESOLUTION_ARTIFACT_ID
+    }
 
-    assert not (tmp_path / "out").exists()
+    with pytest.raises(InvalidContentError, match=ENTITY_RESOLUTION_ARTIFACT_ID):
+        write_artifact(world, locations=without_resolution)
+    assert not (world.root / "out").exists()
 
 
-def test_duplicate_entity_or_relation_keys_are_refused(tmp_path: Path, geometry_dir: Path) -> None:
-    with pytest.raises(RecordTableError, match="duplicate key 'entity-a'"):
-        write_artifact(
-            tmp_path,
-            geometry_dir,
-            name="a",
-            entities=(entity("entity-a"), entity("entity-a")),
-            relations=(),
-        )
-    with pytest.raises(RecordTableError, match="duplicate key 'relation-1'"):
-        write_artifact(
-            tmp_path,
-            geometry_dir,
-            name="b",
-            relations=(
-                relation("relation-1", "entity-a", "entity-b"),
-                relation("relation-1", "entity-b", "entity-a"),
-            ),
-        )
-    assert not (tmp_path / "out").exists()
+def test_a_location_for_an_artifact_the_map_does_not_cite_is_refused(world: World) -> None:
+    with pytest.raises(InvalidContentError, match="not-cited"):
+        write_artifact(world, locations={**world.locations, "not-cited": world.fusion_dir})
+    assert not (world.root / "out").exists()
 
 
-def test_a_record_that_json_cannot_represent_is_refused_naming_it(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    with pytest.raises(RecordTableError, match="entity-a"):
-        write_artifact(
-            tmp_path,
-            geometry_dir,
-            entities=(entity("entity-a", score=float("nan")), entity("entity-b")),
-            relations=(),
-        )
-    assert not (tmp_path / "out").exists()
-
-
-def test_content_the_map_does_not_declare_is_refused(tmp_path: Path, geometry_dir: Path) -> None:
-    no_relations = declared_without(make_context_map(), MapCapability.RELATIONS)
-    no_content = make_context_map(entities=False, relations=False)
-
-    with pytest.raises(InvalidContentError, match="relations capability"):
-        write_artifact(tmp_path, geometry_dir, name="a", context_map=no_relations)
-    with pytest.raises(InvalidContentError, match="entities capability"):
-        write_artifact(tmp_path, geometry_dir, name="b", context_map=no_content, relations=())
-    assert not (tmp_path / "out").exists()
-
-
-def test_the_geometry_must_be_the_one_the_map_names(tmp_path: Path, geometry_dir: Path) -> None:
-    other_map = replace(
-        make_context_map(),
-        geometry_ref=replace(make_context_map().geometry_ref, map_id=MapId("another-map")),
-    )
-    wrong_size = replace(
-        make_context_map(),
-        geometry_ref=replace(make_context_map().geometry_ref, point_count=25),
-    )
-    metadata = make_context_map().metadata
-    other_frame = replace(
-        make_context_map(),
-        metadata=replace(
-            metadata,
-            frame=replace(metadata.frame, frame_id="odom"),
-            bounds=replace(metadata.bounds, frame_id=FrameId("odom")),
+def test_the_lineage_must_name_the_artifact_that_is_actually_there(world: World) -> None:
+    unpinned = make_context_map(world)
+    stale = replace(
+        unpinned,
+        lineage=tuple(
+            replace(item, content_identity="sha256:" + "0" * 64)
+            if item.artifact_id == FUSION_ARTIFACT_ID
+            else item
+            for item in unpinned.lineage
         ),
     )
 
-    with pytest.raises(InvalidContentError, match="another-map"):
-        write_artifact(tmp_path, geometry_dir, name="a", context_map=other_map)
-    with pytest.raises(InvalidContentError, match="25"):
-        write_artifact(tmp_path, geometry_dir, name="b", context_map=wrong_size)
+    with pytest.raises(InvalidContentError, match=r"content identity sha256:0{64}"):
+        write_artifact(world, context_map=stale)
+    assert not (world.root / "out").exists()
+
+
+def test_the_geometry_must_be_the_one_the_map_declares(world: World) -> None:
+    populated = make_context_map(world)
+    wrong_size = replace(populated, geometry_ref=replace(populated.geometry_ref, point_count=1001))
+    frame = populated.metadata.frame
+    other_frame = replace(
+        populated,
+        metadata=replace(
+            populated.metadata,
+            frame=replace(frame, frame_id="odom"),
+            bounds=replace(populated.metadata.bounds, frame_id=FrameId("odom")),
+        ),
+    )
+
+    with pytest.raises(InvalidContentError, match="1001"):
+        write_artifact(world, name="a", context_map=wrong_size)
     with pytest.raises(InvalidContentError, match="frame"):
-        write_artifact(tmp_path, geometry_dir, name="c", context_map=other_frame)
-    assert not (tmp_path / "out").exists()
+        write_artifact(world, name="b", context_map=other_frame)
+    assert not (world.root / "out").exists()
 
 
 def test_a_damaged_or_missing_geometry_is_refused_before_anything_is_written(
-    tmp_path: Path, geometry_dir: Path
+    world: World,
 ) -> None:
-    payload = geometry_dir / "outputs/geometry.bin"
+    payload = world.geometry_dir / "outputs/geometry.bin"
     original = payload.read_bytes()
     payload.write_bytes(b"\xff" + original[1:])
     with pytest.raises(UpstreamArtifactError, match=r"geometry\.bin"):
-        write_artifact(tmp_path, geometry_dir, name="a")
+        write_artifact(world, name="a")
     payload.write_bytes(original)
-    (geometry_dir / MANIFEST).unlink()
-    with pytest.raises(UpstreamArtifactError, match="cannot be opened"):
-        write_artifact(tmp_path, geometry_dir, name="b")
-    assert not (tmp_path / "out").exists()
+    (world.geometry_dir / MANIFEST).unlink()
+    with pytest.raises(UpstreamArtifactError, match="manifest"):
+        write_artifact(world, name="b")
+    assert not (world.root / "out").exists()
 
 
-def test_evidence_that_is_damaged_repeated_or_a_geometric_map_is_refused(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
-) -> None:
-    with pytest.raises(InvalidContentError, match="duplicate"):
-        write_artifact(tmp_path, geometry_dir, name="a", evidence=(evidence, evidence))
-    with pytest.raises(InvalidContentError, match="geometry_dir"):
-        write_artifact(
-            tmp_path,
-            geometry_dir,
-            name="b",
-            evidence=(replace(evidence, artifact_type="geometric_map"),),
-        )
-    payload = evidence.location / "outputs/summary.json"
-    payload.write_text("tampered", encoding="utf-8")
+def test_evidence_that_is_given_must_match_its_own_inventory(world: World) -> None:
+    (world.fusion_dir / "outputs/summary.json").write_text("tampered", encoding="utf-8")
+
     with pytest.raises(UpstreamArtifactError, match=r"summary\.json"):
-        write_artifact(tmp_path, geometry_dir, name="c", evidence=(evidence,))
-    assert not (tmp_path / "out").exists()
+        write_artifact(world)
+    assert not (world.root / "out").exists()
 
 
-def test_a_required_evidence_dependency_is_recorded_as_required(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    required = make_evidence(tmp_path, requirement=Requirement.REQUIRED)
-
-    _, manifest = write_artifact(tmp_path, geometry_dir, evidence=(required,))
-
-    recorded = {item.artifact_type: item.requirement for item in manifest.dependencies}
-    assert recorded["semantic_fusion_run"] is Requirement.REQUIRED
-
-
-def test_nothing_machine_specific_is_written_into_the_artifact(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    output_dir, _ = write_artifact(tmp_path, geometry_dir)
+def test_nothing_machine_specific_is_written_into_the_artifact(world: World) -> None:
+    output_dir, _ = write_artifact(world)
 
     for path, data in tree_files(output_dir).items():
         text = data.decode("utf-8")
-        assert str(tmp_path) not in text, path
+        assert str(world.root) not in text, path
         assert os.path.expanduser("~") not in text, path
 
 
-def test_the_readme_is_deterministic_and_carries_no_time_or_path(
-    tmp_path: Path, geometry_dir: Path
-) -> None:
-    first_dir, _ = write_artifact(tmp_path, geometry_dir, name="first")
+def test_the_readme_is_deterministic_and_carries_no_time_or_path(world: World) -> None:
+    first_dir, _ = write_artifact(world, name="first")
     second_dir, _ = write_artifact(
-        tmp_path, geometry_dir, name="second", written_at=datetime(2031, 5, 5, tzinfo=UTC)
+        world, name="second", written_at=datetime(2031, 5, 5, tzinfo=UTC)
     )
 
     readme = (first_dir / README).read_text(encoding="utf-8")
@@ -513,7 +436,7 @@ def test_the_readme_is_deterministic_and_carries_no_time_or_path(
 def test_the_writer_needs_no_model_or_robotics_runtime() -> None:
     program = (
         "import sys\n"
-        "import contextmap.artifact.writer\n"
+        "import contextmap.artifact.serialization.writer\n"
         "blocked = ('torch', 'transformers', 'rclpy', 'rosbags', 'cv2', 'PIL')\n"
         "found = [name for name in blocked if name in sys.modules]\n"
         "assert not found, found\n"
