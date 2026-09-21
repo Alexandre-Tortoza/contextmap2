@@ -49,6 +49,7 @@ from contextmap.artifact.references import (
     UnknownContextEntityError,
     UpstreamRecordRef,
 )
+from contextmap.artifact.schema_identity import describe_schema, schema_fingerprint
 from contextmap.artifact.versioning import (
     CONTEXT_MAP_SCHEMA_VERSION,
     SchemaVersion,
@@ -96,5 +97,7 @@ __all__ = [
     "UpstreamRecordRef",
     "context_map_from_record",
     "context_map_to_record",
+    "describe_schema",
     "require_supported_schema_version",
+    "schema_fingerprint",
 ]
