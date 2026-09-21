@@ -53,7 +53,7 @@ O writer recusa, com `FusionRunArtifactError` e sem deixar run visível, quando:
 
 ## Linhagem (manifest)
 
-`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se usadas, as de Point Representation. Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
+`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se selecionadas, as de Point Representation (a seleção, não o uso: numa ablação de canais todo braço lista as mesmas). Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
 
 - as políticas: agrupamento por observação física, construção de suporte (com fingerprint) e fusão (com fingerprint);
 - as identidades que alimentaram cada canal (interpretadores, scorers, espaços de embedding, versão das definições de qualidade, espaços de representação, mapa);
@@ -65,7 +65,7 @@ Um run sem suportes é válido e explícito (as políticas ficam `null`).
 
 Separadas, sem um escalar único:
 
-- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência (contados à parte), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
+- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência, ambos **distintos no run inteiro** e contados à parte (um resultado de percepção com várias regiões em suportes diferentes conta uma vez; o valor por suporte está em `distributions.json`), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
 - `distributions.json`: por suporte, frames físicos, resultados de inferência, contribuições e hipóteses (contagem, mínimo, mediana, máximo);
 - `payload.json`: o tamanho de cada arquivo contratual;
 - `runtime.json`: tempo e memória, **só** quando quem chama os mediu, e nunca misturados às métricas de qualidade.

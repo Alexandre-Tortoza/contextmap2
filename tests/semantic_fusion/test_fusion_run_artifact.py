@@ -9,7 +9,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from fusion_run_fixtures import LINEAGE, RunFixture, make_run_fixture
+from fusion_run_fixtures import (
+    LINEAGE,
+    RunFixture,
+    make_multi_region_run_fixture,
+    make_run_fixture,
+)
 
 from contextmap.geometric_mapping import MapId
 from contextmap.semantic_fusion import (
@@ -194,6 +199,22 @@ def test_physical_observations_stay_distinct_from_inference_results(
     distributions = json.loads((run_dir / "metrics" / "distributions.json").read_text())
     assert distributions["physical_observations_per_support"]["max"] == 2
     assert distributions["inference_results_per_support"]["max"] == 3
+
+
+def test_a_result_that_reaches_several_supports_is_counted_once_in_the_run_metrics(
+    tmp_path: Path,
+) -> None:
+    # Regressão de um defeito visto na execução real de corridor-02: cada resultado de percepção
+    # tem dezenas de regiões em suportes diferentes, e somar os resultados por suporte dava 604
+    # "resultados de inferência" para 51 resultados reais e 19 frames físicos.
+    run_dir = _write(tmp_path, make_multi_region_run_fixture())
+    counts = json.loads((run_dir / "metrics" / "counts.json").read_text())
+    distributions = json.loads((run_dir / "metrics" / "distributions.json").read_text())
+
+    assert counts["supports"] == 2
+    assert counts["physical_observations"] == 1
+    assert counts["inference_results"] == 2
+    assert distributions["inference_results_per_support"]["max"] == 2
 
 
 def test_ambiguity_conflict_abstention_and_unscored_evidence_survive_the_round_trip(
