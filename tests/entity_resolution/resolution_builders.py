@@ -33,6 +33,7 @@ from contextmap.entity_resolution import (
     TriggeredRule,
     Unavailability,
     UnavailableReason,
+    UnresolvedReason,
     comparison_id_for,
     decision_id_for,
 )
@@ -315,3 +316,24 @@ def decision(
     }
     values.update(overrides)
     return ResolutionDecision(**values)
+
+
+def decision_between(
+    first: EntityReference, second: EntityReference, outcome: ResolutionOutcome
+) -> ResolutionDecision:
+    """A decision on any pair, in canonical order, whose ids derive from the pair."""
+    a, b = sorted((first, second), key=lambda item: (item.semantic_map_id, item.entity_id))
+    comparison = comparison_id_for(a, b)
+    overrides: dict[str, Any] = {
+        "decision_id": decision_id_for(comparison, policy_ref()),
+        "entity_a_ref": a,
+        "entity_b_ref": b,
+        "evidence_ref": comparison,
+    }
+    if outcome is ResolutionOutcome.UNRESOLVED:
+        overrides.update(
+            unresolved_reason=UnresolvedReason.INSUFFICIENT_EVIDENCE,
+            channels_used=(),
+            channels_ignored=(),
+        )
+    return decision(outcome, **overrides)

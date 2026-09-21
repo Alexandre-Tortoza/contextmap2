@@ -11,7 +11,6 @@ from collections.abc import Sequence
 
 from mapping_builders import (
     CLOCK_ID,
-    FUSED_EVIDENCE_ID,
     MAP_ID,
     SEMANTIC_MAP_ID,
     SUMMARY_POLICY,
@@ -28,6 +27,8 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import (
     EvidenceContributionId,
     EvidenceReference,
+    FusedEvidenceId,
+    FusionSupportId,
     PointRepresentationRef,
 )
 from contextmap.semantic_mapping import (
@@ -89,6 +90,11 @@ def geometry_at(
     return summarize_geometry(references, source=source, policy=SUMMARY_POLICY)
 
 
+def fused_id(number: int) -> FusedEvidenceId:
+    """The identity of the fused evidence of the ``number``-th support."""
+    return FusedEvidenceId(f"fused--support-{number:06d}")
+
+
 def temporal_state_at(
     seconds: Sequence[int], *, clock_id: str = CLOCK_ID, inference_results: int = 1
 ) -> EntityTemporalState:
@@ -131,8 +137,13 @@ def entity_at(
     inference_results: int = 1,
     features: tuple[EntityFeatureRef, ...] = (),
     representations: tuple[PointRepresentationRef, ...] = (),
+    support_number: int = 1,
 ) -> Entity:
-    """A real entity whose support is a box at ``center`` and which was seen at ``seconds``."""
+    """A real entity whose support is a box at ``center`` and which was seen at ``seconds``.
+
+    ``support_number`` picks the fused evidence the entity was materialized from, so distinct
+    entities have distinct evidence, as real materialized entities do.
+    """
     base = stable_index_base(entity_id) if first_index is None else first_index
     return Entity(
         entity_id=EntityId(entity_id),
@@ -146,12 +157,14 @@ def entity_at(
             extra_points=extra_points,
         ),
         semantic_state=make_semantic_state(
-            (make_hypothesis(fused_evidence_id=FUSED_EVIDENCE_ID),)
+            (make_hypothesis(fused_evidence_id=fused_id(support_number)),)
             if hypotheses is None
             else hypotheses,
             attributes=attributes,
         ),
         evidence=make_evidence_links(
+            fused_evidence_id=fused_id(support_number),
+            fusion_support_id=FusionSupportId(f"support-{support_number:06d}"),
             physical=tuple(f"frame-{second:04d}" for second in sorted(seconds)),
             features=features,
             representations=representations,
@@ -219,6 +232,8 @@ def entity_over(
     semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
     policy: GeometrySummaryPolicy = SUMMARY_POLICY,
     representations: tuple[PointRepresentationRef, ...] = (),
+    support_number: int = 1,
+    inference_results: int = 1,
 ) -> Entity:
     """A real entity supported by the given points of a shared scene, so supports can overlap."""
     map_id = source.geometric_map.map_id
@@ -230,11 +245,15 @@ def entity_over(
         entity_id=EntityId(entity_id),
         semantic_map_id=semantic_map_id,
         geometry=summarize_geometry(references, source=source, policy=policy),
-        semantic_state=make_semantic_state((make_hypothesis(),)),
+        semantic_state=make_semantic_state(
+            (make_hypothesis(fused_evidence_id=fused_id(support_number)),)
+        ),
         evidence=make_evidence_links(
+            fused_evidence_id=fused_id(support_number),
+            fusion_support_id=FusionSupportId(f"support-{support_number:06d}"),
             physical=tuple(f"frame-{second:04d}" for second in sorted(seconds)),
             representations=representations,
         ),
-        temporal_state=temporal_state_at(seconds),
+        temporal_state=temporal_state_at(seconds, inference_results=inference_results),
         provenance=make_provenance(),
     )
