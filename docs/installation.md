@@ -37,11 +37,11 @@ Notas sobre `vision`:
 
 - `transformers` 5.x exige `torchvision` para o image processor; por isso ele faz parte do extra. Os pisos de `torch` e `Pillow` são os que o próprio `transformers` 5.x declara.
 - O extra puxa o build padrão do PyTorch no PyPI. Para CPU puro ou para um build CUDA específico, instale o `torch` antes, do índice da PyTorch, e depois o extra.
-- DINOv3 e SAM 3 usam repositórios *gated* no Hugging Face; o acesso é do usuário.
+- DINOv3 e SAM 3 usam repositórios *gated* no Hugging Face; o acesso é do usuário. Licenças e termos de cada modelo: [third-party-licenses.md](third-party-licenses.md).
 
 ## O que não vem de nenhum extra
 
-Estes runtimes são importados ou injetados pelo código, mas o PyPI não os distribui (consulta ao PyPI em 2026-09-21) ou o código só define a fronteira. Instalá-los é responsabilidade do usuário.
+Estes runtimes são importados ou injetados pelo código, mas o PyPI não os distribui (consulta ao PyPI em 2026-09-21) ou o código só define a fronteira. Instalá-los é responsabilidade do usuário; a licença e a origem de cada um estão em [third-party-licenses.md](third-party-licenses.md).
 
 | Backend | Dependência | Como obter |
 | --- | --- | --- |
