@@ -3,6 +3,7 @@
 A CLI é uma camada **fina** sobre o runtime: ela interpreta argumentos, chama os serviços e imprime o que voltou. Não há ramo por backend, lógica científica, parsing de dataset, matemática de projeção nem regra de fusão, entidade ou relação. Cada flag vira um **override de configuração**, então a CLI nunca é um segundo lugar que decide o que roda.
 
 ```text
+contextmap ingest  --source PATH --sequence-name NOME --topic CHAVE=TÓPICO ... [--preflight]
 contextmap run     [opções] [--stage ESTÁGIO]... [--dry-run]
 contextmap stage   ESTÁGIO [opções] [--dry-run]
 contextmap inspect config | plan   [opções]
@@ -30,6 +31,10 @@ Também funciona como `python -m contextmap ...`. O ponto de entrada de console 
 Precedência: perfil < arquivos < `--set` < flags. A seleção continua explícita: um estágio sem `--select` nunca é escolhido implicitamente, e `--select` exige `--catalog` (o arquivo é uma entrada explícita; nada é descoberto por varredura de diretório). O formato do catálogo está em [`selection.md`](selection.md).
 
 ## Comandos
+
+### `ingest`
+
+Ingestion canônica pelo [serviço público de ingestion](ingestion-service.md): `--preflight` só confere o pedido; sem ele lê, valida, sincroniza e publica um `SequenceArtifact` imutável no workspace. O adapter **não** é uma flag: vem do backend selecionado em `components.ingestion.source_adapter.backend` e é composto pela composition root (módulo opcional ausente falha com a dica de instalação). O progresso sai em stderr e o resultado em stdout (ou JSON, com os eventos); Ctrl+C sai com `130` sem publicar nada.
 
 ### `run` e `stage`
 
@@ -67,7 +72,7 @@ Os executores dos estágios reais **não** estão empacotados: `main(argv, execu
 ## Lacunas conhecidas
 
 - **Execução real do canônico.** O comando existe e é testado de ponta a ponta com executores falsos, mas os executores das capabilities reais (que precisam das políticas de Geometric Mapping e Sensor Association e dos hashes de conteúdo dos manifests) acompanham a validação end-to-end (#177). Além disso, o pipeline completo continua bloqueado pelos estágios das milestones #12–#15; hoje o caminho executável é um subgrafo (`--stage`).
-- **`ingest`.** O comando de ingestão chega com o serviço público de ingestion (issue #263), que a CLI deve chamar em vez de recompor adapters, validação e sincronização.
+- **Calibração externa em `ingest`.** A CLI ainda não carrega um arquivo de calibração (o decoder não é API pública de `contextmap.ingestion`); fontes com `camera_info` trazem a calibração pelo adapter.
 - **`export`.** Não há artifact a exportar antes das milestones #15/#16 (`ContextMapArtifact`).
 - **Verificador de artifacts.** As flags de reuso e retomada existem, mas o `verify` do índice vem do dono dos executores reais (#177); a CLI recusa `--reuse-index` sem ele.
 - **API pública.** A CLI chama as funções do runtime diretamente; a fachada pública frontend-neutra (#264) passa a ser o que ela consome.

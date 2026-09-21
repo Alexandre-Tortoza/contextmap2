@@ -20,6 +20,8 @@ O runtime controla **quais artifacts, backends e configurações exatos** uma ex
 | `test_runtime_selection.py` | seleção explícita, `latest` determinístico, linhagem, cardinalidade, catálogo |
 | `test_runtime_lifecycle.py` | estados, eventos, registro de falha, cancelamento, run morto/log corrompido, segredos, retomada |
 | `test_runtime_cli.py` | a CLI como camada fina: dry-run, execução, seleção, artifacts, run records, reuso/retomada, códigos de saída |
+| `test_runtime_ingestion_service.py` | o serviço de ingestion com um adapter falso roteirizado: preflight, identidade determinística, execução até um `SequenceArtifact` real, avisos, falhas por categoria, cancelamento, nada publicado em falha, segredos, o estágio do DAG e o reuso |
+| `test_runtime_ingestion_integration.py` | `contextmap ingest` com o adapter ROS 1 **real** composto e um bag sintético (pulado sem `rosbags`) |
 | `test_runtime_regressions.py` | erros comuns de configuração, seleção, cache e segredos, cada um com um teste nomeado; dry-run = plano executado; execuções equivalentes geram registros equivalentes |
 | `test_runtime_end_to_end.py` | o caminho canônico, do arquivo de configuração aos registros, com estágios falsos |
 | `tests/architecture/test_runtime_boundaries.py` | só a composition root conhece capabilities e backends, e só dentro de factories; importar o runtime não carrega capability nem backend |

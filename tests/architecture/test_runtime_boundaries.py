@@ -1,9 +1,11 @@
 """The runtime composes; only its composition root knows other capabilities and backends.
 
 ``test_boundaries.py`` lets the runtime import anything, because a composition root has to
-name concrete backends. These tests narrow that permission to the one module that needs it,
-so configuration, DAG, reuse, selection, lifecycle and CLI code can never grow a dependency
-on a capability or on a concrete backend.
+name concrete backends. These tests narrow that permission: the composition root may import
+capabilities, lazily; the ingestion application service may import the ingestion capability's
+public root (and nothing below it, so never an adapter); every other runtime module, meaning
+configuration, DAG, reuse, selection, lifecycle and CLI code, can never grow a dependency on a
+capability or on a concrete backend.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[2] / "src"
 RUNTIME = SRC / "contextmap" / "runtime"
 COMPOSITION = RUNTIME / "composition.py"
+# Módulos de aplicação que podem importar a raiz pública de uma capability, e só ela.
+PUBLIC_ROOT_IMPORTERS = {"ingestion_service.py": {"contextmap.ingestion"}}
 CAPABILITIES = frozenset(
     {
         "ingestion",
@@ -72,10 +76,11 @@ def test_only_the_composition_root_imports_a_capability() -> None:
     for path in _runtime_modules():
         if path == COMPOSITION:
             continue
+        allowed = PUBLIC_ROOT_IMPORTERS.get(path.name, set())
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for line, module in _all_imports(tree):
             capability = _capability_of(module)
-            if capability is not None:
+            if capability is not None and module not in allowed:
                 violations.append(f"{path.name}:{line} imports {module} ({capability})")
 
     assert not violations, "\n".join(violations)
@@ -112,14 +117,15 @@ def test_concrete_backends_are_imported_only_inside_the_factory_that_uses_them()
     assert not misplaced, "\n".join(misplaced)
 
 
-def test_importing_the_runtime_loads_no_capability_and_no_backend() -> None:
+def test_importing_the_runtime_loads_no_backend_no_sdk_and_only_the_ingestion_root() -> None:
     code = (
         "import sys\n"
         "import contextmap.runtime, contextmap.runtime.cli\n"
         f"capabilities = {sorted(CAPABILITIES)!r}\n"
         "loaded = sorted(m for m in sys.modules if m.startswith('contextmap.') "
         "and m.split('.')[1] in capabilities)\n"
-        "print('\\n'.join(loaded))\n"
+        "sdks = [m for m in ('torch', 'transformers', 'rosbags', 'numpy') if m in sys.modules]\n"
+        "print('\\n'.join(loaded + sdks))\n"
     )
 
     result = subprocess.run(
@@ -130,7 +136,9 @@ def test_importing_the_runtime_loads_no_capability_and_no_backend() -> None:
         env={"PYTHONPATH": str(SRC), "PATH": ""},
     )
 
-    assert result.stdout.strip() == ""
+    loaded = result.stdout.split()
+    assert not [m for m in loaded if not m.startswith("contextmap.ingestion")], loaded
+    assert not [m for m in loaded if ".adapters" in m or ".backends" in m], loaded
 
 
 def test_the_runtime_public_api_hides_the_concrete_backend_classes() -> None:

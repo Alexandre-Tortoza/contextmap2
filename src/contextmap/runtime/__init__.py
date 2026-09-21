@@ -63,6 +63,16 @@ from contextmap.runtime.errors import (
     StageExecutionError,
     StageUnavailableError,
 )
+from contextmap.runtime.ingestion_service import (
+    IngestionFailure,
+    IngestionMetrics,
+    IngestionPreflight,
+    IngestionRequest,
+    IngestionResult,
+    IngestionService,
+    IngestionStageExecutor,
+    ValidationPolicy,
+)
 from contextmap.runtime.lifecycle import (
     EVENT_KINDS,
     RUN_SCHEMA_VERSION,
@@ -155,6 +165,13 @@ __all__ = [
     "FailureRecord",
     "FeatureBuildScope",
     "FileArtifactStore",
+    "IngestionFailure",
+    "IngestionMetrics",
+    "IngestionPreflight",
+    "IngestionRequest",
+    "IngestionResult",
+    "IngestionService",
+    "IngestionStageExecutor",
     "InputsConfig",
     "Interception",
     "Lineage",
@@ -194,6 +211,7 @@ __all__ = [
     "StageUnavailableError",
     "StaticCatalog",
     "StoreLookup",
+    "ValidationPolicy",
     "capture_environment",
     "categorize_failure",
     "check_availability",
