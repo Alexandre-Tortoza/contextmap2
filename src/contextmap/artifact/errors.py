@@ -68,6 +68,10 @@ class UnresolvedReferenceError(ContextMapArtifactError):
     """Raised when a reference does not resolve inside the artifact."""
 
 
+class BundleError(ContextMapArtifactError):
+    """Raised when a bundle cannot be exported, or a directory is not a readable bundle."""
+
+
 class ArtifactExistsError(ContextMapArtifactError):
     """Raised when a write would land on an artifact that already exists.
 

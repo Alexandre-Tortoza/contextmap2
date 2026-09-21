@@ -17,6 +17,9 @@ from contextmap.artifact.errors import ManifestError
 ARTIFACT_TYPE = "context_map"
 """``artifact_type`` recorded in the manifest of every ContextMapArtifact."""
 
+BUNDLE_ARTIFACT_TYPE = "context_map_bundle"
+"""``artifact_type`` of the manifest of a bundle; a bundle is never a ``context_map``."""
+
 FORMAT_VERSION = "0.1.0"
 """Version of the on-disk layout and encodings written by this code.
 
