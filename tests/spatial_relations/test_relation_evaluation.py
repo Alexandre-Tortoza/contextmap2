@@ -14,6 +14,7 @@ from relation_run_fixture import Run, build_run, write_run
 from contextmap.entity_resolution import ResolvedEntityReference
 from contextmap.evaluation import (
     EvaluationReport,
+    IdentityEvaluation,
     LabelNormalization,
     MetricStatus,
     ObservationRef,
@@ -123,16 +124,50 @@ def artifact(run: Run, tmp_path_factory: pytest.TempPathFactory) -> Path:
     return directory
 
 
+def identity_evaluation(
+    mapping: dict[ResolvedEntityReference, str],
+    spanning: tuple[ResolvedEntityReference, ...] = (),
+) -> IdentityEvaluation:
+    """The identity evaluation Entity Resolution produces, holding the given mapping.
+
+    Only the mapping and the resolved entities that span identities matter to the relations
+    evaluation; every other figure of the evaluation is neutral here. The integration tests below
+    use Entity Resolution's real ``evaluate_identity`` instead.
+    """
+    return IdentityEvaluation(
+        resolved_entities=len(mapping),
+        false_merge_entities=len(spanning),
+        false_merge_rate=None,
+        annotated_identities=len(set(mapping.values())),
+        duplicated_identities=0,
+        duplicate_rate=None,
+        same_pairs=0,
+        distinct_pairs=0,
+        same_pair_outcomes=(),
+        distinct_pair_outcomes=(),
+        true_merges=0,
+        false_merges=0,
+        pairwise_precision=None,
+        pairwise_recall=None,
+        source_entities_spanning_identities=0,
+        identity_of_resolved_entity=tuple(sorted(mapping.items(), key=lambda item: item[1])),
+        resolved_entities_spanning_identities=spanning,
+        transitivity_contradictions=0,
+        ignored_links=0,
+    )
+
+
 def _evaluate(
     artifact: Path,
     reference: RelationAnnotationSet,
     identities: dict[ResolvedEntityReference, str] | None = None,
+    spanning: tuple[ResolvedEntityReference, ...] = (),
     **options: object,
 ) -> SpatialRelationsEvaluationReport:
     return evaluate_spatial_relations(
         SpatialRelationsRunReader(artifact),
         reference=reference,
-        identity_of_entity=IDENTITIES if identities is None else identities,
+        identity=identity_evaluation(IDENTITIES if identities is None else identities, spanning),
         **options,  # type: ignore[arg-type]
     )
 
@@ -250,6 +285,32 @@ def test_a_reference_without_an_entity_is_an_entity_failure_not_a_relation_error
     assert with_ghost.predicates == without.predicates
     assert with_ghost.unmatched.reference_without_entity == 2
     assert without.unmatched.reference_without_entity == 0
+
+
+def test_an_identity_evaluation_of_another_resolution_run_is_refused(artifact: Path) -> None:
+    other = {
+        entity_ref(number, run="resolution-run-0002"): identity
+        for number, identity in enumerate((FLOOR, CRATE, PALLET, HOVER), start=1)
+    }
+    with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
+        _evaluate(artifact, _reference(*CORE), identities=other)
+    spanning = (entity_ref(1, run="resolution-run-0002"),)
+    with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
+        _evaluate(artifact, _reference(*CORE), spanning=spanning)
+
+
+def test_entities_that_span_identities_are_left_out_counted_and_never_guessed(
+    artifact: Path,
+) -> None:
+    without_hover = {key: value for key, value in IDENTITIES.items() if value != HOVER}
+    report = _evaluate(
+        artifact, _reference(*CORE), identities=without_hover, spanning=(entity_ref(4),)
+    )
+    assert report.unmatched.entities_spanning_identities == ("resolved-0004",)
+    assert report.unmatched.reference_without_entity > 0
+    assert report.unmatched.supported_on_unmatched_entities > 0
+    assert report.predicate(P.ON_TOP_OF).annotated_holds == 1
+    assert report.to_dict()["unmatched"]["entities_spanning_identities"] == ["resolved-0004"]
 
 
 def test_an_identity_matched_to_several_entities_is_skipped_and_never_repaired(

@@ -7,8 +7,9 @@ evaluator keeps those apart instead of folding them into one number, and it neve
 entity to save a relation.
 
 It reads a persisted ``SpatialRelationsRunArtifact`` and a ``RelationAnnotationSet``. The two only
-meet through an explicit ``identity_of_entity`` mapping, which is the outcome of an entity
-resolution evaluation: a reference relation whose identity has no matched entity is counted as an
+meet through the ``IdentityEvaluation`` of Entity Resolution's own evaluation, which says which
+annotated identity every resolved entity has and which resolved entities span several identities
+(false merges): a reference relation whose identity has no matched entity is counted as an
 unmatched reference, attributed to entity resolution, and is not scored as a relation error.
 
 Everything is reported **per canonical predicate**; there is no overall score. For each predicate
@@ -48,6 +49,7 @@ from contextmap.evaluation.annotations import (
     RelationAnnotationSet,
     RelationStatus,
 )
+from contextmap.evaluation.entity_resolution import IdentityEvaluation
 from contextmap.evaluation.metrics import EvaluationStage, MetricRegistry
 from contextmap.evaluation.reference_set import ReferenceSetIdentity
 from contextmap.evaluation.report_schema import (
@@ -188,6 +190,9 @@ class RelationUnmatchedReport:
         identities_with_several_entities: Identities matched to more than one entity, sorted;
             their relations are skipped, since a duplicated entity makes the comparison unfair.
         supported_on_unmatched_entities: Supported relations of entities with no identity.
+        entities_spanning_identities: Resolved entities, by id and sorted, whose members belong to
+            several identities (a false merge, or an over-merged source entity). Entity Resolution
+            leaves them out of the identity mapping, so their relations are never scored.
         unmapped_predicates: Reference predicate wordings that are not canonical, sorted.
         ambiguous_reference: Reference relations annotated as ambiguous.
         unknown_reference: Reference relations annotated as unknown.
@@ -198,6 +203,7 @@ class RelationUnmatchedReport:
     reference_without_entity: int
     identities_with_several_entities: tuple[str, ...]
     supported_on_unmatched_entities: int
+    entities_spanning_identities: tuple[str, ...]
     unmapped_predicates: tuple[str, ...]
     ambiguous_reference: int
     unknown_reference: int
@@ -281,6 +287,7 @@ class SpatialRelationsEvaluationReport:
                     self.unmatched.identities_with_several_entities
                 ),
                 "supported_on_unmatched_entities": self.unmatched.supported_on_unmatched_entities,
+                "entities_spanning_identities": list(self.unmatched.entities_spanning_identities),
                 "unmapped_predicates": list(self.unmatched.unmapped_predicates),
                 "ambiguous_reference": self.unmatched.ambiguous_reference,
                 "unknown_reference": self.unmatched.unknown_reference,
@@ -294,7 +301,7 @@ def evaluate_spatial_relations(
     reader: SpatialRelationsRunReader,
     *,
     reference: RelationAnnotationSet,
-    identity_of_entity: Mapping[ResolvedEntityReference, str],
+    identity: IdentityEvaluation,
     code_version: str | None = None,
 ) -> SpatialRelationsEvaluationReport:
     """Evaluate the relations of a persisted run against an annotated reference.
@@ -302,22 +309,26 @@ def evaluate_spatial_relations(
     Args:
         reader: The persisted run.
         reference: The annotated relations, with their predicate vocabulary.
-        identity_of_entity: The identity every resolved entity was matched to, from an entity
-            resolution evaluation. An entity that is absent has no identity; a relation is never
-            evaluated by repairing that.
+        identity: The identity evaluation of Entity Resolution's own evaluator, for the same
+            resolution run the relations are about. Its ``identity_of_resolved_entity`` says which
+            annotated identity every resolved entity has; an entity that is absent from it has no
+            identity, and a relation is never evaluated by repairing that.
         code_version: Code revision of the evaluator run, when known.
 
     Returns:
         The report, per canonical predicate, with no aggregate score.
 
     Raises:
-        SpatialRelationsEvaluationError: If the reference declares a predicate's symmetry or inverse
-            differently from the taxonomy.
+        SpatialRelationsEvaluationError: If the identity evaluation is about another resolution
+            run than the one the relations are built on, or the reference declares a predicate's
+            symmetry or inverse differently from the taxonomy.
     """
     relations = {
         (item.subject_entity_ref, item.predicate, item.object_entity_ref): item
         for item in reader.iter_relations()
     }
+    identity_of_entity = dict(identity.identity_of_resolved_entity)
+    _require_same_resolution(reader, identity, identity_of_entity)
     entity_of_identity, shared = _invert(identity_of_entity)
     truth, unmapped, ambiguous, unknown, conflicting = _expand_reference(reference)
     exclusions = _exclusion_reasons(reader.candidate_set())
@@ -369,6 +380,12 @@ def evaluate_spatial_relations(
             reference_without_entity=without_entity,
             identities_with_several_entities=tuple(sorted(shared)),
             supported_on_unmatched_entities=supported_unmatched,
+            entities_spanning_identities=tuple(
+                sorted(
+                    str(item.resolved_entity_id)
+                    for item in identity.resolved_entities_spanning_identities
+                )
+            ),
             unmapped_predicates=tuple(sorted(unmapped)),
             ambiguous_reference=ambiguous,
             unknown_reference=unknown,
@@ -460,6 +477,23 @@ def spatial_relations_evaluation_report(
 
 def _ratio(numerator: int, denominator: int) -> float | None:
     return None if denominator <= 0 else numerator / denominator
+
+
+def _require_same_resolution(
+    reader: SpatialRelationsRunReader,
+    identity: IdentityEvaluation,
+    identity_of_entity: Mapping[ResolvedEntityReference, str],
+) -> None:
+    """Refuse an identity evaluation that is not about the resolution the relations are built on."""
+    expected = reader.manifest.lineage.entity_resolution_run_id
+    runs = {reference.resolution_run_id for reference in identity_of_entity} | {
+        reference.resolution_run_id for reference in identity.resolved_entities_spanning_identities
+    }
+    if runs - {expected}:
+        raise SpatialRelationsEvaluationError(
+            f"the identity evaluation is about resolution run(s) {sorted(runs - {expected})!r}, "
+            f"but the relations are built on resolution run {expected!r}"
+        )
 
 
 def _invert(
