@@ -49,7 +49,6 @@ from contextmap.semantic_fusion import (
     SemanticFusionRunReader,
     SemanticFusionRunWriter,
     accumulate_baseline_evidence,
-    allocate_fusion_run_index,
     build_fusion_supports,
     group_by_physical_observation,
 )
@@ -423,14 +422,12 @@ def _fuse(
         )
         for support in build.supports
     )
-    index = allocate_fusion_run_index(workspace_root=workspace, sequence_name=SEQUENCE_NAME)
+    directory = workspace / "semantic_fusion"
     SemanticFusionRunWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         run_id=SemanticFusionRunId("fusion-run-0001"),
-        run_index=index,
-        selection_label="full-sequence",
-        policy_label="baseline",
+        run_index=1,
         lineage=FusionRunLineage(
             sequence_artifact_id=str(sequence.manifest.artifact_id),
             geometric_map_id=geometry.manifest.map_id,
@@ -440,7 +437,6 @@ def _fuse(
         ),
         code_version="test",
     ).write(outcomes, excluded=build.excluded)
-    directory = next((workspace / "runs" / "semantic-fusion" / SEQUENCE_NAME).glob("run-0001__*"))
     return outcomes, build.excluded, SemanticFusionRunReader(directory)
 
 
