@@ -19,10 +19,10 @@ Entidades ligadas por decisões `MATCH` formam uma entidade resolvida (component
 `A MATCH B` e `B MATCH C` agrupam `A` e `C`, mesmo que alguma decisão diga `A DISTINCT C`. Fundir o componente esconderia essa contradição, então a regra é conservadora e explícita:
 
 - um componente com um par `DISTINCT` **não é fundido**: cada membro continua sua própria entidade resolvida;
-- uma `TransitivityContradiction` nomeia a decisão `DISTINCT`, o par que ela separa, a **cadeia mais curta de decisões `MATCH`** que o liga e o componente retido;
-- cada entidade retida guarda o `contradiction_id`, então o consumidor vê por que um match provável não foi honrado.
+- **cada** par `DISTINCT` dentro do componente é uma `TransitivityContradiction` própria, com o id derivado da decisão `DISTINCT`: ela nomeia essa decisão, o par que separa, a **cadeia mais curta de decisões `MATCH`** que o liga e o componente retido;
+- cada entidade retida guarda os `contradiction_ids` de **todas** as contradições do componente (um componente pode ter várias, inclusive pares que compartilham uma entidade), então o consumidor vê por que um match provável não foi honrado.
 
-Um `DISTINCT` entre entidades de componentes diferentes não é contradição. Isso perde um match que pode ser verdadeiro (a duplicata permanece), e é a escolha conservadora: um falso merge é pior que uma duplicata visível e rastreada.
+Um componente com várias contradições continua não fundido e cada uma é reportada; o resultado não depende da ordem das decisões. Um `DISTINCT` entre entidades de componentes diferentes não é contradição. Isso perde um match que pode ser verdadeiro (a duplicata permanece), e é a escolha conservadora: um falso merge é pior que uma duplicata visível e rastreada.
 
 ## Agregação exata, sem inventar confiança
 

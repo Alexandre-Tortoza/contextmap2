@@ -17,6 +17,7 @@ from resolution_run_fixtures import (
     LINEAGE,
     RUN,
     RunInputs,
+    build_contradicted_inputs,
     build_inputs,
     resolution_of,
     write_run,
@@ -636,6 +637,46 @@ def test_an_empty_run_is_valid_and_reads_back_empty(tmp_path: Path) -> None:
     assert reader.manifest.count("resolved_entities") == 0
     assert reader.read_record("metrics/distributions.json")["candidates_per_entity"]["count"] == 0
     assert reader.verify_integrity() == []
+
+
+# --- several contradictions in one component ----------------------------------------------------
+
+
+def test_a_component_with_several_contradictions_round_trips_through_the_artifact(
+    tmp_path: Path,
+) -> None:
+    inputs = build_contradicted_inputs()
+    write_run(tmp_path / "artifact", inputs)
+    reader = EntityResolutionRunReader(tmp_path / "artifact")
+
+    expected = tuple(item.contradiction_id for item in inputs.materialization.contradictions)
+
+    assert len(expected) == 2
+    assert reader.contradictions() == inputs.materialization.contradictions
+    assert reader.manifest.count("transitivity_contradictions") == 2
+    resolved = reader.resolved_entities()
+    assert resolved == inputs.materialization.resolved
+    assert len(resolved.entities) == 4
+    assert all(entity.contradiction_ids == expected for entity in resolved.entities)
+    lineage = reader.read_table("outputs/merge-lineage.jsonl")
+    assert all(row["contradiction_ids"] == list(expected) for row in lineage)
+    open_entities = reader.unresolved_entities()
+    assert len(open_entities) == 4
+    assert all(item.contradiction_ids == expected for item in open_entities)
+    assert reader.verify_integrity() == []
+
+
+def test_a_contradiction_that_cites_a_decision_that_was_not_written_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_contradicted_inputs()
+    # A primeira decisão é a~b, que aparece no caminho de MATCH da contradição a!=c.
+    without_a_match = dataclasses.replace(inputs, resolutions=inputs.resolutions[1:])
+
+    with pytest.raises(RunArtifactError, match="contradiction"):
+        write_run(tmp_path / "artifact", without_a_match)
+
+    assert not (tmp_path / "artifact").exists()
 
 
 # --- what a downstream consumer pins and follows -------------------------------------------------

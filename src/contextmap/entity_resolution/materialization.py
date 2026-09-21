@@ -12,8 +12,9 @@ the rule is conservative and explicit: a component that contains a ``DISTINCT`` 
 merged**, every member stays its own resolved entity, and a
 :class:`~contextmap.entity_resolution.resolved_entity.TransitivityContradiction` names the
 ``DISTINCT`` decision, the chain of ``MATCH`` decisions that links the pair, and the withheld
-entities. Each withheld entity carries the contradiction id, so a consumer sees why a probable
-match was not honored. An ``UNRESOLVED`` decision never merges, and is recorded as an unresolved
+entities. A component may hold several contradictions; each withheld entity carries the id of
+every one of them, so a consumer sees why a probable match was not honored. An ``UNRESOLVED``
+decision never merges, and is recorded as an unresolved
 neighbor of both entities.
 
 An entity in a group must share the geometric map and frame of the others (their supports are
@@ -142,9 +143,10 @@ def materialize_resolved_entities(
     graph = _match_graph(decision_list)
     components = _components(by_reference, graph)
     contradictions = _contradictions(decision_list, components, graph)
-    withheld = {
-        reference: item.contradiction_id for item in contradictions for reference in item.component
-    }
+    withheld: dict[EntityReference, set[ContradictionId]] = {}
+    for item in contradictions:
+        for reference in item.component:
+            withheld.setdefault(reference, set()).add(item.contradiction_id)
     neighbors = _unresolved_neighbors(decision_list)
     policy = materialization_policy()
     resolved: list[ResolvedEntity] = []
@@ -305,7 +307,7 @@ def _aggregate(
     members: tuple[Entity, ...],
     graph: _Graph,
     unresolved: dict[EntityReference, set[EntityReference]],
-    withheld: dict[EntityReference, ContradictionId],
+    withheld: dict[EntityReference, set[ContradictionId]],
     resolution_run_id: EntityResolutionRunId,
     provenance: ResolvedEntityProvenance,
 ) -> ResolvedEntity:
@@ -338,7 +340,9 @@ def _aggregate(
         temporal_state=_temporal_state(members),
         resolution_decision_refs=tuple(sorted({d for ids in matched.values() for d in ids})),
         unresolved_neighbor_refs=tuple(neighbors),
-        contradiction_ids=tuple(sorted({withheld[ref] for ref in references if ref in withheld})),
+        contradiction_ids=tuple(
+            sorted({item for ref in references for item in withheld.get(ref, ())})
+        ),
         provenance=provenance,
     )
 

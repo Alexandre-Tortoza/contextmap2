@@ -44,7 +44,7 @@ As **políticas não são passadas ao escritor: são derivadas dos registros**, 
 
 ## Consistência checada antes de escrever
 
-O escritor recusa (`RunArtifactError`), sem deixar nada no disco: par comparado que **não é candidato** (só candidatos são comparados, nunca all-pairs), par resolvido duas vezes, mais de uma política para um papel, entidades resolvidas de outro run, entidade fora dos mapas da linhagem ou sobre outro mapa geométrico, e entidade resolvida que cita uma decisão que não foi escrita.
+O escritor recusa (`RunArtifactError`), sem deixar nada no disco: par comparado que **não é candidato** (só candidatos são comparados, nunca all-pairs), par resolvido duas vezes, mais de uma política para um papel, entidades resolvidas de outro run, entidade fora dos mapas da linhagem ou sobre outro mapa geométrico, entidade resolvida que cita uma decisão que não foi escrita e contradição de transitividade cuja decisão `DISTINCT` ou cuja cadeia de `MATCH` não foi escrita.
 
 ## Leitura (`EntityResolutionRunReader`)
 

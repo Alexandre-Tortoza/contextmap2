@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -235,6 +236,107 @@ def test_only_the_contradictory_component_is_withheld() -> None:
 
     assert members_of(result) == [["a"], ["b"], ["c"], ["d", "e"]]
     assert result.resolved.resolved_of(entities["d"].reference).contradiction_ids == ()
+
+
+# --- several contradictions in one component ----------------------------------------------------
+# Regressão de uma execução real: um componente de MATCH com DOIS pares DISTINCT levantava
+# ValueError, porque cada entidade guardava um único id de contradição.
+
+
+def chain_with_distinct(
+    names: str, distinct: tuple[str, ...]
+) -> tuple[dict[str, Entity], list[ResolutionDecision], list[ResolutionDecision]]:
+    """A chain of MATCH decisions over ``names`` and the DISTINCT decisions named by pairs."""
+    entities = boxes(*names)
+    matches = [
+        decide(entities[first], entities[second], MATCH) for first, second in pairwise(names)
+    ]
+    distincts = [decide(entities[pair[0]], entities[pair[1]], DISTINCT) for pair in distinct]
+    return entities, matches, distincts
+
+
+def test_two_contradictions_in_one_component_are_both_recorded_and_nothing_is_merged() -> None:
+    entities, matches, distincts = chain_with_distinct("abcd", ("ac", "bd"))
+    ab, bc, cd = matches
+    ac, bd = distincts
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"]]
+    by_distinct = {item.distinct_decision_id: item for item in result.contradictions}
+    assert set(by_distinct) == {ac.decision_id, bd.decision_id}
+    assert by_distinct[ac.decision_id].match_path == (ab.decision_id, bc.decision_id)
+    assert by_distinct[bd.decision_id].match_path == (bc.decision_id, cd.decision_id)
+    everyone = tuple(entities[name].reference for name in "abcd")
+    assert all(item.component == everyone for item in result.contradictions)
+    expected = tuple(sorted(item.contradiction_id for item in result.contradictions))
+    assert len(expected) == 2
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+        assert entity.resolution_decision_refs == ()
+
+
+def test_three_contradictions_in_one_component_are_all_recorded() -> None:
+    entities, matches, distincts = chain_with_distinct("abcde", ("ac", "bd", "ce"))
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"], ["e"]]
+    expected = tuple(sorted(contradiction_id_for(item.decision_id) for item in distincts))
+    assert tuple(item.contradiction_id for item in result.contradictions) == expected
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+
+
+def test_two_contradicted_pairs_that_share_an_entity_are_both_recorded() -> None:
+    entities, matches, distincts = chain_with_distinct("abcd", ("ac", "ad"))
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"]]
+    assert {item.distinct_pair for item in result.contradictions} == {
+        (entities["a"].reference, entities["c"].reference),
+        (entities["a"].reference, entities["d"].reference),
+    }
+    expected = tuple(sorted(contradiction_id_for(item.decision_id) for item in distincts))
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+
+
+def test_the_contradictions_of_one_component_never_reach_another() -> None:
+    entities = boxes("a", "b", "c", "d", "e", "f", "g", "h")
+    decisions = [
+        decide(entities[x], entities[y], outcome)
+        for x, y, outcome in (
+            ("a", "b", MATCH),
+            ("b", "c", MATCH),
+            ("c", "d", MATCH),
+            ("a", "c", DISTINCT),
+            ("b", "d", DISTINCT),
+            ("e", "f", MATCH),
+            ("f", "g", MATCH),
+            ("e", "g", DISTINCT),
+            ("g", "h", MATCH),
+        )
+    ]
+
+    result = materialize(entities, *decisions)
+
+    counts = {
+        name: len(result.resolved.resolved_of(entities[name].reference).contradiction_ids)
+        for name in "abcdefgh"
+    }
+    assert counts == {"a": 2, "b": 2, "c": 2, "d": 2, "e": 1, "f": 1, "g": 1, "h": 1}
+    assert len(result.contradictions) == 3
+
+
+def test_several_contradictions_do_not_depend_on_the_order_of_the_decisions() -> None:
+    entities, matches, distincts = chain_with_distinct("abcde", ("ac", "bd", "ce"))
+    decisions = [*matches, *distincts]
+    shuffled = list(decisions)
+    random.Random(7).shuffle(shuffled)
+
+    assert materialize(entities, *shuffled) == materialize(entities, *decisions)
 
 
 # --- geometry -----------------------------------------------------------------------------------

@@ -685,7 +685,7 @@ contradiction_ids[]
 provenance
 ```
 
-Toda entidade de origem pertence a **exatamente uma** entidade resolvida (uma entidade que nada casou vira uma resolvida de um membro), e Spatial Relations consome só entidades resolvidas. Um componente ligado por `MATCH` que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction`: um falso merge é pior que uma duplicata visível e rastreada. Source entities não são mutadas ou apagadas.
+Toda entidade de origem pertence a **exatamente uma** entidade resolvida (uma entidade que nada casou vira uma resolvida de um membro), e Spatial Relations consome só entidades resolvidas. Um componente ligado por `MATCH` que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction` por par `DISTINCT` (um componente pode ter várias, e cada entidade retida guarda todos os seus `contradiction_ids`): um falso merge é pior que uma duplicata visível e rastreada. Source entities não são mutadas ou apagadas.
 
 ### Escopo de identidade
 

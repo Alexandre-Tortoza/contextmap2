@@ -597,6 +597,14 @@ class _Records:
                     f"resolved entity {entity.resolved_entity_id!r} cites decisions that were not "
                     f"written: {unknown[:3]!r}"
                 )
+        for contradiction in materialization.contradictions:
+            cited = (contradiction.distinct_decision_id, *contradiction.match_path)
+            unknown = [ref for ref in cited if ref not in known]
+            if unknown:
+                raise RunArtifactError(
+                    f"contradiction {contradiction.contradiction_id!r} cites decisions that were "
+                    f"not written: {unknown[:3]!r}"
+                )
         return cls(
             run_id=run_id,
             lineage=lineage,
