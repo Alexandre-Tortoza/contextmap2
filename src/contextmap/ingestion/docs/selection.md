@@ -48,7 +48,7 @@ Todos os tipos convergem para o mesmo caminho de resolução. A seleção descre
 
 ## Identidade e serialização para manifests de run
 
-`selection_identity(sequence_artifact_id, selection)` retorna um hash determinístico `sha256:...` de `(sequence_artifact_id, selection)` — duas chamadas com os mesmos argumentos sempre produzem a mesma identidade, adequada para registrar em `manifest.json`/`lineage.json` de um run futuro (`docs/ARTIFACTS.md`). `encode_selection()`/`decode_selection()` fazem a serialização JSON da seleção em si.
+`selection_identity(sequence_artifact_id, selection)` retorna um hash determinístico `sha256:...` de `(sequence_artifact_id, selection)` — duas chamadas com os mesmos argumentos sempre produzem a mesma identidade. Essa identidade já é registrada nos manifests dos runs implementados de Visual Perception, State Estimation, Geometric Mapping e Sensor Association; `encode_selection()`/`decode_selection()` fazem a serialização JSON da seleção em si.
 
 ## Exemplo
 

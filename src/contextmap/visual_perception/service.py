@@ -38,6 +38,7 @@ from contextmap.visual_perception.models import (
     Region2D,
     SceneContext,
     SemanticClaim,
+    SemanticScore,
     VisualFeature,
 )
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
@@ -179,6 +180,7 @@ def assemble_perception_result(
     claim_stage_ids: Sequence[str] = (),
     scene_context_stage_id: str | None = None,
     semantic_execution_stage_ids: Sequence[str] = (),
+    semantic_score_stage_ids: Sequence[str] = (),
 ) -> PerceptionResult:
     """Assemble a PerceptionResult from succeeded stage outcomes.
 
@@ -205,6 +207,8 @@ def assemble_perception_result(
         semantic_execution_stage_ids: ``stage_id``s whose output is a
             :class:`SemanticInterpretationExecution`. Their parsed claims
             and scene context are materialized into the canonical result.
+        semantic_score_stage_ids: ``stage_id``s whose output is
+            ``Sequence[SemanticScore]``.
 
     Returns:
         The assembled result.
@@ -260,6 +264,12 @@ def assemble_perception_result(
                 raise ValueError("multiple scene contexts cannot be assembled into one result")
             scene_context = parsed_scene_context
 
+    semantic_scores: list[SemanticScore] = []
+    for stage_id in semantic_score_stage_ids:
+        outcome = by_id.get(stage_id)
+        if outcome is not None and outcome.status is StageStatus.SUCCEEDED:
+            semantic_scores.extend(outcome.output)  # type: ignore[arg-type]
+
     return PerceptionResult(
         result_id=result_id,
         source_observation_id=source_observation_id,
@@ -270,6 +280,7 @@ def assemble_perception_result(
         features=tuple(features),
         claims=tuple(claims),
         scene_context=scene_context,
+        semantic_scores=tuple(semantic_scores),
     )
 
 

@@ -36,20 +36,20 @@ O adapter apenas decodifica e normaliza a fonte. Validação, sincronização, p
 
 ## Contratos públicos
 
-- `SourceObservation` — union das observações canônicas: `ImageObservation`, `LidarObservation`, `ImuObservation`, `ExternalPoseMeasurement`.
+- `SourceObservation` — union das observações canônicas: `ImageObservation`, `LidarObservation`, `ImuObservation`, `ExternalPoseMeasurement`; layouts LiDAR usam `PointFieldDescriptor`/`PointFieldDataType` e covariâncias usam `Covariance3x3`/`Covariance6x6`.
 - `SourceObservationId`, `SensorId`, `FrameId`, `CalibrationReferenceId` — identificadores tipados.
 - `SourceProvenance` — rastreabilidade até a fonte bruta.
 - `SequenceArtifactWriter`/`SequenceArtifactReader` — persistência local imutável de uma sequência ingerida; `SequenceArtifactManifest`, `SequenceArtifactFileEntry`, `SequenceArtifactId`.
 - `SequenceArtifactError`, `IncompleteSequenceArtifactError` — exceções semânticas de leitura/escrita do artefato.
-- `synchronize()` — agrupa observações em `ProcessingObservation`s auditáveis; `SynchronizationConfig`, `ModalityAssociation`, `SynchronizationDiagnostics`, `DroppedEvent`.
+- `synchronize()` — agrupa observações em `ProcessingObservation`s auditáveis; `SynchronizationConfig`, `SynchronizationDecision`, `ModalityAssociation`, `SynchronizationDiagnostics`, `DroppedEvent`.
 - `observation_modality()`, `MODALITY_NAMES` — utilitário para consumir `SourceObservation` de forma genérica por modalidade.
-- `CalibrationSet`/`CalibrationEntry` — calibração e frames de coordenadas canônicos; `CameraModel` (`PinholeCameraModel`/`FisheyeCameraModel`/`MeiCameraModel`), `RigidTransform`, `validate_calibration_set()`.
-- `resolve_selection()` — lê um subconjunto determinístico de uma sequência; `SequenceSelection` (`FullSequenceSelection`/`FrameRangeSelection`/`TimestampRangeSelection`/`ExplicitIdsSelection`), `selection_identity()`.
+- `CalibrationSet`/`CalibrationEntry` — calibração e frames de coordenadas canônicos; `CameraModel` (`PinholeCameraModel`/`FisheyeCameraModel`/`MeiCameraModel`), `DistortionModel`, `RigidTransform`, `validate_calibration_set()`.
+- `resolve_selection()` — lê um subconjunto determinístico de uma sequência e devolve `SequenceSelectionResult`; `SequenceSelection` (`FullSequenceSelection`/`FrameRangeSelection`/`TimestampRangeSelection`/`ExplicitIdsSelection`), `selection_identity()`.
 - `SourceAdapter` — fronteira (`Protocol`) que qualquer adapter de fonte concreto implementa; `SourceAdapterConfig`, `SourceTopicMapping`, `SourceAdapterCapabilities`, `SourceAdapterWarning`.
 - `contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter` / `contextmap.ingestion.adapters.ros2_bag.Ros2BagSourceAdapter` — implementações concretas para ROS 1/ROS 2 (não reexportadas por `contextmap.ingestion`; importadas pelo path completo, como qualquer backend).
 - `SequenceProvenance` — metadata de proveniência/identidade de conteúdo; `compute_content_identity()`, `compute_source_content_hash()`, `compute_configuration_hash()`, `current_code_version()`.
 - `validate_observations()` e as checagens individuais (`validate_image_observation()`, `validate_lidar_observation()`, `validate_timestamp_ordering()`, `validate_frame_references()`) — validação estrutural sobre observações decodificadas.
-- `summarize_observations()` — sumário legível de uma sequência; `SequenceSummary`, `ModalitySummary`, `SequenceDiagnostics`.
+- `summarize_observations()` — sumário legível de uma sequência; `SequenceSummary`, `ModalitySummary`, `SequenceDiagnostics`, `FrameGraphDiagnostics`.
 
 Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
 
@@ -59,7 +59,7 @@ Apenas `contextmap.shared` (`SourceTimestamp`).
 
 ## Módulos que consomem este
 
-`visual_perception`, `state_estimation`, e demais capabilities a jusante, sempre através de `contextmap.ingestion` (nunca de `contextmap.ingestion.models` diretamente).
+`visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion` e `evaluation`, sempre através de `contextmap.ingestion` (nunca de `contextmap.ingestion.models` diretamente). `point_representation` não possui dependência direta de Ingestion.
 
 ## Fluxo interno (alto nível)
 

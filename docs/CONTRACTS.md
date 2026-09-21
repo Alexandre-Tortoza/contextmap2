@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)) e de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) também já existem; os demais, de Semantic Fusion em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) e de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) também já existem; os demais, de Semantic Mapping em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
 
 ```mermaid
 flowchart LR
@@ -28,11 +28,13 @@ flowchart LR
     PR --> VF["VisualFeature"]
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
-    SS["SemanticSupport"] --> SC
+    SS["SemanticScore"] --> SC
     SO --> PE["PoseEstimate / Trajectory<br/>implementado"]
     PE --> GR["GeometryPoint / GeometryReference / GeometricMap<br/>implementado"]
     PR --> SP["SpatialObservation<br/>implementado"]
-    SP --> FE["FusedEvidence<br/>planejado"]
+    GR --> P3["PointRepresentation<br/>implementado e opcional"]
+    SP --> FE["FusedEvidence<br/>implementado"]
+    P3 -. evidência opcional .-> FE
     FE --> E["Entity → ResolvedEntity → Relation → ContextMap<br/>planejado"]
 ```
 
@@ -47,13 +49,15 @@ flowchart LR
     PR --> VF["VisualFeature"]
     PR --> SC["SemanticClaim"]
     PR --> CTX["SceneContext"]
-    SUP["SemanticSupport"] --> SC
+    SUP["SemanticScore"] --> SC
 
     SO --> PE["PoseEstimate"]
     PE --> GM["GeometryReference"]
     PR --> SP["SpatialObservation"]
     GM --> SP
-    SP -. futuro .-> FE["FusedEvidence"]
+    GM --> P3["PointRepresentation<br/>(opcional)"]
+    SP --> FE["FusedEvidence"]
+    P3 -. evidência 3D opcional .-> FE
     FE -. futuro .-> E["Entity"]
     E -. futuro .-> RE["ResolvedEntity"]
     RE -. futuro .-> REL["Relation"]
@@ -207,17 +211,77 @@ evidence_references[]
 
 Evidência semântica de nível de cena. O contrato implementado contém identidades da observação e do resultado, `claims[]` com `region_id=None`, referências de evidência, provenance semântica e campos opcionais `scene_type`, `environment`, `layout`, `lighting`, `visibility` e `navigability`. Claims internas devem pertencer à mesma observação e ao mesmo resultado.
 
-## 9. `SemanticSupport`
+## 8.1. `SemanticInterpretationRequest`
+
+Boundary canônico de uma chamada semântica de cena ou região. Ele não é uma
+claim nem estado persistente; representa a seleção exata de evidência fornecida
+a um backend.
+
+```text
+request_id
+source_observation_id
+perception_result_id
+mode = SCENE | REGION
+region_id?
+visual_views[]
+visual_features[]
+scene_context_reference?
+supporting_metadata[]
+prompt_template_id
+requested_output_schema
+configuration_fingerprint
+```
+
+Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
+`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
+quando aplicável. Features opcionais preservam `feature_id`,
+`embedding_space_id`, scope e região. Evidência não suportada por um backend é
+rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
+descartada silenciosamente.
+
+## 8.2. `SemanticInterpretationExecution`
+
+Registro de uma inferência semântica individual, mantendo camadas que não devem
+ser colapsadas:
+
+```text
+request
+rendered_prompt
+raw_response
+parsed claims / scene_context / abstention
+diagnostics
+effective_configuration
+```
+
+O run artifact persiste o request e a execution, materializa as views exatas,
+exige payload de qualquer feature efetivamente consumida, resolve contexto de
+cena/região e reconcilia o parsing com o `PerceptionResult`. Qwen/Gemini usam
+`SemanticConfidencePolicy.UNSCORED_ONLY`; um backend com score realmente
+medido pode usar a policy `MEASURED`.
+
+## 9. `SemanticScore`
 
 Julgamento separado produzido por `SemanticScorer` sobre uma `SemanticClaim`:
 
 ```text
+score_id
 claim_id
-support_score ∈ [0, 1]
+feature_id
+score_type = cosine_similarity
+value ∈ [-1, 1]
+calibrated_probability?
+embedding_space_id
+source_observation_id
+perception_result_id
 provenance
 ```
 
-`SemanticSupport` não muta a claim, não substitui `SemanticClaim.confidence` e não é suporte acumulado de Semantic Fusion. Embora o port `SemanticScorer` esteja implementado, ele ainda não integra `CANONICAL_PRESET_V1`.
+`SemanticScore` não muta a claim, não substitui `SemanticClaim.confidence` e
+não é suporte acumulado de Semantic Fusion. Cosine similarity preserva sua
+escala original e não é apresentada como probabilidade. Uma claim sem feature
+compatível continua válida e permanece sem records de score; ausência não vira
+zero. O DAG conhece `semantic_scorer`, mas `CANONICAL_PRESET_V1` não seleciona
+silenciosamente um scorer/modelo.
 
 ## 10. `PoseEstimate`
 
@@ -386,11 +450,12 @@ Representa suporte espacial sobre o qual evidências podem ser acumuladas.
 
 ```text
 FusionSupport
-├── support_id
+├── fusion_support_id
+├── geometric_map_id
 ├── geometry_support[]
-├── bounds / centroid
-├── spatial_observation_refs[]
-├── time bounds
+├── spatial_observation_ids[]
+├── bounds / centroid_m
+├── time_bounds
 └── provenance
 ```
 
@@ -398,7 +463,9 @@ FusionSupport
 
 `FusionSupport` não implica same-object identity.
 
-Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion.
+Ele apenas afirma que as observações possuem suporte espacial compatível para uma policy de fusion. Não há campo de label, classe, confiança nem identidade de objeto.
+
+Ver [`semantic_fusion/docs/contracts.md`](../src/contextmap/semantic_fusion/docs/contracts.md).
 
 ## 18. Evidence grouping
 
@@ -430,6 +497,8 @@ physical_observation_count = 1
 inference_result_count = 3
 ```
 
+No contrato, essa distinção é `EvidenceContribution.physical_observation_id` (chave de correlação) e `PhysicalObservationGroup`, que lista os resultados e execuções correlacionados de um frame. `FusedEvidence` expõe `physical_observation_count` e `inference_result_count` separadamente.
+
 ## 19. `FusedEvidence`
 
 Acumula evidências preservando hipóteses e conflitos.
@@ -437,17 +506,25 @@ Acumula evidências preservando hipóteses e conflitos.
 ```text
 FusedEvidence
 ├── fused_evidence_id
-├── fusion_support_ref
-├── contributing_observations[]
-├── hypotheses[]
-├── visual_feature_refs[]
+├── fusion_support_id
+├── physical_observation_groups[]
+├── contributions[]          (EvidenceContribution)
+├── hypotheses[]             (FusedHypothesis)
 ├── point_representation_refs[]
-├── ambiguity / uncertainty state
-├── temporal summary
-└── provenance
+├── uncertainty[]            (UncertaintyRecord)
+├── temporal_summary
+├── provenance
+├── channels[]               (ChannelProvenance)
+└── weighting                (QualityWeighting, só na política ciente de qualidade)
 ```
 
-Uma hypothesis fundida deve manter references para claims, scores e observações que a sustentam ou contradizem.
+Uma `EvidenceContribution` é uma vista: uma região de um frame físico interpretada por uma execução, com referências para claims, scores de scorer, features visuais, geometria e qualidade de observação. Não carrega `PointRepresentation`: estrutura estática pertence ao suporte e é listada uma vez em `point_representation_refs`, nunca por vista.
+
+Uma hypothesis fundida mantém references para claims e observações que a sustentam, contradizem ou deixam ambíguas (`HypothesisEvidence`, com `stance`, `role` e `SupportSignal` tipados). Um `SupportSignal` com `value=None` é evidência não pontuada, nunca zero.
+
+Qualidade de observação é uma dimensão de evidência separada, referenciada por `ObservationQualityRef`; ela não é confiança semântica, similaridade CLIP nem peso de fusão. `FusedEvidence` não tem vencedor, hipótese primária nem confiança combinada: ambiguidade, contradição, empate e evidência insuficiente são `UncertaintyRecord` com a evidência exata que os produziu, e uma abstenção (`unknown`) é um stance `ABSTAINING`, nunca evidência negativa.
+
+`channels` lista os canais de evidência que a política declarou, com as identidades que os alimentaram; dados de um canal só existem se o canal foi declarado. `weighting`, quando existe, traz os fatores por componente e por contribuição e, por hipótese, o suporte antes e depois da ponderação: é um peso de fusão, não uma confiança semântica nem uma probabilidade.
 
 ## 20. `Entity`
 
@@ -634,7 +711,7 @@ A tabela resume onde uma identidade é válida por padrão.
 | `Region2D` | perception result |
 | `VisualFeature` | perception result |
 | `SemanticClaim` | perception result |
-| `SemanticSupport` | julgamento do scorer referenciando uma claim |
+| `SemanticScore` | julgamento do scorer referenciando uma claim |
 | `PoseEstimate` | state-estimation artifact |
 | `GeometryReference` | geometric-map artifact |
 | `SpatialObservation` | association artifact |
@@ -689,4 +766,4 @@ Mas não podem exigir o tipo nativo do backend para serem lidos.
 
 Todo contrato que atravessa uma boundary persistida deve possuir representação serializável/inspectável ou metadata suficiente para resolver seu payload.
 
-Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente. No `PerceptionRunArtifact` atual, `FeatureStoreReader` valida hash, shape e dtype antes do carregamento lazy.
+Payloads grandes, como dense features, podem ser externos ao registro principal através de `payload_reference`, com shape, dtype, hash e space identity registrados separadamente. No `PerceptionRunArtifact` atual, `FeatureStoreReader` valida hash, shape e dtype antes do carregamento lazy. Evidência usada por Semantic Interpretation recebe regras mais fortes: views são sempre materializadas e content-addressed; features referenciadas semanticamente precisam possuir payload persistido; request, prompt, raw response, parsing e diagnostics da execução ficam auditáveis no mesmo artifact.

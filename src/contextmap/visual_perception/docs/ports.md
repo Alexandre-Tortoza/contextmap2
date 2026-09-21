@@ -17,15 +17,15 @@ flowchart LR
     SAM2["SAM2"] -->|implementado| RD
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
-    F2 -. adapter planejado .-> SI
+    F2 -->|implementado| SI
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
     CLIP["CLIP"] -->|implementado| FE
-    CLIP -. adapter planejado .-> SS
+    CLIP -->|implementado| SS
     ACLIP["AlphaCLIP"] -->|implementado| FE
-    ACLIP -. adapter planejado .-> SS
-    QWEN["Qwen"] -. adapter planejado .-> SI
-    GEMINI["Gemini"] -. adapter planejado .-> SI
+    ACLIP -->|implementado| SS
+    QWEN["Qwen"] -->|adapter canônico implementado| SI
+    GEMINI["Gemini"] -->|adapter canônico implementado| SI
     ENH["Backend aprendido"] -. futuro e opcional .-> FRE
 ```
 
@@ -40,7 +40,7 @@ DINOv3 (dense)         requires: PreparedImage                    provides: Visu
 resolution enhancement requires: DenseFeatureMap                  provides: DenseFeatureMap
 AlphaCLIP (region)     requires: PreparedImage + Region2D[]       provides: VisualFeature[] (region)
 Gemini (region)        requires: SemanticInterpretationRequest    provides: SemanticInterpretationExecution
-CLIP (scorer)          requires: SemanticClaim[] + PreparedImage  provides: SemanticSupport[]
+CLIP (scorer)          requires: SemanticClaim[] + VisualFeature[] provides: SemanticScore[]
 ```
 
 ## `PreparedImage`
@@ -68,10 +68,20 @@ seus modes/views/evidências suportados e devolve
 `SemanticInterpretationExecution`. A execução mantém separados request, prompt
 renderizado, resposta bruta, parsing canônico, configuração efetiva e métricas.
 Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
+`QwenSemanticInterpreter`, `GeminiSemanticInterpreter` e
+`Florence2SemanticInterpreter` implementam esse boundary hoje usando seams
+injetáveis (`QwenRuntime`, `GeminiClient` e `Florence2SemanticRuntime`). Isso
+valida contratos, mapping, parsing, retries/diagnostics e provenance sem afirmar
+que execuções controladas com checkpoint/API real já foram concluídas.
 
 ## `SemanticScorer` nunca muta uma claim
 
-`score()` retorna `SemanticSupport[]` — um julgamento de suporte separado, referenciando `claim_id` — nunca modifica a `SemanticClaim` original. Isso preserva a claim como evidência imutável.
+`score()` recebe claims e features canônicas e retorna `SemanticScore[]` —
+julgamentos separados que referenciam claim, feature, embedding space,
+observação e resultado — sem modificar a `SemanticClaim` original. CLIP opera
+sobre features globais; AlphaCLIP exige feature regional da mesma região.
+Cosine similarity permanece em `[-1, 1]`, e
+`calibrated_probability=None` enquanto não existir calibração demonstrada.
 
 ## Metadata de backend
 
@@ -83,7 +93,12 @@ Qualquer classe que implemente os métodos de um port satisfaz esse port (`Proto
 
 ## Estado no pipeline canônico
 
-Os quatro ports acima são contratos públicos implementados em `ports.py`, mas isso não significa que todos estejam ligados ao preset canônico. O adapter de capability `semantic_interpreter` aceita um request pré-construído e permite seleção de backend por `StageSpec`. `CANONICAL_PRESET_V1` ainda preserva temporariamente os dois estágios anteriores de cena/região até a política de construção de requests ser integrada; Qwen não é inserido silenciosamente nesse preset. `SemanticScorer` existe como ponto de substituição público, porém ainda não possui um estágio no preset canônico.
+Os cinco ports acima são contratos públicos implementados em `ports.py`, mas
+isso não significa que todos pertençam ao preset canônico. Os adapters de
+capability `semantic_interpreter` e `semantic_scorer` podem ser selecionados por
+`StageSpec`; o scorer recebe os inputs nomeados `claims` e `features`.
+`CANONICAL_PRESET_V1` ainda preserva temporariamente os dois estágios anteriores
+de cena/região e não seleciona Qwen, CLIP ou AlphaCLIP silenciosamente.
 
 Essa separação é intencional: adicionar um port ou backend não altera automaticamente a topologia executada. Integrar uma nova capability ao pipeline exige uma decisão explícita de inputs, outputs, validação e preset.
 

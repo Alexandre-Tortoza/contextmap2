@@ -12,6 +12,7 @@ from contextmap.visual_perception import (
     RegionDiscovery,
     RegionId,
     SceneContext,
+    ScoreId,
     SemanticClaim,
     SemanticInferenceProvenance,
     SemanticInterpretationExecution,
@@ -19,11 +20,13 @@ from contextmap.visual_perception import (
     SemanticInterpretationRequest,
     SemanticInterpreter,
     SemanticInterpreterCapabilities,
+    SemanticScore,
     SemanticScorer,
-    SemanticSupport,
+    SemanticScoreType,
+    VisualFeature,
     VisualViewKind,
 )
-from contextmap.visual_perception.models import ClaimId, HypothesisRole
+from contextmap.visual_perception.models import ClaimId, FeatureId, HypothesisRole
 from contextmap.visual_perception.models import PreparedImage as ModelPreparedImage
 from contextmap.visual_perception.models import Region2D as ModelRegion2D
 from contextmap.visual_perception.ports import RegionDiscovery as PortRegionDiscovery
@@ -177,12 +180,20 @@ class _FakeSemanticScorer:
     def score(
         self,
         claims: Sequence[SemanticClaim],
-        image: PreparedImage,
-        regions: Sequence[Region2D] = (),
-    ) -> Sequence[SemanticSupport]:
+        features: Sequence[VisualFeature],
+    ) -> Sequence[SemanticScore]:
         return tuple(
-            SemanticSupport(
-                claim_id=claim.claim_id, support_score=1.0, provenance=self.backend_provenance()
+            SemanticScore(
+                score_id=ScoreId(f"score-{claim.claim_id}"),
+                claim_id=claim.claim_id,
+                feature_id=features[0].feature_id,
+                score_type=SemanticScoreType.COSINE_SIMILARITY,
+                value=1.0,
+                calibrated_probability=None,
+                embedding_space_id=features[0].embedding_space_id,
+                source_observation_id=claim.source_observation_id,
+                perception_result_id=claim.perception_result_id,
+                provenance=self.backend_provenance(),
             )
             for claim in claims
         )
@@ -246,7 +257,23 @@ def test_semantic_scorer_produces_support_without_mutating_claims() -> None:
         provenance=_semantic_provenance(),
     )
 
-    supports = scorer.score((claim,), _image())
+    feature = VisualFeature(
+        feature_id=FeatureId("feature-0001"),
+        scope=FeatureScope.GLOBAL,
+        embedding_space_id="fake-space",
+        shape=(2,),
+        dtype="float32",
+        payload_reference="feature-0001.npy",
+        provenance=BackendProvenance(
+            backend_id="fake-extractor",
+            capability="feature_extractor",
+            provider="fake",
+            model="fake",
+            version="1",
+        ),
+    )
+
+    supports = scorer.score((claim,), (feature,))
 
     assert len(supports) == 1
     assert supports[0].claim_id == claim.claim_id

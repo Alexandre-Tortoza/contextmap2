@@ -74,7 +74,7 @@ flowchart TD
     P[PerceptionRunArtifact]
     T[StateEstimationRunArtifact]
     G[GeometricMapArtifact]
-    A[AssociationRunArtifact]
+    A[SensorAssociationRunArtifact]
     R[PointRepresentationRunArtifact]
     F[SemanticFusionRunArtifact]
     E[Semantic Entity Artifact]
@@ -100,7 +100,7 @@ flowchart TD
 
 ## Artefatos materializados hoje
 
-Na `dev`, seis formatos já existem e são integrados:
+Na `dev`, sete formatos já existem e são integrados:
 
 ```mermaid
 flowchart LR
@@ -128,14 +128,19 @@ flowchart LR
     AW --> ASA["SensorAssociationRunArtifact"]
     ASA --> AR["SensorAssociationRunReader"]
     MAP --> PTE["Point Representation"]
-    PTE --> PW["PointRepresentationRunWriter"]
-    PW --> PTA["PointRepresentationRunArtifact"]
+    PTE --> PTW["PointRepresentationRunWriter"]
+    PTW --> PTA["PointRepresentationRunArtifact"]
     PTA --> PTR["PointRepresentationRunReader"]
+    ASA --> SFU["Semantic Fusion"]
+    PTA -.-> SFU
+    SFU --> SFW["SemanticFusionRunWriter"]
+    SFW --> SFA["SemanticFusionRunArtifact"]
+    SFA --> SFR["SemanticFusionRunReader"]
 ```
 
-`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. Os artifacts downstream do diagrama anterior permanecem planejados.
+`SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. `SemanticFusionRunArtifact` é o artifact imutável dos suportes de fusão e da evidência fundida. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -162,14 +167,17 @@ workspace/runs/visual-perception/<sequence-name>/
     ├── manifest.json
     ├── outputs/
     │   ├── results.jsonl
-    │   └── features/                  # quando payloads de feature são persistidos
+    │   ├── semantic-interpretations.jsonl
+    │   ├── semantic-views/            # bytes exatos fornecidos ao VLM
+    │   └── features/                  # opcional em geral; obrigatório se consumido semanticamente
     │       ├── feature-index.jsonl
     │       └── <observation-scope>/*.npy
     ├── metrics/
     │   ├── stage-timings.jsonl
     │   └── feature-extraction.jsonl   # quando há diagnostics de feature
     └── debug/
-        └── 30-feature-extraction/     # somente standard/full
+        ├── 30-feature-extraction/     # somente standard/full
+        └── 40-semantic-interpretation/<request-id>/raw-response.txt
 ```
 
 No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
@@ -270,6 +278,30 @@ workspace/runs/point-representation/<sequence-name>/
 
 O `manifest.json` traz a linhagem (mapa geométrico consumido, seleção dos centros independente da ordem, política de suporte, espaço, encoder e hash do checkpoint, código, contexto de associação **opcional e explícito**) e o inventário. Um suporte que falhou vai para `failed-supports.jsonl` com o motivo; um run só de falhas é um run válido e explícito, e um vetor nunca é inventado. O run abre sem NumPy, sem biblioteca de modelo e sem o mapa geométrico, e os vetores são lidos sob demanda. O escritor ainda acumula em memória; a escrita em fluxo de `shared.run_directory` ainda não foi adotada por ele. Detalhes: [Point Representation artifact](../src/contextmap/point_representation/docs/artifact.md).
 
+### `SemanticFusionRunArtifact` atual
+
+```text
+workspace/runs/semantic-fusion/<sequence-name>/
+├── runs.json
+└── run-000N__<selection>__<policy>/
+    ├── README.md
+    ├── manifest.json                          # identidade, linhagem explícita, políticas e inventário
+    ├── outputs/
+    │   ├── fusion-supports.jsonl              # um FusionSupport por linha
+    │   ├── fused-evidence.jsonl               # um FusedEvidence por linha (autocontido)
+    │   ├── support-observation-index.jsonl    # suporte → observações, offsets nos dois arquivos
+    │   ├── hypothesis-evidence-index.jsonl    # hipótese → evidência exata
+    │   ├── physical-observation-groups.jsonl  # grupos por frame físico de cada suporte
+    │   ├── contribution-index.jsonl           # contribuição → suporte, observação, resultado, run
+    │   └── excluded-observations.jsonl        # evidência pulada, com o motivo
+    ├── metrics/
+    │   ├── counts.json  distributions.json  payload.json
+    │   └── runtime.json                       # somente quando medido
+    └── debug/                                 # somente standard/full; nunca inventariado
+```
+
+O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenções e evidência não pontuada (`None`, nunca zero), e mantém frames físicos e resultados de inferência distintos. Nada a montante é duplicado: claims, scores, features, qualidade e estrutura 3D são referenciados, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, mapa, runs de associação, percepção e Point Representation), as políticas com fingerprint e as identidades que alimentaram cada canal. Um run é escrito em fluxo e publicado de forma atômica, e o leitor abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo, lendo um suporte sem carregar os outros. Semantic Mapping não pode depender de `debug/`. Detalhes: [Semantic Fusion artifact](../src/contextmap/semantic_fusion/docs/artifact.md).
+
 ### Evidência auditável de Region Discovery
 
 Region Discovery possui um writer de evidência de estágio próprio para experimentação, inspeção e avaliação. Ele não cria uma nova identidade de percepção paralela ao `PerceptionRunArtifact`; registra os intermediários e métricas necessários para explicar como `Region2D[]` foi produzido.
@@ -296,6 +328,27 @@ Feature Extraction não cria um segundo run artifact. Metadata de `VisualFeature
 Diagnostics mínimos ficam em `metrics/feature-extraction.jsonl`. Previews e metadata auxiliares de inspeção ficam em `debug/30-feature-extraction/` somente quando o nível selecionado é `standard` ou `full`. Remover debug não pode afetar a leitura dos outputs contratuais.
 
 Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [diagnostics](../src/contextmap/visual_perception/docs/feature_diagnostics.md).
+
+### Semantic Interpretation dentro do `PerceptionRunArtifact`
+
+Semantic Interpretation também não cria um artifact paralelo. O
+`PerceptionResult` continua sendo a evidência canônica consumida downstream,
+enquanto `outputs/semantic-interpretations.jsonl` preserva o limite exato de
+cada chamada: request, prompt renderizado, resposta bruta distinguível do
+parsing, diagnostics e configuração efetiva.
+
+Cada view selecionada é materializada abaixo de `outputs/semantic-views/` com
+SHA-256 obrigatório e entra no `file_inventory`. Se o request consumir uma
+`VisualFeature`, o payload numérico correspondente precisa estar no feature
+store. `region_id`, `scene_context_reference` e outputs parseados precisam
+resolver para evidência do run antes de `finalize()`.
+
+A resposta bruta também é materializada no path de debug declarado pela
+provenance. Ela é importante para auditoria, mas o parsing canônico não depende
+do arquivo de debug para existir. O schema atual do run artifact é `0.4.0`;
+artifacts `0.3.0` são rejeitados na abertura.
+
+Detalhes: [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md) e [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md).
 
 Detalhes específicos permanecem nos owners:
 
@@ -422,7 +475,7 @@ Lineage não é uma descrição textual vaga. Ele deve apontar para identities/h
 Exemplo conceitual:
 
 ```text
-AssociationRunArtifact
+SensorAssociationRunArtifact
 ├── SequenceArtifact
 ├── PerceptionRunArtifact
 ├── StateEstimationRunArtifact
@@ -467,10 +520,12 @@ Contém o resultado contratual consumido downstream.
 Exemplos:
 
 ```text
-PerceptionRunArtifact (schema atual)
+PerceptionRunArtifact (schema 0.4.0)
 outputs/
 ├── results.jsonl
-└── features/                 # opcional por feature
+├── semantic-interpretations.jsonl   # quando houve execução semântica
+├── semantic-views/                  # views content-addressed consumidas
+└── features/                        # opcional em geral
     ├── feature-index.jsonl
     └── <observation-scope>/*.npy
 ```
@@ -478,7 +533,7 @@ outputs/
 Cada linha contém um `PerceptionResult` completo com `regions`, `features`, `claims` e `scene_context`. Índices separados podem ser adicionados apenas quando houver um caso de uso medido que justifique a duplicação.
 
 ```text
-AssociationRunArtifact
+SensorAssociationRunArtifact
 outputs/
 ├── spatial-observations.*
 ├── projection-records.*
@@ -713,7 +768,7 @@ SequenceArtifact      reusable
 StateEstimationRunArtifact    reusable
 GeometricMapArtifact          reusable
 PerceptionRunArtifact         recompute
-AssociationRunArtifact        recompute
+SensorAssociationRunArtifact  recompute
 SemanticFusion+               recompute
 ```
 
@@ -723,7 +778,7 @@ Se a trajetória muda:
 PerceptionRunArtifact         potentially reusable
 StateEstimationRunArtifact    recompute
 GeometricMapArtifact          recompute
-AssociationRunArtifact        recompute
+SensorAssociationRunArtifact  recompute
 all geometry-dependent stages recompute
 ```
 
@@ -747,6 +802,10 @@ debug dependency
 ```
 
 ## Lineage de entidade
+
+Esta seção e as seções de lineage de relação e `ContextMapArtifact` abaixo
+descrevem artifacts **planejados**. As capabilities `semantic_mapping`,
+`entity_resolution`, `spatial_relations` e `artifact` ainda não existem.
 
 ```mermaid
 flowchart RL

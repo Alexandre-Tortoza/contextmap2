@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from contextmap.visual_perception.region_models import JsonScalar
+from contextmap.visual_perception.semantic_audit import redact_semantic_secrets
 from contextmap.visual_perception.semantic_prompt import (
     ParsedSemanticResponse,
     RenderedSemanticPrompt,
@@ -102,7 +103,7 @@ def encode_semantic_execution(
             "retries": execution.diagnostics.retries,
             "warnings": list(execution.diagnostics.warnings),
         },
-        "effective_configuration": dict(execution.effective_configuration),
+        "effective_configuration": redact_semantic_secrets(dict(execution.effective_configuration)),
     }
 
 

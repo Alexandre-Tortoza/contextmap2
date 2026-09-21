@@ -86,15 +86,26 @@ com o request antes da renderização.
 `semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
 `scene_context=null` e ao menos uma claim com exatamente uma primária; SCENE
 exige um objeto `scene_context` e permite `claims=[]` quando os campos
-estruturados contêm ao menos um valor não nulo. Uma resposta SCENE não abstida
-é rejeitada quando não possui claim nem campo de contexto significativo.
-Abstention é explícita e
+estruturados contêm ao menos um valor não nulo. Como tolerância de parsing
+documentada em #340, uma resposta REGION que omite a chave `scene_context` é
+normalizada para `null` e essa normalização entra nos diagnostics; um valor
+não nulo continua inválido. O modo SCENE permanece estrito e continua rejeitando
+a ausência da chave. Uma resposta SCENE não abstida é rejeitada quando não
+possui claim nem campo de contexto significativo. Abstention é explícita e
 não pode carregar saída semântica escondida.
 
 Campos inesperados, tipos inválidos, JSON malformado e conteúdo obrigatório
 ausente causam
-`SemanticResponseParseError`. A única reparação v1 é remover uma code fence JSON
-externa bem-formada; a decisão aparece em `SemanticParseDiagnostic`. O parser
+`SemanticResponseParseError`. As únicas normalizações v1 são não semânticas e sempre registradas em
+`SemanticParseDiagnostic`: remover uma code fence JSON externa bem-formada (`removed_code_fence`) e,
+no modo REGION, tratar a chave `scene_context` omitida como `null`
+(`defaulted_null_scene_context`). No modo REGION essa chave só pode ser `null`, então sua ausência
+carrega a mesma informação; um valor não nulo continua rejeitado, e no modo SCENE a chave continua
+obrigatória. O prompt e as versões de template/schema (`region/v1`, `semantic-response/1`) não mudam,
+e qualquer outra chave ausente ou inesperada continua rejeitando a resposta inteira. A tolerância
+existe porque modelos reais descrevem corretamente a região mas omitem a chave nula (Qwen3-VL-4B: 3
+de 3 respostas de região, issue #340).
+
 `SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
 prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
 schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
@@ -113,6 +124,37 @@ identidades da observação e do resultado. Ao receber os mesmos outcomes,
 de debug declarado pela proveniência. Assim, execução, evidência canônica e
 artifact permanecem ligados pelo mesmo request id.
 
+`SemanticDebugLevel` controla apenas o conteúdo humano em
+`debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
+`STANDARD` grava request, prompt, parsing, outputs finais e diagnostics, e
+`FULL` acrescenta a resposta bruta. Os outputs canônicos, hashes, métricas e
+views content-addressed continuam válidos em qualquer nível. Antes da
+serialização, campos de credencial conhecidos são redigidos recursivamente;
+contadores como `input_tokens`/`output_tokens` não são confundidos com secrets.
+
+## Scoring semântico
+
+`SemanticScore` registra separadamente o suporte de uma feature visual a uma
+claim: ids do score/claim/feature, tipo e valor do score, embedding space,
+observação, resultado e provenance completa do scorer. O campo opcional
+`calibrated_probability` permanece `None` nos adapters atuais. Uma claim sem
+score continua sendo evidência válida; ausência de record nunca é serializada
+como suporte zero.
+
+`ClipSemanticScorer` compara claims de cena com `VisualFeature` global.
+`AlphaClipSemanticScorer` compara claims regionais somente com a feature da
+mesma região congelada. Ambos exigem espaço de embedding idêntico entre texto e
+imagem, vetores declarados e verificados como L2-normalized, payload
+unidimensional finito e provenance de modelo/configuração. O valor persistido é
+cosine similarity em `[-1, 1]`, sem remapeamento ou comparação implícita entre
+as escalas CLIP e AlphaCLIP.
+
+O encoder de texto e o carregador lazy de payload são seams internos
+injetáveis; tensores/objetos nativos não entram no contrato público. O
+compilador do DAG conhece `semantic_scorer` com inputs `claims` e `features`, e
+`assemble_perception_result()` materializa os scores dos estágios selecionados.
+O preset canônico não escolhe um scorer automaticamente.
+
 ## Adapter Qwen
 
 `QwenSemanticInterpreter` é o adapter local substituível. Ele recebe apenas o
@@ -125,10 +167,12 @@ efetiva da execução.
 O seam de runtime mantém Transformers/Torch e objetos Qwen fora dos contratos.
 Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito.
 Métricas de tokens, latência, memória e warnings são registradas quando o
-runtime consegue medi-las. A cobertura CI usa runtime fake determinístico; uma
-execução de referência com pesos reais continua exigindo ambiente compatível e
-deve ser registrada pelo protocolo de avaliação, nunca simulada como evidência
-real.
+runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
+diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
+registrada para `scene_context` omitido (#340), mas não usou um reference set
+versionado nem o protocolo completo de avaliação. Uma execução de referência
+continua exigindo ambiente compatível e deve ser registrada pelo protocolo de
+avaliação.
 
 ## Adapter Gemini
 
@@ -139,3 +183,49 @@ entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
 limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
+
+## Adapter Florence-2
+
+`Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
+quando ambos compartilham lifecycle/modelo no composition root. Sua
+`Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
+suportados, device, precision e geração. A task e o mode entram em
+`task_identity`; checkpoint, revisão e configuração entram na provenance e no
+fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
+passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+
+## Avaliação
+
+`contextmap.evaluation.semantic_interpretation` fornece um report comum para
+Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
+região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
+custo permanecem em blocos distintos. O baseline usa a policy versionada
+`casefold-exact/1`.
+
+
+## Estado do milestone
+
+O branch de integração materializa:
+
+- `SemanticClaim`/`SceneContext`, request/evidence e prompt/parser possuem
+  contratos canônicos, provenance e incerteza explícita;
+- requests e executions são persistidos com views exatas content-addressed,
+  features consumidas materializadas no feature store e contexto de cena
+  resolvível;
+- Qwen e Gemini implementam o mesmo boundary `SemanticInterpreter`, usando
+  `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
+- Florence-2 implementa o mesmo boundary por adapter separado de Region
+  Discovery;
+- auditoria possui níveis explícitos e redaction de secrets;
+- o harness de avaliação compara qualidade e custo sem Semantic Fusion;
+- testes determinísticos cobrem parsing, abstention, retries, materialização no
+  `PerceptionResult` e reabertura do run artifact.
+
+Uma execução diagnóstica real limitada de Qwen3-VL-4B já ocorreu para o fix
+#340: três respostas REGION omitiram a chave nula, duas passaram a ser aceitas
+após a normalização e a terceira permaneceu corretamente rejeitada por atributo
+não escalar. Ainda não existe execução controlada sobre reference set versionado
+para Qwen, Gemini ou Florence-2. O ambiente de CI valida seams, contratos,
+parsing, provenance, falhas e report schema com doubles determinísticos; isso não
+é registrado como comparação científica dos backends.

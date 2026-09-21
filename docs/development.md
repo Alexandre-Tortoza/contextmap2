@@ -234,7 +234,7 @@ def associate_observation(frame: FrameBundle, tolerance_ms: float) -> SpatialObs
         Spatial observation preserving source provenance.
 
     Raises:
-        AssociationError: If no spatial support satisfies the configured tolerance.
+        AssociationInputError: If no spatial support satisfies the configured tolerance.
     """
 ```
 

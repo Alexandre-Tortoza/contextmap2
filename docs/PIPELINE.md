@@ -26,7 +26,7 @@ flowchart TD
     GEO[GeometricMapArtifact]
 
     SA[Sensor Association]
-    ASSOC[AssociationRunArtifact]
+    ASSOC[SensorAssociationRunArtifact]
 
     P3D[Point Representation, optional]
     PREP[PointRepresentationRunArtifact]
@@ -78,7 +78,7 @@ flowchart TD
 
 ## Estado atual da pipeline
 
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SensorAssociationRunArtifact` e, de forma opcional, `PointRepresentationRunArtifact`: a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria e a Point Representation descreve a estrutura 3D local:
+O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticFusionRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local e a Semantic Fusion acumula a evidência multi-vista sem criar identidade de objeto:
 
 ```mermaid
 flowchart LR
@@ -97,11 +97,13 @@ flowchart LR
     SA --> ASA["SensorAssociationRunArtifact"]
     MAPA --> PTR["Point Representation<br/>(opcional)"]
     PTR --> PTRA["PointRepresentationRunArtifact"]
-    ASA -. próximo estágio ainda não integrado .-> FUT["Semantic Fusion<br/>+ downstream"]
-    PTRA -.-> FUT
+    ASA --> FUS["Semantic Fusion"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact"]
+    FUSA -. próximo estágio ainda não integrado .-> FUT["Semantic Mapping<br/>+ downstream"]
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association e Point Representation (opcional) possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional) e Semantic Fusion possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -115,7 +117,7 @@ Exemplos:
 
 ## 0. Runtime e plano de execução
 
-Antes de executar modelos ou transformações pesadas, `runtime` resolve a configuração do experimento.
+Esta etapa permanece **planejada**: `contextmap.runtime` ainda não existe. Quando for materializado, antes de executar modelos ou transformações pesadas, o runtime deverá resolver a configuração do experimento.
 
 ```mermaid
 flowchart LR
@@ -239,11 +241,52 @@ flowchart LR
 - `VisualFeature` com scopes `DENSE`, `GLOBAL` e `REGION`;
 - `SemanticClaim`, incluindo hipóteses `PRIMARY` e `ALTERNATIVE`;
 - `SceneContext`;
-- `SemanticSupport`, produzido por `SemanticScorer` sem mutar a claim;
+- `SemanticInterpretationRequest`, `SemanticVisualView` e `SemanticFeatureReference`;
+- `SemanticInterpretationExecution`, prompt renderizado, parser estruturado e policy explícita de confidence;
+- `SemanticScore`, produzido por `SemanticScorer` sem mutar a claim;
 - `PerceptionRun` e `PerceptionResult`;
 - `BackendProvenance`.
 
 `RegionId`, `FeatureId` e `ClaimId` são locais ao `PerceptionResult`. Reprocessar a mesma `SourceObservation` em outro run cria outro `PerceptionResult`; não cria uma nova observação física e não funde resultados anteriores.
+
+### Semantic Interpretation: boundary implementado
+
+O milestone de Semantic Interpretation materializa um boundary backend-neutral
+sem transformar uma classificação de frame em verdade persistente. O request
+canônico registra exatamente quais views, features, contexto e metadata foram
+selecionados; o output distingue resposta bruta, parsing e evidência canônica.
+
+```mermaid
+flowchart LR
+    E["views + optional features/context"] --> REQ["SemanticInterpretationRequest"]
+    REQ --> SI["SemanticInterpreter"]
+    SI --> EX["SemanticInterpretationExecution"]
+    EX --> CLAIM["SemanticClaim[] / SceneContext"]
+    EX --> AUDIT["request + prompt + raw response + diagnostics"]
+    CLAIM --> RESULT["PerceptionResult"]
+    AUDIT --> PRA["PerceptionRunArtifact"]
+    RESULT --> PRA
+```
+
+`SemanticVisualView` é content-addressed e precisa estar materializada no run
+artifact. Se uma `VisualFeature` for consumida semanticamente, seu payload
+também deixa de ser opcional para aquele run. `scene_context_reference`,
+`region_id` e outputs parseados são reconciliados com evidência persistida
+antes da finalização.
+
+Qwen, Gemini e Florence-2 implementam o mesmo port `SemanticInterpreter` e usam o parser
+compartilhado com policy `UNSCORED_ONLY`, portanto confidence auto-relatada
+pelo VLM não vira score canônico. Execuções controladas com checkpoints ou
+serviços reais continuam pendentes.
+
+A capability executável `semantic_interpreter` já existe em
+`visual_perception.pipeline`, recebendo um estágio-fonte `semantic_request`.
+Entretanto, `CANONICAL_PRESET_V1` ainda conserva temporariamente
+`scene_interpretation`/`region_interpretation`; migrar o preset exige definir
+explicitamente a política que constrói os requests, em vez de esconder essa
+seleção dentro de um backend.
+
+Detalhes: [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
 
 ### Region Discovery implementado
 
@@ -289,7 +332,7 @@ flowchart LR
     W --> ART["PerceptionRunArtifact"]
     ART --> R["PerceptionRunReader"]
     R --> SET["PerceptionEvidenceSet"]
-    SET -. preserva resultados por run .-> FUT["Semantic Fusion futura"]
+    SET -. evidência reutilizável por run .-> DOWN["downstream implementado<br/>via associação e fusão"]
 ```
 
 `PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
@@ -298,12 +341,12 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global e validação numérica controlada com checkpoints reais;
+- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global; DINOv2/CLIP já foram validados com pesos reais, mas DINOv3/AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- backends reais de Semantic Interpretation;
-- integração de `SemanticScorer` como estágio do DAG;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; execuções controladas de Qwen/Gemini/Florence-2 com checkpoints ou serviços reais continuam pendentes;
+- integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
-- integração end-to-end com State Estimation, geometria e Sensor Association.
+- conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
 
 Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 
@@ -546,7 +589,7 @@ Region-level embeddings continuam associados à região, não são fingidos como
 
 `SpatialObservation` representa evidência visual ancorada em suporte 3D persistente.
 
-Saída persistida: `AssociationRunArtifact`, implementado como `SensorAssociationRunArtifact`.
+Saída persistida: `SensorAssociationRunArtifact`.
 
 Detalhes: [documentação de Sensor Association](../src/contextmap/sensor_association/docs/README.md), [contratos](../src/contextmap/sensor_association/docs/contracts.md), [modelos de câmera](../src/contextmap/sensor_association/docs/camera_models.md), [cadeia de projeção](../src/contextmap/sensor_association/docs/projection_chain.md), [visibilidade](../src/contextmap/sensor_association/docs/visibility.md), [pertencimento à máscara](../src/contextmap/sensor_association/docs/membership.md), [amostragem densa](../src/contextmap/sensor_association/docs/dense_sampling.md), [qualidade da observação](../src/contextmap/sensor_association/docs/quality.md), [diagnósticos](../src/contextmap/sensor_association/docs/diagnostics.md), [artifact](../src/contextmap/sensor_association/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/sensor_association.md).
 
@@ -567,11 +610,12 @@ flowchart LR
 
 ### Support extraction
 
-Políticas iniciais podem incluir:
+As políticas implementadas são:
 
 - radius support;
 - k-nearest support;
-- voxel/cell support quando justificado.
+
+Não existe política voxel/cell no código atual; ela só deve ser adicionada diante de requisito e avaliação concretos.
 
 O suporte precisa preservar quais `GeometryReference` participaram.
 
@@ -645,7 +689,7 @@ Agrupa `SpatialObservation` com suporte 3D suficientemente compatível para acum
 Podem participar, conforme policy/configuração:
 
 - `SemanticClaim`;
-- `SemanticSupport`;
+- `SemanticScore`;
 - visual feature references;
 - visibility/coverage;
 - optional `PointRepresentation`;
@@ -667,11 +711,22 @@ A primeira policy deve ser determinística e preservar:
 
 Não reduzir destrutivamente tudo a um único label.
 
+### Estado implementado
+
+- **Agrupamento por observação física** (`physical-observation-grouping-v1`) sobre uma seleção **explícita** de runs de percepção; a contagem de frames físicos, de resultados de inferência, de runs e de variantes de backend ficam separadas.
+- **`FusionSupport`** por sobreposição de geometria (`geometry-jaccard-support-v1`, limiares declarados e sem valores padrão); observações com pouca geometria vão para uma lista de excluídas explícita.
+- **Política baseline** (`baseline-evidence-accumulation-v1`): uma contribuição por observação espacial, hipóteses por chave de label tipográfica, stances (`SUPPORTING`, `CONFLICTING`, `AMBIGUOUS`, `ABSTAINING`) e sinais tipados, sem ranking e sem ponderar por qualidade.
+- **Incerteza reportada, nunca resolvida:** contradição, ambiguidade, empate e evidência insuficiente com a evidência exata; abstenção só para labels configurados; refinamentos (`pallet` / `wooden pallet`) **não** são reconhecidos.
+- **Canais tipados** (`semantic_claims`, `semantic_scores`, `visual_features`, `observation_quality`, `geometry_support`, `point_representation`) declarados pela política; um canal nunca é ativado só porque há dados.
+- **Política opcional ciente de qualidade** (`quality-aware-evidence-accumulation-v1`), com peso inspecionável e fator neutro registrado; **não** é o padrão e nenhuma decisão de adotá-la foi tomada.
+
 ### Saída
 
 `FusedEvidence`.
 
 Saída persistida: `SemanticFusionRunArtifact`.
+
+Detalhes: [documentação de Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [contratos](../src/contextmap/semantic_fusion/docs/contracts.md), [agrupamento](../src/contextmap/semantic_fusion/docs/grouping.md), [suporte](../src/contextmap/semantic_fusion/docs/support.md), [acumulação](../src/contextmap/semantic_fusion/docs/accumulation.md), [política ciente de qualidade](../src/contextmap/semantic_fusion/docs/quality-aware.md), [artifact](../src/contextmap/semantic_fusion/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_fusion.md).
 
 ## 8. Semantic Mapping
 
@@ -905,19 +960,19 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 
 ## 12. Artefatos ao longo do pipeline
 
-| Estágio | Artefato principal | Consumo downstream |
-| --- | --- | --- |
-| Ingestion | `SequenceArtifact` | perception, state estimation, geometry |
-| Visual Perception | `PerceptionRunArtifact` | sensor association, evaluation |
-| State Estimation | `StateEstimationRunArtifact` | geometry, sensor association |
-| Geometric Mapping | `GeometricMapArtifact` | association, point representation, final map |
-| Sensor Association | `AssociationRunArtifact` | semantic fusion |
-| Point Representation | `PointRepresentationRunArtifact` | optional semantic fusion / resolution evidence |
-| Semantic Fusion | `SemanticFusionRunArtifact` | semantic mapping |
-| Semantic Mapping | semantic entity artifact | entity resolution |
-| Entity Resolution | `EntityResolutionRunArtifact` | spatial relations, final map |
-| Spatial Relations | `SpatialRelationsRunArtifact` | final map |
-| Context Map Assembly | `ContextMapArtifact` | external consumers |
+| Estágio | Artefato principal | Estado | Consumo downstream |
+| --- | --- | --- | --- |
+| Ingestion | `SequenceArtifact` | implementado | perception, state estimation, geometry |
+| Visual Perception | `PerceptionRunArtifact` | implementado | sensor association, evaluation |
+| State Estimation | `StateEstimationRunArtifact` | implementado | geometry, sensor association, evaluation |
+| Geometric Mapping | `GeometricMapArtifact` | implementado | association, point representation, evaluation |
+| Sensor Association | `SensorAssociationRunArtifact` | implementado | semantic fusion, evaluation |
+| Point Representation | `PointRepresentationRunArtifact` | implementado e opcional | semantic fusion opcional, evaluation |
+| Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping planejado, evaluation |
+| Semantic Mapping | semantic entity artifact | planejado | entity resolution |
+| Entity Resolution | `EntityResolutionRunArtifact` | planejado | spatial relations, final map |
+| Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |
+| Context Map Assembly | `ContextMapArtifact` | planejado | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
 
@@ -992,6 +1047,7 @@ Exemplos:
 | State Estimation | ATE/RPE quando referência válida existe, transform consistency |
 | Geometric Mapping | source→map accuracy, scan consistency, reproducibility |
 | Sensor Association | reprojection error, occlusion, mask membership |
+| Point Representation | cobertura/falha do suporte, custo, estabilidade e ablação por braço |
 | Semantic Fusion | multi-view consistency, ambiguity retention, repeated-inference regression |
 | Entity Resolution | false merge, missed merge, unresolved rate |
 | Spatial Relations | precision/recall por predicate, consistency, unresolved rate |

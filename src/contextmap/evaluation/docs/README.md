@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction e Region Discovery (relatórios determinísticos sobre contratos públicos de `visual_perception`), State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido) e Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos).
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais).
 
 ## O que este módulo explicitamente não possui
 
@@ -31,6 +31,22 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_region_discovery_reports()` — comparação controlada entre relatórios que rejeita drift de variáveis opacas.
 - `write_region_discovery_reference_set()`/`write_region_discovery_report()` — persistência imutável dos inputs e resultados de avaliação.
 
+### Semantic Interpretation
+
+- `SemanticEvaluationContext` — reference-set, seleção, run, artifact,
+  pipeline digest e versão do evaluator.
+- `SemanticAnnotation`, `SemanticEvaluationInput` e
+  `SemanticEvaluationFailure` — referência open-vocabulary, variante de
+  evidência e falha `parser`/`backend` explicitamente classificadas.
+- `SemanticEvaluationReport`, `SemanticSampleReport`,
+  `SemanticQualityReport` e `SemanticCostReport` — amostras, qualidade, custo e
+  falhas em blocos separados.
+- `evaluate_semantic_interpretation()` — avaliação por request/evidence variant
+  com matching policy versionada.
+- `MATCHING_POLICY`, `SemanticBackendComparison` e
+  `compare_semantic_backends()` — exigem exatamente os mesmos requests e
+  variants para Qwen, Gemini e Florence-2.
+
 ### State Estimation
 
 - `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
@@ -39,6 +55,14 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
 - `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
 - `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
+
+### Semantic Fusion
+
+- `evaluate_semantic_fusion()`/`SemanticFusionEvaluationReport` — relatório de um run de fusão persistido, com seções separadas: correlação, incerteza, canais, ponderação, recuperação da referência, estratos e custo, e a linhagem completa (`FusionLineage`).
+- `FusionStratificationProfile` — bordas das estratificações; não há valores padrão.
+- `ReferenceAnnotation` — rótulo de referência por observação espacial; ausência é "não aplicável".
+- `FusionArmRole`, `compare_semantic_fusion_reports()`/`SemanticFusionComparison` — comparação controlada de braços (baseline, ciente de qualidade e ablações de canais) sobre a mesma base de evidência, sem vencedor nem escore.
+- `encode_semantic_fusion_report()`/`encode_semantic_fusion_comparison()` — representação JSON com todas as identidades.
 
 ### Sensor Association
 
@@ -71,17 +95,22 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 ## Módulos consumidos
 
-`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association` e `contextmap.point_representation`, exclusivamente por suas APIs públicas.
+`contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
 
 ## Módulos que consomem este
 
-Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar `evaluation` para executar o pipeline principal.
+Experimentos, benchmarks e gates de regressão. A composition root planejada em
+`contextmap.runtime` não precisará importar `evaluation` para executar o
+pipeline principal.
 
 ## Onde estão os documentos detalhados
 
 - [`feature_extraction.md`](feature_extraction.md) — protocolo, invariantes, fixtures determinísticas e trade-offs da avaliação de features.
 - [`../../visual_perception/docs/feature-extraction.md`](../../visual_perception/docs/feature-extraction.md) — visão do core produtor que esta avaliação mede.
 - [`region-discovery.md`](region-discovery.md) — referência, métricas geométricas, diagnósticos, custo e comparação controlada de Region Discovery.
+- [`semantic-interpretation.md`](semantic-interpretation.md) — convenção
+  open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
+- [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.

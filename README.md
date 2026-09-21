@@ -25,8 +25,10 @@ flowchart LR
     SEN --> SENA["SensorAssociationRunArtifact<br/>implementado"]
     MA --> PTR["Point Representation<br/>implementado, opcional"]
     PTR --> PTRA["PointRepresentationRunArtifact<br/>implementado"]
-    SENA -. próximo boundary .-> F["Fusion +<br/>Semantic Mapping planejados"]
-    PTRA -.-> F
+    SENA --> FUS["Semantic Fusion<br/>implementado"]
+    PTRA -.-> FUS
+    FUS --> FUSA["SemanticFusionRunArtifact<br/>implementado"]
+    FUSA -. próximo boundary .-> F["Semantic Mapping +<br/>Entity Resolution planejados"]
     F --> G["ContextMapArtifact<br/>alvo"]
 ```
 
@@ -52,17 +54,18 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 
 ## Estado implementado
 
-A branch `dev` já contém seis módulos de domínio, além da capability de avaliação que mede seus resultados:
+A branch `dev` já contém sete módulos de domínio, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
-- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto e Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de `EmbeddingSpace`, feature store, dense sampling/pooling, diagnostics e enhancement opcional; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
+- [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto, Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP e o boundary canônico de Semantic Interpretation, com requests auditáveis, prompt/parser versionados, adapters Qwen/Gemini/Florence-2 e `SemanticScore` separado das claims; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
 - [`contextmap.state_estimation`](src/contextmap/state_estimation/docs/README.md), com `PoseEstimate`/`Trajectory`, lookup temporal auditável, frame graph estático e preflight de geometria, os backends `ExternalPose` e FAST-LIO atrás do port `StateEstimator` e o `StateEstimationRunArtifact`; a execução de referência do FAST-LIO ainda está pendente;
 - [`contextmap.geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), com `GeometryPoint`, `GeometryReference` e `GeometricMap`, estado explícito de correção de movimento, montagem de inputs, transformação fonte→mapa com traces, acumulação com referências estáveis, acesso espacial por `GeometrySource` e o `GeometricMapArtifact`;
 - [`contextmap.sensor_association`](src/contextmap/sensor_association/docs/README.md), com `SpatialObservation` (a geometria persistente que uma região enxerga, por referência), modelos de câmera calibrados (pinhole, fisheye e MEI), a cadeia mapa→câmera→imagem preparada, visibilidade e oclusão, pertencimento à máscara de `Region2D`, amostragem de features densas, `ObservationQuality` (medidas separadas, nunca confiança semântica), diagnósticos e o `SensorAssociationRunArtifact`; ainda sem dados reais, porque o mapa geométrico do FAST-LIO está pendente;
 - [`contextmap.point_representation`](src/contextmap/point_representation/docs/README.md), capability **opcional** com `PointRepresentation` e `RepresentationSpace`, extração de suporte local sobre `GeometrySource`, o port `PointEncoder`, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3 e o `PointRepresentationRunArtifact`; o PTv3 nunca foi executado de verdade (sem torch nem pesos) e a comparação real contra `off` está pendente;
-- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, State Estimation, Geometric Mapping, Sensor Association e Point Representation.
+- [`contextmap.semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md), com `FusionSupport` (onde a evidência é acumulada, sem identidade de objeto), `EvidenceContribution`, agrupamento por observação física (inferência repetida é correlacionada, não votos independentes), a política baseline de acumulação, a preservação de ambiguidade, contradição, empate e abstenção, canais de evidência tipados, uma política opcional ciente de qualidade e o `SemanticFusionRunArtifact`; toda a verificação é sintética e nenhuma decisão sobre a política ciente de qualidade foi tomada;
+- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, Semantic Interpretation, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion.
 
-Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados; a validação numérica com pesos reais continua pendente na máquina de inferência e não é inferida desses testes.
+Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados. DINOv2 e CLIP foram executados com pesos reais em frames de `corridor-02`, com resultados nos documentos de cada adapter; DINOv3 (repositório gated) e AlphaCLIP (checkpoints ausentes) continuam sem execução real. Essas validações dos adapters não equivalem a uma avaliação científica comparativa da qualidade dos embeddings.
 
 Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 
@@ -129,7 +132,7 @@ src/contextmap/<module>/docs/
 
 A documentação é fragmentada por responsabilidade, mas integrada por links a partir do índice global.
 
-Para detalhes implementacionais, use os READMEs de [`ingestion`](src/contextmap/ingestion/docs/README.md), [`visual_perception`](src/contextmap/visual_perception/docs/README.md) e [`evaluation`](src/contextmap/evaluation/docs/README.md). Dentro de Visual Perception, as visões de [Region Discovery](src/contextmap/visual_perception/docs/region-discovery.md) e [Feature Extraction](src/contextmap/visual_perception/docs/feature-extraction.md) descrevem o estado implementado de cada milestone. Os documentos em `docs/` integram esses módulos ao pipeline global e distinguem explicitamente o que já existe do que ainda é alvo arquitetural.
+Para detalhes implementacionais, use os READMEs de [`ingestion`](src/contextmap/ingestion/docs/README.md), [`visual_perception`](src/contextmap/visual_perception/docs/README.md), [`state_estimation`](src/contextmap/state_estimation/docs/README.md), [`geometric_mapping`](src/contextmap/geometric_mapping/docs/README.md), [`sensor_association`](src/contextmap/sensor_association/docs/README.md), [`point_representation`](src/contextmap/point_representation/docs/README.md), [`semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md) e [`evaluation`](src/contextmap/evaluation/docs/README.md). Dentro de Visual Perception, [Region Discovery](src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](src/contextmap/visual_perception/docs/feature-extraction.md) e [Semantic Interpretation](src/contextmap/visual_perception/docs/semantic-interpretation.md) descrevem os boundaries implementados. Dentro das demais capabilities, o README é o ponto de entrada para contratos, policies, artifacts, backends e validação realmente existentes. Os documentos em `docs/` integram esses módulos ao pipeline global e distinguem explicitamente o que já existe do que ainda é alvo arquitetural.
 
 ## Versionamento
 

@@ -11,7 +11,12 @@ Point Representation é **opcional** e precisa justificar seu custo por avaliaç
 | C. PTv3 | `LEARNED_3D`: inferência com um encoder 3D genérico |
 | D. pré-treinado/destilado | `PRETRAINED_DISTILLED`: um backend identificado separadamente (estilo Sonata/Vernata); opcional, fora do caminho canônico v0.1.0 |
 
-`RepresentationArm(arm_id, role, encoder)` recebe o encoder **já construído** (a composição é de `runtime`); `OFF` não tem encoder e os demais exigem um. PTv3 sozinho **não** pode ser rotulado como `PRETRAINED_DISTILLED`: o backend `ptv3` com esse papel é rejeitado. Um backend futuro do braço D usa o mesmo harness sem mudar nenhum contrato downstream.
+`RepresentationArm(arm_id, role, encoder)` recebe o encoder **já construído**
+(a composição hoje é responsabilidade do chamador; `contextmap.runtime` ainda
+está planejado); `OFF` não tem encoder e os demais exigem um. PTv3 sozinho
+**não** pode ser rotulado como `PRETRAINED_DISTILLED`: o backend `ptv3` com esse
+papel é rejeitado. Um backend futuro do braço D usa o mesmo harness sem mudar
+nenhum contrato downstream.
 
 ## O que o relatório de um braço contém
 
@@ -60,7 +65,10 @@ Esses números mostram o que o relatório reporta para o **controle geométrico*
 ## Estado e pendências
 
 - **Braço C (PTv3) sem execução real**: não há torch nem pesos no ambiente, então a comparação contra `off` e o descritor com um PTv3 real está pendente.
-- **Ablação downstream pendente**: Semantic Fusion e Entity Resolution ainda não existem; o harness já carrega e compara as condições, mas nenhum resultado downstream foi medido.
+- **Ablação downstream pendente**: Semantic Fusion já existe e aceita Point
+  Representation como canal opcional, mas nenhum resultado downstream foi
+  medido; Entity Resolution ainda não existe. O harness já carrega e compara as
+  condições, sem transformar essa capacidade estrutural em evidência de ganho.
 - **Checagem em dados reais pendente**: não há aqui uma fonte real de Geometric Mapping do corredor; a validação usa geometria sintética.
 
 ## Restrições
