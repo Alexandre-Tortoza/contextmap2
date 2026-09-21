@@ -30,6 +30,11 @@ jobs:
       - name: Verify the tag format and that the tagged commit is on main
         run: bash .github/scripts/verify_release_tag.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
 
+      # As notas são lidas do commit tagueado: precisam ter sido revisadas e não podem
+      # ser rascunho (docs/releases/<tag>.md) nem faltar a entrada datada no CHANGELOG.md.
+      - name: Verify the changelog entry and the release notes
+        run: bash .github/scripts/verify_release_notes.sh "${GITHUB_REF_NAME}"
+
   # A mesma CI dos pull requests (quality, compatibilidade de Python, pacote e instalação
   # leve), agora sobre o commit da tag. O job package produz o artifact ``dist``.
   checks:
@@ -72,7 +77,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=(--repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes --title "${GITHUB_REF_NAME}")
+          flags=(--repo "${GITHUB_REPOSITORY}" --verify-tag --title "${GITHUB_REF_NAME}")
+          flags+=(--notes-file "docs/releases/${GITHUB_REF_NAME}.md")
           # A série v0.x.y é de validação (docs/versioning.md).
           if [[ "${GITHUB_REF_NAME}" == v0.* ]]; then
             flags+=(--prerelease)
