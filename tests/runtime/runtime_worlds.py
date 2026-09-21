@@ -63,3 +63,26 @@ class World:
 
     def store(self, root: Path) -> FileArtifactStore:
         return FileArtifactStore(root, verify=lambda ref: ref.artifact_id in self.existing)
+
+
+def world_executors(world: World) -> dict[str, Any]:
+    """One fake executor per canonical stage, for the CLI, which has no plan to build them from."""
+    from contextmap.runtime.catalog import CANONICAL_PRESET
+
+    return {
+        stage.stage_id: world.executor(stage.stage_id, stage.output or "")
+        for stage in CANONICAL_PRESET.stages
+    }
+
+
+def run_cli(*argv: str, **options: Any) -> tuple[int, str, str]:
+    """Run the command-line interface in-process and return its exit code and both streams."""
+    import io
+
+    from contextmap.runtime.cli import main
+
+    out, err = io.StringIO(), io.StringIO()
+    options.setdefault("module_available", lambda _name: True)
+    options.setdefault("environ", {})
+    code = main(list(argv), stdout=out, stderr=err, **options)
+    return code, out.getvalue(), err.getvalue()
