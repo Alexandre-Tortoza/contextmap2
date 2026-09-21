@@ -14,6 +14,8 @@ O módulo é `contextmap.runtime.executors` e é importado **explicitamente**, n
 | `sensor_association` | `SensorAssociationExecutor` | `sequence`, `perception`, `trajectory`, `geometry` | oclusão, tolerâncias e política de pose; só o canal de geometria |
 | `semantic_fusion` | `SemanticFusionExecutor` | `sequence`, `association`, `perception`, `geometry` | política de suporte e de acumulação baseline |
 | `semantic_mapping` | `SemanticMappingExecutor` | `fusion`, `geometry` | política de materialização e o `SemanticMapId` |
+| `entity_resolution` | `EntityResolutionExecutor` | `entities` | recuperação de candidatos, canais de comparação e política de resolução |
+| `spatial_relations` | `SpatialRelationsExecutor` | `entities` (o run de resolução), `geometry` | o pacote `RelationsRunPolicies` (convenções de frame, candidatos, predicados geométricos e de contato) e a política de resumo da geometria |
 
 ## Identidade
 
@@ -27,8 +29,11 @@ Um estágio produz **exatamente um** artifact, e um executor consome **exatament
 
 Para que os executores tenham o que precisam, o DAG `canonical/1` dá `sequence` à fusão (os instantes de aquisição das observações físicas vêm da sequência) e `geometry` ao mapeamento semântico e às relações espaciais (o suporte 3D das entidades vem do mapa).
 
+## Quem carrega as políticas
+
+Os executores de Entity Resolution e de Spatial Relations recebem os pacotes de política na construção, como os demais: nenhum limiar é decidido pela runtime, e **nenhuma configuração do runtime os carrega hoje** (o perfil canônico só declara as capabilities e os componentes). Quem monta o executor (o teste, o script de validação ou um perfil futuro) escolhe as políticas, e elas entram no fingerprint do artifact. As convenções de frame de Spatial Relations precisam nomear o referencial em que o mapa geométrico está expresso; se divergirem, o estágio falha com a mensagem do frame, sem converter em silêncio (o mapa sintético do CI está em `odom`).
+
 ## O que ainda não existe
 
 - **`visual_perception`** não tem executor: a percepção usa modelos e GPU e entra por **referência** a um run existente (`provided`). Um executor real de percepção é um trabalho à parte.
-- **`entity_resolution` e `spatial_relations`**: suas capabilities existem e seus writers seguem o contrato, mas o executor precisa de um pacote de políticas (recuperação de candidatos, canais de comparação, resolução, predicados) que nenhuma configuração do runtime carrega hoje.
 - **`context_map`**: o schema, o writer e o leitor do `ContextMapArtifact` existem, mas **não existe o passo de montagem** que transforma os runs de resolução e de relações em um `ContextMap` (só o builder de teste `assemble_from_runs`, que fixa à mão o estado semântico de cada entidade). Sem esse passo não há executor.
