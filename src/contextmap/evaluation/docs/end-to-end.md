@@ -166,6 +166,8 @@ O estado real de cada gate é decidido pelo relatório de cada run. Nesta versã
 - Os gates de `entity_resolution`, `spatial_relations`, `artifact` e os `cross_stage.*` que atravessam esses estágios dependem de capabilities que ainda não estão na `dev`; ficam `blocked`, nomeando a capability.
 - Os gates que precisam de anotações ficam `blocked` até existir um reference set anotado para o `corridor-02`.
 - `reproducibility.*` e `runtime.resource_reporting` dependem de um run canônico completo e de execuções repetidas.
+- **Executores reais por estágio (#177).** Só podem escrever no diretório da etapa que o `StageRequest` entregar (a runtime informou que passará esse diretório; hoje ele não existe) e nunca fixam caminhos; uma etapa reutilizada de outro run é referenciada (`ArtifactRef`), nunca copiada. Ligar `entity_resolution`, `spatial_relations` e `context_map` em `runtime/catalog.py` (e atualizar `tests/runtime/test_runtime_catalog.py`, que hoje espera essas etapas como indisponíveis) é trabalho da passada de integração, quando os pacotes existirem.
+- **Reingestão da calibração do `corridor-02`.** O `SequenceArtifact` pinado não carrega modelo de câmera; um run canônico real exige um novo artifact de sequência e, por isso, uma nova versão do cenário.
 
 ## Fora do escopo
 
