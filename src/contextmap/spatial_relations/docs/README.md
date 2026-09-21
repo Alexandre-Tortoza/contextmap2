@@ -22,7 +22,7 @@ flowchart LR
 
 ## Estado implementado
 
-Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio), a **taxonomia de predicados** versionada, as **convenções de frame** declaradas pela execução a **geração de candidatos** determinística, os **avaliadores geométricos** de proximidade, direção e topologia a **evidência de contato e apoio** por pontos e a **política de decisão** baseline. Evidência semântica, artifact e avaliação chegam nas demais issues da milestone "Spatial Relations" (#145, #147 e #148).
+Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio), a **taxonomia de predicados** versionada, as **convenções de frame** declaradas pela execução a **geração de candidatos** determinística, os **avaliadores geométricos** de proximidade, direção e topologia a **evidência de contato e apoio** por pontos a **política de decisão** baseline e a **evidência de observação** (afirmações upstream como canal corroborante). Artifact e avaliação chegam nas demais issues da milestone "Spatial Relations" (#147 e #148).
 
 ## Contratos públicos
 
@@ -35,6 +35,7 @@ Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio),
 - `evaluate_geometric_predicate()`, `evaluate_geometric_candidates()`, `GeometricPredicatePolicy`, `GEOMETRIC_PREDICATES`, `GEOMETRIC_POLICY_ID` — os avaliadores de `NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE` e `INTERSECTS` sobre os limites das entidades.
 - `evaluate_contact_predicate()`, `evaluate_contact_candidates()`, `ContactPredicatePolicy`, `CONTACT_PREDICATES`, `CONTACT_POLICY_ID` — a evidência por pontos de `TOUCHING`, `ON_TOP_OF` e `LEANING_AGAINST`.
 - `decide_relations()`, `RelationDecisionResult`, `RelationDecision`, `DecisionRule`, `EvidenceUse`, `CONSERVATIVE_DECISION_POLICY_ID`, `decision_policy_fingerprint()` — a política conservadora que decide os estados, verifica a consistência estrutural e gera inversos e gêmeas simétricas.
+- `observation_evidence_from_statements()`, `ObservationEvidenceResult`, `ObservationRelationStatement`, `UpstreamStatementRef`, `EndpointLink`, `StatementPolarity`, `canonical_predicate()`, `OBSERVATION_RULE_ID`, `UnlinkedEndpointError`, `IncompatibleLineageError` — o canal de observação: vínculo explícito, sem vocabulário escondido e nunca decisivo.
 - `encode_relation_decision()`, `decode_relation_decision()`, `encode_relation()`, `decode_relation()`, `encode_relation_evidence()`, `decode_relation_evidence()` — o codec JSON, que revalida todas as invariantes.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e [`taxonomy.md`](taxonomy.md) para a semântica dos predicados.
@@ -56,3 +57,4 @@ Todas as dependências são pela API pública e estão declaradas em `tests/arch
 - [`geometric-predicates.md`](geometric-predicates.md) — definições, limiares, faixa de tolerância, ressalvas e consistência dos predicados geométricos.
 - [`contact-predicates.md`](contact-predicates.md) — evidência por pontos de contato e apoio, área de contato, inclinação e incerteza.
 - [`decision.md`](decision.md) — política de decisão, consistência estrutural, inverso e simetria, e rastro da evidência.
+- [`observation-evidence.md`](observation-evidence.md) — afirmações upstream como evidência corroborante: vínculo, vocabulário, direção e reconciliação.
