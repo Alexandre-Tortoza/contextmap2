@@ -17,7 +17,7 @@ from contextmap.artifact.errors import (
     MissingPayloadError,
     UnsupportedArtifactSchemaError,
 )
-from contextmap.artifact.layout import CONTRACTUAL_FILES, MANIFEST
+from contextmap.artifact.layout import BUNDLE_ARTIFACT_TYPE, CONTRACTUAL_FILES, MANIFEST
 from contextmap.artifact.manifest import (
     ContextMapArtifactManifest,
     decode_manifest,
@@ -63,6 +63,10 @@ def load_manifest(root: Path) -> ContextMapArtifactManifest:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeDecodeError) as error:
         raise ManifestError(f"{MANIFEST} of {root.name!r} is not valid JSON ({error})") from error
+    if isinstance(record, dict) and record.get("artifact_type") == BUNDLE_ARTIFACT_TYPE:
+        raise ManifestError(
+            f"{root.name!r} is a bundle, not an artifact: open its 'artifact' directory"
+        )
     manifest = decode_manifest(record)
     try:
         require_supported_schema_version(manifest.schema_version)

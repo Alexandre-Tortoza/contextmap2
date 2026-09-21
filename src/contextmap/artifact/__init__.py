@@ -10,11 +10,20 @@ for the full capability documentation and ``src/contextmap/artifact/docs/storage
 the layout.
 """
 
+from contextmap.artifact.bundle import (
+    BundleManifest,
+    ClosurePolicy,
+    EmbeddedDependency,
+    OmittedDependency,
+    export_bundle,
+    verify_bundle,
+)
 from contextmap.artifact.dependencies import UpstreamArtifact
 from contextmap.artifact.entries import EntityEntry, RelationEntry
 from contextmap.artifact.errors import (
     ArtifactExistsError,
     ArtifactIntegrityError,
+    BundleError,
     ContextMapArtifactError,
     DependencyMismatchError,
     IncompleteContextMapArtifactError,
@@ -77,7 +86,10 @@ __all__ = [
     "AnchorKind",
     "ArtifactExistsError",
     "ArtifactIntegrityError",
+    "BundleError",
+    "BundleManifest",
     "CheckOutcome",
+    "ClosurePolicy",
     "ContextMap",
     "ContextMapArtifactError",
     "ContextMapArtifactManifest",
@@ -89,6 +101,7 @@ __all__ = [
     "DeclaredCapabilities",
     "DependencyMismatchError",
     "DependencyRecord",
+    "EmbeddedDependency",
     "EntityEntry",
     "FileStatus",
     "GeometricMapLink",
@@ -103,6 +116,7 @@ __all__ = [
     "MapFrame",
     "MissingDependencyError",
     "ObservationWindow",
+    "OmittedDependency",
     "PolicyRef",
     "RecordTableError",
     "RelationEntry",
@@ -121,7 +135,9 @@ __all__ = [
     "ValidationStatus",
     "context_map_from_record",
     "context_map_to_record",
+    "export_bundle",
     "inventory_digest",
     "require_supported_schema_version",
     "validate_context_map_artifact",
+    "verify_bundle",
 ]
