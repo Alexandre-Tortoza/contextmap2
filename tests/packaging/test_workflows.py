@@ -112,6 +112,15 @@ def test_release_verify_job_runs_the_tag_gate_on_full_history() -> None:
 
     assert checkout["with"]["fetch-depth"] == 0
     assert ".github/scripts/verify_release_tag.sh" in commands
+    assert ".github/scripts/verify_release_notes.sh" in commands
+
+
+def test_release_body_is_the_validated_notes_file_not_generated_text() -> None:
+    publish = _steps(_load("release.yml")["jobs"]["publish"])
+    commands = " ".join(step.get("run", "") for step in publish)
+
+    assert '--notes-file "docs/releases/${GITHUB_REF_NAME}.md"' in commands
+    assert "--generate-notes" not in commands
 
 
 def test_only_the_publish_job_can_write_repository_contents() -> None:
