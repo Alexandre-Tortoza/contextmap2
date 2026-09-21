@@ -38,9 +38,7 @@ from contextmap.point_representation.run_artifact import (
     PointRepresentationRunReader,
     PointRepresentationRunWriter,
     RunArtifactError,
-    allocate_run_index,
     center_selection_id,
-    rebuild_run_registry,
 )
 
 RUN_ID = PointRepresentationRunId("run-0001")
@@ -62,6 +60,11 @@ class BuiltRun:
     writer: PointRepresentationRunWriter
 
 
+def run_directory(workspace: Path, run_index: int = 1) -> Path:
+    """Onde o writer grava: o chamador decide o diretório final, o writer não calcula caminho."""
+    return workspace / f"run-{run_index:04d}"
+
+
 def make_writer(
     workspace: Path,
     encoder: PointEncoder,
@@ -72,12 +75,10 @@ def make_writer(
     association_context_id: str | None = None,
 ) -> PointRepresentationRunWriter:
     return PointRepresentationRunWriter(
-        workspace_root=workspace,
+        output_dir=run_directory(workspace, run_index),
         sequence_name=SEQUENCE,
         run_id=RUN_ID,
         run_index=run_index,
-        selection_label="centers",
-        backend_label="encoder",
         geometric_map=source.geometric_map,
         space=encoder.representation_space(),
         encoder_identity=encoder.encoder_identity(),
@@ -113,13 +114,7 @@ def build_run(
     for outcome in outcomes:
         writer.add(outcome)
     manifest = writer.finalize(metrics=service.metrics, backend_diagnostics=diagnostics)
-    run_dir = (
-        workspace
-        / "runs"
-        / "point-representation"
-        / SEQUENCE
-        / f"run-{run_index:04d}__centers__encoder"
-    )
+    run_dir = run_directory(workspace, run_index)
     return BuiltRun(run_dir, manifest, outcomes, chosen, service, writer)
 
 
@@ -500,22 +495,41 @@ def test_a_writer_finalizes_once(tmp_path: Path) -> None:
         built.writer.add(built.outcomes[0])
 
 
-def test_run_indexes_count_only_valid_runs_and_the_registry_is_rebuildable(tmp_path: Path) -> None:
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 1
-    first = build_run(tmp_path)
-    sequence_dir = first.run_dir.parent
-    (sequence_dir / ".tmp-run-0002__centers__encoder-abc12345").mkdir()
+def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "ws" / "corridor-02" / "run-0001" / "point_representation"
+    source = LinearScanSource(line_of_points(11))
+    encoder = FakeEncoder()
+    service = RepresentationService(source, encoder, run_id=RUN_ID, code_version="test-version")
+    writer = PointRepresentationRunWriter(
+        output_dir=target,
+        sequence_name=SEQUENCE,
+        run_id=RUN_ID,
+        run_index=1,
+        geometric_map=source.geometric_map,
+        space=encoder.representation_space(),
+        encoder_identity=encoder.encoder_identity(),
+        code_version="test-version",
+    )
+    for outcome in service.represent([ref(5)]):
+        writer.add(outcome)
 
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 2
-    registry = json.loads((sequence_dir / "runs.json").read_text(encoding="utf-8"))
-    assert [run["run_index"] for run in registry["runs"]] == [1]
+    writer.finalize(metrics=service.metrics)
 
-    (sequence_dir / "runs.json").unlink()
-    rebuild_run_registry(workspace_root=tmp_path, sequence_name=SEQUENCE)
-    assert json.loads((sequence_dir / "runs.json").read_text(encoding="utf-8")) == registry
+    assert PointRepresentationRunReader(target).manifest.run_id == RUN_ID
+    # Sem registro `runs.json` e sem `runs/<capability>/<sequência>/`: só o diretório do artifact.
+    assert sorted(path.name for path in target.parent.iterdir()) == ["point_representation"]
+    assert sorted(path.name for path in (tmp_path / "ws").iterdir()) == ["corridor-02"]
 
-    (first.run_dir / "outputs" / "payloads" / "vectors.f32").write_bytes(b"corrupt")
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 1
+
+def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+    tmp_path: Path,
+) -> None:
+    manifest = build_run(tmp_path, run_index=7).manifest
+
+    assert (manifest.run_id, manifest.run_index) == (RUN_ID, 7)
+    assert not run_directory(tmp_path, 1).exists()
 
 
 # --- Writer validation -----------------------------------------------------------------------
@@ -616,7 +630,7 @@ def test_a_run_whose_outcomes_do_not_match_its_metrics_is_not_finalized(tmp_path
     with pytest.raises(RunArtifactError, match="incomplete"):
         writer.finalize(metrics=service.metrics)
 
-    assert not (tmp_path / "runs").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_failed_support_of_another_map_is_rejected(tmp_path: Path) -> None:
