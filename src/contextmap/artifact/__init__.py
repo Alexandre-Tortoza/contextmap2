@@ -10,10 +10,15 @@ for the full capability documentation and ``src/contextmap/artifact/docs/storage
 the layout.
 """
 
+from contextmap.artifact.dependencies import UpstreamArtifact
 from contextmap.artifact.errors import (
+    ArtifactExistsError,
     ContextMapArtifactError,
+    InvalidContentError,
     ManifestError,
+    RecordTableError,
     UnsupportedFormatVersionError,
+    UpstreamArtifactError,
 )
 from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
 from contextmap.artifact.layout import ARTIFACT_TYPE, FORMAT_VERSION
@@ -44,22 +49,27 @@ from contextmap.artifact.versioning import (
     UnsupportedSchemaVersionError,
     require_supported_schema_version,
 )
+from contextmap.artifact.writer import ContextMapArtifactWriter, EntityEntry, RelationEntry
 
 __all__ = [
     "ARTIFACT_TYPE",
     "CONTEXT_MAP_SCHEMA_VERSION",
     "FORMAT_VERSION",
     "AnchorKind",
+    "ArtifactExistsError",
     "ContextMap",
     "ContextMapArtifactError",
     "ContextMapArtifactManifest",
+    "ContextMapArtifactWriter",
     "ContextMapId",
     "ContextMapMetadata",
     "ContextMapRecordError",
     "DeclaredCapabilities",
     "DependencyRecord",
+    "EntityEntry",
     "GeometricMapLink",
     "Handedness",
+    "InvalidContentError",
     "LengthUnit",
     "ManifestError",
     "MapAnchor",
@@ -68,11 +78,15 @@ __all__ = [
     "MapFrame",
     "ObservationWindow",
     "PolicyRef",
+    "RecordTableError",
+    "RelationEntry",
     "Requirement",
     "SchemaVersion",
     "SourceSequence",
     "UnsupportedFormatVersionError",
     "UnsupportedSchemaVersionError",
+    "UpstreamArtifact",
+    "UpstreamArtifactError",
     "context_map_from_record",
     "context_map_to_record",
     "inventory_digest",

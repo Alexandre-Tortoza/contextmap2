@@ -288,3 +288,44 @@ def _check_contiguous(entries: list[tuple[str, int, int]], index_name: str) -> i
             )
         expected_offset = offset + length + 1
     return expected_offset
+
+
+def encode_entity_relation_index(
+    entity_keys: Iterable[str], endpoints: Iterable[tuple[str, str, str]]
+) -> bytes:
+    """Encode the traversal index from entities to the relations they take part in.
+
+    One line per entity, ordered by key, listing the keys of the relations in which it is the
+    subject and those in which it is the object. It answers ``relations_for(entity)`` and
+    ``relation -> entity`` traversal without scanning the relation table, and it is derived:
+    it is rebuilt from the two tables and never redefines them.
+
+    Args:
+        entity_keys: The key of every entity of the map.
+        endpoints: ``(relation key, subject entity key, object entity key)`` of every relation.
+
+    Returns:
+        The JSON Lines payload.
+
+    Raises:
+        RecordTableError: If a relation names an entity that is not in ``entity_keys``.
+    """
+    known = set(entity_keys)
+    as_subject: dict[str, list[str]] = {key: [] for key in known}
+    as_object: dict[str, list[str]] = {key: [] for key in known}
+    for relation_key, subject_key, object_key in endpoints:
+        for role, entity_key in (("subject", subject_key), ("object", object_key)):
+            if entity_key not in known:
+                raise RecordTableError(
+                    f"relation {relation_key!r} has the {role} {entity_key!r}, "
+                    "which is not an entity of the map"
+                )
+        as_subject[subject_key].append(relation_key)
+        as_object[object_key].append(relation_key)
+    return b"".join(
+        canonical_json_line(
+            {"key": key, "as_subject": sorted(as_subject[key]), "as_object": sorted(as_object[key])}
+        )
+        + b"\n"
+        for key in sorted(known)
+    )
