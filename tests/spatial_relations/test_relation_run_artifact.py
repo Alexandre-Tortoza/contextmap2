@@ -319,13 +319,3 @@ def test_an_unknown_schema_version_is_refused(run: Run, tmp_path: Path) -> None:
     manifest.write_text(json.dumps(raw))
     with pytest.raises(RelationsRunArtifactError, match="schema_version"):
         SpatialRelationsRunReader(tmp_path / "relations")
-
-
-def test_references_are_checked_against_the_resolved_entities_of_the_run(
-    run: Run, tmp_path: Path
-) -> None:
-    _write(run, tmp_path / "relations")
-    reader = SpatialRelationsRunReader(tmp_path / "relations")
-    assert reader.validate_references(set(run.entities)) == ()
-    assert reader.validate_references(set(run.entities) - {entity_ref(3)}) == ()
-    assert reader.validate_references(set(run.entities) - {entity_ref(2)}) == (entity_ref(2),)

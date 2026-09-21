@@ -80,6 +80,7 @@ from contextmap.spatial_relations.observation_evidence import (
     observation_evidence_fingerprint,
     observation_evidence_from_statements,
 )
+from contextmap.spatial_relations.resolved_geometry import resolved_entity_geometries
 from contextmap.spatial_relations.run_artifact import (
     IncompleteRelationsRunArtifactError,
     RelationsRunArtifactError,
@@ -90,6 +91,8 @@ from contextmap.spatial_relations.run_artifact import (
     SpatialRelationsRunManifest,
     SpatialRelationsRunReader,
     SpatialRelationsRunWriter,
+    lineage_from_resolution_manifest,
+    resolution_artifact_digest,
 )
 from contextmap.spatial_relations.serialization import (
     decode_candidate_set,
@@ -201,8 +204,11 @@ __all__ = [
     "evaluate_geometric_predicate",
     "evidence_id_for",
     "generate_relation_candidates",
+    "lineage_from_resolution_manifest",
     "observation_evidence_fingerprint",
     "observation_evidence_from_statements",
     "predicate_spec",
     "relation_id_for",
+    "resolution_artifact_digest",
+    "resolved_entity_geometries",
 ]
