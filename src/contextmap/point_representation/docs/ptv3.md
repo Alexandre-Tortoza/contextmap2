@@ -14,9 +14,11 @@ O pipeline canônico não exige PTv3: o backend é opcional e desabilitá-lo nã
 
 **Fronteira (runtime falso).** O adaptador (`backends/ptv3.py`) é verificado com um runtime falso determinístico: configuração, identidade, encaminhamento das coordenadas, normalização, falhas explícitas, telemetria e isolamento de importação. Isso testa a **fronteira**, não a qualidade nem o custo de um PTv3.
 
-**Runtime real, sem GPU.** `backends/ptv3_pointcept.py` (ver abaixo) tem testes determinísticos sem torch para tudo que o cerca: voxelização, agrupamento, verificação do hash do checkpoint, compatibilidade com a configuração e falha explícita por dependência ausente.
+**Runtime real, sem GPU.** `backends/ptv3_pointcept.py` (ver abaixo) tem testes determinísticos sem torch para tudo que o cerca: voxelização, agrupamento, verificação do hash do checkpoint, compatibilidade com a configuração, falha explícita por dependência ausente e falta de memória do dispositivo (um duplo de `torch` esgota a memória em cada alocação que um suporte causa, na cópia do resultado e na cópia dos pesos, e os testes verificam a cadeia até o `FailedSupport` e a parada da execução quando os pesos não cabem).
 
-**Runtime real, com GPU (real, não falso).** A suíte opt-in `tests/point_representation/test_ptv3_pointcept_real.py` exige GPU, o clone do Pointcept e o checkpoint (variáveis `CONTEXTMAP_POINTCEPT_ROOT` e `CONTEXTMAP_PTV3_CHECKPOINT`) e é ignorada nas demais máquinas. Executada na RTX 3060, no ambiente descrito abaixo, pela classe `PointceptPTv3Runtime`: **7 de 7 testes passaram em 11 s**. Eles verificam um vetor finito de largura 64, repetição do mesmo suporte dentro de `1e-4`, `center` diferente de `mean`, pico de memória de tensores maior que os pesos residentes, suporte de um único ponto, o fluxo completo pelo `PTv3PointEncoder` e pelo `RepresentationService`, e falta de memória: com um teto artificial de cerca de 800 KB imposto ao processo, a chamada levanta `PTv3OutOfMemoryError` e a seguinte, sem o teto, volta a funcionar.
+**Runtime real, com GPU (real, não falso).** A suíte opt-in `tests/point_representation/test_ptv3_pointcept_real.py` exige GPU, o clone do Pointcept e o checkpoint (variáveis `CONTEXTMAP_POINTCEPT_ROOT` e `CONTEXTMAP_PTV3_CHECKPOINT`) e é ignorada nas demais máquinas. Executada na RTX 3060, no ambiente descrito abaixo, pela classe `PointceptPTv3Runtime`: **10 de 10 testes passaram em 17 s**. Eles verificam um vetor finito de largura 64, repetição do mesmo suporte dentro de `1e-4`, `center` diferente de `mean`, pico de memória de tensores maior que os pesos residentes, suporte de um único ponto, o fluxo completo pelo `PTv3PointEncoder` e pelo `RepresentationService`, e falta de memória: com um teto artificial de cerca de 800 KB imposto ao processo, a chamada levanta `PTv3OutOfMemoryError` e a seguinte, sem o teto, volta a funcionar.
+
+**Falta de memória em GPU real.** Três testes cobrem os pontos de alocação anteriores ao forward, sempre com um teto imposto só ao processo (`set_per_process_memory_fraction`) e conferindo, **com a exceção ainda viva**, que a memória do que falhou já voltou (`memory_allocated` sem diferença de 1 MiB e `memory_reserved` não maior que antes): a preparação do input (suporte de 2 milhões de voxels e teto 30 MiB acima do que o processo já usa: as coordenadas cabem, as células não), o forward (300 mil voxels: o input cabe, as ativações não) e a cópia dos pesos (teto 40 MiB acima do que o processo já usa, para pesos de cerca de 188 MB), que levanta `PTv3RuntimeUnavailableError` e deixa o mesmo runtime carregar do zero na chamada seguinte.
 
 **Custo medido em geometria real.** 100 suportes reais de raio 0,5 m sobre o corredor-02 (recorte descrito em [`point_representation.md`](../../evaluation/docs/point_representation.md) de `evaluation`; mediana de 297 pontos por suporte, de 52 a 367), uma chamada por suporte, `float32`, `grid_size_m = 0,05`, RTX 3060, torch 2.8.0+cu126:
 
@@ -61,7 +63,7 @@ O `RepresentationSpace` tem `family = "ptv3"`, `model = "<variant>/<pooling>-poo
 
 ## `PTv3Runtime`
 
-O runtime é a fronteira interna que isola torch, CUDA, PTv3 e o carregamento do checkpoint. `infer(coordinates_m=..., center_index=..., config=...)` devolve um `PTv3Inference` (`vector` de floats Python e `peak_memory_bytes` quando mensurável); nenhum tensor de framework cruza a fronteira. Um runtime real deve: verificar que os pesos correspondem a `checkpoint_hash`; serializar/voxelizar as coordenadas com `grid_size_m`; rodar apenas o backbone, sem cabeça de classificação; agrupar as features conforme `pooling`; medir o pico de memória do dispositivo; e levantar `PTv3OutOfMemoryError` para falta de memória de um suporte ou `PTv3RuntimeUnavailableError` para dependência, dispositivo ou checkpoint indisponível ou incompatível. A construção do runtime pertence à composição (`runtime`).
+O runtime é a fronteira interna que isola torch, CUDA, PTv3 e o carregamento do checkpoint. `infer(coordinates_m=..., center_index=..., config=...)` devolve um `PTv3Inference` (`vector` de floats Python e `peak_memory_bytes` quando mensurável); nenhum tensor de framework cruza a fronteira. Um runtime real deve: verificar que os pesos correspondem a `checkpoint_hash`; serializar/voxelizar as coordenadas com `grid_size_m`; rodar apenas o backbone, sem cabeça de classificação; agrupar as features conforme `pooling`; medir o pico de memória do dispositivo; e levantar `PTv3OutOfMemoryError` para falta de memória de um suporte, em qualquer alocação que ele causa, ou `PTv3RuntimeUnavailableError` para dependência, dispositivo ou checkpoint indisponível ou incompatível, inclusive pesos que não cabem no dispositivo. A construção do runtime pertence à composição (`runtime`).
 
 ## Runtime real: `PointceptPTv3Runtime`
 
@@ -89,15 +91,20 @@ O SHA-256 do arquivo é verificado contra `checkpoint_hash` **antes** de qualque
 
 **Medição de memória.** `peak_memory_bytes` é `torch.cuda.max_memory_allocated` da chamada: o pico de memória de tensores do processo, incluindo os pesos residentes e excluindo o contexto CUDA e o cache do alocador que o `nvidia-smi` também conta.
 
+**Falta de memória.** Toda alocação de dispositivo que um suporte causa fica sob a mesma proteção: a cópia de `coord`, `grid_coord`, `feat` e `offset`, o reinício do pico de memória, o forward e a cópia do resultado para a CPU. Uma `torch.cuda.OutOfMemoryError` em qualquer desses passos vira `PTv3OutOfMemoryError` **daquele suporte**, que o adaptador converte em `UnencodableSupportError` e o serviço registra como `FailedSupport(UNENCODABLE_SUPPORT)`; a execução continua com os demais suportes. Antes de relançar, o runtime devolve a memória do suporte que falhou: o traceback da exceção mantém vivos os frames e, com eles, os tensores (input, ativações), e `empty_cache` só devolve o que ninguém referencia; por isso os frames são limpos (`traceback.clear_frames`) antes de `empty_cache`, e o traceback continua legível.
+
+**Pesos que não cabem.** Se a cópia dos pesos para o dispositivo esgota a memória, nenhum suporte pode ser codificado: não é a falha de um suporte, é o runtime indisponível. O runtime levanta `PTv3RuntimeUnavailableError` (o backbone do checkpoint não cabe no dispositivo) e a execução para, sem fallback. A cópia parcial é desfeita (os pesos que já tinham chegado ao dispositivo voltam à CPU e o cache é liberado) e nada fica meio carregado: uma nova chamada, com memória disponível, carrega do zero.
+
 ## Falhas explícitas, sem fallback
 
 | Situação | Resultado |
 | --- | --- |
 | suporte menor que `min_support_points` | `UnencodableSupportError` → `FailedSupport`, sem chamar o runtime |
-| falta de memória do dispositivo em um suporte | `UnencodableSupportError` → `FailedSupport`; contada em `telemetry.out_of_memory` |
+| falta de memória do dispositivo em um suporte (preparação do input, forward ou cópia do resultado) | `PTv3OutOfMemoryError` → `UnencodableSupportError` → `FailedSupport`; contada em `telemetry.out_of_memory`; a execução continua com os demais suportes |
 | vetor de dimensão errada | `ValueError`; a execução para |
 | vetor zero com `normalization = "l2"` | `UnencodableSupportError`; nada é inventado |
 | valor não finito | `FailedSupport(NON_FINITE_OUTPUT)` pelo serviço |
+| pesos do backbone que não cabem no dispositivo | `PTv3RuntimeUnavailableError`; a execução para; a cópia parcial é desfeita e nada fica meio carregado |
 | dependência ausente ou checkpoint incompatível | `PTv3RuntimeUnavailableError`; a execução para |
 
 Nunca há queda silenciosa de PTv3 para o descritor determinístico ou para outro modelo: uma comparação entre eles é um run separado e explícito.

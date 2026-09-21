@@ -3,21 +3,39 @@
 The forward pass itself needs a GPU, spconv and the Pointcept code, so it is exercised by the
 opt-in test in ``test_ptv3_pointcept_real.py``. What is checked here is everything around it that
 must hold on any machine: voxelization, pooling, checkpoint identity, compatibility with the
-configuration and explicit failure when a dependency is missing.
+configuration, explicit failure when a dependency is missing and what the runtime does when the
+device runs out of memory (with a torch double that fails at a chosen allocation).
 """
 
+import gc
 import hashlib
 import subprocess
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+from pointrep_builders import radius_policy, ref
+from pointrep_geometry import LinearScanSource, line_of_points
 from pointrep_ptv3_fakes import make_config
+from pointrep_torch_fakes import DevicePoint, FakeOutOfMemoryError, FakeTorch
 
+from contextmap.point_representation import (
+    EncodedRepresentation,
+    FailedSupport,
+    FailureReason,
+    PointRepresentationRunId,
+    RepresentationService,
+)
 from contextmap.point_representation.backends import ptv3_pointcept
-from contextmap.point_representation.backends.ptv3 import PTv3RuntimeUnavailableError
+from contextmap.point_representation.backends.ptv3 import (
+    PTv3Config,
+    PTv3OutOfMemoryError,
+    PTv3PointEncoder,
+    PTv3RuntimeUnavailableError,
+)
 from contextmap.point_representation.backends.ptv3_pointcept import (
     NUSCENES_SEMSEG_PTV3M1_BASE,
     PointceptPTv3Runtime,
@@ -332,3 +350,134 @@ def test_a_center_outside_the_support_is_rejected_before_the_runtime_loads(
 
     with pytest.raises(ValueError, match="center_index"):
         runtime.infer(coordinates_m=COORDINATES, center_index=7, config=config_for_nuscenes())
+
+
+# --- The runtime: the device runs out of memory ---------------------------------------------------
+
+
+def runtime_on_a_fake_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, torch: FakeTorch
+) -> tuple[PointceptPTv3Runtime, PTv3Config]:
+    """A runtime that imports ``torch`` as its torch; the checkpoint bytes and hash are real."""
+    (tmp_path / "Pointcept" / "pointcept" / "models").mkdir(parents=True)
+    weights = b"pinned weights"
+    (tmp_path / "model.pth").write_bytes(weights)
+    monkeypatch.setattr(
+        ptv3_pointcept,
+        "_import_module",
+        lambda name: torch if name == "torch" else types.ModuleType(name),
+    )
+    monkeypatch.setattr(
+        ptv3_pointcept, "_import_pointcept_ptv3", lambda root: torch.pointcept_module
+    )
+    config = config_for_nuscenes(checkpoint_hash="sha256:" + hashlib.sha256(weights).hexdigest())
+    return make_runtime(tmp_path), config
+
+
+@pytest.mark.parametrize(
+    ("point", "forward_calls"),
+    [
+        pytest.param("coord", 0, id="staging-coord"),
+        pytest.param("grid_coord", 0, id="staging-grid-coord"),
+        pytest.param("feat", 0, id="staging-feat"),
+        pytest.param("offset", 0, id="staging-offset"),
+        pytest.param("forward", 1, id="forward"),
+        pytest.param("result", 1, id="result-copy"),
+    ],
+)
+def test_running_out_of_memory_at_any_allocation_of_a_support_is_the_explicit_ptv3_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: DevicePoint, forward_calls: int
+) -> None:
+    torch = FakeTorch(out_of_memory_at=point)
+    runtime, config = runtime_on_a_fake_device(tmp_path, monkeypatch, torch)
+
+    with pytest.raises(PTv3OutOfMemoryError, match="out of memory") as raised:
+        runtime.infer(coordinates_m=COORDINATES, center_index=0, config=config)
+
+    assert isinstance(raised.value.__cause__, FakeOutOfMemoryError)
+    assert torch.forward_calls == forward_calls
+    # O cache só devolve o que ninguém referencia: nada do suporte pode estar vivo ao limpá-lo,
+    # e os pesos, que não são do suporte, continuam residentes.
+    assert torch.cuda.residency_at_empty_cache == [(0, 1)]
+
+
+def test_a_support_that_runs_out_of_memory_while_staging_is_a_failed_support_and_the_run_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torch = FakeTorch(out_of_memory_at="coord")
+    runtime, config = runtime_on_a_fake_device(tmp_path, monkeypatch, torch)
+    encoder = PTv3PointEncoder(config=config, support_policy=radius_policy(0.6), runtime=runtime)
+    service = RepresentationService(
+        LinearScanSource(line_of_points(11)),
+        encoder,
+        run_id=PointRepresentationRunId("run-0001"),
+        code_version="test",
+    )
+
+    failed, encoded = service.represent([ref(5), ref(0)])
+
+    assert isinstance(failed, FailedSupport)
+    assert failed.reason is FailureReason.UNENCODABLE_SUPPORT
+    assert "out of memory" in failed.detail
+    assert isinstance(encoded, EncodedRepresentation)
+    assert encoded.representation.shape == (64,)
+    assert encoder.telemetry.out_of_memory == 1
+    assert encoder.telemetry.encoded == 1
+
+
+def test_weights_that_do_not_fit_on_the_device_make_the_runtime_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torch = FakeTorch(out_of_memory_at="model_move")
+    runtime, config = runtime_on_a_fake_device(tmp_path, monkeypatch, torch)
+
+    with pytest.raises(
+        PTv3RuntimeUnavailableError, match="does not fit on device 'cuda:0'"
+    ) as raised:
+        runtime.infer(coordinates_m=COORDINATES, center_index=0, config=config)
+
+    assert config.checkpoint_hash in str(raised.value)
+    assert isinstance(raised.value.__cause__, FakeOutOfMemoryError)
+    assert torch.forward_calls == 0
+    # Os pesos que já tinham chegado ao dispositivo voltam antes de o cache ser limpo.
+    assert torch.cuda.residency_at_empty_cache == [(0, 0)]
+
+
+def test_a_failed_weight_move_leaves_no_half_loaded_model_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torch = FakeTorch(out_of_memory_at="model_move")
+    runtime, config = runtime_on_a_fake_device(tmp_path, monkeypatch, torch)
+    with pytest.raises(PTv3RuntimeUnavailableError):
+        runtime.infer(coordinates_m=COORDINATES, center_index=0, config=config)
+    gc.collect()
+
+    (partial,) = torch.models_built
+    assert partial() is None
+
+    # Sem a falta de memória, o runtime carrega do zero em vez de reaproveitar o modelo parcial.
+    inference = runtime.infer(coordinates_m=COORDINATES, center_index=0, config=config)
+
+    assert len(inference.vector) == 64
+    assert len(torch.models_built) == 2
+    assert len(torch.models_on_device) == 1
+
+
+def test_weights_that_do_not_fit_stop_the_run_instead_of_failing_one_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torch = FakeTorch(out_of_memory_at="model_move")
+    runtime, config = runtime_on_a_fake_device(tmp_path, monkeypatch, torch)
+    encoder = PTv3PointEncoder(config=config, support_policy=radius_policy(0.6), runtime=runtime)
+    service = RepresentationService(
+        LinearScanSource(line_of_points(11)),
+        encoder,
+        run_id=PointRepresentationRunId("run-0001"),
+        code_version="test",
+    )
+
+    with pytest.raises(PTv3RuntimeUnavailableError, match="does not fit"):
+        list(service.represent([ref(5), ref(0)]))
+
+    assert encoder.telemetry.out_of_memory == 0
+    assert encoder.telemetry.encoded == 0

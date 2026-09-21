@@ -17,8 +17,10 @@ at a pinned commit, passed as ``pointcept_root``.
 Failure is explicit and there is no fallback. Anything that prevents a forward pass from being
 trustworthy raises :class:`PTv3RuntimeUnavailableError` before a weight is used: a missing
 dependency or Pointcept checkout, a checkpoint whose SHA-256 differs from the configured
-``checkpoint_hash``, a checkpoint that does not fit the declared backbone, a device without CUDA.
-Running out of device memory on one support raises :class:`PTv3OutOfMemoryError`.
+``checkpoint_hash``, a checkpoint that does not fit the declared backbone, a device without CUDA, a
+backbone whose weights do not fit in device memory. Running out of device memory on one support
+raises :class:`PTv3OutOfMemoryError`, wherever that support allocates: staging its inputs, the
+forward pass or copying the result back.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import hashlib
 import importlib
 import pickle
 import sys
+import traceback
 import types
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -379,6 +382,17 @@ def _import_pointcept_ptv3(pointcept_root: Path) -> Any:
         ) from error
 
 
+def _release_device_memory_after_out_of_memory(torch: Any, error: BaseException) -> None:
+    """Return to the driver the device memory a failed allocation left behind.
+
+    The traceback of ``error`` keeps every finished frame alive, and with them the tensors held in
+    their locals (staged inputs, activations, weights already moved). ``empty_cache`` only returns
+    memory nobody references, so the frames are cleared first; the traceback itself stays readable.
+    """
+    traceback.clear_frames(error.__traceback__)
+    torch.cuda.empty_cache()
+
+
 @dataclass(frozen=True, eq=False)
 class _LoadedBackbone:
     """A backbone resident on the device, with the identity it was loaded under."""
@@ -446,8 +460,10 @@ class PointceptPTv3Runtime:
         Raises:
             ValueError: If the coordinates are empty, not ``(N, 3)`` or not finite, or the center
                 is outside the support.
-            PTv3OutOfMemoryError: If this support exhausts device memory.
-            PTv3RuntimeUnavailableError: If the runtime cannot run at all.
+            PTv3OutOfMemoryError: If this support exhausts device memory, at any allocation it
+                causes on the device.
+            PTv3RuntimeUnavailableError: If the runtime cannot run at all, including a backbone
+                whose weights do not fit in device memory.
         """
         voxels = voxelize(coordinates_m, config.grid_size_m)
         if not 0 <= center_index < len(coordinates_m):
@@ -466,7 +482,24 @@ class PointceptPTv3Runtime:
     def _forward(
         self, loaded: _LoadedBackbone, voxels: Voxelization, config: PTv3Config
     ) -> tuple[NDArray[Any], int]:
-        """Run the backbone on the voxels and return their features and the memory peak."""
+        """Run the backbone on the voxels and return their features and the memory peak.
+
+        Every allocation this support causes on the device happens under the out-of-memory guard,
+        from staging the inputs to copying the result back, so running out of memory anywhere
+        becomes the same explicit :class:`PTv3OutOfMemoryError` for this support alone.
+        """
+        torch = loaded.torch
+        try:
+            voxel_features = self._run_backbone(loaded, voxels, config)
+        except torch.cuda.OutOfMemoryError as error:
+            _release_device_memory_after_out_of_memory(torch, error)
+            raise PTv3OutOfMemoryError(str(error)) from error
+        return voxel_features, int(torch.cuda.max_memory_allocated(loaded.device))
+
+    def _run_backbone(
+        self, loaded: _LoadedBackbone, voxels: Voxelization, config: PTv3Config
+    ) -> NDArray[Any]:
+        """Stage the voxels on the device, run the backbone and copy the features back."""
         import numpy as np
 
         torch = loaded.torch
@@ -480,14 +513,10 @@ class PointceptPTv3Runtime:
             "offset": torch.tensor([voxel_count], dtype=torch.long, device=loaded.device),
         }
         torch.cuda.reset_peak_memory_stats(loaded.device)
-        try:
-            with torch.no_grad(), self._autocast(torch, config):
-                output = loaded.model(data)
-            voxel_features = output.feat.float().cpu().numpy()
-        except torch.cuda.OutOfMemoryError as error:
-            torch.cuda.empty_cache()
-            raise PTv3OutOfMemoryError(str(error)) from error
-        return voxel_features, int(torch.cuda.max_memory_allocated(loaded.device))
+        with torch.no_grad(), self._autocast(torch, config):
+            output = loaded.model(data)
+        voxel_features: NDArray[Any] = output.feat.float().cpu().numpy()
+        return voxel_features
 
     @staticmethod
     def _autocast(torch: Any, config: PTv3Config) -> Any:
@@ -537,7 +566,17 @@ class PointceptPTv3Runtime:
             raise PTv3RuntimeUnavailableError(
                 f"the checkpoint does not fit the declared backbone: {error}"
             ) from error
-        model.to(device).eval()
+        try:
+            model.to(device).eval()
+        except torch.cuda.OutOfMemoryError as error:
+            # A cópia dos pesos é interrompida no meio: parte deles já está no dispositivo.
+            # Devolve-os à CPU e libera a memória antes de falhar, sem deixar modelo meio carregado.
+            model.to("cpu")
+            _release_device_memory_after_out_of_memory(torch, error)
+            raise PTv3RuntimeUnavailableError(
+                f"the PTv3 backbone of checkpoint {config.checkpoint_hash} does not fit on device "
+                f"{config.device!r}: {error}"
+            ) from error
         self._loaded = _LoadedBackbone(
             torch=torch,
             model=model,

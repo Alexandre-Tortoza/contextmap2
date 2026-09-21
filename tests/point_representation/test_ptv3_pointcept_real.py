@@ -14,6 +14,7 @@ These are the only tests that run a real PTv3; everything else in this capabilit
 import hashlib
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from contextmap.point_representation.backends.ptv3 import (
     PTv3Config,
     PTv3OutOfMemoryError,
     PTv3PointEncoder,
+    PTv3RuntimeUnavailableError,
 )
 from contextmap.point_representation.backends.ptv3_pointcept import (
     NUSCENES_SEMSEG_PTV3M1_BASE,
@@ -50,6 +52,24 @@ pytestmark = pytest.mark.skipif(
 CLOUD = [(0.01 * i, 0.0, 0.02 * (i % 7)) for i in range(30)] + [
     (0.01 * i, 0.15 + 0.005 * (i % 5), 0.0) for i in range(30)
 ]
+
+
+def lattice(nx: int, ny: int, nz: int) -> list[tuple[float, float, float]]:
+    """A regular lattice at twice the default grid size, so every point is its own voxel."""
+    return [(0.1 * i, 0.1 * j, 0.1 * k) for i in range(nx) for j in range(ny) for k in range(nz)]
+
+
+@contextmanager
+def device_memory_capped(torch: Any, *, headroom_mib: float) -> Iterator[None]:
+    """Cap this process's device memory just above what it holds; other processes are unaffected."""
+    torch.cuda.empty_cache()  # sem blocos livres em cache, toda alocação nova passa pelo teto
+    total = torch.cuda.get_device_properties(0).total_memory
+    reserved = torch.cuda.memory_reserved()
+    torch.cuda.set_per_process_memory_fraction((reserved + headroom_mib * 2**20) / total)
+    try:
+        yield
+    finally:
+        torch.cuda.set_per_process_memory_fraction(1.0)
 
 
 def make_real_config(**overrides: Any) -> PTv3Config:
@@ -169,3 +189,83 @@ def test_running_out_of_device_memory_is_an_explicit_error_and_the_runtime_recov
         torch.cuda.set_per_process_memory_fraction(1.0)
 
     assert len(runtime.infer(coordinates_m=CLOUD, center_index=0, config=config).vector) == 64
+
+
+def test_running_out_of_memory_while_staging_the_inputs_is_the_same_explicit_error(
+    runtime: PointceptPTv3Runtime,
+) -> None:
+    torch = pytest.importorskip("torch")
+    config = make_real_config()
+    runtime.infer(coordinates_m=CLOUD, center_index=0, config=config)  # garante o modelo residente
+    support = lattice(200, 100, 100)  # 2 milhões de voxels: o staging sozinho passa de 100 MB
+    torch.cuda.empty_cache()
+    allocated_before = torch.cuda.memory_allocated()
+    reserved_before = torch.cuda.memory_reserved()
+
+    # Cabem as coordenadas (24 MB), mas não as células (48 MB): a falta de memória acontece no
+    # staging, com parte do input já no dispositivo, e o backbone nunca chega a rodar.
+    with device_memory_capped(torch, headroom_mib=30):
+        with pytest.raises(PTv3OutOfMemoryError, match="out of memory") as raised:
+            runtime.infer(coordinates_m=support, center_index=0, config=config)
+
+        # Com a exceção ainda viva (o traceback guarda os frames, e com eles os tensores), a
+        # memória do suporte que falhou já voltou: nada retido, e o cache do alocador devolvido.
+        assert isinstance(raised.value.__cause__, torch.cuda.OutOfMemoryError)
+        assert torch.cuda.memory_allocated() - allocated_before < 2**20
+        assert torch.cuda.memory_reserved() <= reserved_before
+
+    assert len(runtime.infer(coordinates_m=CLOUD, center_index=0, config=config).vector) == 64
+
+
+def test_running_out_of_memory_in_the_forward_leaves_no_device_memory_of_the_failed_support(
+    runtime: PointceptPTv3Runtime,
+) -> None:
+    torch = pytest.importorskip("torch")
+    config = make_real_config()
+    runtime.infer(coordinates_m=CLOUD, center_index=0, config=config)  # garante o modelo residente
+    support = lattice(100, 60, 50)  # 300 mil voxels: o input cabe, as ativações do backbone não
+    torch.cuda.empty_cache()
+    allocated_before = torch.cuda.memory_allocated()
+    reserved_before = torch.cuda.memory_reserved()
+
+    with device_memory_capped(torch, headroom_mib=200):
+        with pytest.raises(PTv3OutOfMemoryError, match="out of memory") as raised:
+            runtime.infer(coordinates_m=support, center_index=0, config=config)
+
+        # Com a exceção ainda viva (o traceback guarda os frames, e com eles os tensores), a
+        # memória do suporte que falhou já voltou: nada retido, e o cache do alocador devolvido.
+        assert isinstance(raised.value.__cause__, torch.cuda.OutOfMemoryError)
+        assert torch.cuda.memory_allocated() - allocated_before < 2**20
+        assert torch.cuda.memory_reserved() <= reserved_before
+
+    assert len(runtime.infer(coordinates_m=CLOUD, center_index=0, config=config).vector) == 64
+
+
+def test_weights_that_do_not_fit_on_the_device_make_the_runtime_unavailable_and_leave_nothing(
+    runtime: PointceptPTv3Runtime,  # só para herdar o skip sem torch, CUDA, Pointcept ou checkpoint
+) -> None:
+    torch = pytest.importorskip("torch")
+    assert POINTCEPT_ROOT is not None and CHECKPOINT is not None
+    config = make_real_config()
+    fresh = PointceptPTv3Runtime(
+        pointcept_root=Path(POINTCEPT_ROOT),
+        checkpoint_path=Path(CHECKPOINT),
+        backbone=NUSCENES_SEMSEG_PTV3M1_BASE,
+        weights_only=False,
+    )
+    torch.cuda.empty_cache()
+    allocated_before = torch.cuda.memory_allocated()
+    reserved_before = torch.cuda.memory_reserved()
+
+    # Os pesos (cerca de 188 MB) não cabem em 40 MB: a mudança para o dispositivo para no meio.
+    with device_memory_capped(torch, headroom_mib=40):
+        with pytest.raises(PTv3RuntimeUnavailableError, match="does not fit on device") as raised:
+            fresh.infer(coordinates_m=CLOUD, center_index=0, config=config)
+
+        # Com a exceção ainda viva: os pesos que já tinham chegado ao dispositivo voltaram.
+        assert isinstance(raised.value.__cause__, torch.cuda.OutOfMemoryError)
+        assert torch.cuda.memory_allocated() - allocated_before < 2**20
+        assert torch.cuda.memory_reserved() <= reserved_before
+
+    # Nada ficou meio carregado: sem o teto, o mesmo runtime carrega do zero e roda.
+    assert len(fresh.infer(coordinates_m=CLOUD, center_index=0, config=config).vector) == 64

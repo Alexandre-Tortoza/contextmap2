@@ -159,7 +159,11 @@ class PTv3OutOfMemoryError(RuntimeError):
 
 
 class PTv3RuntimeUnavailableError(RuntimeError):
-    """Raised by a runtime that cannot run at all: a missing dependency, device or checkpoint."""
+    """Raised by a runtime that cannot run at all.
+
+    A missing dependency, device or checkpoint, or a backbone whose weights do not fit on the
+    device.
+    """
 
 
 class PTv3Runtime(Protocol):
