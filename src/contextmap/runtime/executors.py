@@ -24,6 +24,18 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from contextmap.entity_resolution import (
+    CandidateRetrievalPolicy,
+    ConservativeResolutionPolicy,
+    EntityResolutionRunId,
+    EntityResolutionRunReader,
+    EntityResolutionRunWriter,
+    MatchEvidenceBuilder,
+    lineage_from_mapping_manifest,
+    materialize_resolved_entities,
+    resolve_candidate_pairs,
+    retrieve_candidate_sets,
+)
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometricMapArtifactWriter,
@@ -39,7 +51,15 @@ from contextmap.ingestion import (
     selection_identity,
 )
 from contextmap.runtime.artifacts import ArtifactRef
-from contextmap.runtime.catalog import ASSOCIATION, ENTITIES, FUSION, GEOMETRY, TRAJECTORY
+from contextmap.runtime.catalog import (
+    ASSOCIATION,
+    ENTITIES,
+    FUSION,
+    GEOMETRY,
+    RELATIONS,
+    RESOLUTION,
+    TRAJECTORY,
+)
 from contextmap.runtime.pipeline import StageRequest
 from contextmap.semantic_fusion import (
     BaselineAccumulationPolicy,
@@ -55,8 +75,10 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.semantic_mapping import (
     EntityMaterializationPolicy,
+    GeometrySummaryPolicy,
     SemanticMapId,
     SemanticMappingRunId,
+    SemanticMappingRunReader,
     SemanticMappingRunWriter,
     lineage_from_fusion_manifest,
     materialize_entities,
@@ -70,6 +92,17 @@ from contextmap.sensor_association import (
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
     SensorAssociationService,
+)
+from contextmap.spatial_relations import (
+    RelationsRunPolicies,
+    SpatialRelationsRunId,
+    SpatialRelationsRunWriter,
+    decide_relations,
+    evaluate_contact_candidates,
+    evaluate_geometric_candidates,
+    generate_relation_candidates,
+    lineage_from_resolution_manifest,
+    resolved_entity_geometries,
 )
 from contextmap.state_estimation import (
     GeometryRequirements,
@@ -93,11 +126,13 @@ from contextmap.visual_perception import (
 )
 
 __all__ = [
+    "EntityResolutionExecutor",
     "ExecutorError",
     "GeometricMappingExecutor",
     "SemanticFusionExecutor",
     "SemanticMappingExecutor",
     "SensorAssociationExecutor",
+    "SpatialRelationsExecutor",
     "StateEstimationExecutor",
     "inventory_digest",
 ]
@@ -441,3 +476,110 @@ class SemanticMappingExecutor:
             code_version=self._code_version or "",
         ).write(materialization.entities, rejections=materialization.rejections)
         return _reference(request, ENTITIES, str(manifest.run_id), manifest.file_inventory)
+
+
+class EntityResolutionExecutor:
+    """Decides identity across the materialized entities; without proof it stays unresolved."""
+
+    def __init__(
+        self,
+        *,
+        retrieval: CandidateRetrievalPolicy,
+        builder: MatchEvidenceBuilder,
+        resolution: ConservativeResolutionPolicy,
+        code_version: str | None = None,
+    ) -> None:
+        """Bind the executor to the retrieval, the evidence channels and the decision policy."""
+        self._retrieval = retrieval
+        self._builder = builder
+        self._resolution = resolution
+        self._code_version = code_version
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        """Resolve the ``entities`` run without mutating it and reference the resolution run."""
+        output = _output(request)
+        mapping = SemanticMappingRunReader(_one(request, "entities"))
+        entities = list(mapping.iter_entities())
+        candidate_sets = retrieve_candidate_sets(entities, self._retrieval)
+        resolutions = resolve_candidate_pairs(
+            entities,
+            candidate_sets,
+            self._builder,
+            self._resolution,
+            code_version=self._code_version,
+        )
+        run_id = EntityResolutionRunId(request.identity())
+        materialization = materialize_resolved_entities(
+            entities,
+            [item.decision for item in resolutions],
+            resolution_run_id=run_id,
+            code_version=self._code_version,
+        )
+        manifest = EntityResolutionRunWriter(
+            output_dir=output,
+            run_id=run_id,
+            lineage=lineage_from_mapping_manifest(mapping.manifest),
+            code_version=self._code_version or "",
+        ).write(
+            candidate_sets=candidate_sets, resolutions=resolutions, materialization=materialization
+        )
+        return _reference(request, RESOLUTION, str(manifest.run_id), manifest.file_inventory)
+
+
+class SpatialRelationsExecutor:
+    """Derives the relations between resolved entities and keeps the evidence behind each one."""
+
+    def __init__(
+        self,
+        *,
+        policies: RelationsRunPolicies,
+        geometry_summary: GeometrySummaryPolicy,
+        code_version: str | None = None,
+    ) -> None:
+        """Bind the executor to the frame conventions, the predicate policies and the summary."""
+        self._policies = policies
+        self._geometry_summary = geometry_summary
+        self._code_version = code_version
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        """Relate the ``entities`` resolution over the ``geometry`` map and reference the run."""
+        output = _output(request)
+        resolution = EntityResolutionRunReader(_one(request, "entities"))
+        conventions = self._policies.frame_conventions
+        with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
+            source = geometry.geometry()
+            entities = resolved_entity_geometries(
+                resolution.resolved_entities(), source=source, policy=self._geometry_summary
+            )
+            candidates = generate_relation_candidates(
+                entities, policy=self._policies.candidate, conventions=conventions
+            )
+            evidence = []
+            if self._policies.geometric is not None:
+                evidence.extend(
+                    evaluate_geometric_candidates(
+                        candidates,
+                        entities=entities,
+                        policy=self._policies.geometric,
+                        conventions=conventions,
+                    )
+                )
+            if self._policies.contact is not None:
+                evidence.extend(
+                    evaluate_contact_candidates(
+                        candidates,
+                        entities=entities,
+                        geometry_source=source,
+                        policy=self._policies.contact,
+                        conventions=conventions,
+                    )
+                )
+            decisions = decide_relations(candidates, evidence)
+        manifest = SpatialRelationsRunWriter(
+            output_dir=output,
+            run_id=SpatialRelationsRunId(request.identity()),
+            lineage=lineage_from_resolution_manifest(resolution.manifest),
+            policies=self._policies,
+            code_version=self._code_version or "",
+        ).write(candidates=candidates, evidence=evidence, decisions=decisions)
+        return _reference(request, RELATIONS, str(manifest.run_id), manifest.file_inventory)

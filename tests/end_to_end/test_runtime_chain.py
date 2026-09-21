@@ -17,6 +17,15 @@ from typing import Any
 import pytest
 from chain import canned_perception_results
 
+from contextmap.entity_resolution import (
+    CandidateRetrievalPolicy,
+    ComparisonChannels,
+    ConservativeResolutionPolicy,
+    EntityResolutionRunReader,
+    GeometryComparisonPolicy,
+    MatchChannel,
+    MatchEvidenceBuilder,
+)
 from contextmap.evaluation import canonical_real_scenario, scenario_runtime_document
 from contextmap.evaluation.ci_fixtures import CI_FIXTURE_ID, build_synthetic_sequence
 from contextmap.geometric_mapping import (
@@ -47,10 +56,12 @@ from contextmap.runtime import (
     run_plan,
 )
 from contextmap.runtime.executors import (
+    EntityResolutionExecutor,
     GeometricMappingExecutor,
     SemanticFusionExecutor,
     SemanticMappingExecutor,
     SensorAssociationExecutor,
+    SpatialRelationsExecutor,
     StateEstimationExecutor,
     inventory_digest,
 )
@@ -69,6 +80,16 @@ from contextmap.sensor_association import (
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationRunReader,
+)
+from contextmap.spatial_relations import (
+    AxisDirection,
+    CandidatePolicy,
+    ContactPredicatePolicy,
+    FrameConventions,
+    GeometricPredicatePolicy,
+    RelationPredicate,
+    RelationsRunPolicies,
+    SpatialRelationsRunReader,
 )
 from contextmap.state_estimation import (
     BODY_ENDPOINT,
@@ -96,6 +117,8 @@ STAGES = [
     "sensor_association",
     "semantic_fusion",
     "semantic_mapping",
+    "entity_resolution",
+    "spatial_relations",
 ]
 PROVIDED = (
     "visual_perception.region_discovery",
@@ -230,6 +253,58 @@ def _executors() -> dict[str, Any]:
             ),
             semantic_map_id=SemanticMapId("semantic-map-ci"),
         ),
+        "entity_resolution": EntityResolutionExecutor(
+            retrieval=CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1),
+            builder=MatchEvidenceBuilder(
+                ComparisonChannels(
+                    geometry=GeometryComparisonPolicy(
+                        min_shared_support_jaccard=0.5,
+                        min_bounds_iou=0.5,
+                        min_bounds_containment=0.9,
+                        min_conflict_gap_m=0.5,
+                        min_extent_ratio=0.3,
+                    )
+                )
+            ),
+            resolution=ConservativeResolutionPolicy(
+                use_channels=(MatchChannel.GEOMETRY,), min_supporting_channels=1
+            ),
+        ),
+        "spatial_relations": SpatialRelationsExecutor(
+            policies=RelationsRunPolicies(
+                frame_conventions=FrameConventions(
+                    map_frame="odom",  # o mapa sintético está expresso no referencial odom
+                    up_axis=AxisDirection.POSITIVE_Z,
+                    forward_axis=AxisDirection.POSITIVE_X,
+                ),
+                candidate=CandidatePolicy(
+                    predicates=(RelationPredicate.NEXT_TO, RelationPredicate.TOUCHING),
+                    proximity_radius_m=0.6,
+                    directional_radius_m=2.0,
+                ),
+                geometric=GeometricPredicatePolicy(
+                    boundary_tolerance_m=0.02,
+                    next_to_max_gap_m=0.5,
+                    adjacent_penetration_m=0.05,
+                    containment_slack_m=0.05,
+                    directional_overlap_fraction=0.5,
+                ),
+                contact=ContactPredicatePolicy(
+                    contact_distance_m=0.05,
+                    contact_tolerance_m=0.02,
+                    min_contact_points=3,
+                    support_height_tolerance_m=0.05,
+                    support_footprint_fraction=0.5,
+                    leaning_min_tilt_deg=10.0,
+                    leaning_max_tilt_deg=80.0,
+                    tilt_tolerance_deg=2.0,
+                    leaning_min_vertical_overlap_m=0.3,
+                ),
+            ),
+            geometry_summary=GeometrySummaryPolicy(
+                sparse_point_threshold=3, connectivity_radius_m=0.5
+            ),
+        ),
     }
 
 
@@ -240,7 +315,7 @@ def _scope(tmp_path: Path) -> tuple[Any, ExecutionPlan]:
     path = tmp_path / "canonical.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     effective = resolve_effective_config(files=[path])
-    return effective, resolve_plan(effective).scope(targets=["semantic_mapping"])
+    return effective, resolve_plan(effective).scope(targets=["spatial_relations"])
 
 
 def _run(
@@ -293,6 +368,10 @@ def test_every_stage_writes_its_artifact_into_its_own_directory_of_the_run(
     mapping = SemanticMappingRunReader(run / "semantic_mapping")
     assert mapping.verify_integrity() == []
     assert len(mapping.entity_ids()) == 2  # a palete e o poste, sem fusão entre suportes
+    resolution = EntityResolutionRunReader(run / "entity_resolution")
+    assert resolution.verify_integrity() == []
+    relations = SpatialRelationsRunReader(run / "spatial_relations")
+    assert relations.verify_integrity() == []
 
 
 def test_no_stage_writes_outside_the_directory_the_runtime_gave_it(tmp_path: Path) -> None:
@@ -385,6 +464,8 @@ def test_an_interrupted_run_is_resumed_from_the_completed_stages_and_leaves_no_p
     resumed = f"{CI_FIXTURE_ID}/run-0002/"
     assert refs["semantic_fusion"].location == f"{resumed}semantic_fusion"
     assert refs["semantic_mapping"].location == f"{resumed}semantic_mapping"
+    assert refs["entity_resolution"].location == f"{resumed}entity_resolution"
+    assert refs["spatial_relations"].location == f"{resumed}spatial_relations"
     for stage in STAGES[:5]:  # os concluídos foram reutilizados por referência
         assert refs[stage].location == f"{CI_FIXTURE_ID}/run-0001/{stage}"
     assert read_run(journal.directory).status.value == "completed"
@@ -415,3 +496,34 @@ def test_a_stage_that_gets_several_runs_for_one_input_is_refused_not_resolved(
 
     with pytest.raises(ValueError, match="exactly one run of input 'perception'"):
         executors["sensor_association"].execute(request)
+
+
+def test_resolution_and_relations_are_derived_from_the_entities_without_rewriting_them(
+    tmp_path: Path,
+) -> None:
+    effective, execution = _scope(tmp_path)
+    workspace = tmp_path / "ws"
+
+    _, record = _run(effective, execution, workspace, _executors())
+
+    run = workspace / CI_FIXTURE_ID / "run-0001"
+    mapping = SemanticMappingRunReader(run / "semantic_mapping")
+    resolution = EntityResolutionRunReader(run / "entity_resolution")
+    relations = SpatialRelationsRunReader(run / "spatial_relations")
+    # A resolução decide sobre as entidades materializadas e guarda a origem de cada uma; um
+    # candidato sem prova de identidade fica separado (sem fusão silenciosa).
+    resolved = resolution.resolved_entities()
+    members = {
+        member.entity_ref.entity_id for entity in resolved.entities for member in entity.members
+    }
+    assert members == set(mapping.entity_ids())
+    lineage = resolution.manifest.lineage
+    assert str(lineage.semantic_mapping_run_id) == str(mapping.manifest.run_id)
+    # As relações cobrem exatamente as entidades resolvidas e nascem do run de resolução.
+    assert str(relations.manifest.lineage.entity_resolution_run_id) == str(resolution.run_id)
+    refs = _outputs(record)
+    assert refs["entity_resolution"].artifact_id == str(resolution.run_id)
+    assert refs["spatial_relations"].artifact_id == str(relations.manifest.run_id)
+    assert refs["spatial_relations"].content_hash == inventory_digest(
+        relations.manifest.file_inventory
+    )
