@@ -94,6 +94,7 @@ from contextmap.runtime.selection import (
     SelectedRun,
     StaticCatalog,
     check_lineage,
+    load_catalog,
     resolve_selections,
 )
 
@@ -161,6 +162,7 @@ __all__ = [
     "check_lineage",
     "check_selection",
     "compose",
+    "load_catalog",
     "parse_override",
     "predict_reuse",
     "preflight",

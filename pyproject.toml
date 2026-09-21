@@ -28,6 +28,9 @@ dependencies = [
   "numpy<2.4",
 ]
 
+[project.scripts]
+contextmap = "contextmap.runtime.cli:main"
+
 [project.optional-dependencies]
 ros1 = [
   "rosbags>=0.9,<1",

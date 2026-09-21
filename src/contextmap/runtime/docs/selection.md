@@ -73,6 +73,27 @@ Só uma entrada declarada `multiple` aceita vários runs do estágio de origem (
 
 O reuso (ver [`reuse.md`](reuse.md)) combina os hashes de conteúdo de vários runs de uma entrada como um conjunto: o hash de um único run não muda, e a ordem dos runs não altera a chave.
 
+## Arquivo de catálogo
+
+`load_catalog(caminho)` lê um catálogo explícito (é o que a CLI usa em `--catalog`); nada é descoberto por varredura de diretório nem por nome:
+
+```json
+{
+  "schema_version": "0.1.0",
+  "entries": [
+    {
+      "artifact_id": "perc-1", "stage_id": "visual_perception",
+      "contract": "PerceptionRunArtifact", "content_hash": "sha256:...",
+      "run_index": 1,
+      "lineage": {"sequence": "S1", "selection": null, "calibration": "cal-1",
+                  "schema_version": "0.1.0", "upstream": {"ingestion": ["seq-1"]}}
+    }
+  ]
+}
+```
+
+Entrada inválida, versão de schema diferente ou arquivo ilegível é um erro explícito com o índice da entrada.
+
 ## Lacunas conhecidas
 
 - **Catálogo sobre os índices reais.** O protocolo `ArtifactCatalog` e o `StaticCatalog` estão prontos; a implementação que lê os índices de run e os manifests de cada capability (cujos campos de linhagem diferem) acompanha os executores reais, na validação end-to-end (#177). Sem ela, quem chama fornece o catálogo.
