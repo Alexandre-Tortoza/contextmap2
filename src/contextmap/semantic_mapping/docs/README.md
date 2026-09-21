@@ -31,7 +31,9 @@ Existem os **contratos** do envelope: `Entity`, `EntityReference`, `EntitySet` e
 - `EntityEvidenceLinks`: a evidência fundida de origem (com identidade, versão e digest do artifact), as observações espaciais e físicas que contribuíram, as features visuais e as representações 3D, só por referência. `validate_entity_evidence` checa a integridade das referências e `trace_entity_evidence` / `trace_geometry_sources` percorrem a proveniência ([`evidence.md`](evidence.md));
 - `EntityTemporalState`: `first_seen`, `last_seen`, as contagens de frames físicos e de resultados de inferência (sempre distintas), o histórico de observações e um ciclo de vida conservador. `summarize_temporal_state` deriva o estado da evidência fundida sem fabricar nenhum instante ([`temporal-state.md`](temporal-state.md)).
 
-Materialização e persistência pertencem às issues seguintes da milestone e ainda **não** existem.
+A **materialização** converte a evidência fundida selecionada em entidades sob uma política baseline versionada, um suporte, uma entidade (`one-support-one-entity-v1`), com identidade determinística local ao artifact e rejeição explícita de candidatos inválidos, **sem nenhuma resolução entre suportes** ([`materialization.md`](materialization.md)).
+
+A persistência de um semantic-map artifact pertence à issue seguinte da milestone e ainda **não** existe.
 
 ## Escopo de identidade
 
@@ -48,6 +50,7 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 - `semantic_state_from_fused_evidence`, `derive_ambiguity_state`, `SEMANTIC_STATE_MAPPING_RULE_ID`, `PRIMARY_HYPOTHESIS_POLICY_ID`, `CLASS_ATTRIBUTE_DERIVATION_ID` — o mapeamento de `FusedEvidence` e suas regras versionadas.
 - `EntityEvidenceLinks`, `FusedEvidenceRef`, `EntityFeatureRef`, `evidence_links_from_fused_evidence`, `feature_refs_of`, `fusion_artifact_digest` — os vínculos de evidência.
 - `validate_entity_evidence`, `EvidenceIntegrityIssue`, `EvidenceIntegrityKind`, `FusedEvidenceSource`, `trace_entity_evidence`, `EntityEvidenceTrace`, `ContributionTrace`, `EvidenceTraceError`, `trace_geometry_sources`, `GeometrySourceTrace` — integridade de referências e travessia da proveniência.
+- `materialize_entities`, `EntityMaterializationPolicy`, `EntityMaterialization`, `CandidateRejection`, `RejectionReason`, `MaterializationInputError`, `entity_id_for`, `ENTITY_MATERIALIZATION_POLICY_ID`, `ENTITY_ID_POLICY_ID` — a materialização a partir da evidência fundida, sem resolução entre suportes.
 - `EntityTemporalState`, `ObservationRef`, `TemporalProvenance`, `EntityLifecycle`, `summarize_temporal_state`, `TemporalEvidenceError`, `TEMPORAL_SUMMARY_RULE_ID` — o estado temporal e seu histórico.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes.
@@ -72,5 +75,6 @@ As dependências de `ingestion`, `visual_perception`, `sensor_association`, `poi
 - [`evidence.md`](evidence.md) — vínculos de evidência, integridade de referências e travessia da proveniência.
 - [`semantic-state.md`](semantic-state.md) — estado semântico, distinções preservadas e regras de mapeamento da evidência fundida.
 - [`temporal-state.md`](temporal-state.md) — estado temporal, histórico de observações e ciclo de vida.
+- [`materialization.md`](materialization.md) — política baseline, identidade determinística, seleção explícita e rejeição de candidatos.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Mapping no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — os contratos no contexto global.
