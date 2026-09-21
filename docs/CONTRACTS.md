@@ -17,7 +17,7 @@ Consequências:
 
 ## Estado dos contratos
 
-Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) e de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) também já existem; os demais, de Semantic Mapping em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas.
+Os contratos até Visual Perception já existem no código e devem ser lidos conforme suas APIs públicas atuais. Os contratos `PoseEstimate` e `Trajectory` de State Estimation também já existem ([contratos de State Estimation](../src/contextmap/state_estimation/docs/contracts.md)); os contratos de Geometric Mapping (`GeometryPoint`, `GeometryReference`, `GeometricMap`, [contratos](../src/contextmap/geometric_mapping/docs/contracts.md)) também já existem; os contratos de Sensor Association (`SpatialObservation`, `ObservationQuality`, [contratos](../src/contextmap/sensor_association/docs/contracts.md)), de Point Representation (`PointRepresentation`, `RepresentationSpace`, [contratos](../src/contextmap/point_representation/docs/contracts.md)) de Semantic Fusion (`FusionSupport`, `FusedEvidence`, [contratos](../src/contextmap/semantic_fusion/docs/contracts.md)) e de Semantic Mapping (`Entity`, `EntityReference`, `EntityGeometry`, `EntitySemanticState`, `EntityTemporalState`, [contratos](../src/contextmap/semantic_mapping/docs/contracts.md)) também já existem; os demais, de Entity Resolution em diante, permanecem alvo arquitetural neste documento até suas capabilities serem materializadas. Os contratos da capability transversal `evaluation` (manifesto do reference set, famílias de anotação, definições de métrica, relatório comum, manifesto de experimento e de comparação, evidência e decisão sobre técnicas opcionais) já existem, mas não fazem parte da cadeia de contratos de domínio abaixo: estão em [avaliação](../src/contextmap/evaluation/docs/README.md).
 
 ```mermaid
 flowchart LR
@@ -550,6 +550,10 @@ Entity
 
 Não assume identidade automática entre mapas reconstruídos independentemente.
 
+### Implementação
+
+Implementado em `contextmap.semantic_mapping` ([contratos](../src/contextmap/semantic_mapping/docs/contracts.md)). A referência estável é `EntityReference(semantic_map_id, entity_id)`, e `EntitySet.resolve` recusa uma referência de **outro** semantic map mesmo quando o `entity_id` existe. O contrato implementado agrupa `evidence_refs[]`, `visual_feature_refs[]` e `point_representation_refs[]` em `Entity.evidence` (`EntityEvidenceLinks`, que também carrega a identidade, a versão e o digest do artifact de fusão e as observações espaciais e físicas), e `properties[]` são `semantic_state.attributes`, com evidência e regra de derivação. A identidade é alocada pela política de materialização (`entity--<fusion_support_id>`), não pela geometria.
+
 ## 21. `EntityGeometry`
 
 Mantém suporte espacial real da entidade.
@@ -567,6 +571,8 @@ EntityGeometry
 ```
 
 Centroid e bounds são resumos derivados. Geometry references continuam autoritativas.
+
+Implementado: além desses campos, o contrato traz `SupportStatistics` (pontos, volume, densidade, componentes conexos), diagnósticos explícitos (esparso, desconectado, extensão degenerada, orientação não justificada) e a proveniência dos resumos (algoritmo versionado, conjunto de entrada por digest, frame, convenções numéricas e política). Suporte vazio não vira uma geometria válida, e a orientação só é derivada quando a política pede e os eixos são bem definidos ([detalhes](../src/contextmap/semantic_mapping/docs/geometry.md)).
 
 ## 22. `EntitySemanticState`
 
@@ -586,6 +592,8 @@ EntitySemanticState
 
 Unknown, abstention, unscored e conflicting evidence devem permanecer distinguíveis.
 
+Implementado: `alternative_hypotheses[]` é a propriedade derivada das hipóteses que não são a primária, `conflicts[]` são os registros de contradição dentro de `uncertainty` (que também guarda ambiguidade, quase empate e evidência insuficiente), e `evidence_refs[]`/`fused_evidence_refs[]` vivem nas hipóteses e em `Entity.evidence`, uma única fonte de verdade. O `ambiguity_state` é sempre o que os registros implicam, e uma primária só existe quando o estado é não ambíguo ([detalhes](../src/contextmap/semantic_mapping/docs/semantic-state.md)).
+
 ## 23. `EntityTemporalState`
 
 Resume quando e quantas vezes a entidade foi observada.
@@ -602,6 +610,8 @@ EntityTemporalState
 ```
 
 Não implica tracking dinâmico.
+
+Implementado: o histórico é um índice pequeno (`ObservationRef` por frame físico) e `first_seen`, `last_seen` e as duas contagens precisam concordar com ele; o ciclo de vida é conservador (`observed`, `stale`, `uncertain`) e a baseline atribui só `observed` ([detalhes](../src/contextmap/semantic_mapping/docs/temporal-state.md)).
 
 ## 24. Entity Resolution contracts
 

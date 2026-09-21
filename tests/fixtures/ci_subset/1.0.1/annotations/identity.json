@@ -1,0 +1,65 @@
+{
+  "distinct_pairs": [
+    {
+      "first": "pallet-1",
+      "second": "pallet-2"
+    }
+  ],
+  "identities": [
+    {
+      "description": "the pallet the robot approaches",
+      "identity_id": "pallet-1",
+      "occurrences": [
+        {
+          "observation_id": "frame-0000",
+          "region_id": "region-a",
+          "sample_id": "sample-0000"
+        },
+        {
+          "observation_id": "frame-0001",
+          "region_id": "region-a1",
+          "sample_id": "sample-0001"
+        },
+        {
+          "observation_id": "frame-0002",
+          "region_id": null,
+          "sample_id": "sample-0002"
+        }
+      ]
+    },
+    {
+      "description": "a second pallet with the same concept, a different object",
+      "identity_id": "pallet-2",
+      "occurrences": [
+        {
+          "observation_id": "frame-0000",
+          "region_id": "region-b",
+          "sample_id": "sample-0000"
+        },
+        {
+          "observation_id": "frame-0001",
+          "region_id": "region-b1",
+          "sample_id": "sample-0001"
+        }
+      ]
+    }
+  ],
+  "schema": "contextmap.reference.identity/v1",
+  "scope": [
+    {
+      "coverage": "complete",
+      "observation_id": "frame-0000",
+      "sample_id": "sample-0000"
+    },
+    {
+      "coverage": "complete",
+      "observation_id": "frame-0001",
+      "sample_id": "sample-0001"
+    },
+    {
+      "coverage": "partial",
+      "observation_id": "frame-0002",
+      "sample_id": "sample-0002"
+    }
+  ]
+}
