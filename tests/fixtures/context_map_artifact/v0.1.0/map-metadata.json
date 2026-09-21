@@ -1,0 +1,67 @@
+{
+  "bounds": {
+    "frame_id": "map",
+    "maximum_m": [
+      10.0,
+      5.0,
+      3.0
+    ],
+    "minimum_m": [
+      -10.0,
+      -5.0,
+      0.0
+    ]
+  },
+  "capabilities": {
+    "content": [
+      "entities",
+      "geometry",
+      "relations"
+    ],
+    "relation_predicates": [
+      "next_to",
+      "on"
+    ]
+  },
+  "creation": {
+    "assembly_policy": {
+      "policy_id": "context-map-assembly",
+      "version": "1"
+    },
+    "code_version": "a1b2c3d",
+    "configuration_fingerprint": "sha256:cfg-0001"
+  },
+  "frame": {
+    "anchor": {
+      "kind": "estimator_local",
+      "origin_definition": "pose of the first accepted scan of the estimator run",
+      "reference_frame_id": null
+    },
+    "frame_id": "map",
+    "handedness": "right_handed",
+    "unit": "meter",
+    "up_direction": [
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  "source_sequences": [
+    {
+      "selection_id": "selection--90s-20frames",
+      "sequence_artifact_id": "sequence--corridor-02--e145f73f"
+    }
+  ],
+  "time_bounds": {
+    "end": {
+      "clock_id": "fixture:header",
+      "nanoseconds": 0,
+      "seconds": 190
+    },
+    "start": {
+      "clock_id": "fixture:header",
+      "nanoseconds": 0,
+      "seconds": 100
+    }
+  }
+}

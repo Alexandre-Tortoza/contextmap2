@@ -129,6 +129,15 @@ Um diretório de artifact é copiável entre máquinas como qualquer árvore de 
 
 Debug, checkpoints, tensores nativos de framework, pickles, rosbags e qualquer objeto de runtime nunca entram no artifact. O bundle de exportação (#159) também não os inclui por padrão.
 
+## Compatibilidade e fixtures
+
+O `format_version` (layout) e o `schema_version` (semântica) são independentes, e o leitor aceita um conjunto **explícito** de cada um:
+
+- **Formato**: só as versões de `layout.SUPPORTED_FORMAT_VERSIONS` (hoje `0.1.0`); qualquer outra, inclusive um prefixo, um pré-lançamento ou vazio, é `UnsupportedFormatVersionError` com a lista das aceitas.
+- **Schema**: o que `require_supported_schema_version` aceita (o mesmo `MAJOR.MINOR` enquanto o major é 0; um patch novo do mesmo minor é legível). Uma versão ilegível é rejeitada **antes** de qualquer registro ser interpretado (`UnsupportedArtifactSchemaError`, que também é a `UnsupportedSchemaVersionError` do schema).
+
+Para cada versão prometida como legível pela v0.1.0 há uma **fixture** versionada em `tests/fixtures/context_map_artifact/<versão>/`, gravada uma vez pelo writer e nunca regenerada: `v0.1.0` é um artifact completo (formato `0.1.0`, schema `0.1.0`, três entidades, duas relações, um estado ambíguo e um não resolvido). Um teste fixa a `content_identity` da fixture, então regenerá-la por engano falha, e outros testes garantem que ela continua abrindo com hash verificado, que os registros são iguais aos do schema e que o validador completo só aponta o que a fixture não carrega (as dependências a montante, que são grandes e não versionadas). Quando uma versão de formato ou de schema nova for prometida como legível, acrescenta-se a sua fixture ao lado, sem tirar a anterior; quando uma deixar de ser legível, a mensagem de rejeição é a que a fixture antiga passa a exercitar.
+
 ## Estado desta decisão
 
-O v0 fixa o layout, o manifest e a descrição de payloads. Escrita, leitura, validação e exportação são detalhadas em documentos próprios, acrescentados junto de cada issue (#156 a #159).
+O v0 fixa o layout, o manifest e a descrição de payloads. Escrita, leitura, validação e exportação são detalhadas em documentos próprios, acrescentados junto de cada issue (#156 a #159), e a validação de ida e volta, corrupção, portabilidade e versões está em `tests/artifact/test_context_map_serialization_roundtrip.py` (#160).
