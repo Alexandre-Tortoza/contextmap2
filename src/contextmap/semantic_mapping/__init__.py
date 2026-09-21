@@ -35,16 +35,39 @@ from contextmap.semantic_mapping.models import (
     SemanticMapId,
     UnknownEntityError,
 )
-from contextmap.semantic_mapping.semantic_state import EntityHypothesis, EntitySemanticState
+from contextmap.semantic_mapping.semantic_state import (
+    AmbiguityState,
+    AttributeOrigin,
+    EntityAttribute,
+    EntityHypothesis,
+    EntityHypothesisRef,
+    EntitySemanticState,
+    EntityUncertainty,
+    SemanticStateProvenance,
+    derive_ambiguity_state,
+)
+from contextmap.semantic_mapping.state_mapping import (
+    CLASS_ATTRIBUTE_DERIVATION_ID,
+    PRIMARY_HYPOTHESIS_POLICY_ID,
+    SEMANTIC_STATE_MAPPING_RULE_ID,
+    semantic_state_from_fused_evidence,
+)
 from contextmap.semantic_mapping.temporal import EntityTemporalState
 
 __all__ = [
+    "CLASS_ATTRIBUTE_DERIVATION_ID",
     "GEOMETRY_SUMMARY_ALGORITHM_ID",
+    "PRIMARY_HYPOTHESIS_POLICY_ID",
+    "SEMANTIC_STATE_MAPPING_RULE_ID",
+    "AmbiguityState",
+    "AttributeOrigin",
     "EmptyGeometrySupportError",
     "Entity",
+    "EntityAttribute",
     "EntityEvidenceLinks",
     "EntityGeometry",
     "EntityHypothesis",
+    "EntityHypothesisRef",
     "EntityId",
     "EntityOrientation",
     "EntityProvenance",
@@ -52,6 +75,7 @@ __all__ = [
     "EntitySemanticState",
     "EntitySet",
     "EntityTemporalState",
+    "EntityUncertainty",
     "ForeignEntityReferenceError",
     "FusedEvidenceRef",
     "GeometryDiagnostic",
@@ -60,11 +84,14 @@ __all__ = [
     "GeometrySummaryPolicy",
     "OrientationPolicy",
     "SemanticMapId",
+    "SemanticStateProvenance",
     "SpatialSummaryProvenance",
     "SupportStatistics",
     "UnknownEntityError",
+    "derive_ambiguity_state",
     "geometry_set_digest",
     "resolve_geometry",
+    "semantic_state_from_fused_evidence",
     "summarize_geometry",
     "verify_geometry_summary",
 ]

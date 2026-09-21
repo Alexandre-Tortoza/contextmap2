@@ -26,6 +26,7 @@ from contextmap.geometric_mapping import (
 from contextmap.ingestion import FrameId
 from contextmap.semantic_fusion import (
     EvidenceContributionId,
+    EvidenceReference,
     EvidenceStance,
     FusedEvidenceId,
     FusedHypothesisId,
@@ -34,6 +35,8 @@ from contextmap.semantic_fusion import (
     SemanticFusionRunId,
     SupportSignal,
     SupportSignalKind,
+    UncertaintyKind,
+    UncertaintyRecord,
 )
 from contextmap.semantic_mapping.evidence import EntityEvidenceLinks, FusedEvidenceRef
 from contextmap.semantic_mapping.geometry import (
@@ -51,7 +54,16 @@ from contextmap.semantic_mapping.models import (
     EntityReference,
     SemanticMapId,
 )
-from contextmap.semantic_mapping.semantic_state import EntityHypothesis, EntitySemanticState
+from contextmap.semantic_mapping.semantic_state import (
+    AmbiguityState,
+    AttributeOrigin,
+    EntityAttribute,
+    EntityHypothesis,
+    EntityHypothesisRef,
+    EntitySemanticState,
+    EntityUncertainty,
+    SemanticStateProvenance,
+)
 from contextmap.semantic_mapping.temporal import EntityTemporalState
 from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
@@ -240,12 +252,47 @@ def _decode_geometry_refs(record: Mapping[str, Any]) -> tuple[GeometryReference,
 
 
 def _encode_semantic_state(state: EntitySemanticState) -> dict[str, Any]:
-    return {"hypotheses": [_encode_hypothesis(item) for item in state.hypotheses]}
+    primary = state.primary_hypothesis
+    return {
+        "hypotheses": [_encode_hypothesis(item) for item in state.hypotheses],
+        "ambiguity_state": state.ambiguity_state.value,
+        "primary_hypothesis": None if primary is None else _encode_hypothesis_ref(primary),
+        "attributes": [_encode_attribute(item) for item in state.attributes],
+        "uncertainty": [_encode_uncertainty(item) for item in state.uncertainty],
+        "provenance": {
+            "mapping_rule_id": state.provenance.mapping_rule_id,
+            "primary_policy_id": state.provenance.primary_policy_id,
+        },
+    }
 
 
 def _decode_semantic_state(record: Mapping[str, Any]) -> EntitySemanticState:
+    primary = record["primary_hypothesis"]
+    provenance = record["provenance"]
     return EntitySemanticState(
-        hypotheses=tuple(_decode_hypothesis(item) for item in record["hypotheses"])
+        hypotheses=tuple(_decode_hypothesis(item) for item in record["hypotheses"]),
+        ambiguity_state=AmbiguityState(record["ambiguity_state"]),
+        provenance=SemanticStateProvenance(
+            mapping_rule_id=provenance["mapping_rule_id"],
+            primary_policy_id=provenance["primary_policy_id"],
+        ),
+        primary_hypothesis=None if primary is None else _decode_hypothesis_ref(primary),
+        attributes=tuple(_decode_attribute(item) for item in record["attributes"]),
+        uncertainty=tuple(_decode_uncertainty(item) for item in record["uncertainty"]),
+    )
+
+
+def _encode_hypothesis_ref(ref: EntityHypothesisRef) -> dict[str, Any]:
+    return {
+        "fused_evidence_id": str(ref.fused_evidence_id),
+        "hypothesis_id": str(ref.hypothesis_id),
+    }
+
+
+def _decode_hypothesis_ref(record: Mapping[str, Any]) -> EntityHypothesisRef:
+    return EntityHypothesisRef(
+        fused_evidence_id=FusedEvidenceId(record["fused_evidence_id"]),
+        hypothesis_id=FusedHypothesisId(record["hypothesis_id"]),
     )
 
 
@@ -273,14 +320,7 @@ def _encode_hypothesis_evidence(item: HypothesisEvidence) -> dict[str, Any]:
         "claim_id": str(item.claim_id),
         "stance": item.stance.value,
         "role": item.role.value,
-        "signals": [
-            {
-                "kind": signal.kind.value,
-                "producer": _encode_producer(signal.producer),
-                "value": signal.value,
-            }
-            for signal in item.signals
-        ],
+        "signals": _encode_signals(item.signals),
     }
 
 
@@ -290,14 +330,89 @@ def _decode_hypothesis_evidence(record: Mapping[str, Any]) -> HypothesisEvidence
         claim_id=ClaimId(record["claim_id"]),
         stance=EvidenceStance(record["stance"]),
         role=HypothesisRole(record["role"]),
-        signals=tuple(
-            SupportSignal(
-                kind=SupportSignalKind(signal["kind"]),
-                producer=_decode_producer(signal["producer"]),
-                value=signal["value"],
-            )
-            for signal in record["signals"]
+        signals=_decode_signals(record["signals"]),
+    )
+
+
+def _encode_attribute(attribute: EntityAttribute) -> dict[str, Any]:
+    return {
+        "name": attribute.name,
+        "value": attribute.value,
+        "origin": attribute.origin.value,
+        "derivation_id": attribute.derivation_id,
+        "evidence": [_encode_reference(ref) for ref in attribute.evidence],
+        "support": _encode_signals(attribute.support),
+    }
+
+
+def _decode_attribute(record: Mapping[str, Any]) -> EntityAttribute:
+    return EntityAttribute(
+        name=record["name"],
+        value=record["value"],
+        origin=AttributeOrigin(record["origin"]),
+        derivation_id=record["derivation_id"],
+        evidence=tuple(_decode_reference(ref) for ref in record["evidence"]),
+        support=_decode_signals(record["support"]),
+    )
+
+
+def _encode_uncertainty(item: EntityUncertainty) -> dict[str, Any]:
+    record = item.record
+    return {
+        "fused_evidence_id": str(item.fused_evidence_id),
+        "kind": record.kind.value,
+        "hypothesis_ids": [str(hypothesis_id) for hypothesis_id in record.hypothesis_ids],
+        "evidence": [_encode_reference(ref) for ref in record.evidence],
+        "rule_id": record.rule_id,
+    }
+
+
+def _decode_uncertainty(record: Mapping[str, Any]) -> EntityUncertainty:
+    return EntityUncertainty(
+        fused_evidence_id=FusedEvidenceId(record["fused_evidence_id"]),
+        record=UncertaintyRecord(
+            kind=UncertaintyKind(record["kind"]),
+            hypothesis_ids=tuple(FusedHypothesisId(item) for item in record["hypothesis_ids"]),
+            evidence=tuple(_decode_reference(ref) for ref in record["evidence"]),
+            rule_id=record["rule_id"],
         ),
+    )
+
+
+def _encode_reference(reference: EvidenceReference) -> dict[str, Any]:
+    return {
+        "contribution_id": str(reference.contribution_id),
+        "claim_id": None if reference.claim_id is None else str(reference.claim_id),
+    }
+
+
+def _decode_reference(record: Mapping[str, Any]) -> EvidenceReference:
+    claim_id = record["claim_id"]
+    return EvidenceReference(
+        contribution_id=EvidenceContributionId(record["contribution_id"]),
+        claim_id=None if claim_id is None else ClaimId(claim_id),
+    )
+
+
+def _encode_signals(signals: Sequence[SupportSignal]) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": signal.kind.value,
+            "producer": _encode_producer(signal.producer),
+            "value": signal.value,
+        }
+        for signal in signals
+    ]
+
+
+def _decode_signals(records: Sequence[Mapping[str, Any]]) -> tuple[SupportSignal, ...]:
+    return tuple(
+        SupportSignal(
+            kind=SupportSignalKind(record["kind"]),
+            producer=_decode_producer(record["producer"]),
+            value=record["value"],
+        )
+        for record in records
     )
 
 

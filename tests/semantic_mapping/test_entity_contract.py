@@ -31,7 +31,6 @@ from contextmap.semantic_mapping import (
     EntityId,
     EntityProvenance,
     EntityReference,
-    EntitySemanticState,
     EntitySet,
     EntityTemporalState,
     ForeignEntityReferenceError,
@@ -224,7 +223,7 @@ class TestEntitySemanticState:
             make_semantic_state((second, first))
 
     def test_an_entity_may_have_no_hypothesis_when_no_view_proposed_one(self) -> None:
-        assert make_entity(semantic_state=EntitySemanticState()).semantic_state.hypotheses == ()
+        assert make_entity(semantic_state=make_semantic_state(())).semantic_state.hypotheses == ()
 
     def test_evidence_items_are_canonically_ordered(self) -> None:
         later = make_evidence_item(contribution="contribution--support-000001--spatial-b")

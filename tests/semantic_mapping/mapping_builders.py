@@ -20,16 +20,21 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.semantic_mapping import (
     Entity,
+    EntityAttribute,
     EntityEvidenceLinks,
     EntityGeometry,
     EntityHypothesis,
+    EntityHypothesisRef,
     EntityId,
     EntityProvenance,
     EntitySemanticState,
     EntityTemporalState,
+    EntityUncertainty,
     FusedEvidenceRef,
     GeometrySummaryPolicy,
     SemanticMapId,
+    SemanticStateProvenance,
+    derive_ambiguity_state,
     summarize_geometry,
 )
 from contextmap.shared import SourceTimestamp, Vector3
@@ -140,9 +145,22 @@ def make_geometry(
 
 def make_semantic_state(
     hypotheses: tuple[EntityHypothesis, ...] | None = None,
+    *,
+    uncertainty: tuple[EntityUncertainty, ...] = (),
+    primary: EntityHypothesisRef | None = None,
+    attributes: tuple[EntityAttribute, ...] = (),
 ) -> EntitySemanticState:
+    used = (make_hypothesis(),) if hypotheses is None else hypotheses
     return EntitySemanticState(
-        hypotheses=(make_hypothesis(),) if hypotheses is None else hypotheses
+        hypotheses=used,
+        ambiguity_state=derive_ambiguity_state(used, uncertainty),
+        provenance=SemanticStateProvenance(
+            mapping_rule_id="fused-evidence-semantic-state-v1",
+            primary_policy_id="unambiguous-single-hypothesis-v1",
+        ),
+        primary_hypothesis=primary,
+        attributes=attributes,
+        uncertainty=uncertainty,
     )
 
 
