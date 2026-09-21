@@ -120,6 +120,13 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
 - O subconjunto protege contra regressões e não substitui a avaliação com dados reais.
 
+### Registro de métricas e relatório comum
+
+- `MetricRegistry`/`MetricDefinition`/`default_metric_registry()` — definições versionadas e legíveis por máquina de todas as métricas por estágio: nome/versão, população, unidade/faixa, anotações exigidas, agregação, comportamento com dados ausentes, evaluator e direção. Não existe unidade `probability`: score de suporte arbitrário não é probabilidade calibrada.
+- `EvaluationReport`/`ReproducibilityMetadata`/`MetricResult` — envelope comum com metadados de reprodutibilidade compartilhados, métricas de **qualidade** e de **performance** em campos separados e o relatório do estágio intocado; `not_applicable`/`unsupported` nunca viram zero e não há score geral.
+- `assemble_evaluation_report()`/`decode_evaluation_report()` — validam o relatório contra o registro; `require_annotation_compatibility()` recusa versões de anotação incompatíveis.
+- `region_discovery_evaluation_report()`/`semantic_interpretation_evaluation_report()`/`wrap_stage_report()` — levam os relatórios existentes para o envelope sem recalcular métricas.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -140,6 +147,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
