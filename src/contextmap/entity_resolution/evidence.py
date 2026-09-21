@@ -32,6 +32,7 @@ from contextmap.entity_resolution.channels import (
     TemporalEvidence,
     UnavailableReason,
 )
+from contextmap.entity_resolution.models import reference_order
 from contextmap.semantic_mapping import Entity, EntityReference
 
 COMPARISON_GATES_POLICY_ID = "entity-comparison-gates-v1"
@@ -39,11 +40,6 @@ COMPARISON_GATES_POLICY_ID = "entity-comparison-gates-v1"
 
 ComparisonId = NewType("ComparisonId", str)
 """Identity of one comparison of a pair of entities, derived from the pair."""
-
-
-def reference_order(reference: EntityReference) -> tuple[str, str]:
-    """The canonical sort key of an entity reference: its map and then its id."""
-    return (str(reference.semantic_map_id), str(reference.entity_id))
 
 
 def comparison_id_for(entity_a_ref: EntityReference, entity_b_ref: EntityReference) -> ComparisonId:

@@ -15,6 +15,7 @@ from contextmap.entity_resolution._codec import from_record, to_record
 from contextmap.entity_resolution.decision import ResolutionDecision
 from contextmap.entity_resolution.evidence import EntityMatchEvidence
 from contextmap.entity_resolution.models import ResolvedEntityReference
+from contextmap.entity_resolution.retrieval import EntityCandidateSet
 
 
 def encode_resolved_entity_reference(reference: ResolvedEntityReference) -> dict[str, Any]:
@@ -78,3 +79,24 @@ def decode_resolution_decision(record: Mapping[str, Any]) -> ResolutionDecision:
         ValueError: If the record is malformed or violates the contract.
     """
     return from_record(ResolutionDecision, record)
+
+
+def encode_candidate_set(candidate_set: EntityCandidateSet) -> dict[str, Any]:
+    """Encode the candidates retrieved for one entity, with the policy and the reasons."""
+    record: dict[str, Any] = to_record(candidate_set)
+    return record
+
+
+def decode_candidate_set(record: Mapping[str, Any]) -> EntityCandidateSet:
+    """Decode a candidate set and revalidate every invariant.
+
+    Args:
+        record: The output of :func:`encode_candidate_set`.
+
+    Returns:
+        The candidate set.
+
+    Raises:
+        ValueError: If the record is malformed or violates the contract.
+    """
+    return from_record(EntityCandidateSet, record)

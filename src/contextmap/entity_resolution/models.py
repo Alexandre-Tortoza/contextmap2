@@ -23,12 +23,18 @@ from dataclasses import dataclass
 from typing import NewType
 
 from contextmap.entity_resolution._checks import require_present
+from contextmap.semantic_mapping import EntityReference
 
 EntityResolutionRunId = NewType("EntityResolutionRunId", str)
 """Identity of one immutable resolution artifact: the scope inside which resolved ids are unique."""
 
 ResolvedEntityId = NewType("ResolvedEntityId", str)
 """Identity of one resolved entity, local to its resolution artifact."""
+
+
+def reference_order(reference: EntityReference) -> tuple[str, str]:
+    """The canonical sort key of a source entity reference: its semantic map and then its id."""
+    return (str(reference.semantic_map_id), str(reference.entity_id))
 
 
 @dataclass(frozen=True, kw_only=True)
