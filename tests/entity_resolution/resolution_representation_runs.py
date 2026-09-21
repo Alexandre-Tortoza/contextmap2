@@ -88,13 +88,12 @@ def write_run(
         script, family=family, checkpoint=checkpoint, dimension=dimension
     )
     service = RepresentationService(source, chosen, run_id=run_id, code_version="test")
+    run_dir = workspace / run
     writer = PointRepresentationRunWriter(
-        workspace_root=workspace,
+        output_dir=run_dir,
         sequence_name="corridor-02",
         run_id=run_id,
         run_index=1,
-        selection_label="centers",
-        backend_label="scripted",
         geometric_map=source.geometric_map,
         space=chosen.representation_space(),
         encoder_identity=chosen.encoder_identity(),
@@ -103,9 +102,6 @@ def write_run(
     for outcome in service.represent([geometry_ref(index) for index in sorted(script)]):
         writer.add(outcome)
     writer.finalize(metrics=service.metrics, backend_diagnostics=None)
-    run_dir = (
-        workspace / "runs" / "point-representation" / "corridor-02" / "run-0001__centers__scripted"
-    )
     reader = PointRepresentationRunReader(run_dir)
     representations = {
         geometry_index_of(
