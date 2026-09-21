@@ -749,6 +749,7 @@ _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "semantic_mapping": _compose_nothing,
     "entity_resolution": _compose_nothing,
     "spatial_relations": _compose_nothing,
+    "context_map": _compose_nothing,
 }
 
 

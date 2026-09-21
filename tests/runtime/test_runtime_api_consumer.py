@@ -14,7 +14,9 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 
 import contextmap.runtime as public
 from contextmap.runtime import (
@@ -72,6 +74,7 @@ def _summary(result: RuntimeExecutionResult) -> dict[str, str]:
     return {stage.stage_id: stage.outcome for stage in result.record.stages}
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     tmp_path: Path,
 ) -> None:

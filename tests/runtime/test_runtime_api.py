@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 from runtime_ingestion import factory, request
 from runtime_worlds import World, world_executors
 
@@ -138,6 +139,7 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     assert (bare.workspace, bare.executors, bare.verifier_configured) == (None, (), False)
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> None:
     capabilities = Runtime(module_available=_ready, environ={}).capabilities()
     by_stage = {capability.stage_id: capability for capability in capabilities}
@@ -320,6 +322,7 @@ def test_an_unsupported_stage_or_backend_is_refused_at_resolution(
         _config(runtime, tmp_path, override)
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
@@ -400,6 +403,7 @@ def test_supplied_upstream_artifacts_take_the_place_of_their_stages(tmp_path: Pa
     assert [problem.path for problem in refused.problems] == ["provided.ingestion"]
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_value(
     tmp_path: Path,
 ) -> None:
@@ -448,6 +452,7 @@ def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Pa
     assert world.runs == []
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     runtime, _ = _runtime(
         tmp_path, executors=False, module_available=lambda name: name != "rosbags"
@@ -660,6 +665,7 @@ def test_a_blocked_run_is_a_result_and_nothing_executed(tmp_path: Path) -> None:
     assert set(_outcomes(result.record).values()) == {"pending"}
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_an_unimplemented_stage_blocks_the_run_explicitly(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
 

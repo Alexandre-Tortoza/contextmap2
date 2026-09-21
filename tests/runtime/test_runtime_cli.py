@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 from runtime_ingestion import factory as fake_factory
 from runtime_worlds import World
 
@@ -126,6 +127,7 @@ class TestDryRun:
         assert code == 0
         assert _json(out)["executors"]["missing"]
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_the_complete_pipeline_is_blocked_with_the_reason_per_stage(
         self, tmp_path: Path
     ) -> None:
