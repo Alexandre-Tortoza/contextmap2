@@ -72,8 +72,9 @@ A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPrepa
 Hoje, `semantic_fusion` e `evaluation`, sempre através de
 `contextmap.sensor_association`. `point_representation` não consome esta
 capability: extrai suporte diretamente de Geometric Mapping e só pode fornecer
-um canal opcional posterior a Semantic Fusion. A composition root em `runtime`
-e o módulo global `artifact` continuam planejados.
+um canal opcional posterior a Semantic Fusion. O runtime (`contextmap.runtime`)
+orquestra esta capability como um estágio do DAG; o módulo global `artifact`
+continua planejado.
 
 ## Onde estão os documentos detalhados
 

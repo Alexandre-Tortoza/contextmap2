@@ -69,6 +69,8 @@ Point Representation é uma capability **opcional**: possui os contratos `PointR
 
 Semantic Fusion acumula a evidência multi-vista **sem criar identidade de objeto**: possui `FusionSupport`, `EvidenceContribution`, o agrupamento por observação física, a política baseline de acumulação (hipóteses por chave de label, stances e sinais tipados, abstenção configurável e registros de incerteza), os canais de evidência tipados, a política opcional ciente de qualidade, o `SemanticFusionRunArtifact` e o harness de validação em `evaluation`. Toda a verificação usa fixtures sintéticos: não há run de fusão sobre dados reais nem anotações de referência reais, então **nenhuma decisão foi tomada** sobre manter a política ciente de qualidade opcional ou adotá-la.
 
+Runtime & Configuration compõe essas capabilities: possui a configuração efetiva versionada (perfil, arquivos e overrides, digest determinístico, segredos só do ambiente), o catálogo de stages, pontos de variação e backends, a composition root, o DAG de estágios com preflight, o reuso por identidade de conteúdo, a seleção explícita de runs com linhagem, o ciclo de vida do run (journal, eventos, cancelamento, retomada), o serviço público de ingestion, a CLI `contextmap` e a API pública de aplicação `Runtime` para qualquer frontend. Só a Ingestion possui um executor de estágio real: os demais são fornecidos por quem chama e os testes usam estágios falsos, então o pipeline canônico ainda **não foi executado de ponta a ponta com dados reais**. Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` continuam declarados como estágios indisponíveis.
+
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
 ## Ordem recomendada de leitura
@@ -117,6 +119,8 @@ flowchart TD
     M --> PR[src/contextmap/point_representation/docs/README.md]
     M --> SF[src/contextmap/semantic_fusion/docs/README.md]
     M --> EV[src/contextmap/evaluation/docs/README.md]
+    M --> RTM[src/contextmap/runtime/docs/README.md]
+    RTM --> RTD[configuration / composition / pipeline / reuse / selection / lifecycle / cli / api]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]
@@ -182,6 +186,7 @@ Módulos com documentação própria:
 - [`sensor_association`](../src/contextmap/sensor_association/docs/README.md) — evidência visual 2D ancorada em geometria 3D persistente: `SpatialObservation`, modelos de câmera, visibilidade e oclusão, pertencimento à máscara, features densas e `ObservationQuality`.
 - [`semantic_fusion`](../src/contextmap/semantic_fusion/docs/README.md) — acumulação de evidência multi-vista sobre suporte espacial, sem identidade de objeto: `FusionSupport`, `FusedEvidence`, agrupamento por observação física, política baseline e ciente de qualidade, canais tipados e o artifact de run.
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
+- [`runtime`](../src/contextmap/runtime/docs/README.md) — configuração efetiva, composition root, DAG com preflight, reuso, seleção de runs, lifecycle, CLI, serviço de ingestion e a API pública `Runtime` para frontends; compõe e executa, sem decidir ciência.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 
 ## Integração da documentação
