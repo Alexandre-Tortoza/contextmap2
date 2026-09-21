@@ -73,6 +73,15 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
 
+### Spatial Relations
+
+- `evaluate_spatial_relations()`/`SpatialRelationsEvaluationReport` — avaliação de um run de relações persistido contra um `RelationAnnotationSet`, **por predicado canônico** e sem score agregado: verdadeiros positivos, relações perdidas (não resolvidas, rejeitadas ou nunca recuperadas pelo estágio de candidatos), falsos positivos (violação de negativos), negativos corretos e não resolvidos, previsões sem anotação, com precisão, revocação, F1, taxa de falsa relação, de relação perdida, de não resolvidas e recall de recuperação de candidatos.
+- `RelationPredicateEvaluation`, `RelationConsistencyViolation`, `RelationUnmatchedReport` — os contadores por predicado, as contradições estruturais das relações persistidas (inverso, simetria e suporte mútuo) e o que não pôde ser comparado e de quem é a falha (referência sem entidade casada, identidade com várias entidades, predicados sem mapeamento, estados ambíguos e desconhecidos).
+- `spatial_relations_evaluation_report()` — relatório comum com `relations.f1` e `relations.negative_violation.rate` por predicado, a linhagem (run de relações e de resolução), as políticas efetivas e o reference set.
+- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION`, `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia.
+
+Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
+
 ### Sensor Association
 
 - `evaluate_sensor_association()`/`SensorAssociationEvaluationReport` — relatório estratificado de um run persistido, lido pelo leitor público, com a linhagem completa (`SensorAssociationLineage`).
@@ -175,6 +184,7 @@ pipeline principal.
   open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`semantic_mapping.md`](semantic_mapping.md) — as seis camadas de validação de Semantic Mapping, a linhagem do relatório e a robustez a upstream corrompido.
+- [`spatial_relations.md`](spatial_relations.md) — avaliação por predicado de relações persistidas: contadores separados por causa, falhas de recuperação, consistência estrutural, referência expandida pela taxonomia e o envelope comum.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
 - [`optional-techniques.md`](optional-techniques.md) — protocolos das técnicas opcionais, estratos, evidência por estrato, custos separados e decisão manter/adiar/mudar o default.
