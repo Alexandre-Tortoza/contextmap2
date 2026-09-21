@@ -36,6 +36,7 @@ Existem os **contratos** (`Relation`, `RelationEvidence` e seus tipos de apoio),
 - `evaluate_contact_predicate()`, `evaluate_contact_candidates()`, `ContactPredicatePolicy`, `CONTACT_PREDICATES`, `CONTACT_POLICY_ID` — a evidência por pontos de `TOUCHING`, `ON_TOP_OF` e `LEANING_AGAINST`.
 - `decide_relations()`, `RelationDecisionResult`, `RelationDecision`, `DecisionRule`, `EvidenceUse`, `CONSERVATIVE_DECISION_POLICY_ID`, `decision_policy_fingerprint()` — a política conservadora que decide os estados, verifica a consistência estrutural e gera inversos e gêmeas simétricas.
 - `observation_evidence_from_statements()`, `ObservationEvidenceResult`, `ObservationRelationStatement`, `UpstreamStatementRef`, `EndpointLink`, `StatementPolarity`, `canonical_predicate()`, `OBSERVATION_RULE_ID`, `UnlinkedEndpointError`, `IncompatibleLineageError` — o canal de observação: vínculo explícito, sem vocabulário escondido e nunca decisivo.
+- `lineage_from_resolution_manifest()`, `resolution_artifact_digest()`, `resolved_entity_geometries()` — a leitura de um run de Entity Resolution pela API pública dela: a linhagem derivada do manifest, o digest do artifact e a geometria das entidades resolvidas conferida com a persistida.
 - `SpatialRelationsRunWriter`, `SpatialRelationsRunReader`, `SpatialRelationsRunManifest`, `SpatialRelationsRunId`, `RelationsRunLineage`, `RelationsRunPolicies`, `RelationsRunDebugLevel`, `RelationsRunArtifactError`, `IncompleteRelationsRunArtifactError` — o artifact persistido: escrita atômica em diretório escolhido por quem chama, linhagem explícita, leitura por identidade e índice por entidade.
 - `encode_candidate_set()`, `decode_candidate_set()`, `encode_relation_decision()`, `decode_relation_decision()`, `encode_relation()`, `decode_relation()`, `encode_relation_evidence()`, `decode_relation_evidence()` — o codec JSON, que revalida todas as invariantes.
 
@@ -43,7 +44,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e [`taxonomy.md`
 
 ## Módulos consumidos
 
-- `contextmap.entity_resolution`: `ResolvedEntityReference` e o codec da referência.
+- `contextmap.entity_resolution`: `ResolvedEntityReference` e o codec da referência; `EntityResolutionRunManifest`, `EntityResolutionRunReader` e `ResolvedEntitySet` para a linhagem, a validação das referências e a geometria das entidades resolvidas.
 - `contextmap.semantic_mapping`: `EntityGeometry`, o resumo espacial que os avaliadores leem.
 - `contextmap.geometric_mapping`: `GeometrySource`, `GeometryPoint`, `GeometryReference`, `GeometryId` e `MapId`; a fonte só serve para resolver os pontos do canal de contato.
 - `contextmap.shared`: `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
