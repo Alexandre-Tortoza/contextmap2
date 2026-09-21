@@ -1,0 +1,513 @@
+{
+  "context_map_id": "context-map--corridor-02--fixture",
+  "schema_version": "0.1.0",
+  "metadata": {
+    "creation": {
+      "assembly_policy": {
+        "policy_id": "context-map-assembly",
+        "version": "1"
+      },
+      "code_version": "fixture",
+      "configuration_fingerprint": null
+    },
+    "source_sequences": [
+      {
+        "sequence_artifact_id": "sequence--corridor-02--fixture",
+        "selection_id": "selection--fixture-window"
+      }
+    ],
+    "frame": {
+      "frame_id": "map",
+      "unit": "meter",
+      "handedness": "right_handed",
+      "up_direction": null,
+      "anchor": {
+        "kind": "estimator_local",
+        "origin_definition": "first accepted lidar scan of the state-estimation run",
+        "reference_frame_id": null
+      }
+    },
+    "bounds": {
+      "frame_id": "map",
+      "minimum_m": [
+        -4.0,
+        -2.0,
+        0.0
+      ],
+      "maximum_m": [
+        8.0,
+        2.0,
+        2.5
+      ]
+    },
+    "time_bounds": {
+      "start": {
+        "seconds": 1700000000,
+        "nanoseconds": 0,
+        "clock_id": "corridor-02:header"
+      },
+      "end": {
+        "seconds": 1700000090,
+        "nanoseconds": 0,
+        "clock_id": "corridor-02:header"
+      }
+    },
+    "capabilities": {
+      "content": [
+        "entities",
+        "geometry",
+        "point_representation_evidence",
+        "relations"
+      ],
+      "relation_predicates": [
+        "near",
+        "next_to",
+        "on"
+      ]
+    }
+  },
+  "geometry_ref": {
+    "map_id": "corridor-02--map--fixture",
+    "point_count": 120
+  },
+  "entities": [
+    {
+      "entity_id": "entity-0001",
+      "source": {
+        "artifact_id": "entity-resolution-run--corridor-02--fixture",
+        "record_id": "resolved-0001"
+      },
+      "member_entities": [
+        {
+          "artifact_id": "semantic-map--corridor-02--fixture",
+          "record_id": "entity-a"
+        },
+        {
+          "artifact_id": "semantic-map--corridor-02--fixture",
+          "record_id": "entity-b"
+        }
+      ],
+      "resolution_decisions": [
+        {
+          "artifact_id": "entity-resolution-run--corridor-02--fixture",
+          "record_id": "decision-a-b"
+        }
+      ],
+      "geometry_refs": [
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000010"
+        },
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000011"
+        },
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000012"
+        }
+      ],
+      "semantic_state": {
+        "status": "unambiguous",
+        "hypotheses": [
+          {
+            "label": "chair",
+            "origin": {
+              "kind": "model_inferred",
+              "derived_from": [
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000120-a"
+                },
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000135-a"
+                }
+              ],
+              "policy": null
+            }
+          }
+        ]
+      },
+      "origin": {
+        "kind": "multiview_fused",
+        "derived_from": [
+          {
+            "artifact_id": "point-representation-run--corridor-02--fixture",
+            "record_id": "representation-0001"
+          },
+          {
+            "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+            "record_id": "fused-support-0001"
+          },
+          {
+            "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+            "record_id": "fused-support-0002"
+          },
+          {
+            "artifact_id": "sequence--corridor-02--fixture",
+            "record_id": "observation-000120"
+          },
+          {
+            "artifact_id": "sequence--corridor-02--fixture",
+            "record_id": "observation-000135"
+          }
+        ],
+        "policy": {
+          "policy_id": "baseline-evidence-accumulation",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "entity_id": "entity-0002",
+      "source": {
+        "artifact_id": "entity-resolution-run--corridor-02--fixture",
+        "record_id": "resolved-0002"
+      },
+      "member_entities": [
+        {
+          "artifact_id": "semantic-map--corridor-02--fixture",
+          "record_id": "entity-c"
+        }
+      ],
+      "resolution_decisions": [],
+      "geometry_refs": [
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000020"
+        },
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000021"
+        },
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000022"
+        }
+      ],
+      "semantic_state": {
+        "status": "ambiguous",
+        "hypotheses": [
+          {
+            "label": "desk",
+            "origin": {
+              "kind": "model_inferred",
+              "derived_from": [
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000120-b"
+                }
+              ],
+              "policy": null
+            }
+          },
+          {
+            "label": "table",
+            "origin": {
+              "kind": "model_inferred",
+              "derived_from": [
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000135-b"
+                }
+              ],
+              "policy": null
+            }
+          }
+        ]
+      },
+      "origin": {
+        "kind": "multiview_fused",
+        "derived_from": [
+          {
+            "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+            "record_id": "fused-support-0003"
+          }
+        ],
+        "policy": {
+          "policy_id": "baseline-evidence-accumulation",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "entity_id": "entity-0003",
+      "source": {
+        "artifact_id": "entity-resolution-run--corridor-02--fixture",
+        "record_id": "resolved-0003"
+      },
+      "member_entities": [
+        {
+          "artifact_id": "semantic-map--corridor-02--fixture",
+          "record_id": "entity-d"
+        }
+      ],
+      "resolution_decisions": [],
+      "geometry_refs": [
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000040"
+        },
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000041"
+        }
+      ],
+      "semantic_state": {
+        "status": "conflicting",
+        "hypotheses": [
+          {
+            "label": "bin",
+            "origin": {
+              "kind": "model_inferred",
+              "derived_from": [
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000120-c"
+                }
+              ],
+              "policy": null
+            }
+          },
+          {
+            "label": "box",
+            "origin": {
+              "kind": "model_inferred",
+              "derived_from": [
+                {
+                  "artifact_id": "perception-run--corridor-02--fixture",
+                  "record_id": "claim-000150-c"
+                }
+              ],
+              "policy": null
+            }
+          }
+        ]
+      },
+      "origin": {
+        "kind": "multiview_fused",
+        "derived_from": [
+          {
+            "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+            "record_id": "fused-support-0004"
+          }
+        ],
+        "policy": {
+          "policy_id": "baseline-evidence-accumulation",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "entity_id": "entity-0004",
+      "source": {
+        "artifact_id": "entity-resolution-run--corridor-02--fixture",
+        "record_id": "resolved-0004"
+      },
+      "member_entities": [
+        {
+          "artifact_id": "semantic-map--corridor-02--fixture",
+          "record_id": "entity-e"
+        }
+      ],
+      "resolution_decisions": [],
+      "geometry_refs": [
+        {
+          "map_id": "corridor-02--map--fixture",
+          "geometry_id": "corridor-02--map--fixture--geom-000000060"
+        }
+      ],
+      "semantic_state": {
+        "status": "insufficient_evidence",
+        "hypotheses": []
+      },
+      "origin": {
+        "kind": "multiview_fused",
+        "derived_from": [
+          {
+            "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+            "record_id": "fused-support-0005"
+          }
+        ],
+        "policy": {
+          "policy_id": "baseline-evidence-accumulation",
+          "version": "1"
+        }
+      }
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "relation-0001",
+      "source": {
+        "artifact_id": "spatial-relations-run--corridor-02--fixture",
+        "record_id": "relation-0001"
+      },
+      "subject": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0001"
+      },
+      "predicate": "next_to",
+      "object": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0002"
+      },
+      "state": "supported",
+      "origin": {
+        "kind": "geometry_derived",
+        "derived_from": [
+          {
+            "artifact_id": "corridor-02--map--fixture",
+            "record_id": "corridor-02--map--fixture--geom-000000020"
+          },
+          {
+            "artifact_id": "spatial-relations-run--corridor-02--fixture",
+            "record_id": "relation-evidence-0001"
+          }
+        ],
+        "policy": {
+          "policy_id": "geometric-relations",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "relation_id": "relation-0002",
+      "source": {
+        "artifact_id": "spatial-relations-run--corridor-02--fixture",
+        "record_id": "relation-0002"
+      },
+      "subject": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0003"
+      },
+      "predicate": "on",
+      "object": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0002"
+      },
+      "state": "unresolved",
+      "origin": {
+        "kind": "geometry_derived",
+        "derived_from": [
+          {
+            "artifact_id": "corridor-02--map--fixture",
+            "record_id": "corridor-02--map--fixture--geom-000000020"
+          },
+          {
+            "artifact_id": "spatial-relations-run--corridor-02--fixture",
+            "record_id": "relation-evidence-0002"
+          }
+        ],
+        "policy": {
+          "policy_id": "geometric-relations",
+          "version": "1"
+        }
+      }
+    },
+    {
+      "relation_id": "relation-0003",
+      "source": {
+        "artifact_id": "spatial-relations-run--corridor-02--fixture",
+        "record_id": "relation-0003"
+      },
+      "subject": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0004"
+      },
+      "predicate": "near",
+      "object": {
+        "context_map_id": "context-map--corridor-02--fixture",
+        "entity_id": "entity-0001"
+      },
+      "state": "conflicting",
+      "origin": {
+        "kind": "geometry_derived",
+        "derived_from": [
+          {
+            "artifact_id": "corridor-02--map--fixture",
+            "record_id": "corridor-02--map--fixture--geom-000000020"
+          },
+          {
+            "artifact_id": "spatial-relations-run--corridor-02--fixture",
+            "record_id": "relation-evidence-0003"
+          }
+        ],
+        "policy": {
+          "policy_id": "geometric-relations",
+          "version": "1"
+        }
+      }
+    }
+  ],
+  "lineage": [
+    {
+      "artifact_id": "corridor-02--map--fixture",
+      "kind": "geometric_map",
+      "content_identity": "sha256:c3794efc1918fd7d8d3b6e74b3f7a92aab45cadf89f3d3668144bfb7bb512f5b",
+      "configuration_fingerprint": "sha256:5d4fc91796892a8c626b3fda26cf9cd795714ff824483d75ca5402e7f7ac4bca",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "entity-resolution-run--corridor-02--fixture",
+      "kind": "entity_resolution_run",
+      "content_identity": "sha256:7dee82dbdbc340dda9c166b7c1db82a5ab38dd36da1f7c0118174e730aec7617",
+      "configuration_fingerprint": "sha256:78f0fc74bc41b38fc3d95852460f226aca11e7b168e0e65bd825ad128bd0a154",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "perception-run--corridor-02--fixture",
+      "kind": "perception_run",
+      "content_identity": "sha256:e5c8b62471a155529c9448cb132be1a05293698e5ef43c2faf432d4faeae19a6",
+      "configuration_fingerprint": "sha256:8e06240144474d4910524250a4296c96871e29afb6ff73a5c3ff7370ad3343f1",
+      "code_version": "fixture",
+      "model_identities": [
+        "qwen2.5-vl-7b@fixture",
+        "sam2-hiera-large@fixture"
+      ]
+    },
+    {
+      "artifact_id": "point-representation-run--corridor-02--fixture",
+      "kind": "point_representation_run",
+      "content_identity": "sha256:c458467899fc3e51e2ce7f1b4b9a07c7d32d9de6f708abf7c563b9241d5e636a",
+      "configuration_fingerprint": "sha256:20300b09deab4112b9f5f12833658e7ec436f67f692b2669727f393a3944f888",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "semantic-fusion-run--corridor-02--fixture",
+      "kind": "semantic_fusion_run",
+      "content_identity": "sha256:c1f374bccab4f31adc09595eda78a2544a62939f70dfab927f94cf57c1b8c992",
+      "configuration_fingerprint": "sha256:d416c3c3f15fcce0975e6c417cecabe56f798b7c6d876d01bdf675d0984f2f3f",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "semantic-map--corridor-02--fixture",
+      "kind": "semantic_map",
+      "content_identity": "sha256:779f621c3c79075670c72c91ac9e49ae0b7a83b8a4018b80410ab9f04d45b97c",
+      "configuration_fingerprint": "sha256:61328f974c22916eef413985ef27e9bbcb8aa45189f9c94f74bccd73fdca3906",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "sequence--corridor-02--fixture",
+      "kind": "sequence",
+      "content_identity": "sha256:e0a2c79bfbb70fb29b967f8902d65a986768fd9222a351fa950a05f31a235e03",
+      "configuration_fingerprint": "sha256:b920cfc576d1f3707a42cfbd332c2d39cda0086f18198e05658892afb7a7c3a0",
+      "code_version": "fixture",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "spatial-relations-run--corridor-02--fixture",
+      "kind": "spatial_relations_run",
+      "content_identity": "sha256:fb717a6efac8da4d6f1466894f16aafe5fa0dcc1591a8b190009b04d8cbf224a",
+      "configuration_fingerprint": "sha256:5f7fa84498d1c65bc0cec89abf43126d3309c316dc0045b3dcc1b979982d5299",
+      "code_version": "fixture",
+      "model_identities": []
+    }
+  ]
+}
