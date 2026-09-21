@@ -23,7 +23,8 @@ from contextmap.geometric_mapping import (
     geometry_id_for,
     geometry_index_of,
 )
-from contextmap.ingestion import FrameId
+from contextmap.ingestion import FrameId, SourceObservationId
+from contextmap.point_representation import PointRepresentationId, PointRepresentationRunId
 from contextmap.semantic_fusion import (
     EvidenceContributionId,
     EvidenceReference,
@@ -32,13 +33,18 @@ from contextmap.semantic_fusion import (
     FusedHypothesisId,
     FusionSupportId,
     HypothesisEvidence,
+    PointRepresentationRef,
     SemanticFusionRunId,
     SupportSignal,
     SupportSignalKind,
     UncertaintyKind,
     UncertaintyRecord,
 )
-from contextmap.semantic_mapping.evidence import EntityEvidenceLinks, FusedEvidenceRef
+from contextmap.semantic_mapping.evidence import (
+    EntityEvidenceLinks,
+    EntityFeatureRef,
+    FusedEvidenceRef,
+)
 from contextmap.semantic_mapping.geometry import (
     EntityGeometry,
     EntityOrientation,
@@ -65,8 +71,18 @@ from contextmap.semantic_mapping.semantic_state import (
     SemanticStateProvenance,
 )
 from contextmap.semantic_mapping.temporal import EntityTemporalState
+from contextmap.sensor_association import SpatialObservationId
 from contextmap.shared import SourceTimestamp, Vector3
-from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
+from contextmap.visual_perception import (
+    BackendProvenance,
+    ClaimId,
+    FeatureId,
+    FeatureScope,
+    HypothesisRole,
+    PerceptionResultId,
+    PerceptionRunId,
+    RegionId,
+)
 
 
 def encode_entity_reference(reference: EntityReference) -> dict[str, Any]:
@@ -443,11 +459,35 @@ def _encode_evidence(evidence: EntityEvidenceLinks) -> dict[str, Any]:
         "fused_evidence": [
             {
                 "fusion_run_id": str(ref.fusion_run_id),
+                "fusion_schema_version": ref.fusion_schema_version,
+                "fusion_artifact_digest": ref.fusion_artifact_digest,
                 "fused_evidence_id": str(ref.fused_evidence_id),
                 "fusion_support_id": str(ref.fusion_support_id),
             }
             for ref in evidence.fused_evidence
-        ]
+        ],
+        "spatial_observation_ids": [str(item) for item in evidence.spatial_observation_ids],
+        "physical_observation_ids": [str(item) for item in evidence.physical_observation_ids],
+        "visual_feature_refs": [
+            {
+                "perception_run_id": str(ref.perception_run_id),
+                "perception_result_id": str(ref.perception_result_id),
+                "feature_id": str(ref.feature_id),
+                "embedding_space_id": ref.embedding_space_id,
+                "scope": ref.scope.value,
+                "region_id": None if ref.region_id is None else str(ref.region_id),
+            }
+            for ref in evidence.visual_feature_refs
+        ],
+        "point_representation_refs": [
+            {
+                "representation_id": str(ref.representation_id),
+                "run_id": str(ref.run_id),
+                "representation_space_id": ref.representation_space_id,
+                "geometry": _encode_geometry_refs((ref.geometry_reference,)),
+            }
+            for ref in evidence.point_representation_refs
+        ],
     }
 
 
@@ -456,11 +496,39 @@ def _decode_evidence(record: Mapping[str, Any]) -> EntityEvidenceLinks:
         fused_evidence=tuple(
             FusedEvidenceRef(
                 fusion_run_id=SemanticFusionRunId(item["fusion_run_id"]),
+                fusion_schema_version=item["fusion_schema_version"],
+                fusion_artifact_digest=item["fusion_artifact_digest"],
                 fused_evidence_id=FusedEvidenceId(item["fused_evidence_id"]),
                 fusion_support_id=FusionSupportId(item["fusion_support_id"]),
             )
             for item in record["fused_evidence"]
-        )
+        ),
+        spatial_observation_ids=tuple(
+            SpatialObservationId(item) for item in record["spatial_observation_ids"]
+        ),
+        physical_observation_ids=tuple(
+            SourceObservationId(item) for item in record["physical_observation_ids"]
+        ),
+        visual_feature_refs=tuple(
+            EntityFeatureRef(
+                perception_run_id=PerceptionRunId(item["perception_run_id"]),
+                perception_result_id=PerceptionResultId(item["perception_result_id"]),
+                feature_id=FeatureId(item["feature_id"]),
+                embedding_space_id=item["embedding_space_id"],
+                scope=FeatureScope(item["scope"]),
+                region_id=None if item["region_id"] is None else RegionId(item["region_id"]),
+            )
+            for item in record["visual_feature_refs"]
+        ),
+        point_representation_refs=tuple(
+            PointRepresentationRef(
+                representation_id=PointRepresentationId(item["representation_id"]),
+                run_id=PointRepresentationRunId(item["run_id"]),
+                representation_space_id=item["representation_space_id"],
+                geometry_reference=_decode_geometry_refs(item["geometry"])[0],
+            )
+            for item in record["point_representation_refs"]
+        ),
     )
 
 

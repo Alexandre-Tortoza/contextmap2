@@ -4,15 +4,12 @@ import json
 import pytest
 from mapping_builders import (
     FUSED_EVIDENCE_ID,
-    FUSION_RUN_ID,
-    FUSION_SUPPORT_ID,
     MAP_ID,
     SEMANTIC_MAP_ID,
     claim_signal,
     geometry_refs,
     make_entity,
     make_evidence_item,
-    make_evidence_links,
     make_geometry,
     make_hypothesis,
     make_semantic_state,
@@ -26,7 +23,6 @@ from contextmap.semantic_fusion import EvidenceStance, FusedEvidenceId
 from contextmap.semantic_mapping import (
     EmptyGeometrySupportError,
     Entity,
-    EntityEvidenceLinks,
     EntityHypothesis,
     EntityId,
     EntityProvenance,
@@ -34,7 +30,6 @@ from contextmap.semantic_mapping import (
     EntitySet,
     EntityTemporalState,
     ForeignEntityReferenceError,
-    FusedEvidenceRef,
     SemanticMapId,
     UnknownEntityError,
 )
@@ -235,31 +230,6 @@ class TestEntitySemanticState:
                 hypothesis_id="hypothesis-0001",  # type: ignore[arg-type]
                 label="pallet",
                 evidence=(later, earlier),
-            )
-
-
-class TestEntityEvidenceLinks:
-    def test_an_entity_needs_evidence_behind_it(self) -> None:
-        with pytest.raises(ValueError, match="fused_evidence must not be empty"):
-            EntityEvidenceLinks(fused_evidence=())
-
-    def test_references_are_canonical(self) -> None:
-        later = FusedEvidenceRef(
-            fusion_run_id=FUSION_RUN_ID,
-            fused_evidence_id=FusedEvidenceId("fused--support-000002"),
-            fusion_support_id=FUSION_SUPPORT_ID,
-        )
-        earlier = make_evidence_links().fused_evidence[0]
-
-        with pytest.raises(ValueError, match="sorted and unique"):
-            EntityEvidenceLinks(fused_evidence=(later, earlier))
-
-    def test_a_reference_needs_every_identity(self) -> None:
-        with pytest.raises(ValueError, match="fusion_run_id"):
-            FusedEvidenceRef(
-                fusion_run_id="",  # type: ignore[arg-type]
-                fused_evidence_id=FUSED_EVIDENCE_ID,
-                fusion_support_id=FUSION_SUPPORT_ID,
             )
 
 

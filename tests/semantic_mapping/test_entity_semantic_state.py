@@ -4,10 +4,10 @@ import json
 import pytest
 from mapping_builders import (
     FUSED_EVIDENCE_ID,
-    FUSION_RUN_ID,
     claim_signal,
     make_entity,
     make_evidence_item,
+    make_evidence_links,
     make_hypothesis,
     make_semantic_state,
     scorer_signal,
@@ -36,7 +36,6 @@ from contextmap.semantic_mapping import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
-    FusedEvidenceRef,
     SemanticStateProvenance,
     derive_ambiguity_state,
     semantic_state_from_fused_evidence,
@@ -58,14 +57,9 @@ def _fused(views: list[View], policy: BaselineAccumulationPolicy | None = None) 
 
 
 def _links_for(evidence: FusedEvidence) -> EntityEvidenceLinks:
-    return EntityEvidenceLinks(
-        fused_evidence=(
-            FusedEvidenceRef(
-                fusion_run_id=FUSION_RUN_ID,
-                fused_evidence_id=evidence.fused_evidence_id,
-                fusion_support_id=evidence.fusion_support_id,
-            ),
-        )
+    return make_evidence_links(
+        fused_evidence_id=evidence.fused_evidence_id,
+        fusion_support_id=evidence.fusion_support_id,
     )
 
 

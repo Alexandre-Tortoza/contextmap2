@@ -118,8 +118,9 @@ class Entity:
         """Validate the identity and that the semantic state can be traced to the evidence.
 
         Raises:
-            ValueError: If an identity is empty or a hypothesis or an uncertainty record comes
-                from a fused evidence the entity does not link to.
+            ValueError: If an identity is empty, a hypothesis or an uncertainty record comes
+                from a fused evidence the entity does not link to, or a 3D representation is
+                anchored outside the entity's geometry support.
         """
         require_present(self, "entity_id", "semantic_map_id")
         linked = {ref.fused_evidence_id for ref in self.evidence.fused_evidence}
@@ -134,6 +135,13 @@ class Entity:
                 raise ValueError(
                     f"uncertainty comes from fused evidence {item.fused_evidence_id!r}, which "
                     f"the entity does not link to"
+                )
+        support = set(self.geometry.geometry_refs)
+        for representation in self.evidence.point_representation_refs:
+            if representation.geometry_reference not in support:
+                raise ValueError(
+                    f"point representation {representation.representation_id!r} is anchored "
+                    f"outside the geometry support of the entity"
                 )
 
     @property
