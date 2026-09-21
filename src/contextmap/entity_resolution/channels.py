@@ -38,7 +38,7 @@ from contextmap.entity_resolution._checks import (
 from contextmap.entity_resolution.models import PolicyRef
 from contextmap.geometric_mapping import GeometryReference, MapId
 from contextmap.point_representation import PointRepresentationId, PointRepresentationRunId
-from contextmap.semantic_mapping import AmbiguityState, EntityFeatureRef
+from contextmap.semantic_mapping import AmbiguityState, AttributeOrigin, EntityFeatureRef
 
 
 class MatchChannel(Enum):
@@ -391,29 +391,36 @@ class LabelComparison:
 
 @dataclass(frozen=True, kw_only=True)
 class AttributeComparison:
-    """The values of one attribute name on each entity.
+    """One value of an attribute name on each entity, with where each value comes from.
 
     Attributes:
         name: The attribute, for example ``material``.
-        value_a: Its value on ``a``, verbatim.
-        value_b: Its value on ``b``, verbatim.
-        same: Whether the values are equal.
+        value_a: A value of the attribute on ``a``, verbatim.
+        value_b: A value of the attribute on ``b``, verbatim.
+        origin_a: Whether ``value_a`` was observed or derived; external knowledge is never compared.
+        origin_b: The same for ``value_b``.
+        same: Whether the values are the same under the policy's normalization.
     """
 
     name: str
     value_a: str
     value_b: str
+    origin_a: AttributeOrigin
+    origin_b: AttributeOrigin
     same: bool
 
     def __post_init__(self) -> None:
         """Validate the name and that ``same`` agrees with the values.
 
         Raises:
-            ValueError: If the name is empty or ``same`` does not match the values.
+            ValueError: If the name is empty, a value is external knowledge, or identical values
+                are not marked as the same.
         """
         require_present(self, "name")
-        if self.same != (self.value_a == self.value_b):
-            raise ValueError("same must agree with the two values")
+        if AttributeOrigin.EXTERNAL_KNOWLEDGE in (self.origin_a, self.origin_b):
+            raise ValueError("external knowledge is never evidence and cannot be compared")
+        if self.value_a == self.value_b and not self.same:
+            raise ValueError("identical values must be marked as the same")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -427,7 +434,7 @@ class SemanticMeasurement:
         hypothesis_count_b: Hypotheses of ``b``.
         label_comparisons: The relation of each compared label pair, sorted by labels and unique.
         attribute_comparisons: The values of the attribute names both entities have, sorted by
-            name and unique.
+            name and values and unique.
     """
 
     ambiguity_a: AmbiguityState
@@ -451,7 +458,9 @@ class SemanticMeasurement:
             lambda item: (item.label_a, item.label_b),
         )
         require_canonical(
-            "attribute_comparisons", self.attribute_comparisons, lambda item: (item.name,)
+            "attribute_comparisons",
+            self.attribute_comparisons,
+            lambda item: (item.name, item.value_a, item.value_b),
         )
 
 
