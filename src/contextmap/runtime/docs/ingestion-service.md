@@ -79,6 +79,6 @@ Categorias de falha: `configuration`, `dependency`, `source`, `validation`, `out
 ## Lacunas conhecidas
 
 - **Calibração externa pela CLI.** `IngestionRequest.calibration` aceita um `CalibrationSet` (API Python); a CLI ainda não carrega um arquivo de calibração porque o decoder não faz parte da API pública de `contextmap.ingestion`. Fontes com `camera_info` (bag) trazem a calibração pelo adapter.
-- **Sem journal de run.** A ingestion publica um artifact e emite eventos; o registro de ciclo de vida (`runtime/run-NNNN`) é do DAG. Rodada como estágio, ela ganha o journal do run.
+- **Sem journal de run.** A ingestion publica um artifact e emite eventos; o registro de ciclo de vida (`<workspace>/<dataset>/run-NNNN`) é do DAG. Rodada como estágio, ela ganha o journal do run.
 - **Reuso entre gravações.** O hash da fonte (O(tamanho)) entra na identidade; `--no-source-hash` troca custo por identidade mais fraca e fica registrado.
 - **TUI.** O contrato (pedido, preflight, eventos, resultado, cancelamento) está pronto para um frontend externo; a fachada pública única do runtime (issue #264) o expõe junto com o restante.

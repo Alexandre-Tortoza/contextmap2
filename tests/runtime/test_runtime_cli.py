@@ -305,7 +305,7 @@ class TestRun:
 
         assert code == 0, out + err
         assert log == ["ingestion", "state_estimation", "geometric_mapping"]
-        run_dir = workspace / "runtime" / "run-0001"
+        run_dir = workspace / "S1" / "run-0001"
         assert sorted(p.name for p in run_dir.iterdir()) == [
             "effective_config.json",
             "events.jsonl",
@@ -328,7 +328,7 @@ class TestRun:
             )
             assert code == 0
 
-        assert sorted(p.name for p in (tmp_path / "ws" / "runtime").iterdir()) == [
+        assert sorted(p.name for p in (tmp_path / "ws" / "S1").iterdir()) == [
             "run-0001",
             "run-0002",
         ]
@@ -383,9 +383,9 @@ class TestRun:
         assert code == 1
         assert "executor" in out + err and "ingestion" in out + err
         assert "run record" in err
-        status = _status(tmp_path / "ws" / "runtime" / "run-0001")
+        status = _status(tmp_path / "ws" / "S1" / "run-0001")
         assert status["status"] == "blocked"
-        assert not (tmp_path / "ws" / "runtime" / "run-0001" / "execution.json").exists()
+        assert not (tmp_path / "ws" / "S1" / "run-0001" / "execution.json").exists()
 
     def test_a_failing_stage_reports_what_completed_and_leaves_a_failure_record(
         self, tmp_path: Path
@@ -412,7 +412,7 @@ class TestRun:
         assert code == 1
         text = out + err
         assert "state_estimation" in text and "out of memory" in text and "ingestion" in text
-        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        run_dir = tmp_path / "ws" / "S1" / "run-0001"
         assert str(run_dir) in err
         status = _status(run_dir)
         assert status["status"] == "failed"
@@ -495,7 +495,7 @@ class TestSelections:
         assert code == 0, out + err
         assert log == ["geometric_mapping"]
         record = json.loads(
-            (tmp_path / "ws" / "runtime" / "run-0001" / "execution.json").read_text("utf-8")
+            (tmp_path / "ws" / "S1" / "run-0001" / "execution.json").read_text("utf-8")
         )["document"]
         assert record["selections"]["stages"]["ingestion"][0]["artifact_id"] == "seq-1"
 
@@ -636,7 +636,7 @@ class TestArtifactInspectionAndValidation:
         assert "manifest.json" in out + err
 
     def test_runtime_documents_are_verified_by_digest(self, tmp_path: Path) -> None:
-        run = tmp_path / "ws" / "runtime" / "run-0001"
+        run = tmp_path / "ws" / "S1" / "run-0001"
         cli(
             "run",
             "-c",
@@ -762,7 +762,7 @@ class TestLifecycleCommands:
 
     def test_inspect_run_shows_the_failure_record_and_the_trail(self, tmp_path: Path) -> None:
         self._resumable(tmp_path)
-        run_dir = str(tmp_path / "ws" / "runtime" / "run-0001")
+        run_dir = str(tmp_path / "ws" / "S1" / "run-0001")
 
         code, out, _ = cli("inspect", "run", run_dir, "--events")
 
@@ -773,9 +773,7 @@ class TestLifecycleCommands:
     def test_inspect_run_json_carries_every_event_and_the_environment(self, tmp_path: Path) -> None:
         self._resumable(tmp_path)
 
-        code, out, _ = cli(
-            "inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"), "--json"
-        )
+        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "S1" / "run-0001"), "--json")
 
         document = _json(out)
         assert code == 0
@@ -795,7 +793,7 @@ class TestLifecycleCommands:
             str(tmp_path / "ws"),
         )
 
-        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"))
+        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "S1" / "run-0001"))
 
         assert code == 0
         assert "blocked" in out and "executor" in out
@@ -804,7 +802,7 @@ class TestLifecycleCommands:
         self, tmp_path: Path
     ) -> None:
         self._resumable(tmp_path)
-        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        run_dir = tmp_path / "ws" / "S1" / "run-0001"
         assert cli("validate", str(run_dir))[0] == 0
 
         events = run_dir / "events.jsonl"
@@ -831,9 +829,9 @@ class TestLifecycleCommands:
         assert code == 0, out + err
         assert world.runs == ["geometric_mapping", "sensor_association", "semantic_fusion"]
         assert "resumed run-0001" in out
-        new = tmp_path / "ws" / "runtime" / "run-0002"
+        new = tmp_path / "ws" / "S1" / "run-0002"
         assert _status(new)["resumed_from"] == "run-0001"
-        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "failed"
+        assert _status(tmp_path / "ws" / "S1" / "run-0001")["status"] == "failed"
 
     def test_resuming_a_completed_run_is_refused_and_creates_no_run(self, tmp_path: Path) -> None:
         world, args = self._resumable(tmp_path)
@@ -848,7 +846,7 @@ class TestLifecycleCommands:
 
         assert code == 1
         assert "nothing to resume" in out + err
-        assert not (tmp_path / "ws" / "runtime" / "run-0003").exists()
+        assert not (tmp_path / "ws" / "S1" / "run-0003").exists()
 
     def test_resume_and_reuse_flags_have_explicit_requirements(self, tmp_path: Path) -> None:
         base = [
@@ -917,7 +915,7 @@ class TestLifecycleCommands:
 
         assert code == 130
         assert "cancelled" in out + err
-        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "cancelled"
+        assert _status(tmp_path / "ws" / "S1" / "run-0001")["status"] == "cancelled"
 
     def test_a_secret_never_reaches_the_output_or_the_run_record(self, tmp_path: Path) -> None:
         secret = "s3cr3t-token-value"
@@ -944,7 +942,7 @@ class TestLifecycleCommands:
 
         assert code == 1
         assert secret not in out + err
-        for path in (tmp_path / "ws" / "runtime" / "run-0001").iterdir():
+        for path in (tmp_path / "ws" / "S1" / "run-0001").iterdir():
             assert secret not in path.read_text("utf-8"), path.name
 
     def test_the_dry_run_predicts_what_reuse_would_do(self, tmp_path: Path) -> None:

@@ -68,10 +68,10 @@ from contextmap.runtime.pipeline import (
 )
 from contextmap.runtime.reuse import FileArtifactStore, ReusePolicy
 from contextmap.runtime.runs import (
-    RUNS_DIRECTORY,
     RunJournal,
     RunSummary,
     check_resumable,
+    dataset_directory,
     read_run,
     resume_plan,
 )
@@ -517,6 +517,7 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     if args.dry_run:
         return _dry_run(session, effective, plan, execution, resolved, reuse)
     assert workspace is not None  # exigido acima
+    _dataset_directory(effective, workspace)  # recusa cedo um run sem dataset
     return _execute(session, effective, execution, Path(workspace), reuse)
 
 
@@ -590,7 +591,7 @@ def _execute(
             raise _UsageError(
                 "--resume reuses the completed stages: pass --reuse-index and --code-identity"
             )
-        previous = _previous_run(workspace, args.resume)
+        previous = _previous_run(_dataset_directory(effective, str(workspace)), args.resume)
         check_resumable(read_run(previous), execution)  # recusa antes de criar um run novo
     secrets = resolve_secrets(effective.config, environ=session.environ)
     journal = RunJournal.create(workspace, effective, execution, code_identity=args.code_identity)
@@ -667,12 +668,20 @@ def _reuse_policy(session: _Session) -> ReusePolicy | None:
     )
 
 
-def _previous_run(workspace: Path, reference: str) -> Path:
-    """Resolve ``--resume`` as a run directory, or as a run id under the workspace."""
+def _dataset_directory(effective: EffectiveConfig, workspace: str) -> Path:
+    """Resolve ``<workspace>/<dataset>``: a real run needs ``inputs.sequence`` to be placed."""
+    try:
+        return dataset_directory(workspace, effective.config.inputs.sequence)
+    except ValueError as error:
+        raise _UsageError(str(error)) from error
+
+
+def _previous_run(datasets: Path, reference: str) -> Path:
+    """Resolve ``--resume`` as a run directory, or as a run id under the dataset directory."""
     candidate = Path(reference)
     if candidate.is_dir():
         return candidate
-    under = workspace / RUNS_DIRECTORY / reference
+    under = datasets / reference
     if under.is_dir():
         return under
     raise _Failure(f"no run record at {candidate} or {under}")

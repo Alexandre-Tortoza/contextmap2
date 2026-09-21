@@ -342,12 +342,18 @@ class StageRequest:
             evidence, in deterministic order) for an input that accepts them.
         components: Resolved configuration of the stage's variation points.
         config_digest: Identity of the stage's own configuration.
+        output_dir: The final directory of the stage's artifact, ``<run>/<stage_id>``. The
+            executor hands it, unchanged, to the capability's writer, which creates and
+            finalizes it atomically: the directory does not exist yet, and an executor never
+            computes a path of its own. ``None`` only when the plan runs without a journal
+            (an in-memory execution), where an executor that persists cannot run.
     """
 
     stage_id: str
     inputs: Mapping[str, tuple[ArtifactRef, ...]]
     components: Mapping[str, ComponentConfig]
     config_digest: str
+    output_dir: Path | None = None
 
 
 class StageExecutor(Protocol):
@@ -756,7 +762,8 @@ def run_plan(
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
         reuse: How to decide between reusing and recomputing, or ``None`` to always run.
-        journal: Persists the run's lifecycle, status and execution record.
+        journal: Persists the run's lifecycle, status and execution record. Its directory is
+            the run root: each stage receives ``<run>/<stage_id>`` as its output directory.
         events: An extra receiver of the run's events.
         cancellation: Cooperative cancellation, checked before each stage.
         redact: Replaces secret values inside a string.
@@ -811,7 +818,16 @@ def run_plan(
             )
             raise PreflightError(report)
         emitter.emit("run_started")
-        records = _run_stages(execution, executors, reuse, emitter, cancellation, redact, progress)
+        records = _run_stages(
+            execution,
+            executors,
+            reuse,
+            emitter,
+            cancellation,
+            redact,
+            progress,
+            None if journal is None else journal.directory,
+        )
     except (PreflightError, StageExecutionError, RunCancelledError):
         raise
     except KeyboardInterrupt:
@@ -855,6 +871,7 @@ def _run_stages(
     cancellation: CancellationToken | None,
     redact: Callable[[str], str] | None,
     progress: list[str],
+    run_directory: Path | None,
 ) -> list[StageRecord]:
     """Run the stages in order, emitting an event for each step and stopping at a failure."""
     outputs: dict[str, tuple[ArtifactRef, ...]] = dict(execution.reused)
@@ -905,6 +922,7 @@ def _run_stages(
                 inputs=inputs,
                 components=stage.component_configs,
                 config_digest=stage.config_digest,
+                output_dir=None if run_directory is None else run_directory / stage.stage_id,
             )
             try:
                 produced = executor.execute(request)
