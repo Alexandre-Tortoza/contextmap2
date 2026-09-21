@@ -48,9 +48,21 @@ O espaço `family="dinov3"` não é compatível automaticamente com DINOv2, CLIP
 
 ## Validação desta implementação
 
-Os testes injetam um runtime determinístico e cobrem o port, persistência, metadata, exclusão de registers, mapping espacial, normalização, determinismo, pooling comum e falhas sem rede ou modelo real.
+Os testes de CI injetam um runtime determinístico e cobrem o port, persistência, metadata, exclusão de registers, mapping espacial, normalização, determinismo, pooling comum, falhas sem rede ou modelo real e a reconstrução do mapa denso a partir das métricas persistidas.
 
-Por solicitação explícita do usuário, pesos reais não foram baixados nem executados neste ambiente. A issue #69 só deve ser encerrada depois de uma execução controlada na máquina de inferência confirmar carregamento, layout de tokens e repetibilidade numérica do checkpoint selecionado. Em 2026-09-20 essa execução foi bloqueada porque os repositórios `facebook/dinov3-*` são *gated* e a conta usada não aceitou os termos (403). O caminho de pré-processamento e de carregamento é o mesmo do DINOv2, validado com pesos reais (ver `dinov2.md`).
+Execução real (issue #69, 2026-09-21; RTX 3060, torch 2.14+cu130, transformers 5.17, 20 frames reais de `corridor-02` da seleção `sha256:dc641b34…`): `facebook/dinov3-vitb16-pretrain-lvd1689m` (revisão `5931719e…`, patch 16, 4 registers, 768 canais) e `facebook/dinov3-vits16-pretrain-lvd1689m` (revisão `114c1379…`, 384 canais), ambos com entrada 448×336 e `float32`. O relatório completo, com identidade, números e limites, está em [`dinov3-validation.md`](dinov3-validation.md). Em resumo:
+
+- **carga:** o adapter carrega o checkpoint fixado por revisão em cache local (safetensors, sha256 conferido contra o Hub) e produz `(21, 28, 768)` com stride e suporte de `16 × 640/448 ≈ 22,86` px e origem `(0, 0)`; 1,3–1,6 s incluindo a carga, 336 MiB de GPU (ViT-B) e mediana de 42 ms por frame;
+- **layout de tokens:** a contagem de registers coincide entre `config`, o parâmetro real do modelo e a aritmética de tokens; a saída é idêntica (diferença máxima 8e-6) a um forward cru independente. Um bloco magenta colado em posição conhecida é localizado com IoU 0,88–1,0 e erro de centroide de 2–9 px (célula de 16–23 px) usando só o `sampling`; sem remover os registers o bloco aparece deslocado exatamente 4 células (IoU 0), e a leitura em ordem de colunas o desloca dezenas a centenas de pixels. O pico de equivariância à translação cai no deslocamento correto (0,4) e (3,0) células;
+- **repetibilidade:** diferença 0,0 na mesma instância, depois de outro frame e em instância nova; os 20 payloads têm hash idêntico entre dois processos; `assert_repeatable_feature_outputs` passa;
+- **pooling:** as 429 regiões reais do SAM2 (20 frames) passam por `pool_region_feature`; contra uma reimplementação independente da política a diferença máxima é 2,4e-7 e pesos e contagem de células coincidem nas 429;
+- **persistência:** um run imutável reabre com integridade íntegra, payload idêntico e, com `FeatureDebugLevel.NONE`, o `DenseFeatureSampling` é reconstruído exatamente de `metrics/feature-extraction.jsonl`.
+
+A execução real revelou que a geometria densa só existia em `debug/` e sem a origem da grade; ela agora é persistida nas métricas obrigatórias com a origem (ver [`feature_diagnostics.md`](feature_diagnostics.md)), com testes de regressão.
+
+Observações que não foram alteradas neste adapter (detalhes no relatório): entradas que não são múltiplos do patch deixam uma faixa sem célula (o `sampling` é fiel e o pooling informa `coverage_fraction`; o DINOv2 se comporta igual); `coordinate_transform_id` inclui o fingerprint da configuração (device e precisão); `float32` em GPU Ampere usa TF32 no conv do patch por default do cuDNN (CPU contra GPU: cosseno mínimo 0,9999999998).
+
+Esses resultados validam carregamento, layout espacial, contratos e estabilidade numérica dessas configurações; não constituem avaliação científica comparativa da qualidade dos embeddings.
 
 ## O que este backend não faz
 

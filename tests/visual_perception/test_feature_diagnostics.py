@@ -12,6 +12,7 @@ from contextmap.visual_perception import (
     BackendProvenance,
     BoundingBox2D,
     DenseFeatureDiagnostic,
+    DenseFeatureSampling,
     EmbeddingSpace,
     FeatureDebugLevel,
     FeatureDiagnosticPreview,
@@ -95,6 +96,8 @@ def _dense_diagnostic() -> FeatureExtractionDiagnostic:
             source_artifact_id="run-0001",
             grid_width=4,
             grid_height=4,
+            origin_x=1.0,
+            origin_y=0.5,
             stride_x=2.0,
             stride_y=2.0,
             support_width=2.0,
@@ -312,3 +315,76 @@ def test_diagnostics_cannot_be_added_after_finalize(tmp_path: Path) -> None:
 
     with pytest.raises(RunArtifactError, match="after finalize"):
         writer.add_feature_diagnostic(_dense_diagnostic())
+
+
+def test_dense_sampling_is_rebuildable_from_required_metrics_without_debug(tmp_path: Path) -> None:
+    """Regression: a real run showed the geometry only in debug and without the grid origin."""
+    writer = _writer(tmp_path, FeatureDebugLevel.NONE)
+    writer.add_feature_diagnostic(_dense_diagnostic())
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    assert not (run_dir / "debug").exists()
+    record = json.loads(
+        (run_dir / "metrics" / "feature-extraction.jsonl").read_text(encoding="utf-8")
+    )
+
+    persisted = record["dense"]
+    assert persisted["origin_x"] == 1.0
+    assert persisted["origin_y"] == 0.5
+    rebuilt = DenseFeatureSampling(
+        grid_width=persisted["grid_width"],
+        grid_height=persisted["grid_height"],
+        source_image_width=persisted["source_image_width"],
+        source_image_height=persisted["source_image_height"],
+        origin_x=persisted["origin_x"],
+        origin_y=persisted["origin_y"],
+        stride_x=persisted["stride_x"],
+        stride_y=persisted["stride_y"],
+        support_width=persisted["support_width"],
+        support_height=persisted["support_height"],
+        coordinate_transform_id=persisted["coordinate_transform_id"],
+    )
+    assert rebuilt == DenseFeatureSampling(
+        grid_width=4,
+        grid_height=4,
+        source_image_width=8,
+        source_image_height=8,
+        origin_x=1.0,
+        origin_y=0.5,
+        stride_x=2.0,
+        stride_y=2.0,
+        support_width=2.0,
+        support_height=2.0,
+        coordinate_transform_id="sha256:transform",
+    )
+    assert persisted["source_artifact_id"] == "run-0001"
+
+
+def test_non_dense_metrics_carry_no_dense_geometry(tmp_path: Path) -> None:
+    writer = _writer(tmp_path, FeatureDebugLevel.NONE)
+    writer.add_feature_diagnostic(_region_diagnostic())
+    writer.finalize()
+
+    record = json.loads(
+        (_run_dir(tmp_path) / "metrics" / "feature-extraction.jsonl").read_text(encoding="utf-8")
+    )
+
+    assert record["dense"] is None
+
+
+@pytest.mark.parametrize("axis", ["origin_x", "origin_y"])
+def test_dense_diagnostic_rejects_non_finite_origin(axis: str) -> None:
+    values: dict[str, float] = {"origin_x": 0.0, "origin_y": 0.0, axis: float("nan")}
+    with pytest.raises(ValueError, match=axis):
+        DenseFeatureDiagnostic(
+            source_artifact_id="run-0001",
+            grid_width=4,
+            grid_height=4,
+            stride_x=2.0,
+            stride_y=2.0,
+            support_width=2.0,
+            support_height=2.0,
+            coordinate_transform_id="sha256:transform",
+            **values,
+        )
