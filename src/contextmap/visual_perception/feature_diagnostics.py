@@ -1,14 +1,16 @@
 """Structured Feature Extraction diagnostics and debug-artifact writer.
 
-Required timing/status metrics are always written under ``metrics/`` when a
-diagnostic exists. Human-oriented metadata and previews are written under
-``debug/30-feature-extraction/`` according to an explicit debug level and are
-never required to load contractual feature payloads.
+Required timing/status metrics, and the sampling geometry of dense features, are
+always written under ``metrics/`` when a diagnostic exists. Human-oriented
+metadata and previews are written under ``debug/30-feature-extraction/``
+according to an explicit debug level and are never required to load contractual
+feature payloads.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -59,10 +61,19 @@ class FeatureEventStatus(Enum):
 class DenseFeatureDiagnostic:
     """Spatial metadata for one dense feature map.
 
+    These values are persisted contractually in ``metrics/feature-extraction.jsonl``
+    and must rebuild a valid
+    :class:`~contextmap.visual_perception.dense_region_association.DenseFeatureSampling`,
+    so they are validated with the same rules. ``PerceptionRunWriter.finalize()`` also
+    validates them against the dense ``VisualFeature`` this diagnostic describes.
+
     Attributes:
-        source_artifact_id: Artifact/run owning the source feature.
-        grid_width: Feature-grid width.
-        grid_height: Feature-grid height.
+        source_artifact_id: Run that owns and persists the described feature
+            (``str`` of its ``PerceptionRunId``).
+        grid_width: Feature-grid width; equals ``feature.shape[1]``.
+        grid_height: Feature-grid height; equals ``feature.shape[0]``.
+        origin_x: Left edge of column zero's support, in prepared-image pixels.
+        origin_y: Top edge of row zero's support, in prepared-image pixels.
         stride_x: Horizontal sampling stride in prepared-image pixels.
         stride_y: Vertical sampling stride in prepared-image pixels.
         support_width: Horizontal support per cell in image pixels.
@@ -73,6 +84,8 @@ class DenseFeatureDiagnostic:
     source_artifact_id: str
     grid_width: int
     grid_height: int
+    origin_x: float
+    origin_y: float
     stride_x: float
     stride_y: float
     support_width: float
@@ -80,13 +93,30 @@ class DenseFeatureDiagnostic:
     coordinate_transform_id: str
 
     def __post_init__(self) -> None:
-        """Validate dense spatial metadata."""
+        """Validate dense spatial metadata with the ``DenseFeatureSampling`` rules.
+
+        Raises:
+            ValueError: If an identity is empty, a grid dimension is not positive, any
+                origin/stride/support is NaN or infinite, or a stride/support is not positive.
+        """
         if not self.source_artifact_id or not self.coordinate_transform_id:
             raise ValueError("dense artifact and coordinate transform identities are required")
         if self.grid_width <= 0 or self.grid_height <= 0:
             raise ValueError("dense grid dimensions must be positive")
-        if min(self.stride_x, self.stride_y, self.support_width, self.support_height) <= 0:
-            raise ValueError("dense stride and support dimensions must be positive")
+        geometry = {
+            "origin_x": self.origin_x,
+            "origin_y": self.origin_y,
+            "stride_x": self.stride_x,
+            "stride_y": self.stride_y,
+            "support_width": self.support_width,
+            "support_height": self.support_height,
+        }
+        for name, value in geometry.items():
+            if not math.isfinite(value):
+                raise ValueError(f"dense {name} must be finite")
+        for name in ("stride_x", "stride_y", "support_width", "support_height"):
+            if geometry[name] <= 0.0:
+                raise ValueError(f"dense {name} must be positive")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -141,6 +171,11 @@ class RegionFeatureDiagnostic:
 class FeatureExtractionDiagnostic:
     """Common auditable record for dense, global, or region extraction.
 
+    The feature metadata of a ``SUCCEEDED``/``WARNING`` event must describe exactly one
+    ``VisualFeature`` of the run that persists it (same ``source_observation_id`` and
+    ``feature_id``); ``PerceptionRunWriter.finalize()`` rejects the run otherwise, because the
+    required metrics carry the dense feature-to-image geometry contractually.
+
     Attributes:
         event_id: Stable identity of this extraction event.
         source_observation_id: Physical observation being processed.
@@ -189,6 +224,11 @@ class FeatureExtractionDiagnostic:
     dense: DenseFeatureDiagnostic | None = None
     region: RegionFeatureDiagnostic | None = None
 
+    @property
+    def produced_feature(self) -> bool:
+        """Whether this event claims a produced feature (``SUCCEEDED`` or ``WARNING``)."""
+        return self.status in {FeatureEventStatus.SUCCEEDED, FeatureEventStatus.WARNING}
+
     def __post_init__(self) -> None:
         """Validate outcome and scope-specific metadata consistency."""
         if not self.event_id or not self.stage_id or not self.source_prepared_image_reference:
@@ -205,7 +245,6 @@ class FeatureExtractionDiagnostic:
         elif self.failure_reason is not None:
             raise ValueError("failure_reason is only valid for failed/abstained events")
 
-        produced = self.status in {FeatureEventStatus.SUCCEEDED, FeatureEventStatus.WARNING}
         produced_fields = (
             self.feature_id,
             self.scope,
@@ -214,7 +253,7 @@ class FeatureExtractionDiagnostic:
             self.dtype,
             self.payload_reference,
         )
-        if produced and any(value is None for value in produced_fields):
+        if self.produced_feature and any(value is None for value in produced_fields):
             raise ValueError("successful/warning events require complete feature metadata")
         if self.output_shape is not None and (
             not self.output_shape or any(dimension <= 0 for dimension in self.output_shape)
@@ -349,6 +388,9 @@ def _encode_metric(item: FeatureExtractionDiagnostic) -> dict[str, Any]:
         "peak_memory_bytes": item.peak_memory_bytes,
         "warnings": list(item.warnings),
         "failure_reason": item.failure_reason,
+        # A geometria densa é contratual: sem ela o payload não vira mapa espacial, e o nível de
+        # debug não pode decidir se ela existe.
+        "dense": _encode_dense(item),
     }
 
 
@@ -375,21 +417,28 @@ def _encode_diagnostic(item: FeatureExtractionDiagnostic) -> dict[str, Any]:
         "normalization": item.normalization,
         "payload_reference": item.payload_reference,
         "preprocessing": list(item.preprocessing),
-        "dense": _encode_dense(item.dense) if item.dense is not None else None,
         "region": _encode_region(item.region) if item.region is not None else None,
     }
 
 
-def _encode_dense(item: DenseFeatureDiagnostic) -> dict[str, Any]:
+def _encode_dense(item: FeatureExtractionDiagnostic) -> dict[str, Any] | None:
+    """Encode every field needed to rebuild the ``DenseFeatureSampling`` of a dense feature."""
+    dense = item.dense
+    if dense is None:
+        return None
     return {
-        "source_artifact_id": item.source_artifact_id,
-        "grid_width": item.grid_width,
-        "grid_height": item.grid_height,
-        "stride_x": item.stride_x,
-        "stride_y": item.stride_y,
-        "support_width": item.support_width,
-        "support_height": item.support_height,
-        "coordinate_transform_id": item.coordinate_transform_id,
+        "source_artifact_id": dense.source_artifact_id,
+        "source_image_width": item.source_image_width,
+        "source_image_height": item.source_image_height,
+        "grid_width": dense.grid_width,
+        "grid_height": dense.grid_height,
+        "origin_x": dense.origin_x,
+        "origin_y": dense.origin_y,
+        "stride_x": dense.stride_x,
+        "stride_y": dense.stride_y,
+        "support_width": dense.support_width,
+        "support_height": dense.support_height,
+        "coordinate_transform_id": dense.coordinate_transform_id,
     }
 
 

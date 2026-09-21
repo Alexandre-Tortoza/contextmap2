@@ -72,6 +72,8 @@ Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.
 
 `add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
 
+O writer também exige, antes de publicar, que cada diagnostic de feature `SUCCEEDED`/`WARNING` descreva exatamente uma feature do resultado da mesma observação (`feature_id`), com scope, shape, dtype, normalização, `payload_reference`, proveniência do backend e fingerprint do `EmbeddingSpace` iguais. Para features densas, `(grid_height, grid_width)` precisa ser `feature.shape[:2]` e `source_artifact_id` precisa ser o `run_id` do próprio run; um segundo diagnostic para a mesma feature é rejeitado. `metrics/feature-extraction.jsonl` carrega a geometria densa contratual, então ela não pode descrever outro payload. Detalhes em [`feature_diagnostics.md`](feature_diagnostics.md).
+
 Antes de publicar, o writer também exige que cada `SemanticInterpretationExecution` resolva para exatamente um `PerceptionResult` por `perception_result_id` e observação. Todas as `parsed.claims` precisam estar materializadas nesse resultado e o `parsed.scene_context`, quando presente, precisa coincidir integralmente com o contexto persistido.
 
 Essa reconciliação inclui inputs mesmo quando a execução abstém: `region_id`
