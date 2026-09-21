@@ -227,8 +227,76 @@ quando ambos compartilham lifecycle/modelo no composition root. Sua
 `Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
 suportados, device, precision e geração. A task e o mode entram em
 `task_identity`; checkpoint, revisão e configuração entram na provenance e no
-fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
-passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+fingerprint. A saída passa pelo mesmo parser canônico com `UNSCORED_ONLY`.
+
+### Decisão de design: task token versus JSON canônico
+
+Florence-2 é dirigido por *task tokens* e responde texto puro (por exemplo,
+`<REGION_TO_CATEGORY>` devolve `door`). O boundary canônico exige JSON
+`semantic-response/1`, e o prompt canônico (instruções mais JSON Schema) não é
+algo que o modelo entenda. A decisão foi:
+
+1. **O adapter é dono do mapeamento, não o runtime.** O `Florence2SemanticRuntime`
+   devolve o texto nativo da task, após o parser oficial do processor. A regra
+   `florence2-task-envelope/1` (`_canonical_response_json`) é uma função pura,
+   testável sem transformers: o texto vira **exatamente uma claim `primary`**,
+   com `hypothesis` igual ao texto, sem `category`, `region_kind`, atributos nem
+   confidence (`null`). Nunca há alternativas. No modo `scene`, a claim fica em
+   um `scene_context` vazio, porque nenhum campo de cena (tipo, ambiente,
+   iluminação, navegabilidade) pode ser derivado do texto sem heurística. Texto
+   vazio vira `abstained=true`, uma abstenção explícita com warning, e nunca uma
+   claim inventada.
+2. **O texto só é publicado como claim depois do parser compartilhado.** O JSON
+   intermediário é serializado com `json.dumps`, então um texto que pareça JSON
+   não consegue acrescentar claims, alternativas ou campos, e passa por
+   `parse_semantic_response` como qualquer outro backend.
+3. **O raw response é o texto do modelo.** `execution.raw_response` e o hash
+   `raw_response_sha256` referem-se ao texto nativo da task; o envelope é
+   reconstruível pela política e sua aplicação fica registrada no diagnostic
+   `wrapped_task_text` do parsing.
+4. **O prompt canônico não é input do modelo.** Ele continua renderizado no
+   `SemanticInterpretationExecution` (o request o exige), mas o modelo recebe só
+   o task token e a imagem. Um warning constante em cada execução registra isso,
+   para que o fingerprint do prompt não sugira uma instrução que o Florence-2
+   nunca viu.
+5. **Tasks declaradas.** `FLORENCE2_SEMANTIC_TASKS` lista as tasks de texto:
+   `<CAPTION>`, `<DETAILED_CAPTION>` e `<MORE_DETAILED_CAPTION>` (modo `scene`,
+   view `FULL_FRAME`) e `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>` (modo
+   `region`). As tasks que produzem geometria (`<OD>`, `<REGION_PROPOSAL>`, ...)
+   ficam de fora de propósito: pertencem a `Florence2RegionDiscovery`, e seus
+   rótulos não são claims semânticas. Uma task serve um único modo, e
+   `supported_modes` precisa coincidir com ele.
+6. **Views aceitas.** Uma task de região recebe a view inteira como região
+   (`<loc_0><loc_0><loc_999><loc_999>`), pois o request não carrega a caixa da
+   região dentro de um frame completo ou de um crop contextual. Por isso só
+   `TIGHT_CROP` e `MASKED_SUBJECT` são aceitos; qualquer outra view é rejeitada
+   antes do modelo, assim como requests com mais de uma view.
+
+**Trade-offs aceitos.**
+
+- Nada é fabricado e o mapeamento é determinístico e auditável, ao custo de
+  claims pobres: uma legenda vira uma frase em `hypothesis`, não um conceito, e
+  `casefold-exact/1` quase nunca a casa com um conceito anotado. O relatório
+  deve ler isso como limitação do output do Florence-2, não como alucinação.
+- Sem alternativas, a preservação de ambiguidade é impossível para este backend.
+  A abstenção só acontece por texto vazio.
+- `scene_context` não é estruturado, então as métricas de campos de cena do
+  Florence-2 são vazias por construção.
+- Alternativas rejeitadas: extrair substantivos ou atributos da legenda
+  (fabricação por NLP ad hoc); usar `<OD>` para claims de cena (mistura Region
+  Discovery); pedir JSON ao modelo (não suportado); devolver o JSON no runtime
+  (mistura regra de domínio com o SDK e impede testar sem transformers).
+
+### Runtime Transformers (`HuggingFaceFlorence2SemanticRuntime`)
+
+Carrega o port transformers-nativo (`florence-community/Florence-2-*`) na
+revisão fixada, com `Florence2ForConditionalGeneration` e `AutoProcessor`, sem
+`trust_remote_code` e somente do cache local por padrão. Aplica o parser oficial
+`post_process_generation` da task e remove os tokens `<loc_*>` que ecoam a caixa
+de entrada nas tasks de região, pois repetem o input e não fazem parte da
+resposta. Registra tokens, pico de memória de GPU e o mesmo `load()` explícito
+do runtime Qwen. Sem SDK, device ou checkpoint disponível, falha com erro
+explícito.
 
 ## Avaliação
 
