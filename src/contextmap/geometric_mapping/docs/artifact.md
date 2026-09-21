@@ -6,8 +6,10 @@ Um `GeometricMapArtifact` é um diretório imutável e autodescritivo com o mapa
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/geometric_mapping/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/geometric-mapping/<sequência>/run-000N__<seleção>__<perfil>/
+<output_dir>/
 ├── README.md
 ├── manifest.json
 ├── lineage.json
@@ -26,11 +28,11 @@ workspace/runs/geometric-mapping/<sequência>/run-000N__<seleção>__<perfil>/
 
 `outputs/`, `metrics/`, `lineage.json`, `config.json` e `environment.json` são **contratuais**: entram no inventário do manifesto com tamanho e SHA-256, então a perda ou a alteração de qualquer um é detectada. `debug/` nunca entra: removê-lo não invalida o run, e nenhum estágio a jusante pode depender dele. O `DebugLevel.NONE` não remove nada que o Sensor Association ou etapas posteriores precisem.
 
-A escrita usa `AtomicRunDirectory`: um run interrompido não parece um run finalizado, um run finalizado nunca é sobrescrito, e rodar de novo cria outro run. A geometria é escrita **em fluxo** (`open_binary`) e hasheada durante a escrita, então um mapa maior que a memória pode ser gravado.
+A escrita usa `AtomicRunDirectory(output_dir)`: um run interrompido não parece um run finalizado e não deixa nada para trás, e um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, então rodar de novo grava em outro diretório. A geometria é escrita **em fluxo** (`open_binary`) e hasheada durante a escrita, então um mapa maior que a memória pode ser gravado.
 
 ## Identidade
 
-`map_id = <sequência>--<run_id>`; toda `GeometryReference` carrega esse `map_id`. As referências continuam válidas para o mesmo artefato e são locais a ele.
+`map_id = <sequência>--<run_id>`; toda `GeometryReference` carrega esse `map_id`. `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca (no runtime, o `run_id` deriva do estágio, do `config_digest` e dos hashes das entradas). O `run_index` é um ordinal legível, mas não substitui identidade nem hash. As referências continuam válidas para o mesmo artefato e são locais a ele.
 
 ## Manifesto
 
@@ -57,7 +59,7 @@ A escrita usa `AtomicRunDirectory`: um run interrompido não parece um run final
 - `verify_integrity()` confere o inventário (arquivo ausente, tamanho, hash) e, por padrão, recalcula os limites derivados a partir da geometria e os compara com os registrados;
 - `geometry().trace(reference)` reconstrói **como um ponto persistido chegou à sua posição global** (a cadeia com a pose e a calibração usadas) sem reexecutar o mapeamento.
 
-Arquivo ausente ou payload truncado viram um `MapArtifactError` explícito. `allocate_map_run_index` e `rebuild_map_run_registry` seguem as mesmas regras do State Estimation: o índice é monotônico, calculado dos runs válidos no disco (manifesto e tamanhos, sem reler gigabytes), e o `runs.json` é só uma conveniência.
+Arquivo ausente ou payload truncado viram um `MapArtifactError` explícito.
 
 ## Debug
 
