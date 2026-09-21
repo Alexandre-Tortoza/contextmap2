@@ -29,6 +29,7 @@ Existem os **contratos** de identidade e de comparação:
 - `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
 - `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
 - `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve;
+- a **política de resolução baseline** (`decide`, `ConservativeResolutionPolicy`, `MatchEvidenceBuilder`, `resolve_candidate_pairs`): estágios explícitos (gates, elegibilidade, evidência, regras, decisão) sobre o status dos canais, sem soma ponderada, que prefere `UNRESOLVED` e tem um caminho só de geometria válido ([`resolution-policy.md`](resolution-policy.md));
 - a **comparação de representações 3D**, opcional (`RepresentationComparator`, `RunReaderRepresentationSource`): estrutura 3D comparada só dentro de um espaço de representação compatível, sem nunca interpretar componentes indefinidos, com ausência como `unavailable` ([`representation-comparison.md`](representation-comparison.md));
 - a **comparação de aparência** (`AppearanceComparator`, `FeatureStoreVectorSource`): features visuais comparadas só dentro de um espaço de embedding compatível, um voto por observação física, com ausência como `unavailable` ([`appearance-comparison.md`](appearance-comparison.md));
 - a **comparação semântica e temporal** (`compare_semantics`, `compare_temporal`): compatibilidade de labels, hipóteses e atributos, e do histórico de observações, sem ontologia, sem senso comum e sem tratar ausência como evidência negativa ([`semantic-temporal-comparison.md`](semantic-temporal-comparison.md));
@@ -55,6 +56,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `GeometryComparisonPolicy`, `SupportDistancePolicy`, `GEOMETRY_COMPARISON_POLICY_ID`, `compare_geometry` — o canal de geometria.
 - `AppearanceComparisonPolicy`, `APPEARANCE_COMPARISON_POLICY_ID`, `APPEARANCE_AGGREGATION_ID`, `AppearanceComparator`, `FeatureVectorSource`, `LoadedFeature`, `FeatureStoreVectorSource` — o canal de aparência e a fronteira de carregamento de vetores.
 - `RepresentationComparisonPolicy`, `REPRESENTATION_COMPARISON_POLICY_ID`, `REPRESENTATION_AGGREGATION_ID`, `RepresentationComparator`, `RepresentationVectorSource`, `LoadedRepresentation`, `RunReaderRepresentationSource` — o canal opcional de representação 3D e sua fronteira de carregamento.
+- `ConservativeResolutionPolicy`, `CONSERVATIVE_RESOLUTION_POLICY_ID`, `decide`, `ComparisonChannels`, `MatchEvidenceBuilder`, `PairResolution`, `resolve_candidate_pairs` — a política baseline, a coleta de evidência e o serviço de execução.
 - `PolicyRef` — política versionada e fingerprint da configuração, comum a canais, recuperação e políticas.
 - `encode_*` e `decode_*` de referência resolvida, evidência de comparação, decisão e conjunto de candidatos — o codec JSON, que revalida todas as invariantes.
 
@@ -73,6 +75,7 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`resolution-policy.md`](resolution-policy.md) — estágios, regras de decisão, configuração e execução.
 - [`representation-comparison.md`](representation-comparison.md) — espaço de representação, componentes indefinidos e agregação.
 - [`appearance-comparison.md`](appearance-comparison.md) — espaço de embedding, agregação por observação física e fonte de vetores.
 - [`semantic-temporal-comparison.md`](semantic-temporal-comparison.md) — regras de label, atributos e histórico de observações.

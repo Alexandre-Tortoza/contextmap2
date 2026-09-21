@@ -266,6 +266,11 @@ class RepresentationComparator:
         self._policy = policy
         self._profiles: dict[EntityReference, _Profile] = {}
 
+    @property
+    def policy(self) -> RepresentationComparisonPolicy:
+        """The policy this comparator applies."""
+        return self._policy
+
     def compare(self, entity_a: Entity, entity_b: Entity) -> PointRepresentationEvidence:
         """Compare the 3D structure of two entities.
 
