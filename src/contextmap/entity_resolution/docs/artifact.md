@@ -52,6 +52,14 @@ O escritor recusa (`RunArtifactError`), sem deixar nada no disco: par comparado 
 
 `read_table` e `read_record` só aceitam `outputs/*.jsonl` e `metrics/*.json`: **`debug/` nunca é uma fonte válida**. Spatial Relations consome as entidades resolvidas só dos arquivos contratuais, e apagar `debug/` não invalida o run nem muda o que se lê.
 
+## O que quem consome fixa e segue
+
+Um artifact posterior (Spatial Relations) precisa de três valores deste run, todos pela API pública de `contextmap.entity_resolution`:
+
+- **versão do schema e digest do run:** `reader.manifest.schema_version` e `resolution_artifact_digest(reader.manifest)`. O digest é calculado aqui, pelo dono do artifact, com a mesma regra de `mapping_artifact_digest`: identidade do run, versão do schema e hash de cada arquivo contratual. Ignora `debug/` e o instante da escrita, então o mesmo conteúdo contratual tem o mesmo digest, e uma mudança posterior no run é detectável;
+- **elo de uma afirmação a montante até a entidade resolvida:** uma afirmação sobre uma região só chega a uma entidade resolvida pela observação espacial que ligou a região ao 3D. `reader.resolved_of_spatial_observation(spatial_observation_id)` devolve as entidades resolvidas cuja evidência inclui essa observação. Zero significa que nenhuma entidade a usou; mais de uma significa que a observação sustenta entidades que a resolução manteve separadas. Os dois casos são devolvidos como são, nunca reduzidos a um palpite: quem consome recusa ou decide de forma explícita. Já `resolved_of(EntityReference)` leva de uma entidade de origem à sua entidade resolvida;
+- **identidade de cada entidade resolvida**, para avaliar saídas construídas sobre elas: vem da avaliação de Entity Resolution (`IdentityEvaluation.identity_of_resolved_entity`, em [`evaluation`](../../evaluation/docs/entity_resolution.md)), porque só a avaliação tem a referência anotada. O run em si não conhece identidades físicas.
+
 ## Métricas (separadas, nenhum score composto)
 
 `counts.json`: entidades de origem, conjuntos e pares candidatos, pares comparados e bloqueados, decisões por resultado, entidades resolvidas e fundidas, contradições, candidatos a divisão e, por canal, quantas comparações o mediram, tiveram o canal indisponível ou não o avaliaram. `distributions.json`: histograma do tamanho dos grupos de fusão, candidatos e entidades examinadas por entidade. `payload.json`: tamanho por arquivo e total. `runtime.json` (tempo e memória) só existe quando quem chamou mediu, e fica à parte de toda medida de qualidade.
