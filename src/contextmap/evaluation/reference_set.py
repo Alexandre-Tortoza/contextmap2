@@ -616,6 +616,15 @@ class ReferenceSetIdentity:
             "digest": self.digest,
         }
 
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> ReferenceSetIdentity:
+        """Rebuild an identity from :meth:`to_record` output."""
+        return cls(
+            reference_set_id=record["reference_set_id"],
+            version=record["version"],
+            digest=record["digest"],
+        )
+
 
 @dataclass(frozen=True, kw_only=True)
 class ReferenceSetManifest:

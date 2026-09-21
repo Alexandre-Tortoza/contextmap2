@@ -201,11 +201,7 @@ class ReproducibilityMetadata:
             evaluator=EvaluatorIdentity.from_record(record["evaluator"]),
             reference_set=None
             if reference is None
-            else ReferenceSetIdentity(
-                reference_set_id=reference["reference_set_id"],
-                version=reference["version"],
-                digest=reference["digest"],
-            ),
+            else ReferenceSetIdentity.from_record(reference),
             annotation_schemas=tuple(record["annotation_schemas"]),
             input_artifacts=tuple(
                 ArtifactIdentity.from_record(item) for item in record["input_artifacts"]
