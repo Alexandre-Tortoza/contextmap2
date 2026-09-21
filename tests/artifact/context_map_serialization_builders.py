@@ -1,10 +1,16 @@
 """Builders for ContextMapArtifact serialization tests.
 
-A map is assembled from the schema test builders and a small *world* of real upstream artifacts:
-a GeometricMapArtifact written by the public writer of Geometric Mapping and generic run
-artifacts (a manifest with an inventory) for the entity-resolution and spatial-relations runs and
-for one optional evidence run. The lineage of the map is pinned to those artifacts by the digest
-of their inventories, so no perception, robotics or model runtime is involved.
+A map is assembled from the schema test builders and a small *world* of upstream artifacts on
+disk. Three of them are written by the real writers of their capabilities: a GeometricMapArtifact
+(Geometric Mapping), an EntityResolutionRunArtifact and a SpatialRelationsRunArtifact (on a tiny
+scene, see ``context_map_serialization_upstream``); the fourth, one optional evidence run, is a
+stand-in with the same manifest and inventory conventions. The populated map is assembled from the
+two real runs: its entities are the resolved entities of the resolution run and its relations
+are the relations of the spatial-relations run, with their real identities and geometry
+references; only the semantic state and the origin of each record, which the assembly stage that
+does not exist yet would derive, come from the schema builders. The lineage of the map pins every
+located artifact by the digest of its manifest, so no perception, robotics or model runtime is
+involved. Results are contract/synthetic tests over real artifact formats.
 """
 
 from __future__ import annotations
@@ -19,20 +25,28 @@ from context_map_builders import (
     ENTITY_RESOLUTION_ARTIFACT_ID,
     FUSION_ARTIFACT_ID,
     GEOMETRIC_MAP_ID,
+    SEMANTIC_MAP_ARTIFACT_ID,
     SPATIAL_RELATIONS_ARTIFACT_ID,
     context_map,
-    populated_map,
+    entity_capabilities,
+    metadata,
+    semantic_state,
 )
+from context_map_builders import entity as schema_entity
+from context_map_builders import relation as schema_relation
 from context_map_serialization_geometry import POINT_COUNT, build_geometry_artifact
+from context_map_serialization_upstream import write_relations_run, write_resolution_run
 
 from contextmap.artifact import (
+    AmbiguityStatus,
     ContextMap,
     ContextMapArtifactManifest,
     ContextMapArtifactWriter,
-    inventory_digest,
 )
-from contextmap.artifact.serialization.dependencies import read_inventory
+from contextmap.artifact.serialization.dependencies import artifact_digest
+from contextmap.entity_resolution import EntityResolutionRunReader, ResolvedEntityReference
 from contextmap.shared import AtomicRunDirectory
+from contextmap.spatial_relations import RelationId, SpatialRelationsRunReader
 
 WRITTEN_AT = "2026-09-21T12:00:00+00:00"
 MAP_ID = str(GEOMETRIC_MAP_ID)
@@ -85,15 +99,29 @@ def make_upstream(root: Path, name: str, artifact_id: str) -> Path:
 
 
 def make_world(root: Path, *, geometry_scans: int = 10, points_per_scan: int = 100) -> World:
-    """Write the geometry and the upstream runs a populated test map cites."""
+    """Write the upstream artifacts a populated test map cites.
+
+    The geometric map, the entity-resolution run and the spatial-relations run are written by
+    their capabilities' real writers; the evidence run is a stand-in.
+    """
     geometry_dir, _ = build_geometry_artifact(
         root / "geometry-workspace", scans=geometry_scans, points_per_scan=points_per_scan
+    )
+    resolution_dir, relations_dir = root / "entity-resolution", root / "spatial-relations"
+    write_resolution_run(
+        resolution_dir,
+        run_id=ENTITY_RESOLUTION_ARTIFACT_ID,
+        geometric_map_id=MAP_ID,
+        semantic_map_id=SEMANTIC_MAP_ARTIFACT_ID,
+    )
+    write_relations_run(
+        relations_dir, run_id=SPATIAL_RELATIONS_ARTIFACT_ID, resolution_dir=resolution_dir
     )
     return World(
         root=root,
         geometry_dir=geometry_dir,
-        resolution_dir=make_upstream(root, "entity-resolution", ENTITY_RESOLUTION_ARTIFACT_ID),
-        relations_dir=make_upstream(root, "spatial-relations", SPATIAL_RELATIONS_ARTIFACT_ID),
+        resolution_dir=resolution_dir,
+        relations_dir=relations_dir,
         fusion_dir=make_upstream(root, "semantic-fusion", FUSION_ARTIFACT_ID),
     )
 
@@ -101,8 +129,7 @@ def make_world(root: Path, *, geometry_scans: int = 10, points_per_scan: int = 1
 def pinned(context_map: ContextMap, world: World) -> ContextMap:
     """The same map with the lineage identity of every located artifact set to its real digest."""
     digests = {
-        artifact_id: inventory_digest(read_inventory(location))
-        for artifact_id, location in world.locations.items()
+        artifact_id: artifact_digest(location) for artifact_id, location in world.locations.items()
     }
     lineage = tuple(
         replace(item, content_identity=digests.get(item.artifact_id, item.content_identity))
@@ -111,10 +138,74 @@ def pinned(context_map: ContextMap, world: World) -> ContextMap:
     return replace(context_map, lineage=lineage)
 
 
+_SEMANTIC_STATES = (
+    lambda: semantic_state(),
+    lambda: semantic_state(AmbiguityStatus.AMBIGUOUS, ("box", "table")),
+    lambda: semantic_state(AmbiguityStatus.INSUFFICIENT_EVIDENCE, ()),
+)
+
+
+def assemble_from_runs(world: World) -> ContextMap:
+    """Assemble a map from the real resolution and spatial-relations runs of the world.
+
+    Entities are ``entity-0001`` to ``entity-000N`` in the order of the resolved entities, each
+    mapping to its resolved entity with the real members, decisions, unresolved neighbours and
+    geometry references; relations are ``relation-0001`` to ``relation-000M`` in the order of the
+    relations of the run, with their real ends, predicate and state. The semantic state of each
+    entity is set by the test (the first is plain, the second ambiguous, the third has no
+    evidence), which is what the missing assembly stage would derive.
+    """
+    resolution = EntityResolutionRunReader(world.resolution_dir)
+    relations_run = SpatialRelationsRunReader(world.relations_dir)
+    identities: dict[ResolvedEntityReference, str] = {}
+    entities = []
+    for number, resolved in enumerate(resolution.resolved_entities().entities, 1):
+        source = ResolvedEntityReference(
+            resolution_run_id=resolved.resolution_run_id,
+            resolved_entity_id=resolved.resolved_entity_id,
+        )
+        identities[source] = f"entity-{number:04d}"
+        entities.append(
+            replace(
+                schema_entity(identities[source]),
+                source=source,
+                member_entities=tuple(member.entity_ref for member in resolved.members),
+                resolution_decisions=resolved.resolution_decision_refs,
+                unresolved_neighbors=resolved.unresolved_neighbor_refs,
+                geometry_refs=resolved.geometry.geometry_refs,
+                semantic_state=_SEMANTIC_STATES[(number - 1) % len(_SEMANTIC_STATES)](),
+            )
+        )
+    relations = []
+    ordered = sorted(relations_run.iter_relations(), key=lambda item: str(item.relation_id))
+    for number, relation in enumerate(ordered, 1):
+        relations.append(
+            schema_relation(
+                f"relation-{number:04d}",
+                identities[relation.subject_entity_ref],
+                relation.predicate,
+                identities[relation.object_entity_ref],
+                source_relation_id=RelationId(str(relation.relation_id)),
+                state=relation.state,
+                uncertainty_kinds=tuple(
+                    sorted(
+                        {item.kind for item in relation.uncertainty}, key=lambda kind: kind.value
+                    )
+                ),
+            )
+        )
+    capabilities = entity_capabilities(*{item.predicate for item in relations})
+    return context_map(
+        metadata=metadata(capabilities=capabilities),
+        entities=tuple(entities),
+        relations=tuple(relations),
+    )
+
+
 def make_context_map(world: World, *, kind: str = "populated") -> ContextMap:
     """A valid map pinned to the world: populated (entities and relations) or geometry only."""
     if kind == "populated":
-        return pinned(populated_map(), world)
+        return pinned(assemble_from_runs(world), world)
     if kind == "geometry-only":
         return pinned(context_map(), world)
     raise ValueError(kind)

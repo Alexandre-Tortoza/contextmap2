@@ -39,9 +39,8 @@ from contextmap.artifact import (
     Requirement,
     context_map_from_record,
     context_map_to_record,
-    inventory_digest,
 )
-from contextmap.artifact.serialization.dependencies import read_inventory
+from contextmap.artifact.serialization.dependencies import artifact_digest
 from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     InvalidContentError,
@@ -108,7 +107,11 @@ def test_the_manifest_records_schema_format_code_and_configuration_identities(
     assert manifest.code_version == creation.code_version
     assert manifest.configuration_fingerprint == creation.configuration_fingerprint
     assert manifest.written_at == WRITTEN_AT
-    assert (manifest.entity_count, manifest.relation_count) == (3, 2)
+    assert (manifest.entity_count, manifest.relation_count) == (
+        len(context_map.entities),
+        len(context_map.relations),
+    )
+    assert (manifest.entity_count, manifest.relation_count) == (3, 10)
     assert manifest.content_identity == manifest_content_identity(manifest)
 
 
@@ -158,12 +161,16 @@ def test_the_tables_are_written_ordered_with_indexes_that_describe_them(world: W
         output_dir / "indexes/relation-index.jsonl",
         record_count=manifest.relation_count,
     )
-    assert entities.keys == ("entity-0001", "entity-0002", "entity-0003")
-    assert relations.keys == ("relation-0001", "relation-0002")
-    assert entities.read("entity-0002")["record"]["entity_id"] == "entity-0002"
-    line = relations.read("relation-0002")
-    assert (line["subject"], line["object"]) == ("entity-0002", "entity-0003")
-    assert line["record"]["predicate"] == "next_to"
+    written = make_context_map(world)
+    assert entities.keys == tuple(str(item.entity_id) for item in written.entities)
+    assert relations.keys == tuple(str(item.relation_id) for item in written.relations)
+    line = relations.read(str(written.relations[1].relation_id))
+    assert (line["subject"], line["object"]) == (
+        str(written.relations[1].subject.entity_id),
+        str(written.relations[1].object.entity_id),
+    )
+    assert line["record"]["predicate"] == written.relations[1].predicate.value
+    assert line["record"]["source_relation_id"] == str(written.relations[1].source_relation_id)
 
 
 def test_the_traversal_index_lists_the_relations_of_every_entity(world: World) -> None:
@@ -173,15 +180,24 @@ def test_the_traversal_index_lists_the_relations_of_every_entity(world: World) -
         json.loads(line)
         for line in (output_dir / "indexes/entity-relation-index.jsonl").read_bytes().splitlines()
     ]
+    written = make_context_map(world)
     assert lines == [
-        {"key": "entity-0001", "as_subject": ["relation-0001"], "as_object": []},
         {
-            "key": "entity-0002",
-            "as_subject": ["relation-0002"],
-            "as_object": ["relation-0001"],
-        },
-        {"key": "entity-0003", "as_subject": [], "as_object": ["relation-0002"]},
+            "key": str(item.entity_id),
+            "as_subject": sorted(
+                str(rel.relation_id)
+                for rel in written.relations
+                if rel.subject.entity_id == item.entity_id
+            ),
+            "as_object": sorted(
+                str(rel.relation_id)
+                for rel in written.relations
+                if rel.object.entity_id == item.entity_id
+            ),
+        }
+        for item in written.entities
     ]
+    assert any(line["as_subject"] and line["as_object"] for line in lines)
 
 
 def test_payloads_are_described_with_their_role_counts_and_sources(world: World) -> None:
@@ -233,7 +249,7 @@ def test_dependencies_follow_the_lineage_and_its_structural_kinds(world: World) 
         locator = by_id[artifact_id].locator
         assert locator is not None and not locator.startswith("/")
         assert (output_dir / locator).resolve() == directory.resolve()
-        assert by_id[artifact_id].content_identity == inventory_digest(read_inventory(directory))
+        assert by_id[artifact_id].content_identity == artifact_digest(directory)
     assert by_id[SEQUENCE_ARTIFACT_ID].locator is None
 
 

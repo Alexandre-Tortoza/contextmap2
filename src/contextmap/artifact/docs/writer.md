@@ -26,7 +26,7 @@ manifest = ContextMapArtifactWriter(output_dir=Path("…/context_map")).write(
 Cada entrada de `context_map.lineage` vira uma dependência no manifest, com o `artifact_type = kind.value`:
 
 - **exigência**: `required` se `ArtifactKind.is_structural` (o mapa geométrico, o run de Entity Resolution e o de Spatial Relations), `optional` nos demais tipos. A classificação é a do schema, sem reinterpretação;
-- **identidade**: `content_identity` é a da linhagem. Para uma dependência localizada, o `inventory_digest` do inventário do seu manifest **tem de ser igual** a ela: por convenção, a identidade de conteúdo de um artifact a montante é o `inventory_digest` (exportado por `contextmap.artifact`), e quem monta o mapa (a runtime) a calcula assim. Sem localização (evidência opcional), a identidade da linhagem é gravada sem verificação, e o validador a marca como ausente.
+- **identidade**: `content_identity` é a da linhagem. Para uma dependência localizada, o `artifact_digest` do seu diretório (o digest de artifact que os irmãos usam: SHA-256 de `{run_id, schema_version, arquivos [caminho, hash]}`, o mesmo que Spatial Relations grava para o run de Entity Resolution) **tem de ser igual** a ela. Quem monta a linhagem (a runtime) pode reutilizar o valor que cada capability já calcula para o seu artifact. Sem localização (evidência opcional), a identidade da linhagem é gravada sem verificação, e o validador a marca como ausente.
 
 ## O que é validado antes de publicar
 
@@ -38,7 +38,7 @@ Nada é escrito no disco se algo abaixo falhar, e nada inválido é descartado e
 | valor de um registro que JSON não representa (por exemplo `NaN`) | `RecordTableError` |
 | localização de um artifact que o mapa não cita | `InvalidContentError` |
 | dependência estrutural sem localização | `InvalidContentError` |
-| o artifact achado não é o que a linhagem nomeia (`inventory_digest` diferente da `content_identity`) | `InvalidContentError` |
+| o artifact achado não é o que a linhagem nomeia (`artifact_digest` diferente da `content_identity`) | `InvalidContentError` |
 | o mapa geométrico não é o que o mapa declara: identidade, número de pontos ou frame | `InvalidContentError` |
 | artifact a montante ausente, ou diferente do próprio inventário (arquivo ausente, tamanho ou hash) | `UpstreamArtifactError` |
 
@@ -67,4 +67,4 @@ O writer usa `contextmap.shared.AtomicRunDirectory`: os arquivos são escritos n
 
 - O v0 não escreve colunas binárias: nenhum payload denso é necessário enquanto a geometria fica no `GeometricMapArtifact` e o suporte geométrico de cada entidade cabe no próprio registro. O formato de coluna está definido e descrito no manifest para quando um índice denso (por exemplo, suporte geométrico por entidade) for justificado por uma medição.
 - Não há política de rejeição declarada: um mapa inconsistente é recusado inteiro.
-- A convenção de identidade de conteúdo dos artifacts a montante (`inventory_digest`) precisa ser adotada por quem monta a linhagem; enquanto a runtime de montagem não existe, os testes a aplicam com artifacts reais.
+- Os testes usam artifacts **reais** de Geometric Mapping, Entity Resolution e Spatial Relations (escritos pelos writers das capabilities numa cena mínima) e um run de evidência simulado. A geometria da cena é sintética (caixas numa fonte em memória, não os pontos do mapa geométrico real), e o estado semântico e a origem de cada registro do mapa, que a montagem ainda inexistente derivaria, vêm dos builders do schema. Nenhuma validação com dados reais.

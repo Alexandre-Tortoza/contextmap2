@@ -19,8 +19,9 @@
       "relations"
     ],
     "relation_predicates": [
-      "next_to",
-      "on"
+      "contains",
+      "inside",
+      "next_to"
     ]
   },
   "creation": {

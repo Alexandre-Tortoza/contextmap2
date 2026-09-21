@@ -154,9 +154,9 @@ def test_relations_round_trip_as_schema_types(
 ) -> None:
     written = make_context_map(world)
 
-    assert reader.relation_ids() == ("relation-0001", "relation-0002")
+    assert reader.relation_ids() == tuple(str(item.relation_id) for item in written.relations)
     assert tuple(reader.relations()) == written.relations
-    assert reader.relation("relation-0002") == written.relations[1]
+    assert reader.relation(str(written.relations[1].relation_id)) == written.relations[1]
 
 
 def test_relations_for_an_entity_lists_those_it_takes_part_in(
@@ -169,10 +169,7 @@ def test_relations_for_an_entity_lists_those_it_takes_part_in(
         assert {item.relation_id for item in reader.relations_for(reference)} == {
             item.relation_id for item in written.relations_for(reference)
         }
-    assert [item.relation_id for item in reader.relations_for(entity_reference("entity-0002"))] == [
-        "relation-0001",
-        "relation-0002",
-    ]
+    assert len(reader.relations_for(entity_reference("entity-0003"))) > 2
 
 
 def test_a_map_without_entities_reads_as_empty(tmp_path: Path) -> None:
@@ -275,7 +272,9 @@ def test_a_moved_artifact_opens_and_reads_everything_that_needs_no_geometry(
     with ContextMapArtifactReader.open(elsewhere) as reader:
         assert reader.context_map() == written
         assert reader.entity(entity_reference("entity-0001")).entity_id == "entity-0001"
-        assert len(reader.relations_for(entity_reference("entity-0001"))) == 1
+        assert reader.relations_for(entity_reference("entity-0001")) == written.relations_for(
+            entity_reference("entity-0001")
+        )
         with pytest.raises(MissingDependencyError, match=MAP_ID):
             reader.geometry(_reference(0))
 

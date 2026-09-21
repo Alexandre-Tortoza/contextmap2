@@ -39,14 +39,14 @@ Abrir um artifact custa um `stat` por arquivo. As tabelas só são abertas no pr
 
 A geometria não está no artifact: o leitor a resolve pelo `GeometricMapArtifactReader`, e o `GeometrySource` que ele devolve continua sendo o dono das coordenadas.
 
-Para achar uma dependência, o leitor usa **só** dois lugares, nesta ordem: o caminho informado em `dependency_paths[artifact_id]` (e, se houver, apenas ele: nunca cai para a dica) ou a dica relativa `locator` do manifest, resolvida contra o diretório do artifact. Não há busca. O que for achado só conta se o digest do seu inventário for igual ao `content_identity` registrado:
+Para achar uma dependência, o leitor usa **só** dois lugares, nesta ordem: o caminho informado em `dependency_paths[artifact_id]` (e, se houver, apenas ele: nunca cai para a dica) ou a dica relativa `locator` do manifest, resolvida contra o diretório do artifact. Não há busca. O que for achado só conta se o seu digest de artifact for igual ao `content_identity` registrado:
 
 | Resultado | Erro |
 | --- | --- |
 | não há onde procurar, ou não há diretório com manifest no lugar | `MissingDependencyError` |
-| há um diretório, mas não é o artifact registrado (digest diferente: velho ou de outro mapa) | `DependencyMismatchError` |
+| há um diretório, mas não é o artifact registrado (digest de artifact diferente: velho ou de outro mapa) | `DependencyMismatchError` |
 
-Com `verify_hashes=True`, o leitor também confere o hash de todos os arquivos do mapa geométrico ao abri-lo (uma leitura sequencial do payload). Sem isso, ele confia no digest do inventário e na conferência de tamanho da própria geometria. Um artifact movido **sem** as dependências continua abrindo, e tudo que não precisa de geometria funciona; resolver geometria pede o caminho da dependência.
+Com `verify_hashes=True`, o leitor também confere o hash de todos os arquivos do mapa geométrico ao abri-lo (uma leitura sequencial do payload). Sem isso, ele confia no digest de artifact e na conferência de tamanho da própria geometria. Um artifact movido **sem** as dependências continua abrindo, e tudo que não precisa de geometria funciona; resolver geometria pede o caminho da dependência.
 
 ## Erros explícitos
 

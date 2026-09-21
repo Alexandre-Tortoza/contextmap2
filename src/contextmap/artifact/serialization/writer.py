@@ -27,6 +27,7 @@ from contextmap.artifact.provenance import ArtifactKind
 from contextmap.artifact.records import context_map_to_record
 from contextmap.artifact.serialization.decoding import entity_lines, relation_lines
 from contextmap.artifact.serialization.dependencies import (
+    artifact_digest,
     read_inventory,
     relative_locator,
     verify_inventory,
@@ -58,7 +59,6 @@ from contextmap.artifact.serialization.manifest import (
     create_manifest,
     decode_manifest,
     encode_manifest,
-    inventory_digest,
 )
 from contextmap.artifact.serialization.tables import (
     document_json,
@@ -195,8 +195,7 @@ class ContextMapArtifactWriter:
                     )
             else:
                 self._verify_upstream(context_map, upstream.artifact_id, upstream.kind, location)
-                inventory = read_inventory(location)
-                found = inventory_digest(inventory)
+                found = artifact_digest(location)
                 if found != upstream.content_identity:
                     raise InvalidContentError(
                         f"the lineage names {upstream.kind.value} {upstream.artifact_id!r} with "
