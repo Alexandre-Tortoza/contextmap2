@@ -7,6 +7,18 @@ evidence, never corrects an entity and never answers a natural-language query. S
 ``src/contextmap/spatial_relations/docs/README.md`` for the full capability documentation.
 """
 
+from contextmap.spatial_relations.candidates import (
+    CANDIDATE_POLICY_ID,
+    CandidateExclusion,
+    CandidateExclusionReason,
+    CandidatePolicy,
+    CandidateProvenance,
+    CandidateReason,
+    RelationCandidate,
+    RelationCandidateSet,
+    SkippedPredicate,
+    generate_relation_candidates,
+)
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
     EvidenceCaveatKind,
@@ -53,10 +65,16 @@ from contextmap.spatial_relations.taxonomy import (
 )
 
 __all__ = [
+    "CANDIDATE_POLICY_ID",
     "FRAME_CONVENTIONS_POLICY_ID",
     "PREDICATE_SPECS",
     "TAXONOMY_VERSION",
     "AxisDirection",
+    "CandidateExclusion",
+    "CandidateExclusionReason",
+    "CandidatePolicy",
+    "CandidateProvenance",
+    "CandidateReason",
     "EvidenceCaveat",
     "EvidenceCaveatKind",
     "FrameConventionError",
@@ -68,6 +86,8 @@ __all__ = [
     "PredicateSpec",
     "Quantity",
     "Relation",
+    "RelationCandidate",
+    "RelationCandidateSet",
     "RelationEvidence",
     "RelationEvidenceChannel",
     "RelationEvidenceId",
@@ -79,12 +99,14 @@ __all__ = [
     "RelationState",
     "RelationUncertainty",
     "RelationUncertaintyKind",
+    "SkippedPredicate",
     "UndeclaredAxisError",
     "decode_relation",
     "decode_relation_evidence",
     "encode_relation",
     "encode_relation_evidence",
     "evidence_id_for",
+    "generate_relation_candidates",
     "predicate_spec",
     "relation_id_for",
 ]

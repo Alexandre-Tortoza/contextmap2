@@ -38,6 +38,18 @@ def require_relatable_pair(subject: ResolvedEntityReference, obj: ResolvedEntity
         )
 
 
+def reference_key(reference: ResolvedEntityReference) -> tuple[str, str]:
+    """Order references canonically: by resolution artifact, then by resolved entity.
+
+    Args:
+        reference: A resolved-entity reference.
+
+    Returns:
+        The sort key; equal references have equal keys and different ones never do.
+    """
+    return (reference.resolution_run_id, reference.resolved_entity_id)
+
+
 def candidate_digest(
     subject: ResolvedEntityReference,
     predicate: RelationPredicate,
