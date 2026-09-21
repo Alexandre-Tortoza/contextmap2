@@ -31,7 +31,7 @@ __all__ = ["SemanticClaim", "SemanticInterpreter"]
 
 ## Integração pública implementada
 
-As dependências cross-module reais percorrem sete capabilities de domínio materializadas e a capability transversal `evaluation` na `dev`. A regra continua sendo a mesma em todas elas: o consumer importa o producer pela raiz pública `contextmap.<capability>`; backends, adapters e submódulos internos não atravessam o boundary. O diagrama abaixo representa **imports diretos existentes**, não apenas fluxo conceitual de dados.
+As dependências cross-module reais percorrem oito capabilities de domínio materializadas e a capability transversal `evaluation` na `dev`. A regra continua sendo a mesma em todas elas: o consumer importa o producer pela raiz pública `contextmap.<capability>`; backends, adapters e submódulos internos não atravessam o boundary. O diagrama abaixo representa **imports diretos existentes**, não apenas fluxo conceitual de dados.
 
 ```mermaid
 flowchart LR
@@ -50,6 +50,8 @@ flowchart LR
     GM --> SF
     SA --> SF["contextmap.semantic_fusion"]
     PR -. evidência 3D opcional .-> SF
+    GM --> SM["contextmap.semantic_mapping"]
+    SF --> SM
 
     ING --> EV["contextmap.evaluation"]
     VP --> EV["contextmap.evaluation"]
@@ -58,6 +60,7 @@ flowchart LR
     SA --> EV
     PR --> EV
     SF --> EV
+    SM --> EV
 ```
 
 Exemplos concretos dessa integração:
@@ -66,6 +69,7 @@ Exemplos concretos dessa integração:
 - `sensor_association` consome evidência visual, trajetória e geometria pelas raízes públicas dos respectivos owners;
 - `point_representation` consome `GeometrySource`; seu manifest pode registrar uma identidade opaca de contexto de associação, mas a capability não importa `sensor_association`;
 - `semantic_fusion` consome `SpatialObservation`, evidência visual referenciada e `PointRepresentation` opcional pelas APIs públicas;
+- `semantic_mapping` consome `FusedEvidence`, o run de fusão e a geometria pelas APIs públicas e devolve `Entity` com a evidência referenciada por identidade;
 - `evaluation` mede as capabilities implementadas sem acessar seus backends ou mutar seus artifacts.
 
 A matriz mecanicamente verificável de dependências permitidas está em `tests/architecture/test_boundaries.py`. Ela é a referência executável para imports cross-capability; [architecture.md](architecture.md) continua sendo a referência conceitual de ownership e direção de dados.
