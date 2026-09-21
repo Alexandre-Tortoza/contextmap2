@@ -45,7 +45,7 @@ Existem os **contratos** (`PointRepresentation`, `RepresentationSpace`, polític
 - `EncoderIdentity`, `RepresentationProvenance` — qual implementação e qual código produziram a representação.
 - `PointEncoder`, `EncodedVector`, `UnencodableSupportError` — a porta de encoders: um `PreparedSupport` entra, um vetor sai, e uma falha nunca vira vetor padrão.
 - `RepresentationService`, `EncodedRepresentation`, `RepresentationMetrics`, `FailedSupport`, `FailureReason` — a execução independente de backend e seus resultados explícitos; ver [`execution.md`](execution.md).
-- `PointRepresentationRunWriter`, `PointRepresentationRunReader`, `PointRepresentationRunManifest`, `PointRepresentationDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError`, `allocate_run_index()`, `rebuild_run_registry()` — o artifact persistido: escrita atômica, leitura lazy de representações e vetores, inventário com hash; ver [`artifact.md`](artifact.md).
+- `PointRepresentationRunWriter`, `PointRepresentationRunReader`, `PointRepresentationRunManifest`, `PointRepresentationDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError` — o artifact persistido: escrita atômica, leitura lazy de representações e vetores, inventário com hash; ver [`artifact.md`](artifact.md).
 - `center_selection_id()`, `encode_support_policy()` — a identidade independente da ordem de um conjunto de centros e a codificação da política de suporte, usadas pelo manifest e pela avaliação.
 - `SupportExtractor` — seleciona o suporte (raio ou k vizinhos) de um elemento pela porta `GeometrySource` e prepara suas coordenadas; ver [`support-extraction.md`](support-extraction.md).
 
