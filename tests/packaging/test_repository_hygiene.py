@@ -68,7 +68,9 @@ def test_research_data_workspaces_and_secrets_are_ignored(path: str) -> None:
 def test_no_tracked_file_is_a_model_weight_a_recording_or_oversized() -> None:
     offenders = []
     for path in _tracked_files():
-        if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.stat().st_size > MAX_TRACKED_FILE_BYTES:
+        forbidden = path.suffix.lower() in FORBIDDEN_SUFFIXES
+        oversized = path.stat().st_size > MAX_TRACKED_FILE_BYTES
+        if forbidden or oversized:
             offenders.append(str(path.relative_to(REPOSITORY_ROOT)))
 
     assert not offenders, f"tracked files that must not be released: {offenders}"
