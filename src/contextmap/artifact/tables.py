@@ -133,6 +133,50 @@ def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
     return EncodedTable(payload=bytes(payload), index=bytes(index), record_count=len(keyed))
 
 
+def rebuild_index(payload: bytes) -> bytes:
+    """Recompute the offset index of a table payload from the payload alone.
+
+    The payload is authoritative and the index is derived, so a validator rebuilds the index and
+    compares it byte for byte with the stored one: any difference means the stored index is not
+    the one these lines would produce.
+
+    Args:
+        payload: The bytes of a JSON Lines table.
+
+    Returns:
+        The index that :func:`encode_record_table` would have written for these lines.
+
+    Raises:
+        RecordTableError: If the payload is not a canonical table: a line is not terminated by a
+            newline or is not a JSON object with a string ``key``, or the keys are not strictly
+            ascending (which is also how a duplicate key shows).
+    """
+    if payload and not payload.endswith(b"\n"):
+        raise RecordTableError("the table is not terminated by a newline")
+    index = bytearray()
+    offset = 0
+    previous: str | None = None
+    for text in payload.split(b"\n")[:-1]:
+        try:
+            line = json.loads(text)
+        except ValueError as error:
+            raise RecordTableError(
+                f"the line at offset {offset} is not valid JSON ({error})"
+            ) from error
+        key = line.get("key") if isinstance(line, dict) else None
+        if not isinstance(key, str) or not key:
+            raise RecordTableError(f"the line at offset {offset} has no non-empty string 'key'")
+        if previous is not None and key <= previous:
+            raise RecordTableError(
+                f"the keys are not strictly ascending: {key!r} follows {previous!r} "
+                "(a repeated key is a duplicate)"
+            )
+        index += canonical_json_line({"key": key, "length": len(text), "offset": offset}) + b"\n"
+        offset += len(text) + 1
+        previous = key
+    return bytes(index)
+
+
 class RecordTable:
     """Read-only, random-access view of a table on disk.
 

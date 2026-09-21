@@ -8,11 +8,11 @@ O leitor abre um artifact **só pelo próprio diretório** e responde o que um c
 
 ```python
 with ContextMapArtifactReader.open(path) as reader:
-    reader.metadata()                      # ContextMapMetadata
-    reader.map_bounds()                    # Bounds3D no frame do mapa
-    reader.entity("entity-a")              # EntityEntry, sem ler as outras
-    reader.relations_for("entity-a")       # relações em que participa, por chave
-    reader.geometry(geometry_reference)    # GeometryPoint autoritativo
+    reader.metadata()  # ContextMapMetadata
+    reader.map_bounds()  # Bounds3D no frame do mapa
+    reader.entity("entity-a")  # EntityEntry, sem ler as outras
+    reader.relations_for("entity-a")  # relações em que participa, por chave
+    reader.geometry(geometry_reference)  # GeometryPoint autoritativo
     reader.validate_reference(geometry_reference)
 ```
 
@@ -67,4 +67,4 @@ O leitor só abre arquivos para leitura: não escreve índice, cache nem lock, e
 
 ## Limites
 
-Entidades e relações são devolvidas como `EntityEntry`/`RelationEntry` (chave, extremos e o registro canônico opaco); quando o schema (#150) as tipar, o leitor as decodifica com ele. A conferência de hash de um artifact e de referências entre registros pertence ao validador (issue #158).
+Entidades e relações são devolvidas como `EntityEntry`/`RelationEntry` (chave, extremos e o registro canônico opaco); quando o schema (#150) as tipar, o leitor as decodifica com ele. A conferência de hash de um artifact e de referências entre registros pertence ao validador ([`validation.md`](validation.md)).
