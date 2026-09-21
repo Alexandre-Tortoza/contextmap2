@@ -138,13 +138,16 @@ def entity_at(
     features: tuple[EntityFeatureRef, ...] = (),
     representations: tuple[PointRepresentationRef, ...] = (),
     support_number: int = 1,
+    spatial: tuple[str, ...] | None = None,
 ) -> Entity:
     """A real entity whose support is a box at ``center`` and which was seen at ``seconds``.
 
     ``support_number`` picks the fused evidence the entity was materialized from, so distinct
-    entities have distinct evidence, as real materialized entities do.
+    entities have distinct evidence, as real materialized entities do. ``spatial`` names the
+    spatial observations that supported it; by default every entity shares one.
     """
     base = stable_index_base(entity_id) if first_index is None else first_index
+    spatial_links: dict[str, tuple[str, ...]] = {} if spatial is None else {"spatial": spatial}
     return Entity(
         entity_id=EntityId(entity_id),
         semantic_map_id=semantic_map_id,
@@ -168,6 +171,7 @@ def entity_at(
             physical=tuple(f"frame-{second:04d}" for second in sorted(seconds)),
             features=features,
             representations=representations,
+            **spatial_links,
         ),
         temporal_state=temporal_state_at(
             seconds, clock_id=clock_id, inference_results=inference_results

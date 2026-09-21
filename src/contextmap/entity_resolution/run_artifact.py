@@ -272,11 +272,34 @@ def mapping_artifact_digest(manifest: SemanticMappingRunManifest) -> str:
     Returns:
         ``sha256:`` followed by the digest.
     """
+    return _run_digest(str(manifest.run_id), manifest.schema_version, manifest.file_inventory)
+
+
+def resolution_artifact_digest(manifest: EntityResolutionRunManifest) -> str:
+    """Digest the identity and the inventory of a persisted Entity Resolution run.
+
+    This is the value a downstream artifact records to pin the exact resolution it was built
+    from. It is computed here, by the owner of the artifact, with the rule
+    :func:`mapping_artifact_digest` uses for Semantic Mapping: the run identity, its schema version
+    and the hash of every contractual file. It ignores ``debug/`` and the moment of writing, so the
+    same contractual content has the same digest.
+
+    Args:
+        manifest: The manifest of the run.
+
+    Returns:
+        ``sha256:`` followed by the digest.
+    """
+    return _run_digest(str(manifest.run_id), manifest.schema_version, manifest.file_inventory)
+
+
+def _run_digest(run_id: str, schema_version: str, inventory: tuple[FileEntry, ...]) -> str:
+    """The digest of a run's identity, schema version and file hashes, independent of layout."""
     canonical = json.dumps(
         {
-            "run_id": str(manifest.run_id),
-            "schema_version": manifest.schema_version,
-            "files": sorted([entry.path, entry.content_hash] for entry in manifest.file_inventory),
+            "run_id": run_id,
+            "schema_version": schema_version,
+            "files": sorted([entry.path, entry.content_hash] for entry in inventory),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -791,6 +814,7 @@ class EntityResolutionRunReader:
         self._manifest = _load_manifest(run_dir)
         self._offsets: dict[ResolvedEntityId, tuple[int, int]] | None = None
         self._sources: dict[EntityReference, ResolvedEntityId] | None = None
+        self._spatial_observations: dict[str, tuple[ResolvedEntityReference, ...]] | None = None
 
     @property
     def manifest(self) -> EntityResolutionRunManifest:
@@ -894,6 +918,31 @@ class EntityResolutionRunReader:
         return ResolvedEntityReference(
             resolution_run_id=self.run_id, resolved_entity_id=self._sources[entity_ref]
         )
+
+    def resolved_of_spatial_observation(
+        self, spatial_observation_id: str
+    ) -> tuple[ResolvedEntityReference, ...]:
+        """The resolved entities a spatial observation supports: the link from an upstream claim.
+
+        A statement about a region reaches a resolved entity only through the spatial observation
+        that tied the region to 3D. Zero entities means the observation supports none (it was
+        never materialized into an entity); more than one means the observation supports entities
+        the resolution kept apart. Both are returned as they are, never collapsed to a guess, so
+        the consumer refuses or decides explicitly.
+
+        Args:
+            spatial_observation_id: The spatial observation named by the upstream claim.
+
+        Returns:
+            The references of the resolved entities whose evidence includes it, sorted by id.
+        """
+        if self._spatial_observations is None:
+            found: dict[str, list[ResolvedEntityReference]] = {}
+            for entity in self.resolved_entities().entities:
+                for observation_id in entity.evidence.spatial_observation_ids:
+                    found.setdefault(str(observation_id), []).append(entity.reference)
+            self._spatial_observations = {key: tuple(value) for key, value in found.items()}
+        return self._spatial_observations.get(str(spatial_observation_id), ())
 
     def read_record(self, relative_path: str) -> dict[str, Any]:
         """Read a JSON record from ``metrics/``.
