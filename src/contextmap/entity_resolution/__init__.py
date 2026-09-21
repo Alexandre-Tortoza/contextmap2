@@ -50,6 +50,12 @@ from contextmap.entity_resolution.evidence import (
     comparison_id_for,
     evaluate_comparison_gates,
 )
+from contextmap.entity_resolution.geometry_comparison import (
+    GEOMETRY_COMPARISON_POLICY_ID,
+    GeometryComparisonPolicy,
+    SupportDistancePolicy,
+    compare_geometry,
+)
 from contextmap.entity_resolution.models import (
     EntityResolutionRunId,
     PolicyRef,
@@ -85,6 +91,7 @@ from contextmap.entity_resolution.serialization import (
 __all__ = [
     "CANDIDATE_RETRIEVAL_POLICY_ID",
     "COMPARISON_GATES_POLICY_ID",
+    "GEOMETRY_COMPARISON_POLICY_ID",
     "AppearanceEvidence",
     "AppearanceMeasurement",
     "AttributeComparison",
@@ -103,6 +110,7 @@ __all__ = [
     "FeatureContribution",
     "Finding",
     "GateResult",
+    "GeometryComparisonPolicy",
     "GeometryEvidence",
     "GeometryMeasurement",
     "LabelComparison",
@@ -124,6 +132,7 @@ __all__ = [
     "SemanticEvidence",
     "SemanticMeasurement",
     "SupportDistance",
+    "SupportDistancePolicy",
     "TemporalEvidence",
     "TemporalMeasurement",
     "TriggeredRule",
@@ -131,6 +140,7 @@ __all__ = [
     "UnavailableReason",
     "UnresolvedReason",
     "candidate_pairs",
+    "compare_geometry",
     "comparison_id_for",
     "decision_id_for",
     "decode_candidate_set",
