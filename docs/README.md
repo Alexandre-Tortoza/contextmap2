@@ -83,6 +83,7 @@ Os detalhes implementados pertencem aos documentos dos módulos. Os documentos g
 8. [development.md](development.md), fluxo de desenvolvimento, branches, commits, Python e qualidade.
 9. [repository-settings.md](repository-settings.md), políticas esperadas do GitHub e checks.
 10. [versioning.md](versioning.md), Semantic Versioning e releases.
+11. [installation.md](installation.md), instalação base, extras opcionais e runtimes que não vêm do PyPI.
 
 ## Mapa da documentação
 
@@ -100,6 +101,7 @@ flowchart TD
     R --> D[development.md]
     R --> RS[repository-settings.md]
     R --> V[versioning.md]
+    R --> I[installation.md]
 
     A --> M[docs específicos dos módulos]
     API --> M
@@ -138,6 +140,7 @@ flowchart TD
 | `development.md` | Como uma mudança deve ser implementada e integrada? |
 | `repository-settings.md` | Como o GitHub deve reforçar o fluxo de desenvolvimento? |
 | `versioning.md` | Como versões e releases são identificadas? |
+| `installation.md` | O que cada instalação e cada extra traz, e o que fica por conta do usuário? |
 
 ## Pipeline em uma linha
 
