@@ -251,7 +251,7 @@ def test_the_manifest_records_lineage_policies_identities_and_counts(
     assert manifest.support_count == 3
     assert manifest.excluded_count == len(fixture.excluded)
     assert manifest.warnings == ("one warning",)
-    assert manifest.schema_version == "0.1.0"
+    assert manifest.schema_version == "0.2.0"
 
 
 def test_metrics_report_each_quantity_on_its_own(tmp_path: Path, fixture: RunFixture) -> None:
@@ -396,6 +396,22 @@ def test_an_unknown_schema_version_is_refused(tmp_path: Path, fixture: RunFixtur
     (run_dir / "manifest.json").write_text(json.dumps(manifest))
 
     with pytest.raises(FusionRunArtifactError, match="schema_version"):
+        SemanticFusionRunReader(run_dir)
+
+
+def test_a_run_of_the_previous_schema_is_refused_because_its_inference_count_means_another_thing(
+    tmp_path: Path, fixture: RunFixture
+) -> None:
+    # 0.1.0 gravava `inference_results` como a soma por suporte; 0.2.0 grava os resultados
+    # distintos do run. Na execução real de corridor-02 isso deu 604 contra 51 sob o mesmo
+    # `schema_version`. Ler um run 0.1.0 devolveria o mesmo campo com outro denominador, então
+    # ele é recusado (pré-1.0: sem leitor de compatibilidade e sem consumidor real do formato).
+    run_dir = _write(tmp_path, fixture)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest["schema_version"] = "0.1.0"
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(FusionRunArtifactError, match=r"unsupported.*0\.1\.0"):
         SemanticFusionRunReader(run_dir)
 
 

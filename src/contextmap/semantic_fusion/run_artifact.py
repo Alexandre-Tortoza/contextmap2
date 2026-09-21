@@ -62,8 +62,16 @@ from contextmap.shared import (
 )
 from contextmap.visual_perception import PerceptionRunId
 
-SCHEMA_VERSION = "0.1.0"
-"""Semantic Fusion run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Semantic Fusion run artifact schema version written and understood by this module.
+
+Bumped to ``0.2.0`` when ``metrics/counts.json`` redefined ``inference_results``: ``0.1.0``
+summed the results of every support, so a result whose regions fall in several supports was
+counted once per support; ``0.2.0`` counts the distinct results of the whole run, like
+``physical_observations``. The metrics are contractual and inventoried, so the same field with
+two denominators must not share a version. This is a pre-1.0 schema: no compatibility reader
+for ``0.1.0`` is kept and such a run is refused when opened.
+"""
 
 SemanticFusionRunId = NewType("SemanticFusionRunId", str)
 """Identity of one Semantic Fusion run."""
@@ -1065,7 +1073,8 @@ def _load_manifest(run_dir: Path) -> SemanticFusionRunManifest:
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise FusionRunArtifactError(
-            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}"
+            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}; "
+            f"this reader understands {SCHEMA_VERSION!r}"
         )
     lineage = raw["lineage"]
     policies = raw["policies"]

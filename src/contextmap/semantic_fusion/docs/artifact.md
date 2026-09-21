@@ -72,6 +72,17 @@ Separadas, sem um escalar único:
 
 Uma claim de um suporte sem nenhuma hipótese (só abstenções) não tem sinais persistidos em hipótese alguma; por isso aparece em `without_hypothesis`, e sua referência fica nos registros de `INSUFFICIENT_EVIDENCE`.
 
+## Versão do schema
+
+`schema_version` do manifest é `0.2.0`. `metrics/` é contratual e inventariada, então **o significado de um campo de métrica pertence à versão do schema**:
+
+| Versão | `counts.json` → `inference_results` |
+| --- | --- |
+| `0.1.0` | soma, sobre os suportes, dos resultados de cada suporte: um resultado com regiões em vários suportes era contado uma vez por suporte |
+| `0.2.0` | resultados **distintos no run inteiro**, o mesmo denominador de `physical_observations` |
+
+Na execução real de `corridor-02` (ver [avaliação](../../evaluation/docs/semantic_fusion.md)) os dois significados deram 604 e 51 sobre a mesma evidência, ambos sob `schema_version = 0.1.0`. Por isso o leitor **recusa** um run `0.1.0` com `FusionRunArtifactError` (`unsupported run artifact schema_version`), em vez de devolver o mesmo campo com outro denominador. Pré-1.0 não há leitor de compatibilidade: nenhum código do repositório consome runs `0.1.0` além deste leitor e do avaliador, e um run de fusão se refaz sobre as mesmas runs a montante, sem nova inferência (a acumulação levou de 0,5 a 0,6 s por braço na execução real). O `EVALUATOR_VERSION = "2"` versiona a definição das métricas do **relatório** do avaliador; a `schema_version` do artifact versiona o layout e a semântica do **run persistido**. As duas mudaram juntas aqui porque a mesma definição de `inference_results` alimenta as duas, mas são versões distintas.
+
 ## Leitura
 
 `SemanticFusionRunReader(run_dir)` abre um run só pelo seu diretório:

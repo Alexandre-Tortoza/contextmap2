@@ -29,7 +29,7 @@ flowchart LR
 
 ### Contagens do run
 
-`physical_observation_count` e `inference_result_count` são **ambas distintas no run inteiro**. Um resultado de percepção tem dezenas de regiões e cada uma cai em um suporte, então somar os resultados por suporte contaria o mesmo resultado várias vezes e deixaria de ser comparável com os frames físicos. O defeito só apareceu na execução real (ver abaixo): com 19 frames físicos e 51 resultados distintos, a versão `"1"` do avaliador (e `metrics/counts.json`) informava 604, porque os fixtures sintéticos tinham uma região por resultado. A versão `"2"` conta cada resultado uma vez; a contagem por suporte continua em `metrics/distributions.json` e em `correlation`.
+`physical_observation_count` e `inference_result_count` são **ambas distintas no run inteiro**. Um resultado de percepção tem dezenas de regiões e cada uma cai em um suporte, então somar os resultados por suporte contaria o mesmo resultado várias vezes e deixaria de ser comparável com os frames físicos. O defeito só apareceu na execução real (ver abaixo): com 19 frames físicos e 51 resultados distintos, a versão `"1"` do avaliador (e o `metrics/counts.json` do schema `0.1.0`) informava 604, porque os fixtures sintéticos tinham uma região por resultado. A versão `"2"` do avaliador conta cada resultado uma vez, e o schema do artifact foi para `0.2.0` pelo mesmo motivo: `metrics/` é contratual, então o campo não pode ter dois denominadores sob a mesma `schema_version` (ver [artifact](../../semantic_fusion/docs/artifact.md#versão-do-schema)). A contagem por suporte continua em `metrics/distributions.json` e em `correlation`.
 
 ## Anotações: recuperação da referência
 
@@ -139,7 +139,7 @@ Suportes em 2,9 s; acumulação de 0,5 a 0,6 s por braço; escrita de 0,7 s; 4,4
 
 ### Defeito encontrado e corrigido
 
-A execução real mostrou `inference_results = 604` em `metrics/counts.json` e no relatório, para 51 resultados distintos: ambos somavam `inference_result_count` por suporte, e um resultado de percepção tem dezenas de regiões em suportes diferentes. Os fixtures sintéticos tinham uma região por resultado e não podiam ver isso. Corrigido (avaliador na versão `"2"`) com testes de regressão.
+A execução real mostrou `inference_results = 604` em `metrics/counts.json` e no relatório, para 51 resultados distintos: ambos somavam `inference_result_count` por suporte, e um resultado de percepção tem dezenas de regiões em suportes diferentes. Os fixtures sintéticos tinham uma região por resultado e não podiam ver isso. Corrigido (avaliador na versão `"2"`) com testes de regressão. A correção sozinha deixava dois artifacts reais com `schema_version = 0.1.0` e `inference_results` de 604 e de 51; o schema do `SemanticFusionRunArtifact` foi para `0.2.0` e o leitor recusa `0.1.0` (teste de regressão em `tests/semantic_fusion/test_fusion_run_artifact.py`).
 
 ### O que a execução não prova
 
