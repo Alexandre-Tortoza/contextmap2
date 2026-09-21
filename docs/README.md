@@ -135,6 +135,7 @@ flowchart TD
     M --> EV[src/contextmap/evaluation/docs/README.md]
     M --> RTM[src/contextmap/runtime/docs/README.md]
     RTM --> RTD[configuration / composition / pipeline / reuse / selection / lifecycle / cli / api]
+    M --> ART[src/contextmap/artifact/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]
@@ -205,6 +206,7 @@ Módulos com documentação própria:
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
 - [`runtime`](../src/contextmap/runtime/docs/README.md) — configuração efetiva, composition root, DAG com preflight, reuso, seleção de runs, lifecycle, CLI, serviço de ingestion e a API pública `Runtime` para frontends; compõe e executa, sem decidir ciência.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline; [cenário end-to-end e matriz de aceitação](../src/contextmap/evaluation/docs/end-to-end.md) (perfil canônico congelado, gates por estágio, invariantes entre estágios e a validação real parcial); [reference set](../src/contextmap/evaluation/docs/reference-set.md), [anotações](../src/contextmap/evaluation/docs/annotations.md), [integridade](../src/contextmap/evaluation/docs/reference-integrity.md), [QA](../src/contextmap/evaluation/docs/annotation-qa.md), [métricas](../src/contextmap/evaluation/docs/metrics.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md), [fixtures de CI](../src/contextmap/evaluation/docs/ci-fixtures.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
+- [`artifact`](../src/contextmap/artifact/docs/README.md) — o schema do produto final: `ContextMap` (metadados de frame, unidades, âncora e capacidades; geometria referenciada; entidades e relações por referência; linhagem e proveniência; versionamento). O schema é independente de layout, serializador, ROS e modelos; a persistência (layout em disco, escrita atômica, leitura preguiçosa, validação de integridade e bundle portátil) fica em módulos separados do pacote, documentados em [Layout e formatos](../src/contextmap/artifact/docs/storage-layout.md).
 
 ## Integração da documentação
 
