@@ -24,9 +24,9 @@ from mapping_builders import (
 from contextmap.geometric_mapping import MapId
 from contextmap.semantic_fusion import EvidenceStance, FusedEvidenceId
 from contextmap.semantic_mapping import (
+    EmptyGeometrySupportError,
     Entity,
     EntityEvidenceLinks,
-    EntityGeometry,
     EntityHypothesis,
     EntityId,
     EntityProvenance,
@@ -179,27 +179,26 @@ class TestIdentityScope:
             EntitySet.of(SEMANTIC_MAP_ID, [foreign])
 
 
-class TestEntityGeometry:
+class TestEntityGeometryAuthority:
     def test_empty_support_cannot_masquerade_as_a_valid_geometry(self) -> None:
-        with pytest.raises(ValueError, match="must not be empty"):
-            EntityGeometry(geometry_refs=(), map_frame="map")  # type: ignore[arg-type]
+        with pytest.raises(EmptyGeometrySupportError, match="must not be empty"):
+            dataclasses.replace(make_geometry(), geometry_refs=())
 
     def test_support_must_be_sorted_and_unique(self) -> None:
-        refs = geometry_refs((2, 1))
         with pytest.raises(ValueError, match="sorted by geometry_id"):
-            EntityGeometry(geometry_refs=refs, map_frame="map")  # type: ignore[arg-type]
+            dataclasses.replace(make_geometry(), geometry_refs=geometry_refs((2, 1)))
         with pytest.raises(ValueError, match="sorted by geometry_id"):
-            EntityGeometry(geometry_refs=geometry_refs((1, 1)), map_frame="map")  # type: ignore[arg-type]
+            dataclasses.replace(make_geometry(), geometry_refs=geometry_refs((1, 1)))
 
     def test_support_must_come_from_one_map(self) -> None:
         mixed = geometry_refs((0,)) + geometry_refs((1,), map_id=MapId("map-0002"))
 
         with pytest.raises(ValueError, match="one map"):
-            EntityGeometry(geometry_refs=mixed, map_frame="map")  # type: ignore[arg-type]
+            dataclasses.replace(make_geometry(), geometry_refs=mixed)
 
     def test_the_map_frame_is_explicit(self) -> None:
         with pytest.raises(ValueError, match="map_frame"):
-            make_geometry(frame=" ")
+            dataclasses.replace(make_geometry(), map_frame=" ")  # type: ignore[arg-type]
 
     def test_it_exposes_the_map_that_owns_the_support(self) -> None:
         assert make_geometry().geometric_map_id == MAP_ID

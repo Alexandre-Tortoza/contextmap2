@@ -24,14 +24,14 @@ Uma entidade **não é** um `Region2D` cru, uma `SpatialObservation`, um `Fusion
 
 ## Estado implementado
 
-Existem os **contratos** do envelope: `Entity`, `EntityReference`, `EntitySet` e `EntityProvenance`, as regras de **escopo de identidade** e a serialização JSON com revalidação (`serialization.py`). Os quatro componentes de uma entidade existem em sua forma mínima, referência a referência:
+Existem os **contratos** do envelope: `Entity`, `EntityReference`, `EntitySet` e `EntityProvenance`, as regras de **escopo de identidade** e a serialização JSON com revalidação (`serialization.py`). Os quatro componentes de uma entidade:
 
-- `EntityGeometry`: as `GeometryReference` do suporte e o frame do mapa;
-- `EntitySemanticState`: todas as hipóteses (`EntityHypothesis`), com a evidência exata e os sinais tipados de cada claim;
-- `EntityEvidenceLinks`: as referências à evidência fundida (`FusedEvidenceRef`);
-- `EntityTemporalState`: `first_seen`, `last_seen` e as contagens de frames físicos e de resultados de inferência, sempre distintas.
+- `EntityGeometry`: o suporte 3D como `GeometryReference` (a autoridade) e os resumos derivados, no frame do mapa: centroide, limites, extensão, estatísticas, orientação opcional e diagnósticos, com a proveniência de como foram calculados. `summarize_geometry`, `resolve_geometry` e `verify_geometry_summary` constroem, resolvem e reverificam esses resumos ([`geometry.md`](geometry.md));
+- `EntitySemanticState`: todas as hipóteses (`EntityHypothesis`), com a evidência exata e os sinais tipados de cada claim, em sua forma mínima;
+- `EntityEvidenceLinks`: as referências à evidência fundida (`FusedEvidenceRef`), em sua forma mínima;
+- `EntityTemporalState`: `first_seen`, `last_seen` e as contagens de frames físicos e de resultados de inferência, sempre distintas, em sua forma mínima.
 
-Resumos espaciais, estado semântico completo, vínculos de evidência, histórico temporal, materialização e persistência pertencem às issues seguintes da milestone e ainda **não** existem.
+Estado semântico completo, vínculos de evidência, histórico temporal, materialização e persistência pertencem às issues seguintes da milestone e ainda **não** existem.
 
 ## Escopo de identidade
 
@@ -42,22 +42,25 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 - `Entity`, `EntityId`, `SemanticMapId`, `EntityProvenance` — o registro persistente e sua identidade local ao mapa.
 - `EntityReference` — o handle estável `(semantic_map_id, entity_id)`.
 - `EntitySet`, `UnknownEntityError`, `ForeignEntityReferenceError` — as entidades de um mapa, com resolução de referência que distingue "outro mapa" de "entidade inexistente".
-- `EntityGeometry`, `EntitySemanticState`, `EntityHypothesis`, `EntityEvidenceLinks`, `FusedEvidenceRef`, `EntityTemporalState` — os componentes.
+- `EntityGeometry`, `SupportStatistics`, `SpatialSummaryProvenance`, `EntityOrientation`, `GeometryDiagnostic`, `GeometryDiagnosticKind` — o suporte 3D e seus resumos derivados.
+- `GeometrySummaryPolicy`, `OrientationPolicy`, `summarize_geometry`, `resolve_geometry`, `verify_geometry_summary`, `geometry_set_digest`, `GEOMETRY_SUMMARY_ALGORITHM_ID`, `EmptyGeometrySupportError`, `GeometryResolutionError` — construção, resolução e verificação da geometria.
+- `EntitySemanticState`, `EntityHypothesis`, `EntityEvidenceLinks`, `FusedEvidenceRef`, `EntityTemporalState` — os demais componentes.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes.
 
 ## Módulos consumidos
 
 - `contextmap.semantic_fusion`: `FusedEvidenceId`, `FusedHypothesisId`, `FusionSupportId`, `SemanticFusionRunId`, `EvidenceContributionId`, `HypothesisEvidence`, `EvidenceStance`, `SupportSignal`, `SupportSignalKind`.
-- `contextmap.geometric_mapping`: `GeometryReference`, `MapId`, `geometry_id_for`, `geometry_index_of`.
+- `contextmap.geometric_mapping`: `GeometryReference`, `GeometrySource`, `GeometryPoint`, `Bounds3D`, `MapId`, `geometry_id_for`, `geometry_index_of`.
 - `contextmap.ingestion`: `FrameId`.
 - `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `HypothesisRole`, presentes nos sinais e nas claims preservadas.
-- `contextmap.shared`: `SourceTimestamp`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`.
 
 As dependências de `ingestion` e `visual_perception` existem apenas para identidades e tipos que a evidência fundida já traz, sempre pela API pública, e estão declaradas em `tests/architecture/test_boundaries.py`.
 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`geometry.md`](geometry.md) — suporte 3D, resumos derivados, proveniência, diagnósticos e verificação.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Mapping no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — os contratos no contexto global.
