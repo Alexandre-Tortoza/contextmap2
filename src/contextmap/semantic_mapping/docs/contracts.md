@@ -103,4 +103,4 @@ O intervalo e as contagens devem concordar com o histórico, e `Entity` exige qu
 
 ## Serialização
 
-`serialization.encode_entity` / `decode_entity` produzem e leem registros JSON com primitivas apenas. A decodificação reconstrói os contratos pelos construtores, então todas as invariantes são revalidadas e um registro adulterado é recusado. A geometria é guardada como deltas posicionais (`map--geom-N` é posicional), o que mantém compacta uma entidade de milhares de pontos.
+`encode_entity` / `decode_entity` (e `encode_entity_reference` / `decode_entity_reference`), exportados pela API pública, produzem e leem registros JSON com primitivas apenas. A decodificação reconstrói os contratos pelos construtores, então todas as invariantes são revalidadas e um registro adulterado é recusado. A geometria é guardada como deltas posicionais (`map--geom-N` é posicional), o que mantém compacta uma entidade de milhares de pontos.

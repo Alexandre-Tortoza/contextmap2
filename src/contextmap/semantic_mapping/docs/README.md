@@ -33,7 +33,7 @@ Existem os **contratos** do envelope: `Entity`, `EntityReference`, `EntitySet` e
 
 A **materialização** converte a evidência fundida selecionada em entidades sob uma política baseline versionada, um suporte, uma entidade (`one-support-one-entity-v1`), com identidade determinística local ao artifact e rejeição explícita de candidatos inválidos, **sem nenhuma resolução entre suportes** ([`materialization.md`](materialization.md)).
 
-O **`SemanticMappingRunArtifact`** persiste as entidades, os índices, a linhagem, as métricas e os candidatos rejeitados de forma imutável e atômica, e reabre sem runtimes de percepção, fusão ou modelo ([`artifact.md`](artifact.md)). A validação das invariantes, da preservação de evidência e da reprodutibilidade pertence à issue seguinte da milestone.
+O **`SemanticMappingRunArtifact`** persiste as entidades, os índices, a linhagem, as métricas e os candidatos rejeitados de forma imutável e atômica, e reabre sem runtimes de percepção, fusão ou modelo ([`artifact.md`](artifact.md)). A validação das invariantes, da preservação de evidência e da reprodutibilidade é feita por `evaluate_semantic_mapping` em `contextmap.evaluation` ([validação](../../evaluation/docs/semantic_mapping.md)).
 
 ## Escopo de identidade
 
@@ -43,6 +43,7 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 
 - `Entity`, `EntityId`, `SemanticMapId`, `EntityProvenance` — o registro persistente e sua identidade local ao mapa.
 - `EntityReference` — o handle estável `(semantic_map_id, entity_id)`.
+- `encode_entity`, `decode_entity`, `encode_entity_reference`, `decode_entity_reference` — o codec JSON canônico, que revalida todas as invariantes na decodificação.
 - `EntitySet`, `UnknownEntityError`, `ForeignEntityReferenceError` — as entidades de um mapa, com resolução de referência que distingue "outro mapa" de "entidade inexistente".
 - `EntityGeometry`, `SupportStatistics`, `SpatialSummaryProvenance`, `EntityOrientation`, `GeometryDiagnostic`, `GeometryDiagnosticKind` — o suporte 3D e seus resumos derivados.
 - `GeometrySummaryPolicy`, `OrientationPolicy`, `summarize_geometry`, `resolve_geometry`, `verify_geometry_summary`, `geometry_set_digest`, `GEOMETRY_SUMMARY_ALGORITHM_ID`, `EmptyGeometrySupportError`, `GeometryResolutionError` — construção, resolução e verificação da geometria.
@@ -79,5 +80,6 @@ As dependências de `ingestion`, `visual_perception`, `sensor_association`, `poi
 - [`temporal-state.md`](temporal-state.md) — estado temporal, histórico de observações e ciclo de vida.
 - [`materialization.md`](materialization.md) — política baseline, identidade determinística, seleção explícita e rejeição de candidatos.
 - [`artifact.md`](artifact.md) — layout, linhagem, métricas, leitura, integridade e debug do `SemanticMappingRunArtifact`.
+- [validação de Semantic Mapping](../../evaluation/docs/semantic_mapping.md) — as seis camadas de validação, a linhagem do relatório e as defesas contra upstream corrompido.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Mapping no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — os contratos no contexto global.

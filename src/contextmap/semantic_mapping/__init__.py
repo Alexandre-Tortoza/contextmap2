@@ -90,6 +90,12 @@ from contextmap.semantic_mapping.semantic_state import (
     SemanticStateProvenance,
     derive_ambiguity_state,
 )
+from contextmap.semantic_mapping.serialization import (
+    decode_entity,
+    decode_entity_reference,
+    encode_entity,
+    encode_entity_reference,
+)
 from contextmap.semantic_mapping.state_mapping import (
     CLASS_ATTRIBUTE_DERIVATION_ID,
     PRIMARY_HYPOTHESIS_POLICY_ID,
@@ -169,7 +175,11 @@ __all__ = [
     "TemporalProvenance",
     "UnknownEntityError",
     "allocate_mapping_run_index",
+    "decode_entity",
+    "decode_entity_reference",
     "derive_ambiguity_state",
+    "encode_entity",
+    "encode_entity_reference",
     "entity_id_for",
     "evidence_links_from_fused_evidence",
     "feature_refs_of",
