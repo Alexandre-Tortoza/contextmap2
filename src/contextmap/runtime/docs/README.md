@@ -35,7 +35,9 @@ Existe ainda o **DAG de estágios** (issue #163): `resolve_plan()` deriva da con
 
 Existe também o **reuso por identidade** (issue #164): a chave de reuso combina a configuração própria do estágio, o hash de conteúdo das entradas, a identidade do código e identidades extras; o índice guarda só artifacts concluídos e re-validados; e cada estágio registra se foi reutilizado (com o artifact exato) ou recomputado (com o motivo). Detalhes em [`reuse.md`](reuse.md).
 
-A seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
+Existe ainda a **seleção explícita de runs e o vínculo de linhagem** (issue #165): a configuração escolhe ids exatos, seleções nomeadas ou `latest` (opt-in explícito), a compatibilidade é conferida a partir da linhagem que cada artifact declara (sequência física, seleção de observações, calibração, schema, upstream exato) e uma seleção incompatível falha antes de qualquer execução. Detalhes em [`selection.md`](selection.md).
+
+A CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -55,6 +57,7 @@ A seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 
 - `ExecutionPlan`, `preflight()`, `PreflightReport` — o escopo de uma execução e a validação antes dela.
 - `run_plan()`, `StageExecutor`, `StageRequest`, `ArtifactRef`, `ExecutionRecord`, `StageRecord` — a execução e o registro exato de entradas e saídas.
 - `write_plan()`, `write_execution_record()`, `read_plan_document()` — a persistência da topologia e da execução.
+- `resolve_selections()`, `ResolvedSelections`, `SelectedRun`, `ArtifactCatalog`, `StaticCatalog`, `CatalogEntry`, `Lineage`, `check_lineage()`, `LATEST`, `NAMED_PREFIX` — a seleção explícita de runs e a checagem de linhagem.
 - `ReusePolicy`, `ReuseKey`, `ReuseDecision`, `ArtifactStore`, `FileArtifactStore`, `StoreLookup`, `predict_reuse()` — o reuso por identidade e a previsão do que seria reutilizado.
 - `PipelineError`, `PreflightError`, `PlanDocumentError`, `StageExecutionError`, `ReuseError` — falhas do DAG, todas explícitas.
 

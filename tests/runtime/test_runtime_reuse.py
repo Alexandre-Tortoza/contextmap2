@@ -76,7 +76,9 @@ class World:
                 if not world.ignore_config:
                     parts.append(request.config_digest)
                 parts.extend(
-                    f"{name}={ref.content_hash}" for name, ref in sorted(request.inputs.items())
+                    f"{name}={ref.content_hash}"
+                    for name, refs in sorted(request.inputs.items())
+                    for ref in refs
                 )
                 content = "sha256:" + hashlib.sha256("|".join(parts).encode()).hexdigest()
                 artifact_id = f"{stage_id}-run{world._count}"

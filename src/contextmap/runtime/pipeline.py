@@ -20,7 +20,7 @@ import os
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.runtime._files import publish_text
 from contextmap.runtime.artifacts import ArtifactRef
@@ -34,6 +34,9 @@ from contextmap.runtime.config import (
 )
 from contextmap.runtime.errors import PlanDocumentError, PreflightError, StageExecutionError
 from contextmap.runtime.reuse import ReuseDecision, ReuseKey, ReusePolicy
+
+if TYPE_CHECKING:
+    from contextmap.runtime.selection import ResolvedSelections
 
 PLAN_SCHEMA_VERSION = "0.1.0"
 """Version of the persisted plan and execution-record documents."""
@@ -52,12 +55,14 @@ class PlannedInput:
         source: Stage that produces it in this plan. It can differ from the preset's base
             wiring when an optional stage was inserted in between.
         optional: Whether the stage would also run without it.
+        multiple: Whether the input accepts several runs of its source stage at once.
     """
 
     name: str
     contract: str
     source: str
     optional: bool
+    multiple: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -143,6 +148,7 @@ class PipelinePlan:
                             "contract": item.contract,
                             "source": item.source,
                             "optional": item.optional,
+                            "multiple": item.multiple,
                         }
                         for item in stage.inputs
                     ],
@@ -162,33 +168,54 @@ class PipelinePlan:
         *,
         targets: Iterable[str] | None = None,
         provided: Mapping[str, ArtifactRef] | None = None,
+        selections: ResolvedSelections | None = None,
     ) -> ExecutionPlan:
         """Select what one execution runs.
 
         A target pulls in the stages it transitively depends on, except those whose
-        artifact is explicitly ``provided``: an existing immutable artifact is reused
-        instead of recomputed. Nothing is inferred; an artifact that is provided but not
-        needed, or of the wrong kind, is reported by preflight.
+        artifacts are explicitly supplied: an existing immutable artifact is used instead
+        of recomputed. Supply them either as ``provided`` (one exact artifact per stage) or
+        as ``selections`` (the resolved run selection, which can hold several runs of a
+        stage). Nothing is inferred; a supplied artifact that is not needed, or of the wrong
+        kind, and every problem of the selection is reported by preflight.
 
         Args:
             targets: Stages to produce, or ``None`` for the complete pipeline.
             provided: Existing artifacts by the stage that produced them.
+            selections: The resolved run selection, with its lineage checked.
 
         Returns:
             The execution scope; its problems are reported by :func:`preflight`.
+
+        Raises:
+            ValueError: If both ``provided`` and ``selections`` are given.
         """
-        provided = dict(provided or {})
+        if provided is not None and selections is not None:
+            raise ValueError("pass either provided artifacts or selections, not both")
+        supplied: dict[str, tuple[ArtifactRef, ...]] = {}
         problems = list(self.problems)
+        origin = "provided"
+        if selections is not None:
+            supplied = {stage_id: tuple(refs) for stage_id, refs in selections.provided.items()}
+            problems.extend(selections.problems)
+            origin = "selections"
+        elif provided is not None:
+            supplied = {stage_id: (ref,) for stage_id, ref in provided.items()}
         by_id = {stage.stage_id: stage for stage in self.stages}
-        valid: dict[str, ArtifactRef] = {}
-        for stage_id, ref in provided.items():
+        valid: dict[str, tuple[ArtifactRef, ...]] = {}
+        for stage_id, refs in supplied.items():
             stage = by_id.get(stage_id)
-            path = f"provided.{stage_id}"
+            path = f"{origin}.{stage_id}"
             if stage is None:
                 problems.append(
                     ConfigProblem(path=path, message=f"{stage_id!r} is not a stage of this plan")
                 )
-            elif ref.stage_id != stage_id or ref.contract != stage.output:
+                continue
+            wrong = [
+                ref for ref in refs if ref.stage_id != stage_id or ref.contract != stage.output
+            ]
+            if wrong:
+                ref = wrong[0]
                 problems.append(
                     ConfigProblem(
                         path=path,
@@ -199,9 +226,11 @@ class PipelinePlan:
                     )
                 )
             else:
-                valid[stage_id] = ref
+                valid[stage_id] = refs
         if self.order is None:
-            return ExecutionPlan(plan=self, stages=(), reused={}, problems=tuple(problems))
+            return ExecutionPlan(
+                plan=self, stages=(), reused={}, problems=tuple(problems), selections=selections
+            )
 
         wanted = list(self.order if targets is None else targets)
         stack = []
@@ -230,9 +259,9 @@ class PipelinePlan:
             if stage_id not in reused_used:
                 problems.append(
                     ConfigProblem(
-                        path=f"provided.{stage_id}",
+                        path=f"{origin}.{stage_id}",
                         message=(
-                            f"{stage_id!r} is provided but not needed by the targets, and "
+                            f"{stage_id!r} is supplied but not needed by the targets, and "
                             "an explicit selection is never silently ignored"
                         ),
                     )
@@ -244,6 +273,7 @@ class PipelinePlan:
                 stage_id: valid[stage_id] for stage_id in self.order if stage_id in reused_used
             },
             problems=tuple(problems),
+            selections=selections,
         )
 
 
@@ -254,14 +284,17 @@ class ExecutionPlan:
     Attributes:
         plan: The full topology.
         stages: Stages to run, in dependency order.
-        reused: Existing artifacts fed to the stages that consume them, by producing stage.
+        reused: Existing artifacts fed to the stages that consume them, by producing stage;
+            more than one run of a stage only when the selection asked for it.
         problems: Problems found while scoping.
+        selections: The resolved run selection the execution starts from, if any.
     """
 
     plan: PipelinePlan
     stages: tuple[PlannedStage, ...]
-    reused: Mapping[str, ArtifactRef]
+    reused: Mapping[str, tuple[ArtifactRef, ...]]
     problems: tuple[ConfigProblem, ...]
+    selections: ResolvedSelections | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -290,13 +323,15 @@ class StageRequest:
 
     Attributes:
         stage_id: The stage being executed.
-        inputs: The exact artifacts it consumes, by input name.
+        inputs: The exact artifacts it consumes, by input name. Every input is a tuple of
+            runs: one run for an ordinary input, several distinct runs (kept as separate
+            evidence, in deterministic order) for an input that accepts them.
         components: Resolved configuration of the stage's variation points.
         config_digest: Identity of the stage's own configuration.
     """
 
     stage_id: str
-    inputs: Mapping[str, ArtifactRef]
+    inputs: Mapping[str, tuple[ArtifactRef, ...]]
     components: Mapping[str, ComponentConfig]
     config_digest: str
 
@@ -319,14 +354,14 @@ class StageRecord:
 
     Attributes:
         stage_id: The stage.
-        inputs: The exact artifacts it consumed, by input name.
+        inputs: The exact artifacts it consumed, by input name (a tuple of runs each).
         output: The artifact it produced, or the prior artifact it reused.
         decision: Whether it was reused or recomputed and why, when the execution had a
             reuse policy.
     """
 
     stage_id: str
-    inputs: Mapping[str, ArtifactRef]
+    inputs: Mapping[str, tuple[ArtifactRef, ...]]
     output: ArtifactRef
     decision: ReuseDecision | None = None
 
@@ -340,12 +375,15 @@ class ExecutionRecord:
         order: Stages in the order they ran.
         stages: What each stage consumed and produced.
         reused: Existing artifacts that fed the stages, by producing stage.
+        selections: The resolved run selection the execution started from: the exact
+            artifact ids, how each was chosen and the lineage each declared.
     """
 
     plan_digest: str
     order: tuple[str, ...]
     stages: tuple[StageRecord, ...]
-    reused: Mapping[str, ArtifactRef]
+    reused: Mapping[str, tuple[ArtifactRef, ...]]
+    selections: Mapping[str, Any] | None = None
 
     def to_document(self) -> dict[str, Any]:
         """Return the JSON-compatible record of the execution."""
@@ -353,11 +391,18 @@ class ExecutionRecord:
             "schema_version": PLAN_SCHEMA_VERSION,
             "plan_digest": self.plan_digest,
             "order": list(self.order),
-            "reused": {stage_id: ref.to_document() for stage_id, ref in self.reused.items()},
+            "reused": {
+                stage_id: [ref.to_document() for ref in refs]
+                for stage_id, refs in self.reused.items()
+            },
+            "selections": None if self.selections is None else dict(self.selections),
             "stages": [
                 {
                     "stage_id": record.stage_id,
-                    "inputs": {name: ref.to_document() for name, ref in record.inputs.items()},
+                    "inputs": {
+                        name: [ref.to_document() for ref in refs]
+                        for name, refs in record.inputs.items()
+                    },
                     "output": record.output.to_document(),
                     "decision": None if record.decision is None else record.decision.to_document(),
                 }
@@ -443,7 +488,11 @@ def resolve_plan(
                 )
             inputs.append(
                 PlannedInput(
-                    name=item.name, contract=item.contract, source=source, optional=item.optional
+                    name=item.name,
+                    contract=item.contract,
+                    source=source,
+                    optional=item.optional,
+                    multiple=item.multiple,
                 )
             )
         component_configs = {
@@ -579,17 +628,17 @@ def predict_reuse(execution: ExecutionPlan, reuse: ReusePolicy) -> dict[str, Reu
     Returns:
         A decision per stage of the execution.
     """
-    known: dict[str, ArtifactRef | None] = dict(execution.reused)
+    known: dict[str, tuple[ArtifactRef, ...] | None] = dict(execution.reused)
     decisions: dict[str, ReuseDecision] = {}
     for stage in execution.stages:
-        inputs: dict[str, ArtifactRef] = {}
+        inputs: dict[str, tuple[ArtifactRef, ...]] = {}
         unknown: set[str] = set()
         for item in stage.inputs:
-            ref = known.get(item.source)
-            if ref is None:
+            refs = known.get(item.source)
+            if refs is None:
                 unknown.add(item.source)
             else:
-                inputs[item.name] = ref
+                inputs[item.name] = refs
         if unknown:
             decisions[stage.stage_id] = ReuseDecision(
                 kind="recomputed",
@@ -602,12 +651,12 @@ def predict_reuse(execution: ExecutionPlan, reuse: ReusePolicy) -> dict[str, Reu
             continue
         decision, hit, _ = _decide(stage, inputs, reuse)
         decisions[stage.stage_id] = decision
-        known[stage.stage_id] = hit
+        known[stage.stage_id] = None if hit is None else (hit,)
     return decisions
 
 
 def _decide(
-    stage: PlannedStage, inputs: Mapping[str, ArtifactRef], reuse: ReusePolicy
+    stage: PlannedStage, inputs: Mapping[str, tuple[ArtifactRef, ...]], reuse: ReusePolicy
 ) -> tuple[ReuseDecision, ArtifactRef | None, ReuseKey | None]:
     """Decide between reusing an indexed artifact and recomputing one stage.
 
@@ -617,11 +666,12 @@ def _decide(
     """
     hashes: dict[str, tuple[str, str]] = {}
     missing = []
-    for name, ref in sorted(inputs.items()):
-        if ref.content_hash is None:
+    for name, refs in sorted(inputs.items()):
+        content_hashes = [ref.content_hash for ref in refs]
+        if any(content_hash is None for content_hash in content_hashes):
             missing.append(name)
         else:
-            hashes[name] = (ref.contract, ref.content_hash)
+            hashes[name] = (refs[0].contract, _combined_hash(content_hashes))
     if missing:
         reason = (
             f"input {', '.join(missing)} has no content hash, so its identity cannot be checked"
@@ -698,7 +748,7 @@ def run_plan(
     if not report.ok:
         raise PreflightError(report)
 
-    outputs: dict[str, ArtifactRef] = dict(execution.reused)
+    outputs: dict[str, tuple[ArtifactRef, ...]] = dict(execution.reused)
     records: list[StageRecord] = []
     for stage in execution.stages:
         inputs = {item.name: outputs[item.source] for item in stage.inputs}
@@ -731,7 +781,7 @@ def run_plan(
                 )
             if reuse is not None and decision is not None and key is not None:
                 decision = _index(reuse, key, produced, decision)
-        outputs[stage.stage_id] = produced
+        outputs[stage.stage_id] = (produced,)
         records.append(
             StageRecord(stage_id=stage.stage_id, inputs=inputs, output=produced, decision=decision)
         )
@@ -740,7 +790,20 @@ def run_plan(
         order=tuple(record.stage_id for record in records),
         stages=tuple(records),
         reused=dict(execution.reused),
+        selections=None if execution.selections is None else execution.selections.to_document(),
     )
+
+
+def _combined_hash(content_hashes: Sequence[str | None]) -> str:
+    """Identify a set of input runs by their content.
+
+    One run is identified by its own hash, so a single-run key does not change. Several
+    runs are an unordered set of evidence: their hashes are sorted before being combined.
+    """
+    hashes = sorted(h for h in content_hashes if h is not None)
+    if len(hashes) == 1:
+        return hashes[0]
+    return "sha256:" + hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
 
 
 def _index(

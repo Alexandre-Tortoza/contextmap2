@@ -139,7 +139,7 @@ backend = "geometric_descriptor"
             "device": "cuda",
         }
         assert config.inputs.sequence == "seq-01"
-        assert config.inputs.selections == {"state_estimation": "seq-01--run-0003"}
+        assert config.inputs.selections == {"state_estimation": ("seq-01--run-0003",)}
         assert config.resources.workspace == "workspace/run-a"
         assert config.policies.debug_level == "standard"
 
