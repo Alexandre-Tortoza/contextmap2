@@ -252,7 +252,13 @@ def _mask_around_landmark(region: RegionId, frame_index: int) -> InlineMask:
     )
 
 
-def _perception_result(run: PerceptionRunId, frame_index: int) -> PerceptionResult:
+def _perception_result(
+    run: PerceptionRunId,
+    frame_index: int,
+    *,
+    claims_of: str | None = None,
+    sequence_artifact_id: str | None = None,
+) -> PerceptionResult:
     observation_id = SourceObservationId(f"frame-{frame_index:04d}")
     result_id = PerceptionResultId(f"{run}--{observation_id}")
     regions = []
@@ -272,7 +278,7 @@ def _perception_result(run: PerceptionRunId, frame_index: int) -> PerceptionResu
             )
         )
         for claim_index, (label, role, confidence) in enumerate(
-            _CLAIMS.get((str(run), frame_index, region_id), ())
+            _CLAIMS.get((claims_of or str(run), frame_index, region_id), ())
         ):
             claims.append(
                 SemanticClaim(
@@ -295,7 +301,7 @@ def _perception_result(run: PerceptionRunId, frame_index: int) -> PerceptionResu
         result_id=result_id,
         source_observation_id=observation_id,
         run_id=run,
-        sequence_artifact_id=str(SEQUENCE_ARTIFACT_ID),
+        sequence_artifact_id=sequence_artifact_id or str(SEQUENCE_ARTIFACT_ID),
         created_at="2026-01-01T00:00:00Z",
         regions=tuple(regions),
         features=(),
@@ -503,3 +509,13 @@ def cross_stage_inputs(chain: SyntheticChain) -> CrossStageInputs:
         fusion=chain.fusion.manifest,
         fusion_outcomes=chain.fusion_outcomes,
     )
+
+
+def canned_perception_results(
+    run: PerceptionRunId, sequence_artifact_id: str
+) -> list[PerceptionResult]:
+    """The canned perception evidence of the first run (three frames) under another run identity."""
+    return [
+        _perception_result(run, index, claims_of="run-a", sequence_artifact_id=sequence_artifact_id)
+        for index in range(3)
+    ]
