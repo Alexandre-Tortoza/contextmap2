@@ -73,7 +73,7 @@ from contextmap.semantic_mapping import (
     verify_geometry_summary,
 )
 
-EVALUATOR_VERSION = "1"
+EVALUATOR_VERSION = "2"
 """Bumped whenever a check's definition changes, so reports stay comparable."""
 
 _FOREIGN_MAP = SemanticMapId("semantic-map--evaluation-foreign-probe")
@@ -133,7 +133,8 @@ class SemanticMappingEvaluationLineage:
     Attributes:
         mapping_run_id: The Semantic Mapping run that was validated.
         semantic_map_id: The semantic map it holds.
-        entity_schema_version: The schema version of the run artifact.
+        entity_schema_version: The version of the canonical entity record, as the run manifest
+            records it; not the run artifact schema version.
         fusion_run_id: The Semantic Fusion run the entities were materialized from.
         fusion_schema_version: The schema version of that run.
         fusion_artifact_digest: Digest of that run's identity and inventory.
@@ -143,6 +144,7 @@ class SemanticMappingEvaluationLineage:
         identity_policy_id: The entity id allocation policy, ``None`` for an empty run.
         configuration_fingerprint: Digest of the materialization configuration.
         code_version: The code revision that produced the entities.
+        code_digest: The digest of that code, as the run manifest recorded it.
         evaluator_version: The version of these checks.
     """
 
@@ -157,6 +159,7 @@ class SemanticMappingEvaluationLineage:
     identity_policy_id: str | None
     configuration_fingerprint: str | None
     code_version: str
+    code_digest: str
     evaluator_version: str
 
 
@@ -247,7 +250,7 @@ def evaluate_semantic_mapping(
         lineage=SemanticMappingEvaluationLineage(
             mapping_run_id=str(manifest.run_id),
             semantic_map_id=manifest.semantic_map_id,
-            entity_schema_version=manifest.schema_version,
+            entity_schema_version=manifest.entity_schema_version,
             fusion_run_id=str(lineage.fusion_run_id),
             fusion_schema_version=lineage.fusion_schema_version,
             fusion_artifact_digest=lineage.fusion_artifact_digest,
@@ -256,6 +259,7 @@ def evaluate_semantic_mapping(
             identity_policy_id=manifest.identity_policy_id,
             configuration_fingerprint=manifest.configuration_fingerprint,
             code_version=manifest.code_version,
+            code_digest=manifest.code_digest,
             evaluator_version=EVALUATOR_VERSION,
         ),
         entity_count=len(entities),
@@ -288,6 +292,7 @@ def encode_semantic_mapping_report(report: SemanticMappingEvaluationReport) -> d
             "identity_policy_id": lineage.identity_policy_id,
             "configuration_fingerprint": lineage.configuration_fingerprint,
             "code_version": lineage.code_version,
+            "code_digest": lineage.code_digest,
         },
         "entity_count": report.entity_count,
         "rejected_count": report.rejected_count,

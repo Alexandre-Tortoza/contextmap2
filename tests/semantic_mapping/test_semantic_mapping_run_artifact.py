@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mapping_builders import MAP_ID, SEMANTIC_MAP_ID, SUMMARY_POLICY
+from mapping_builders import CODE_DIGEST, MAP_ID, SEMANTIC_MAP_ID, SUMMARY_POLICY
 from mapping_fusion import FusionRun, write_fusion_run
 from mapping_geometry_fake import InMemoryGeometrySource
 
@@ -18,6 +18,7 @@ from contextmap.geometric_mapping import MapId
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import SemanticFusionRunId
 from contextmap.semantic_mapping import (
+    ENTITY_SCHEMA_VERSION,
     AmbiguityState,
     CandidateRejection,
     Entity,
@@ -73,6 +74,7 @@ def _writer(
     debug: MappingDebugLevel = MappingDebugLevel.NONE,
     semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
     lineage: MappingRunLineage | None = None,
+    code_digest: str = CODE_DIGEST,
 ) -> SemanticMappingRunWriter:
     return SemanticMappingRunWriter(
         workspace_root=workspace,
@@ -84,6 +86,7 @@ def _writer(
         semantic_map_id=semantic_map_id,
         lineage=lineage or lineage_from_fusion_manifest(fusion.manifest),
         code_version="test",
+        code_digest=code_digest,
         debug_level=debug,
     )
 
@@ -260,6 +263,33 @@ class TestLayoutAndManifest:
         assert (manifest.entity_count, manifest.rejected_count) == (3, 0)
         assert manifest.warnings == ("one warning",)
         assert manifest.code_version == "test"
+        assert manifest.code_digest == CODE_DIGEST
+
+    def test_the_manifest_records_the_entity_schema_version_apart_from_the_artifact_schema(
+        self, mapped: Mapped, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw = json.loads((mapped.run_dir / "manifest.json").read_text())
+
+        assert mapped.reader.manifest.entity_schema_version == ENTITY_SCHEMA_VERSION
+        assert raw["entity_schema_version"] == ENTITY_SCHEMA_VERSION
+        # Versionar o artifact não versiona o registro da entidade, e vice-versa.
+        monkeypatch.setattr("contextmap.semantic_mapping.run_artifact.SCHEMA_VERSION", "9.9.9")
+        fusion = write_fusion_run(mapped.workspace.parent / "fusion-2")
+        _writer(mapped.workspace.parent / "mapping-2", fusion).write([])
+        manifest = SemanticMappingRunReader(
+            _run_dir(mapped.workspace.parent / "mapping-2")
+        ).manifest
+        assert manifest.schema_version == "9.9.9"
+        assert manifest.entity_schema_version == ENTITY_SCHEMA_VERSION
+
+    def test_an_unsupported_entity_schema_version_is_refused(self, mapped: Mapped) -> None:
+        manifest = mapped.run_dir / "manifest.json"
+        record = json.loads(manifest.read_text())
+        record["entity_schema_version"] = "9.9.9"
+        manifest.write_text(json.dumps(record))
+
+        with pytest.raises(MappingRunArtifactError, match="entity_schema_version"):
+            SemanticMappingRunReader(mapped.run_dir)
 
     def test_an_empty_run_is_valid_and_explicit(self, tmp_path: Path) -> None:
         fusion = write_fusion_run(tmp_path / "fusion")
@@ -603,6 +633,13 @@ class TestWriterRefusals:
 
         with pytest.raises(MappingRunArtifactError, match="rejected candidates must be sorted"):
             _writer(tmp_path / "m", fusion).write(result.entities, rejections=(second, first))
+
+    @pytest.mark.parametrize("digest", ["", "   "])
+    def test_a_run_needs_a_code_digest(self, tmp_path: Path, digest: str) -> None:
+        fusion = write_fusion_run(tmp_path / "fusion")
+
+        with pytest.raises(ValueError, match="code_digest must not be empty"):
+            _writer(tmp_path / "m", fusion, code_digest=digest)
 
     def test_a_run_is_never_overwritten(self, tmp_path: Path) -> None:
         mapped = _write(tmp_path)

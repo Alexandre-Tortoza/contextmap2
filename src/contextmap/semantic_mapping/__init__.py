@@ -91,6 +91,7 @@ from contextmap.semantic_mapping.semantic_state import (
     derive_ambiguity_state,
 )
 from contextmap.semantic_mapping.serialization import (
+    ENTITY_SCHEMA_VERSION,
     decode_entity,
     decode_entity_reference,
     encode_entity,
@@ -116,6 +117,7 @@ __all__ = [
     "CLASS_ATTRIBUTE_DERIVATION_ID",
     "ENTITY_ID_POLICY_ID",
     "ENTITY_MATERIALIZATION_POLICY_ID",
+    "ENTITY_SCHEMA_VERSION",
     "GEOMETRY_SUMMARY_ALGORITHM_ID",
     "PRIMARY_HYPOTHESIS_POLICY_ID",
     "SEMANTIC_STATE_MAPPING_RULE_ID",

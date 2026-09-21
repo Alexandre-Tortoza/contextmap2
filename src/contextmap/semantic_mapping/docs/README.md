@@ -43,7 +43,7 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 
 - `Entity`, `EntityId`, `SemanticMapId`, `EntityProvenance` — o registro persistente e sua identidade local ao mapa.
 - `EntityReference` — o handle estável `(semantic_map_id, entity_id)`.
-- `encode_entity`, `decode_entity`, `encode_entity_reference`, `decode_entity_reference` — o codec JSON canônico, que revalida todas as invariantes na decodificação.
+- `encode_entity`, `decode_entity`, `encode_entity_reference`, `decode_entity_reference` — o codec JSON canônico, que revalida todas as invariantes na decodificação; `ENTITY_SCHEMA_VERSION`, a versão do registro canônico da entidade (distinta da versão do schema do artifact).
 - `EntitySet`, `UnknownEntityError`, `ForeignEntityReferenceError` — as entidades de um mapa, com resolução de referência que distingue "outro mapa" de "entidade inexistente".
 - `EntityGeometry`, `SupportStatistics`, `SpatialSummaryProvenance`, `EntityOrientation`, `GeometryDiagnostic`, `GeometryDiagnosticKind` — o suporte 3D e seus resumos derivados.
 - `GeometrySummaryPolicy`, `OrientationPolicy`, `summarize_geometry`, `resolve_geometry`, `verify_geometry_summary`, `geometry_set_digest`, `GEOMETRY_SUMMARY_ALGORITHM_ID`, `EmptyGeometrySupportError`, `GeometryResolutionError` — construção, resolução e verificação da geometria.

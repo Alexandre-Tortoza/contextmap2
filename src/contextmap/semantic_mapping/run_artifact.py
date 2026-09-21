@@ -51,7 +51,11 @@ from contextmap.semantic_mapping.models import (
     UnknownEntityError,
 )
 from contextmap.semantic_mapping.semantic_state import AmbiguityState
-from contextmap.semantic_mapping.serialization import decode_entity, encode_entity
+from contextmap.semantic_mapping.serialization import (
+    ENTITY_SCHEMA_VERSION,
+    decode_entity,
+    encode_entity,
+)
 from contextmap.shared import (
     AtomicRunDirectory,
     FileEntry,
@@ -195,11 +199,15 @@ class SemanticMappingRunManifest:
         identity_policy_id: The entity id allocation policy, ``None`` for an empty run.
         configuration_fingerprint: Hash of the materialization configuration.
         code_version: Code revision that produced the run.
+        code_digest: Digest of the code that produced the run, exactly as the caller supplied it;
+            the capability never computes one from a source tree.
         entity_count: Entities persisted.
         rejected_count: Candidates that could not become entities, persisted explicitly.
         warnings: Human-readable warnings of the run.
         debug_level: Debug evidence level that was requested.
         schema_version: Run artifact schema version.
+        entity_schema_version: Version of the canonical entity record the run stores
+            (``ENTITY_SCHEMA_VERSION``), independent of the artifact schema version.
         created_at: ISO 8601 UTC creation timestamp.
         file_inventory: Every contractual file, with size and hash; excludes the manifest, the
             README and ``debug/``.
@@ -214,11 +222,13 @@ class SemanticMappingRunManifest:
     identity_policy_id: str | None
     configuration_fingerprint: str | None
     code_version: str
+    code_digest: str
     entity_count: int
     rejected_count: int
     warnings: tuple[str, ...]
     debug_level: str
     schema_version: str
+    entity_schema_version: str
     created_at: str
     file_inventory: tuple[FileEntry, ...]
 
@@ -246,6 +256,7 @@ class SemanticMappingRunWriter:
         semantic_map_id: SemanticMapId,
         lineage: MappingRunLineage,
         code_version: str,
+        code_digest: str,
         debug_level: MappingDebugLevel = MappingDebugLevel.NONE,
     ) -> None:
         """Create a writer for a new run.
@@ -263,8 +274,15 @@ class SemanticMappingRunWriter:
             semantic_map_id: The semantic map the run holds.
             lineage: The explicit upstream selection.
             code_version: Code revision that produced the run.
+            code_digest: Digest of the code that produced the run, recorded exactly as given;
+                the caller owns how it is computed (for example a commit or a build hash).
             debug_level: Amount of non-contractual debug evidence to persist.
+
+        Raises:
+            ValueError: If the code digest is empty.
         """
+        if not code_digest.strip():
+            raise ValueError("code_digest must not be empty")
         self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
@@ -272,6 +290,7 @@ class SemanticMappingRunWriter:
         self._semantic_map_id = semantic_map_id
         self._lineage = lineage
         self._code_version = code_version
+        self._code_digest = code_digest
         self._debug_level = debug_level
         self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
             f"run-{run_index:04d}__{selection_label}__{policy_label}"
@@ -412,10 +431,12 @@ class SemanticMappingRunWriter:
                 "configuration_fingerprint": tally.configuration_fingerprint,
             },
             "code_version": self._code_version,
+            "code_digest": self._code_digest,
             "counts": {"entities": tally.entity_count, "rejected_candidates": len(rejected)},
             "warnings": list(warnings),
             "debug_level": self._debug_level.value,
             "schema_version": SCHEMA_VERSION,
+            "entity_schema_version": ENTITY_SCHEMA_VERSION,
             "created_at": datetime.now(UTC).isoformat(),
         }
 
@@ -946,6 +967,10 @@ def _load_manifest(run_dir: Path) -> SemanticMappingRunManifest:
         raise MappingRunArtifactError(
             f"unsupported run artifact schema_version: {raw.get('schema_version')!r}"
         )
+    if raw.get("entity_schema_version") != ENTITY_SCHEMA_VERSION:
+        raise MappingRunArtifactError(
+            f"unsupported entity_schema_version: {raw.get('entity_schema_version')!r}"
+        )
     lineage = raw["lineage"]
     policies = raw["policies"]
     counts = raw["counts"]
@@ -970,11 +995,13 @@ def _load_manifest(run_dir: Path) -> SemanticMappingRunManifest:
         identity_policy_id=policies["identity_policy_id"],
         configuration_fingerprint=policies["configuration_fingerprint"],
         code_version=raw["code_version"],
+        code_digest=raw["code_digest"],
         entity_count=counts["entities"],
         rejected_count=counts["rejected_candidates"],
         warnings=tuple(raw["warnings"]),
         debug_level=raw["debug_level"],
         schema_version=raw["schema_version"],
+        entity_schema_version=raw["entity_schema_version"],
         created_at=raw["created_at"],
         file_inventory=tuple(
             FileEntry(

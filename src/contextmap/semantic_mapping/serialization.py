@@ -89,6 +89,15 @@ from contextmap.visual_perception import (
     RegionId,
 )
 
+ENTITY_SCHEMA_VERSION = "0.1.0"
+"""Version of the canonical entity record that :func:`encode_entity` writes and
+:func:`decode_entity` reads.
+
+It versions the *entity* contract, not the run artifact that stores entities (which has its own
+``SCHEMA_VERSION``), so a change to how a run is laid out does not pretend to change what an
+entity is, and vice versa. Every run manifest records it and a reader refuses another value.
+"""
+
 
 def encode_entity_reference(reference: EntityReference) -> dict[str, Any]:
     """Encode the stable handle of an entity."""

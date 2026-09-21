@@ -53,6 +53,8 @@ FUSION_RUN_ID = SemanticFusionRunId("fusion-run-0001")
 FUSED_EVIDENCE_ID = FusedEvidenceId("fused--support-000001")
 FUSION_SUPPORT_ID = FusionSupportId("support-000001")
 CLOCK_ID = "fixture:header"
+CODE_DIGEST = "sha256:" + "ab" * 32
+"""A caller-supplied code digest; the capability records it as given and never computes one."""
 
 
 def timestamp(seconds: int, nanoseconds: int = 0, *, clock_id: str = CLOCK_ID) -> SourceTimestamp:
