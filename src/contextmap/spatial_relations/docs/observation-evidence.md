@@ -14,10 +14,10 @@ Como a capability não importa `visual_perception` nem `ingestion` (ver `tests/a
 
 ## Vínculo a partir de um run de Entity Resolution
 
-Uma afirmação upstream nomeia coisas como a percepção as viu, isto é, **regiões de um frame projetadas no mapa como observações espaciais**; ela não sabe em qual entidade resolvida elas foram parar. Isso está em Entity Resolution: a entidade resolvida traz na sua evidência as observações espaciais de **todos** os membros e lista os membros que fundiu. `link_statements(afirmações, resolved=ResolvedEntitySet)` deriva o vínculo só disso:
+Uma afirmação upstream nomeia coisas como a percepção as viu, isto é, **regiões de um frame projetadas no mapa como observações espaciais**; ela não sabe em qual entidade resolvida elas foram parar. Isso está em Entity Resolution: a entidade resolvida traz na sua evidência as observações espaciais de **todos** os membros e lista os membros que fundiu; o leitor do run responde quais entidades resolvidas uma observação espacial sustenta (`EntityResolutionRunReader.resolved_of_spatial_observation`), devolvendo nenhuma ou várias e **nunca escolhendo uma**. `link_statements(afirmações, resolution=leitor)` deriva o vínculo só dessa resposta:
 
 - `UpstreamRelationStatement` (`source`, `subject_spatial_observation_id`, `predicate_text`, `object_spatial_observation_id`, `polarity`) é a afirmação como o upstream a fez, ainda sem entidade;
-- uma ponta é ligada à entidade resolvida **cuja evidência contém** a sua observação espacial, e o `EndpointLink` resultante registra a observação, a entidade resolvida e os membros (`linked_through`: "spatial observation … is in the evidence of resolved entity … (members: …)");
+- uma ponta é ligada à **única** entidade resolvida que o leitor diz que a sua observação espacial sustenta, e o `EndpointLink` resultante registra a observação, a entidade resolvida e os membros (`linked_through`: "spatial observation … is in the evidence of resolved entity … (members: …)");
 - afirmações de **membros diferentes** da mesma entidade fundida caem na mesma entidade resolvida e, depois, viram um só registro de evidência;
 - uma observação que **nenhuma** entidade tem (`NOT_IN_ANY_ENTITY`), que **várias** têm (`IN_SEVERAL_ENTITIES`, ponta ambígua) ou duas pontas na **mesma** entidade (`BOTH_ENDS_IN_ONE_ENTITY`, que não é uma relação entre duas entidades) **não** são ligadas: vão para `unlinked` com a razão e os identificadores, nunca por proximidade, label ou palpite.
 
