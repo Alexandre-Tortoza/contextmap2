@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from contextmap.artifact.errors import UpstreamArtifactError
 from contextmap.artifact.layout import MANIFEST
-from contextmap.artifact.manifest import Requirement
+from contextmap.artifact.manifest import DependencyRecord, Requirement, inventory_digest
 from contextmap.shared import FileEntry, check_file_inventory
 
 GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
@@ -95,6 +97,113 @@ def verify_inventory(directory: Path, inventory: tuple[FileEntry, ...]) -> None:
             f"the upstream artifact {directory.name!r} does not match its inventory: "
             + "; ".join(problems)
         )
+
+
+class DependencyStatus(Enum):
+    """Whether a recorded dependency was found, and whether it is the recorded one.
+
+    Attributes:
+        FOUND: A directory was found whose inventory digest is the recorded one.
+        MISSING: No directory was found at the given path or at the relative hint.
+        MISMATCH: A directory was found but it is not the recorded artifact: its inventory digest
+            differs (stale or foreign) or its inventory is unreadable.
+    """
+
+    FOUND = "found"
+    MISSING = "missing"
+    MISMATCH = "mismatch"
+
+
+@dataclass(frozen=True, kw_only=True)
+class DependencyResolution:
+    """The outcome of looking for one recorded dependency.
+
+    Attributes:
+        record: The dependency as the manifest recorded it.
+        status: Whether it was found and matches.
+        location: The directory that was examined; ``None`` when there was nowhere to look.
+        detail: A sentence explaining the status, for people and reports.
+    """
+
+    record: DependencyRecord
+    status: DependencyStatus
+    location: Path | None
+    detail: str
+
+
+def resolve_dependency(
+    record: DependencyRecord, *, artifact_root: Path, dependency_paths: Mapping[str, Path]
+) -> DependencyResolution:
+    """Look for a recorded dependency and check that it is exactly the recorded artifact.
+
+    An explicit path for the artifact id is used alone: it never falls back to the relative hint,
+    because a caller who says where the dependency is must not be answered with another place.
+    Without one, the recorded hint is resolved against the artifact directory. Whatever is found
+    counts only if the digest of its inventory equals the recorded ``content_identity``; nothing
+    is searched for, and no directory is trusted for its name.
+
+    Args:
+        record: The dependency the manifest recorded.
+        artifact_root: The directory of the artifact that refers to it.
+        dependency_paths: Explicit locations, keyed by ``artifact_id``.
+
+    Returns:
+        The resolution. Nothing is raised for a missing or stale dependency; the caller decides
+        what that means for a required or an optional one.
+    """
+    if record.artifact_id in dependency_paths:
+        candidate: Path | None = dependency_paths[record.artifact_id]
+    elif record.locator is not None:
+        candidate = (artifact_root / record.locator).resolve()
+    else:
+        candidate = None
+    what = f"{record.artifact_type} {record.artifact_id!r}"
+    if candidate is None:
+        return DependencyResolution(
+            record=record,
+            status=DependencyStatus.MISSING,
+            location=None,
+            detail=f"the {what} has no recorded hint; pass its location explicitly",
+        )
+    if not candidate.is_dir():
+        return DependencyResolution(
+            record=record,
+            status=DependencyStatus.MISSING,
+            location=candidate,
+            detail=f"the {what} is not at {candidate.name!r}: no such directory",
+        )
+    if not (candidate / MANIFEST).is_file():
+        return DependencyResolution(
+            record=record,
+            status=DependencyStatus.MISSING,
+            location=candidate,
+            detail=f"the {what} is not at {candidate.name!r}: it holds no {MANIFEST}",
+        )
+    try:
+        found = inventory_digest(read_inventory(candidate))
+    except UpstreamArtifactError as error:
+        return DependencyResolution(
+            record=record,
+            status=DependencyStatus.MISMATCH,
+            location=candidate,
+            detail=str(error),
+        )
+    if found != record.content_identity:
+        return DependencyResolution(
+            record=record,
+            status=DependencyStatus.MISMATCH,
+            location=candidate,
+            detail=(
+                f"the directory {candidate.name!r} is not the {what}: its inventory digest "
+                f"{found} differs from the recorded {record.content_identity}"
+            ),
+        )
+    return DependencyResolution(
+        record=record,
+        status=DependencyStatus.FOUND,
+        location=candidate,
+        detail=f"the {what} was found and matches",
+    )
 
 
 def relative_locator(from_directory: Path, to_directory: Path) -> str | None:

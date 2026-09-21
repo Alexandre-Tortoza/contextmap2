@@ -15,11 +15,9 @@ ever reaches the files; the writer accepts only plain records.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from contextmap.artifact.dependencies import (
     GEOMETRIC_MAP_ARTIFACT_TYPE,
@@ -28,6 +26,7 @@ from contextmap.artifact.dependencies import (
     relative_locator,
     verify_inventory,
 )
+from contextmap.artifact.entries import EntityEntry, RelationEntry
 from contextmap.artifact.errors import (
     ArtifactExistsError,
     ContextMapArtifactError,
@@ -67,38 +66,6 @@ from contextmap.artifact.tables import (
 )
 from contextmap.geometric_mapping import GeometricMapArtifactReader, MapArtifactError
 from contextmap.shared import AtomicRunDirectory, RunDirectoryError, file_entry
-
-
-@dataclass(frozen=True, kw_only=True)
-class EntityEntry:
-    """One entity of the map, as the artifact stores it.
-
-    Attributes:
-        key: Identity of the entity inside this map, unique and non-empty. It is what relations
-            and readers refer to; the writer never rewrites it.
-        record: The entity's canonical, JSON-compatible record. The artifact keeps it verbatim
-            and does not interpret it.
-    """
-
-    key: str
-    record: Mapping[str, Any]
-
-
-@dataclass(frozen=True, kw_only=True)
-class RelationEntry:
-    """One relation of the map, as the artifact stores it.
-
-    Attributes:
-        key: Identity of the relation inside this map, unique and non-empty.
-        subject_key: Key of the entity that is the subject; it must exist in the map.
-        object_key: Key of the entity that is the object; it must exist in the map.
-        record: The relation's canonical, JSON-compatible record, kept verbatim.
-    """
-
-    key: str
-    subject_key: str
-    object_key: str
-    record: Mapping[str, Any]
 
 
 class ContextMapArtifactWriter:

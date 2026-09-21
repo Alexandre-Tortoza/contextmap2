@@ -11,12 +11,19 @@ the layout.
 """
 
 from contextmap.artifact.dependencies import UpstreamArtifact
+from contextmap.artifact.entries import EntityEntry, RelationEntry
 from contextmap.artifact.errors import (
     ArtifactExistsError,
+    ArtifactIntegrityError,
     ContextMapArtifactError,
+    DependencyMismatchError,
+    IncompleteContextMapArtifactError,
     InvalidContentError,
     ManifestError,
+    MissingDependencyError,
     RecordTableError,
+    UnresolvedReferenceError,
+    UnsupportedArtifactSchemaError,
     UnsupportedFormatVersionError,
     UpstreamArtifactError,
 )
@@ -38,6 +45,7 @@ from contextmap.artifact.metadata import (
     SourceSequence,
 )
 from contextmap.artifact.models import ContextMap, ContextMapId, GeometricMapLink
+from contextmap.artifact.reader import ContextMapArtifactReader
 from contextmap.artifact.records import (
     ContextMapRecordError,
     context_map_from_record,
@@ -49,7 +57,7 @@ from contextmap.artifact.versioning import (
     UnsupportedSchemaVersionError,
     require_supported_schema_version,
 )
-from contextmap.artifact.writer import ContextMapArtifactWriter, EntityEntry, RelationEntry
+from contextmap.artifact.writer import ContextMapArtifactWriter
 
 __all__ = [
     "ARTIFACT_TYPE",
@@ -57,18 +65,22 @@ __all__ = [
     "FORMAT_VERSION",
     "AnchorKind",
     "ArtifactExistsError",
+    "ArtifactIntegrityError",
     "ContextMap",
     "ContextMapArtifactError",
     "ContextMapArtifactManifest",
+    "ContextMapArtifactReader",
     "ContextMapArtifactWriter",
     "ContextMapId",
     "ContextMapMetadata",
     "ContextMapRecordError",
     "DeclaredCapabilities",
+    "DependencyMismatchError",
     "DependencyRecord",
     "EntityEntry",
     "GeometricMapLink",
     "Handedness",
+    "IncompleteContextMapArtifactError",
     "InvalidContentError",
     "LengthUnit",
     "ManifestError",
@@ -76,6 +88,7 @@ __all__ = [
     "MapCapability",
     "MapCreation",
     "MapFrame",
+    "MissingDependencyError",
     "ObservationWindow",
     "PolicyRef",
     "RecordTableError",
@@ -83,6 +96,8 @@ __all__ = [
     "Requirement",
     "SchemaVersion",
     "SourceSequence",
+    "UnresolvedReferenceError",
+    "UnsupportedArtifactSchemaError",
     "UnsupportedFormatVersionError",
     "UnsupportedSchemaVersionError",
     "UpstreamArtifact",
