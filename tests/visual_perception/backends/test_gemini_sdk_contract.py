@@ -36,7 +36,7 @@ from contextmap.visual_perception.backends.gemini import (  # noqa: E402
 )
 from contextmap.visual_perception.semantic_backend import encode_semantic_execution  # noqa: E402
 
-KEY = "AIza-not-a-real-key-0123456789"
+KEY = "test-only-fake-credential-0123456789"
 REFERENCE = "outputs/semantic-views/full.png"
 PNG = b"\x89PNG\r\n\x1a\n-fake-pixels"
 CANONICAL = json.dumps(
