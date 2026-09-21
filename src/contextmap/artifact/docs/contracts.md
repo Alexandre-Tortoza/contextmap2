@@ -1,6 +1,6 @@
 # Contratos do ContextMap
 
-Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `frame.py`, `versioning.py` e `records.py`.
+Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `frame.py`, `references.py`, `versioning.py` e `records.py`.
 
 ## `ContextMap`
 
@@ -9,7 +9,9 @@ ContextMap
 ├── context_map_id
 ├── schema_version
 ├── metadata
-└── geometry_ref
+├── geometry_ref
+├── entities[]
+└── relations[]
 ```
 
 | Campo | Significado |
@@ -18,6 +20,8 @@ ContextMap
 | `schema_version` | versão da **semântica dos dados** sob a qual o mapa foi escrito (`MAJOR.MINOR.PATCH`) |
 | `metadata` | o que o mapa é, de onde veio e como foi criado |
 | `geometry_ref` | o `GeometricMapArtifact` dono da geometria autoritativa |
+| `entities` | entidades resolvidas, ordenadas por id e únicas (ver [`composition.md`](composition.md)) |
+| `relations` | relações direcionadas entre entidades do mapa, ordenadas por id e únicas |
 
 Um mapa é imutável (`frozen`), comparável por valor e não carrega objeto de backend, tensor, tipo de ROS nem caminho de arquivo.
 

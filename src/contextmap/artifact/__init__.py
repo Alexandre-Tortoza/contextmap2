@@ -8,6 +8,14 @@ of ROS and of model stacks. See ``src/contextmap/artifact/docs/README.md`` for t
 capability documentation.
 """
 
+from contextmap.artifact.composition import (
+    AmbiguityStatus,
+    ContextEntity,
+    ContextRelation,
+    ContextSemanticState,
+    LabelHypothesis,
+    RelationState,
+)
 from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
 from contextmap.artifact.metadata import (
     ContextMapMetadata,
@@ -18,11 +26,21 @@ from contextmap.artifact.metadata import (
     PolicyRef,
     SourceSequence,
 )
-from contextmap.artifact.models import ContextMap, ContextMapId, GeometricMapLink
+from contextmap.artifact.models import ContextMap, GeometricMapLink
 from contextmap.artifact.records import (
     ContextMapRecordError,
     context_map_from_record,
     context_map_to_record,
+)
+from contextmap.artifact.references import (
+    ContextEntityId,
+    ContextEntityReference,
+    ContextMapId,
+    ContextRelationId,
+    ForeignContextEntityReferenceError,
+    ReferenceIntegrityError,
+    UnknownContextEntityError,
+    UpstreamRecordRef,
 )
 from contextmap.artifact.versioning import (
     CONTEXT_MAP_SCHEMA_VERSION,
@@ -33,14 +51,23 @@ from contextmap.artifact.versioning import (
 
 __all__ = [
     "CONTEXT_MAP_SCHEMA_VERSION",
+    "AmbiguityStatus",
     "AnchorKind",
+    "ContextEntity",
+    "ContextEntityId",
+    "ContextEntityReference",
     "ContextMap",
     "ContextMapId",
     "ContextMapMetadata",
     "ContextMapRecordError",
+    "ContextRelation",
+    "ContextRelationId",
+    "ContextSemanticState",
     "DeclaredCapabilities",
+    "ForeignContextEntityReferenceError",
     "GeometricMapLink",
     "Handedness",
+    "LabelHypothesis",
     "LengthUnit",
     "MapAnchor",
     "MapCapability",
@@ -48,9 +75,13 @@ __all__ = [
     "MapFrame",
     "ObservationWindow",
     "PolicyRef",
+    "ReferenceIntegrityError",
+    "RelationState",
     "SchemaVersion",
     "SourceSequence",
+    "UnknownContextEntityError",
     "UnsupportedSchemaVersionError",
+    "UpstreamRecordRef",
     "context_map_from_record",
     "context_map_to_record",
     "require_supported_schema_version",
