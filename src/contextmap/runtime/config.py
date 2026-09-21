@@ -152,12 +152,20 @@ class InputsConfig:
     """What an execution starts from.
 
     Attributes:
-        sequence: Name or reference of the ingested sequence, when already chosen.
-        selections: Exact upstream run or artifact reference chosen per stage.
+        sequence: Identity of the physical sequence the execution is about, when already
+            chosen. It is an explicit expectation checked against the lineage of the
+            selected artifacts, never inferred from names.
+        selections: For each stage, which upstream runs to start from: an exact artifact
+            id, several ids (distinct runs kept as separate evidence), ``"latest"``
+            (explicit opt-in to the newest compatible run) or ``"named:<name>"`` (a named
+            selection defined in ``named``). A stage that is not listed is never
+            selected implicitly.
+        named: Named selections, each mapping stages to exact artifact ids.
     """
 
     sequence: str | None
-    selections: Mapping[str, str]
+    selections: Mapping[str, tuple[str, ...]]
+    named: Mapping[str, Mapping[str, tuple[str, ...]]]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -229,7 +237,13 @@ class RuntimeConfig:
             "components": nested,
             "inputs": {
                 "sequence": self.inputs.sequence,
-                "selections": dict(self.inputs.selections),
+                "selections": {
+                    stage: list(references) for stage, references in self.inputs.selections.items()
+                },
+                "named": {
+                    name: {stage: list(ids) for stage, ids in stages.items()}
+                    for name, stages in self.inputs.named.items()
+                },
             },
             "resources": {
                 "device": self.resources.device,
@@ -669,7 +683,7 @@ def _profile_document(profile: str) -> dict[str, Any]:
             "stages": {stage.stage_id: stage.default_enabled for stage in preset.stages},
         },
         "components": components,
-        "inputs": {"sequence": None, "selections": {}},
+        "inputs": {"sequence": None, "selections": {}, "named": {}},
         "resources": {"device": None, "workspace": None},
         "policies": {"debug_level": "none"},
     }
@@ -769,7 +783,11 @@ def _parse_document(document: object, problems: list[ConfigProblem]) -> RuntimeC
         )
     preset, toggles = _parse_pipeline(document.get("pipeline", {}), problems)
     raw_components = _parse_components(document.get("components", {}), problems)
-    inputs = _parse_inputs(document.get("inputs", {}), problems)
+    inputs = _parse_inputs(
+        document.get("inputs", {}),
+        problems,
+        None if preset is None else {stage.stage_id for stage in preset.stages},
+    )
     resources = _parse_resources(document.get("resources", {}), problems)
     policies = _parse_policies(document.get("policies", {}), problems)
     if preset is None or problems:
@@ -920,26 +938,108 @@ def _resolve_component(
     return ComponentConfig(backend=raw.backend, parameters=MappingProxyType(parameters))
 
 
-def _parse_inputs(value: object, problems: list[ConfigProblem]) -> InputsConfig:
+LATEST = "latest"
+"""Selection value that explicitly opts a stage into the newest compatible run."""
+
+NAMED_PREFIX = "named:"
+"""Prefix of a selection value that refers to a named selection."""
+
+
+def _parse_inputs(
+    value: object, problems: list[ConfigProblem], known_stages: set[str] | None
+) -> InputsConfig:
     section = _mapping(value, "inputs", problems)
-    _reject_unknown(section, {"sequence", "selections"}, "inputs", problems)
-    selections: dict[str, str] = {}
-    for stage_id, reference in _mapping(
+    _reject_unknown(section, {"sequence", "selections", "named"}, "inputs", problems)
+    named = _parse_named(section.get("named", {}), problems, known_stages)
+    selections: dict[str, tuple[str, ...]] = {}
+    for stage_id, raw in _mapping(
         section.get("selections", {}), "inputs.selections", problems
     ).items():
-        if isinstance(reference, str) and reference:
-            selections[stage_id] = reference
-        else:
+        path = f"inputs.selections.{stage_id}"
+        if known_stages is not None and stage_id not in known_stages:
+            problems.append(ConfigProblem(path=path, message="is not a stage of the preset"))
+            continue
+        references = _references(raw, path, problems)
+        if references is None:
+            continue
+        for reference in references:
+            if reference.startswith(NAMED_PREFIX):
+                name = reference.removeprefix(NAMED_PREFIX)
+                if stage_id not in named.get(name, {}):
+                    problems.append(
+                        ConfigProblem(
+                            path=path,
+                            message=f"refers to the named selection {name!r}, which does not "
+                            f"define stage {stage_id!r} in inputs.named",
+                        )
+                    )
+        exclusive = [r for r in references if r == LATEST or r.startswith(NAMED_PREFIX)]
+        if exclusive and len(references) > 1:
             problems.append(
                 ConfigProblem(
-                    path=f"inputs.selections.{stage_id}",
-                    message="must be a non-empty run or artifact reference",
+                    path=path,
+                    message=f"{exclusive[0]!r} must be the only reference of the stage",
                 )
             )
+        selections[stage_id] = references
     return InputsConfig(
         sequence=_optional_text(section.get("sequence"), "inputs.sequence", problems),
         selections=MappingProxyType(selections),
+        named=MappingProxyType(named),
     )
+
+
+def _parse_named(
+    value: object, problems: list[ConfigProblem], known_stages: set[str] | None
+) -> dict[str, Mapping[str, tuple[str, ...]]]:
+    named: dict[str, Mapping[str, tuple[str, ...]]] = {}
+    for name, stages in _mapping(value, "inputs.named", problems).items():
+        path = f"inputs.named.{name}"
+        if not name:
+            problems.append(ConfigProblem(path="inputs.named", message="a name must not be empty"))
+            continue
+        resolved: dict[str, tuple[str, ...]] = {}
+        for stage_id, raw in _mapping(stages, path, problems).items():
+            stage_path = f"{path}.{stage_id}"
+            if known_stages is not None and stage_id not in known_stages:
+                problems.append(
+                    ConfigProblem(path=stage_path, message="is not a stage of the preset")
+                )
+                continue
+            references = _references(raw, stage_path, problems)
+            if references is None:
+                continue
+            if any(r == LATEST or r.startswith(NAMED_PREFIX) for r in references):
+                problems.append(
+                    ConfigProblem(
+                        path=stage_path,
+                        message="a named selection lists exact artifact ids only",
+                    )
+                )
+                continue
+            resolved[stage_id] = references
+        named[name] = MappingProxyType(resolved)
+    return named
+
+
+def _references(raw: object, path: str, problems: list[ConfigProblem]) -> tuple[str, ...] | None:
+    """Read one reference or a list of them; every reference is a non-empty text."""
+    items = [raw] if isinstance(raw, str) else raw
+    if (
+        not isinstance(items, list | tuple)
+        or not items
+        or not all(isinstance(item, str) and item for item in items)
+    ):
+        problems.append(
+            ConfigProblem(
+                path=path, message="must be a non-empty reference or a non-empty list of them"
+            )
+        )
+        return None
+    if len(set(items)) != len(items):
+        problems.append(ConfigProblem(path=path, message="lists the same reference twice"))
+        return None
+    return tuple(items)
 
 
 def _parse_resources(value: object, problems: list[ConfigProblem]) -> ResourcesConfig:

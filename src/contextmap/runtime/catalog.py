@@ -91,12 +91,16 @@ class StageInput:
         source: Stage that produces it in the base topology.
         optional: Whether the stage runs without it. An optional input is dropped when
             its source stage does not take part, and wired when it does.
+        multiple: Whether the stage accepts several runs of its source stage at once, kept
+            as distinct evidence (for example repeated perception runs over the same
+            observations). Every other input accepts exactly one run.
     """
 
     name: str
     contract: str
     source: str
     optional: bool = False
+    multiple: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -340,7 +344,12 @@ CANONICAL_PRESET = RuntimePreset(
             capability="sensor_association",
             inputs=(
                 StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
-                StageInput(name="perception", contract=PERCEPTION, source="visual_perception"),
+                StageInput(
+                    name="perception",
+                    contract=PERCEPTION,
+                    source="visual_perception",
+                    multiple=True,
+                ),
                 StageInput(name="trajectory", contract=TRAJECTORY, source="state_estimation"),
                 StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
             ),
@@ -368,8 +377,18 @@ CANONICAL_PRESET = RuntimePreset(
             capability="semantic_fusion",
             components=("semantic_fusion.support", "semantic_fusion.accumulation"),
             inputs=(
-                StageInput(name="association", contract=ASSOCIATION, source="sensor_association"),
-                StageInput(name="perception", contract=PERCEPTION, source="visual_perception"),
+                StageInput(
+                    name="association",
+                    contract=ASSOCIATION,
+                    source="sensor_association",
+                    multiple=True,
+                ),
+                StageInput(
+                    name="perception",
+                    contract=PERCEPTION,
+                    source="visual_perception",
+                    multiple=True,
+                ),
                 StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
                 StageInput(
                     name="representation",

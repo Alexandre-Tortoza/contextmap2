@@ -38,7 +38,7 @@ debug_level = "standard"     # none | standard | full
 |---|---|
 | `pipeline` | preset de topologia e quais estágios opcionais participam |
 | `components` | backend escolhido para cada ponto de variação, com os parâmetros **somente desse backend** |
-| `inputs` | sequência e seleção explícita de runs/artifacts upstream por estágio |
+| `inputs` | sequência esperada e seleção explícita de runs/artifacts upstream por estágio: ids exatos, listas de runs, seleções nomeadas ou `latest` ([`selection.md`](selection.md)) |
 | `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram) e workspace |
 | `policies` | nível de debug; o debug nunca é dependência contratual de um estágio downstream |
 

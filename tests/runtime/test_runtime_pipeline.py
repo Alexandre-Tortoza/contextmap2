@@ -388,10 +388,12 @@ class TestScopeAndExecution:
         assert log == IMPLEMENTED
         assert record.order == tuple(IMPLEMENTED)
         fusion = executors["semantic_fusion"].requests[0]
-        assert {name: ref.artifact_id for name, ref in fusion.inputs.items()} == {
-            "association": "sensor_association#1",
-            "perception": "visual_perception#1",
-            "geometry": "geometric_mapping#1",
+        assert {
+            name: [ref.artifact_id for ref in refs] for name, refs in fusion.inputs.items()
+        } == {
+            "association": ["sensor_association#1"],
+            "perception": ["visual_perception#1"],
+            "geometry": ["geometric_mapping#1"],
         }
 
     def test_an_explicit_subgraph_reuses_the_provided_upstream_artifacts(
@@ -420,10 +422,10 @@ class TestScopeAndExecution:
         )
 
         assert log == ["geometric_mapping"]
-        assert record.reused == provided
+        assert record.reused == {stage: (ref,) for stage, ref in provided.items()}
         request = executors["geometric_mapping"].requests[0]
-        assert request.inputs["sequence"].artifact_id == "seq-7"
-        assert request.inputs["trajectory"].artifact_id == "traj-3"
+        assert request.inputs["sequence"][0].artifact_id == "seq-7"
+        assert request.inputs["trajectory"][0].artifact_id == "traj-3"
 
     def test_a_subgraph_whose_upstream_is_not_provided_pulls_it_in(self, tmp_path: Path) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
@@ -579,12 +581,14 @@ class TestScopeAndExecution:
         assert document["plan_digest"] == plan.digest
         assert document["order"] == ["ingestion", "state_estimation"]
         assert document["stages"][1]["inputs"] == {
-            "sequence": {
-                "stage_id": "ingestion",
-                "contract": "SequenceArtifact",
-                "artifact_id": "ingestion#1",
-                "content_hash": None,
-            }
+            "sequence": [
+                {
+                    "stage_id": "ingestion",
+                    "contract": "SequenceArtifact",
+                    "artifact_id": "ingestion#1",
+                    "content_hash": None,
+                }
+            ]
         }
         assert document["stages"][1]["output"]["artifact_id"] == "state_estimation#1"
 
