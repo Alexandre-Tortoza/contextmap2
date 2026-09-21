@@ -57,8 +57,6 @@ from contextmap.shared import (
     FileEntry,
     RunDirectoryError,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.visual_perception import PerceptionRunId
 
@@ -223,10 +221,6 @@ class SemanticMappingRunManifest:
     file_inventory: tuple[FileEntry, ...]
 
 
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "semantic-mapping" / sequence_name
-
-
 class SemanticMappingRunWriter:
     """Builds an immutable Semantic Mapping run artifact on the local filesystem.
 
@@ -237,12 +231,10 @@ class SemanticMappingRunWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: SemanticMappingRunId,
         run_index: int,
-        selection_label: str,
-        policy_label: str,
         semantic_map_id: SemanticMapId,
         lineage: MappingRunLineage,
         code_version: str,
@@ -251,21 +243,19 @@ class SemanticMappingRunWriter:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/semantic_mapping``); the writer computes
+                no path, creates the directory atomically on writing and refuses to replace one
+                that exists.
             sequence_name: Name of the sequence the run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's runs (see
-                :func:`allocate_mapping_run_index`).
-            selection_label: Short readable description of the selected fusion run, for the
-                directory name.
-            policy_label: Short readable description of the materialization policy, for the
-                directory name.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             semantic_map_id: The semantic map the run holds.
             lineage: The explicit upstream selection.
             code_version: Code revision that produced the run.
             debug_level: Amount of non-contractual debug evidence to persist.
         """
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
@@ -273,9 +263,7 @@ class SemanticMappingRunWriter:
         self._lineage = lineage
         self._code_version = code_version
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{policy_label}"
-        )
+        self._final_dir = output_dir
 
     def write(
         self,
@@ -318,9 +306,6 @@ class SemanticMappingRunWriter:
                 )
         except RunDirectoryError as error:
             raise MappingRunArtifactError(str(error)) from error
-        rebuild_mapping_run_registry(
-            workspace_root=self._workspace_root, sequence_name=self._sequence_name
-        )
         return _load_manifest(self._final_dir)
 
     def _stream(self, run: AtomicRunDirectory, entities: Iterable[Entity], tally: _Tally) -> None:
@@ -612,32 +597,6 @@ class SemanticMappingRunReader:
         return data
 
 
-def allocate_mapping_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's semantic-mapping runs.
-
-    Scans the run directories, never the registry, so an interrupted or corrupted run is not
-    counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
-def rebuild_mapping_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
 class _Tally:
     """Checks the entities as they stream and collects what the tables and metrics need."""
 
@@ -912,23 +871,6 @@ def _decode(raw: bytes, decoder: Callable[[Mapping[str, Any]], _T], what: str) -
         return decoder(json.loads(raw))
     except (ValueError, KeyError, TypeError) as error:
         raise MappingRunArtifactError(f"malformed {what}: {error}") from error
-
-
-def _valid_run_index(run_dir: Path) -> int | None:
-    # Um diretório ilegível ou com manifest malformado simplesmente não é um run válido.
-    try:
-        reader = SemanticMappingRunReader(run_dir)
-    except (MappingRunArtifactError, ValueError, KeyError, OSError):
-        return None
-    return None if reader.verify_integrity() else reader.manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = SemanticMappingRunReader(run_dir).manifest
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
 
 
 def _load_manifest(run_dir: Path) -> SemanticMappingRunManifest:

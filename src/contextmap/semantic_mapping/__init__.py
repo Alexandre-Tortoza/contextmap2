@@ -75,9 +75,7 @@ from contextmap.semantic_mapping.run_artifact import (
     SemanticMappingRunManifest,
     SemanticMappingRunReader,
     SemanticMappingRunWriter,
-    allocate_mapping_run_index,
     lineage_from_fusion_manifest,
-    rebuild_mapping_run_registry,
 )
 from contextmap.semantic_mapping.semantic_state import (
     AmbiguityState,
@@ -174,7 +172,6 @@ __all__ = [
     "TemporalEvidenceError",
     "TemporalProvenance",
     "UnknownEntityError",
-    "allocate_mapping_run_index",
     "decode_entity",
     "decode_entity_reference",
     "derive_ambiguity_state",
@@ -187,7 +184,6 @@ __all__ = [
     "geometry_set_digest",
     "lineage_from_fusion_manifest",
     "materialize_entities",
-    "rebuild_mapping_run_registry",
     "resolve_geometry",
     "semantic_state_from_fused_evidence",
     "summarize_geometry",

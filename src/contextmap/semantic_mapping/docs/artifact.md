@@ -14,28 +14,28 @@ Um run persiste as **entidades semânticas** com os índices, a linhagem, as mé
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/semantic_mapping/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/semantic-mapping/<sequence>/
-├── runs.json                                   # registry reconstruível
-└── run-000N__<selection>__<policy>/
-    ├── README.md
-    ├── manifest.json                           # identidade, linhagem, política e inventário
-    ├── outputs/                                # contratual
-    │   ├── entities.jsonl                      # uma Entity canônica por linha (autocontida, autoritativa)
-    │   ├── entity-index.jsonl                  # entidade → deslocamento e tamanho em entities.jsonl
-    │   ├── entity-geometry-index.jsonl         # entidade → mapa, frame, pontos, limites, centroide, diagnósticos
-    │   ├── entity-evidence-index.jsonl         # entidade → evidência fundida (run, evidência, suporte) e contagens
-    │   ├── entity-observation-index.jsonl      # uma linha por (entidade, frame físico): instante e inferências
-    │   ├── entity-semantic-state.jsonl         # entidade → ambiguidade, primária, labels, atributos, incerteza
-    │   ├── entity-temporal-state.jsonl         # entidade → first/last seen, contagens, ciclo de vida
-    │   └── rejected-candidates.jsonl           # candidatos que não viraram entidade, com o motivo
-    ├── metrics/                                # contratual
-    │   ├── counts.json
-    │   ├── distributions.json
-    │   ├── payload.json
-    │   └── runtime.json                        # somente quando medido
-    └── debug/                                  # nunca contratual
-        └── entities/<entity-id>/{summary,geometry-summary,semantic-state,evidence-trace,temporal-history}.json
+<output_dir>/
+├── README.md
+├── manifest.json                           # identidade, linhagem, política e inventário
+├── outputs/                                # contratual
+│   ├── entities.jsonl                      # uma Entity canônica por linha (autocontida, autoritativa)
+│   ├── entity-index.jsonl                  # entidade → deslocamento e tamanho em entities.jsonl
+│   ├── entity-geometry-index.jsonl         # entidade → mapa, frame, pontos, limites, centroide, diagnósticos
+│   ├── entity-evidence-index.jsonl         # entidade → evidência fundida (run, evidência, suporte) e contagens
+│   ├── entity-observation-index.jsonl      # uma linha por (entidade, frame físico): instante e inferências
+│   ├── entity-semantic-state.jsonl         # entidade → ambiguidade, primária, labels, atributos, incerteza
+│   ├── entity-temporal-state.jsonl         # entidade → first/last seen, contagens, ciclo de vida
+│   └── rejected-candidates.jsonl           # candidatos que não viraram entidade, com o motivo
+├── metrics/                                # contratual
+│   ├── counts.json
+│   ├── distributions.json
+│   ├── payload.json
+│   └── runtime.json                        # somente quando medido
+└── debug/                                  # nunca contratual
+    └── entities/<entity-id>/{summary,geometry-summary,semantic-state,evidence-trace,temporal-history}.json
 ```
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a política e a linhagem ficam no `manifest.json`, e os candidatos rejeitados em `rejected-candidates.jsonl`. Criá-los sem produtor real violaria YAGNI (mesma decisão de Semantic Fusion, Sensor Association e Point Representation).
@@ -86,9 +86,9 @@ Separadas, sem um escalar único:
 
 `MappingDebugLevel.NONE` (padrão) não escreve nada; `STANDARD` escreve um resumo, a geometria, o estado semântico, os vínculos de evidência e o histórico temporal de uma amostra de entidades; `FULL` cobre todas. Nunca é inventariado, então removê-lo não invalida o run, e nenhum estágio a jusante pode depender dele.
 
-## Índices de run
+## Identidade do run
 
-Cada run tem um índice monotônico por sequência, calculado por `allocate_mapping_run_index` a partir dos runs **válidos** no disco (um run corrompido ou incompleto não conta). `runs.json` é só uma conveniência reconstruível (`rebuild_mapping_run_registry`).
+`run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca, não escreve `runs.json` e recusa um `output_dir` que já exista. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.
 
 ## Validação
 

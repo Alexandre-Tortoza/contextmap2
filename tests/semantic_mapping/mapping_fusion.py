@@ -82,23 +82,15 @@ def write_run(
     excluded: Sequence[ExcludedObservation] = (),
 ) -> FusionRun:
     """Persist fusion outcomes as a real run artifact and reopen it from disk."""
+    run_dir = workspace / "semantic_fusion"
     manifest = SemanticFusionRunWriter(
-        workspace_root=workspace,
+        output_dir=run_dir,
         sequence_name="sequence-0001",
         run_id=SemanticFusionRunId("fusion-run-0001"),
         run_index=1,
-        selection_label="all-frames",
-        policy_label="quality-aware",
         lineage=LINEAGE,
         code_version="test",
     ).write(outcomes, excluded=excluded)
-    run_dir = (
-        workspace
-        / "runs"
-        / "semantic-fusion"
-        / "sequence-0001"
-        / f"run-{manifest.run_index:04d}__all-frames__quality-aware"
-    )
     return FusionRun(
         run_dir=run_dir,
         reader=SemanticFusionRunReader(run_dir),
@@ -164,21 +156,14 @@ def write_mapping_run(
     rejections: Sequence[CandidateRejection] = (),
 ) -> Path:
     """Persist entities as a real Semantic Mapping run and return the run directory."""
+    run_dir = workspace / "semantic_mapping"
     SemanticMappingRunWriter(
-        workspace_root=workspace,
+        output_dir=run_dir,
         sequence_name="sequence-0001",
         run_id=SemanticMappingRunId("mapping-run-0001"),
         run_index=1,
-        selection_label="fusion-run-0001",
-        policy_label="one-support-one-entity",
         semantic_map_id=SEMANTIC_MAP_ID,
         lineage=lineage_from_fusion_manifest(run.manifest),
         code_version="test",
     ).write(entities, rejections=rejections)
-    return (
-        workspace
-        / "runs"
-        / "semantic-mapping"
-        / "sequence-0001"
-        / "run-0001__fusion-run-0001__one-support-one-entity"
-    )
+    return run_dir
