@@ -368,6 +368,7 @@ def _performance(
     aggregation: str,
     population: str = "every evaluated sample of the stage",
     direction: MetricDirection = _LOWER,
+    maximum: float | None = None,
 ) -> MetricDefinition:
     return MetricDefinition(
         name=name,
@@ -378,7 +379,7 @@ def _performance(
         population=population,
         unit=unit,
         minimum=0.0,
-        maximum=None,
+        maximum=maximum,
         direction=direction,
         aggregation=aggregation,
         required_annotations=(),
@@ -389,7 +390,7 @@ def _performance(
 
 
 def default_metric_registry() -> MetricRegistry:
-    """Return the version-1 registry of Solution 1 stage metrics."""
+    """Return the current registry of Solution 1 stage metrics (version 2)."""
     stage = EvaluationStage
     regions = AnnotationFamily.REGIONS
     semantics = AnnotationFamily.SEMANTICS
@@ -595,6 +596,17 @@ def default_metric_registry() -> MetricRegistry:
             evaluator="sensor-association-evaluator",
         ),
         _quality(
+            "association.feature_anchoring.rate",
+            stage.SENSOR_ASSOCIATION,
+            "Fraction of dense feature samples of associated support points that are anchored.",
+            population="dense feature samples requested for the associated support of the frames",
+            unit="ratio",
+            maximum=1.0,
+            direction=_HIGHER,
+            aggregation="anchored samples divided by requested samples",
+            evaluator="sensor-association-evaluator",
+        ),
+        _quality(
             "pointrep.repeatability.cosine",
             stage.POINT_REPRESENTATION,
             "Cosine similarity of representations of the same support under identical input.",
@@ -633,6 +645,17 @@ def default_metric_registry() -> MetricRegistry:
             missing_data=_EXCLUDE,
         ),
         _quality(
+            "fusion.view_consistency.rate",
+            stage.SEMANTIC_FUSION,
+            "Fraction of multi-view supports whose independent physical observations agree.",
+            population="supports observed in two or more distinct physical observations",
+            unit="ratio",
+            maximum=1.0,
+            direction=_HIGHER,
+            aggregation="supports whose observations agree divided by multi-view supports",
+            evaluator="semantic-fusion-evaluator",
+        ),
+        _quality(
             "entity.false_merge.rate",
             stage.ENTITY_RESOLUTION,
             "Fraction of resolved entities that merge annotated-distinct identities.",
@@ -656,6 +679,19 @@ def default_metric_registry() -> MetricRegistry:
             aggregation="duplicated identities divided by annotated identities",
             evaluator="entity-resolution-evaluator",
             annotations=(identity,),
+            missing_data=_EXCLUDE,
+        ),
+        _quality(
+            "entity.semantic_accuracy.rate",
+            stage.ENTITY_RESOLUTION,
+            "Fraction of resolved entities whose semantic state keeps an acceptable concept.",
+            population="resolved entities matched to an annotated identity with a labeled record",
+            unit="ratio",
+            maximum=1.0,
+            direction=_HIGHER,
+            aggregation="entities with an acceptable concept divided by matched entities",
+            evaluator="entity-resolution-evaluator",
+            annotations=(semantics, identity),
             missing_data=_EXCLUDE,
         ),
         _quality(
@@ -712,15 +748,22 @@ def default_metric_registry() -> MetricRegistry:
         ),
         _performance(
             "runtime.peak_memory",
-            "Peak resident or device memory during the stage.",
+            "Peak memory during the stage; CPU and GPU are separate results (stratum device).",
             unit="bytes",
-            aggregation="maximum over samples",
+            aggregation="maximum over samples, per device stratum (device=cpu or gpu)",
         ),
         _performance(
             "runtime.storage_size",
-            "Bytes written by the stage.",
+            "Bytes written by the stage; intermediate and final artifacts are separate results.",
             unit="bytes",
-            aggregation="sum over artifacts written",
+            aggregation="sum over artifacts written, per artifact_role stratum",
+        ),
+        _performance(
+            "runtime.failure_rate",
+            "Fraction of attempted samples that failed, including out-of-memory failures.",
+            unit="ratio",
+            maximum=1.0,
+            aggregation="failed samples divided by attempted samples",
         ),
         _performance(
             "runtime.throughput",
@@ -731,5 +774,5 @@ def default_metric_registry() -> MetricRegistry:
         ),
     )
     return MetricRegistry(
-        registry_id="contextmap-stage-metrics", registry_version="1", definitions=definitions
+        registry_id="contextmap-stage-metrics", registry_version="2", definitions=definitions
     )

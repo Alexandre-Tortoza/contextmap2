@@ -141,6 +141,12 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `certify_reference_set()`/`CertifiedReferenceSet` — exige integridade e QA sem blockers; a integridade é pré-requisito das execuções oficiais.
 - `check_evaluator_reproducibility()`/`compare_evaluation_reports()`/`NondeterministicField` — rodam um evaluator repetidamente sobre as mesmas entradas e recusam qualquer diferença não declarada; valores de recursos são excluídos explicitamente e o não determinismo inevitável exige motivo.
 
+### Avaliação de técnicas opcionais
+
+- `build_feature_resolution_protocol()`/`build_quality_aware_fusion_protocol()`/`TechniqueProtocol` — os dois experimentos controlados (features nativas × melhoradas; fusão uniforme × ciente de qualidade) como um manifesto por estágio avaliado, com o mesmo artifact upstream pinado nos dois arms, os estratos do protocolo e as métricas de qualidade e de custo separadas.
+- `build_technique_evidence()`/`TechniqueEvidence`/`EffectPolicy` — efeito por métrica **e por estrato** (inclusive regressões escondidas por um ganho global), custos à parte, estágios não avaliados e arms indisponíveis explícitos, artifacts compartilhados e disponibilidade dos estratos; sem score geral.
+- `record_technique_decision()`/`TechniqueDecision` — decisão humana (manter, adiar, propor mudar o default) presa ao digest da evidência; nunca altera configuração e exige re-validação E2E para mudar o default.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -161,6 +167,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`optional-techniques.md`](optional-techniques.md) — protocolos das técnicas opcionais, estratos, evidência por estrato, custos separados e decisão manter/adiar/mudar o default.
 - [`annotation-qa.md`](annotation-qa.md) — verificações do conteúdo das anotações por família, ambiguidade permissível, divergência entre anotadores, certificação e reprodutibilidade dos evaluators.
 - [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.

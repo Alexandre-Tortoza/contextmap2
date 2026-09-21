@@ -29,9 +29,9 @@ Regras aplicadas na construção:
 
 ## Registro
 
-`MetricRegistry` é imutável, tem `registry_id`/`registry_version` e um `digest()` sobre todas as definições; `identity()` é o que os relatórios citam. `get(name, version)` recusa métrica ou versão desconhecida. O `default_metric_registry()` (v1) cobre todos os estágios:
+`MetricRegistry` é imutável, tem `registry_id`/`registry_version` e um `digest()` sobre todas as definições; `identity()` é o que os relatórios citam. `get(name, version)` recusa métrica ou versão desconhecida. O `default_metric_registry()` (**v2**) cobre todos os estágios. A v2 acrescenta as métricas que a avaliação de técnicas opcionais ([`optional-techniques.md`](optional-techniques.md)) precisa: `association.feature_anchoring.rate`, `fusion.view_consistency.rate`, `entity.semantic_accuracy.rate` e `runtime.failure_rate`.
 
-| Estágio | Métricas de qualidade (v1) |
+| Estágio | Métricas de qualidade (v2) |
 |---|---|
 | `ingestion_integrity` | `ingestion.integrity.violations`, `ingestion.modality.coverage` |
 | `state_estimation` | `state.ate.rmse`, `state.rpe.translation.rmse`, `state.gap.ratio` |
@@ -39,15 +39,15 @@ Regras aplicadas na construção:
 | `region_discovery` | `region.iou.mean`, `region.recall.mean`, `region.duplicate_rate.mean` |
 | `feature_extraction` | `feature.finite_ratio`, `feature.repeatability.max_abs_diff` |
 | `semantic_interpretation` | `semantic.acceptable_claim_rate`, `semantic.unsupported_claim_rate`, `semantic.ambiguity_preservation_rate` |
-| `sensor_association` | `association.reprojection_error.median`, `association.visible_support.ratio` |
+| `sensor_association` | `association.reprojection_error.median`, `association.visible_support.ratio`, `association.feature_anchoring.rate` |
 | `point_representation` | `pointrep.repeatability.cosine` |
-| `semantic_fusion` | `fusion.reference_recovery.rate`, `fusion.ambiguity_retention.rate` |
-| `entity_resolution` | `entity.false_merge.rate`, `entity.duplicate.rate` |
+| `semantic_fusion` | `fusion.reference_recovery.rate`, `fusion.ambiguity_retention.rate`, `fusion.view_consistency.rate` |
+| `entity_resolution` | `entity.false_merge.rate`, `entity.duplicate.rate`, `entity.semantic_accuracy.rate` |
 | `spatial_relations` | `relations.f1`, `relations.negative_violation.rate` |
 | `artifact_integrity` | `artifact.integrity.violations`, `artifact.round_trip.mismatches` |
 | `runtime` | só performance (abaixo) |
 
-Performance (transversal a qualquer estágio): `runtime.wall_time`, `runtime.peak_memory`, `runtime.storage_size`, `runtime.throughput`.
+Performance (transversal a qualquer estágio): `runtime.wall_time`, `runtime.peak_memory` (por estrato `device=cpu|gpu`), `runtime.storage_size` (por `artifact_role=intermediate|final`), `runtime.throughput` e `runtime.failure_rate` (falhas, inclusive OOM).
 
 As definições de Entity Resolution e Spatial Relations existem para que os relatórios desses estágios tenham onde se apoiar; os avaliadores correspondentes dependem dos contratos das milestones 12–14 e ainda não existem.
 
