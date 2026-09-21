@@ -24,7 +24,13 @@ flowchart LR
 
 ## Estado implementado
 
-Existe o **contrato de identidade**: `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência. Os demais contratos (evidência de comparação, decisão, candidatos, política, entidade resolvida, artifact e avaliação) chegam nas issues #130 a #140 da milestone "Entity Resolution".
+Existem os **contratos** de identidade e de comparação:
+
+- `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
+- `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
+- `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve.
+
+Um canal é sempre **medido ou indisponível**: a falta de evidência nunca vira zero nem voto por `DISTINCT`. O codec é estrito e reflexivo (`_codec.py`). Os demais contratos (candidatos, política, entidade resolvida, artifact e avaliação) chegam nas issues seguintes da milestone.
 
 ## Escopo de identidade
 
@@ -34,18 +40,22 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 
 ## Contratos públicos
 
-- `EntityResolutionRunId` — identidade do artifact de resolução, o escopo dos ids resolvidos.
-- `ResolvedEntityId` — identidade de uma entidade resolvida, local ao artifact.
-- `ResolvedEntityReference` — o handle estável `(resolution_run_id, resolved_entity_id)`.
-- `encode_resolved_entity_reference`, `decode_resolved_entity_reference` — o codec JSON, que revalida a referência na decodificação.
+- `EntityResolutionRunId`, `ResolvedEntityId`, `ResolvedEntityReference` — identidade escopada ao artifact de resolução e o handle estável `(resolution_run_id, resolved_entity_id)`.
+- `EntityMatchEvidence`, `ComparisonId`, `comparison_id_for`, `MatchEvidenceProvenance`, `GateResult`, `evaluate_comparison_gates`, `COMPARISON_GATES_POLICY_ID`, `reference_order` — a comparação de um par e seus gates.
+- `MatchChannel`, `EvidenceStatus`, `UnavailableReason`, `Unavailability`, `ChannelPolicyRef`, `Finding`, `ChannelEvidence` — o vocabulário comum dos canais.
+- `GeometryEvidence`, `GeometryMeasurement`, `SupportDistance`; `SemanticEvidence`, `SemanticMeasurement`, `LabelComparison`, `LabelRelation`, `AttributeComparison`; `AppearanceEvidence`, `AppearanceMeasurement`, `FeatureContribution`; `TemporalEvidence`, `TemporalMeasurement`; `PointRepresentationEvidence`, `RepresentationMeasurement`, `RepresentationRef` — a evidência tipada de cada canal.
+- `ResolutionDecision`, `ResolutionDecisionId`, `ResolutionOutcome`, `UnresolvedReason`, `PolicyStage`, `TriggeredRule`, `ResolutionPolicyRef`, `DecisionProvenance`, `decision_id_for` — a decisão.
+- `encode_*` e `decode_*` de referência resolvida, evidência de comparação e decisão — o codec JSON, que revalida todas as invariantes.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes.
 
 ## Módulos consumidos
 
-- `contextmap.semantic_mapping`: `Entity`, `EntityReference`, `EntitySet` e os componentes de uma entidade, como referência do que é comparado.
+- `contextmap.semantic_mapping`: `Entity`, `EntityReference`, `EntityFeatureRef` e `AmbiguityState`, o que é comparado e referenciado.
+- `contextmap.geometric_mapping`: `GeometryReference` e `MapId`, o suporte 3D referenciado.
+- `contextmap.point_representation`: `PointRepresentationId` e `PointRepresentationRunId`, as representações referenciadas.
 
-A dependência é declarada em `tests/architecture/test_boundaries.py` e sempre feita pela API pública.
+As dependências estão declaradas em `tests/architecture/test_boundaries.py` e são sempre feitas pela API pública.
 
 ## Onde estão os documentos detalhados
 

@@ -84,6 +84,9 @@ check_untyped_defs = true
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
+# Os testes não são pacotes: os builders de Semantic Fusion e Semantic Mapping, que Entity
+# Resolution reutiliza para construir entidades reais, ficam importáveis pelo nome do módulo.
+pythonpath = ["tests/semantic_fusion", "tests/semantic_mapping"]
 
 [tool.coverage.run]
 source = ["contextmap"]
