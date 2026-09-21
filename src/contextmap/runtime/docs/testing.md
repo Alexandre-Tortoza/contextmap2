@@ -22,9 +22,11 @@ O runtime controla **quais artifacts, backends e configurações exatos** uma ex
 | `test_runtime_cli.py` | a CLI como camada fina: dry-run, execução, seleção, artifacts, run records, reuso/retomada, códigos de saída |
 | `test_runtime_ingestion_service.py` | o serviço de ingestion com um adapter falso roteirizado: preflight, identidade determinística, execução até um `SequenceArtifact` real, avisos, falhas por categoria, cancelamento, nada publicado em falha, segredos, o estágio do DAG e o reuso |
 | `test_runtime_ingestion_integration.py` | `contextmap ingest` com o adapter ROS 1 **real** composto e um bag sintético (pulado sem `rosbags`) |
+| `test_runtime_api.py` | a API pública `Runtime` com o mundo falso: descoberta com backends disponíveis e indisponíveis (e nenhum SDK pesado importado), configuração e topologia determinísticas, edições permitidas, estágio/backend não suportado explícito, preflight (sucesso, todos os problemas, avisos, previsão de reuso), execução (sucesso, falha, bloqueio, cancelamento, interrupção), ordem dos eventos, sink que levanta, segredos, reuso/retomada visíveis, lista e detalhe de runs a partir do registro persistido sem inferir ausências, consultas repetidas equivalentes |
+| `test_runtime_api_consumer.py` | um frontend escrito **só com imports públicos** de `contextmap.runtime` (descoberta → configuração → preflight → execução → inspeção → reuso → cancelamento) e um teste que lê o próprio arquivo e prova que só `contextmap.runtime` foi importado |
 | `test_runtime_regressions.py` | erros comuns de configuração, seleção, cache e segredos, cada um com um teste nomeado; dry-run = plano executado; execuções equivalentes geram registros equivalentes |
 | `test_runtime_end_to_end.py` | o caminho canônico, do arquivo de configuração aos registros, com estágios falsos |
-| `tests/architecture/test_runtime_boundaries.py` | só a composition root conhece capabilities e backends, e só dentro de factories; importar o runtime não carrega capability nem backend |
+| `tests/architecture/test_runtime_boundaries.py` | só a composition root conhece capabilities e backends, e só dentro de factories; importar o runtime não carrega capability nem backend; a API pública só depende da biblioteca padrão e do runtime; nenhum módulo do runtime depende de biblioteca de UI; os contratos públicos não expõem tipo ROS nem de backend |
 
 ## Invariantes exercitadas de ponta a ponta
 
@@ -35,7 +37,11 @@ O runtime controla **quais artifacts, backends e configurações exatos** uma ex
 - a **retomada** só reutiliza o que passa nas checagens de reuso, nunca promove uma saída parcial e nunca toca o run anterior;
 - **nenhum segredo** aparece em saída, eventos, status, plano, configuração efetiva ou ambiente registrado, nem em uma execução bem-sucedida.
 
+- a **API pública** devolve, para consultas repetidas (status, capacidades, plano, preflight, lista e detalhe de runs), documentos equivalentes; toda inspeção de run vem do registro persistido e uma ausência (entradas de um estágio reaproveitado, configuração persistida) é `None` com uma nota, nunca deduzida.
+
 ## Como o teste foi validado
+
+A API pública foi validada por mutação: sink que levantar quebrando o run, workspace da configuração diferente aceito, ordem de runs lexicográfica, seleção sem catálogo aceita em silêncio, todo backend "disponível", segredos sem redação, identidade de código de reuso não registrada, entradas do estágio descartadas do registro, retomada impossível não recusada antes de criar o run e executor exigido de um estágio que será reaproveitado: cada quebra é pega por pelo menos um teste.
 
 Além de passar, os guardas centrais foram verificados por **mutação**: quebrar deliberadamente a regra (índice que nunca registra, índice que nunca verifica, retomada que aceita topologia alterada, mensagem de falha sem redação, import de capability fora da composition root) faz a suíte falhar. Uma dessas mutações revelou a ausência de um teste de retomada com a **topologia** alterada e a mesma configuração efetiva, hoje coberto.
 

@@ -42,6 +42,8 @@ Existe ainda a **CLI** (issue #166), uma camada fina que traduz flags em overrid
 
 Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`planned`, `running`, `completed`, `failed`, `blocked`, `cancelled`), eventos estruturados append-only, registro de falha com categoria, cancelamento cooperativo, ambiente para reprodução, segredos sempre redigidos e retomada como um run novo que só reutiliza artifacts que passam nas checagens normais de reuso. Detalhes em [`lifecycle.md`](lifecycle.md). Existe também o **serviço público de ingestion** (issue #263): um caminho único e neutro de frontend (`preflight` e `run` com eventos, cancelamento cooperativo e resultado estruturado) que a CLI, uma TUI e o DAG compartilham, com o adapter vindo da composition root e nenhuma regra de fonte, validação ou sincronização duplicada. Detalhes em [`ingestion-service.md`](ingestion-service.md).
 
+Existe, por fim, a **API pública de aplicação** (issue #264): `contextmap.runtime.Runtime`, a única superfície de que um frontend (CLI, TUI) precisa para descobrir capabilities e backends (sem carregar modelo), resolver configuração e topologia, fazer preflight, executar com eventos e cancelamento e inspecionar runs a partir do registro persistido, com contratos serializáveis, sem classe de backend, objeto ROS nem biblioteca de UI. É uma fachada: cada operação delega ao serviço que a possui. Detalhes em [`api.md`](api.md).
+
 A estratégia de testes, o mapa de cobertura e as invariantes exercitadas estão em [`testing.md`](testing.md). Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
@@ -70,6 +72,8 @@ A estratégia de testes, o mapa de cobertura e as invariantes exercitadas estão
 - `resolve_selections()`, `ResolvedSelections`, `SelectedRun`, `ArtifactCatalog`, `StaticCatalog`, `CatalogEntry`, `Lineage`, `check_lineage()`, `LATEST`, `NAMED_PREFIX` — a seleção explícita de runs e a checagem de linhagem.
 - `ReusePolicy`, `ReuseKey`, `ReuseDecision`, `ArtifactStore`, `FileArtifactStore`, `StoreLookup`, `predict_reuse()` — o reuso por identidade e a previsão do que seria reutilizado.
 - `PipelineError`, `PreflightError`, `PlanDocumentError`, `StageExecutionError`, `ReuseError` — falhas do DAG, todas explícitas.
+- `Runtime` — a API pública de aplicação para qualquer frontend: `status()`, `capabilities()`, `resolve_config()`, `resolve_plan()`, `preflight()`, `run()`, `reuse_policy()`, `list_runs()`, `inspect_run()` e `ingestion()`.
+- `RuntimeStatus`, `RuntimeCapability`, `RuntimeComponent`, `RuntimeBackend`, `ResolvedPipelinePlan`, `RuntimePlanStage`, `RuntimePlanInput`, `RuntimeEdit`, `RuntimePreflightReport`, `RuntimeExecutionEvent`, `RuntimeExecutionResult`, `RuntimeRunRecord`, `RuntimeRunStage`, `RuntimeRunSummary` — os contratos que essa API devolve, todos com `to_document()`.
 
 ## Módulos consumidos
 
