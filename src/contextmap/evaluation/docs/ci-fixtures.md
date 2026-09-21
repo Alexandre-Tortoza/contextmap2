@@ -61,6 +61,8 @@ O catálogo traz a matriz de cobertura, verificada em CI, com o que **não** est
 - respostas enlatadas → `parse_semantic_response` → claims esperados, e avaliação contra a anotação semântica;
 - o reference set do subconjunto → validação de integridade sem achados.
 
+**Escopo (#172).** Esta regressão cobre só os elos acima. Ela **não** é a regressão entre módulos "da ingestão até o artifact final": isso exige a fusão multi-vista (saídas sintéticas de Sensor Association) e o round-trip do `ContextMapArtifact`, que dependem das milestones de schema e serialização do artifact, e a identidade e as relações seguem só em nível de anotação até existirem Entity Resolution e Spatial Relations. Por isso a issue #172 segue aberta: o que existe é o subconjunto e sua regressão parcial, não o critério completo.
+
 ## Versionamento e revisão
 
 - A versão é o diretório (`ci_subset/1.0.1/`) e está em `manifest.json` e `catalogue.json`. **Qualquer** mudança em um arquivo gerado exige uma nova versão.

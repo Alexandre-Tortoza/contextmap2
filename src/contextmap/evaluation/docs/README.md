@@ -118,7 +118,7 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 - `generate_ci_fixture_subset()`/`build_synthetic_sequence()` — gera, só com fórmulas, uma sequência sintética canônica (RGB, LiDAR, pose, calibração), o reference set do subconjunto e o catálogo; commitado em `tests/fixtures/ci_subset/<versão>/`.
 - `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
-- O subconjunto protege contra regressões e não substitui a avaliação com dados reais.
+- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A regressão entre módulos que ele sustenta é parcial: a cadeia "da ingestão até o artifact final" (#172) depende de fusão multi-vista, do `ContextMapArtifact` e de Entity Resolution/Spatial Relations.
 
 ### Registro de métricas e relatório comum
 
@@ -142,6 +142,8 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `check_evaluator_reproducibility()`/`compare_evaluation_reports()`/`NondeterministicField` — rodam um evaluator repetidamente sobre as mesmas entradas e recusam qualquer diferença não declarada; valores de recursos são excluídos explicitamente e o não determinismo inevitável exige motivo.
 
 ### Avaliação de técnicas opcionais
+
+Protocolo e harness apenas: não há execução real nem evidência, e nenhuma decisão foi tomada (#197 segue aberta para a execução e a decisão).
 
 - `build_feature_resolution_protocol()`/`build_quality_aware_fusion_protocol()`/`TechniqueProtocol` — os dois experimentos controlados (features nativas × melhoradas; fusão uniforme × ciente de qualidade) como um manifesto por estágio avaliado, com o mesmo artifact upstream pinado nos dois arms, os estratos do protocolo e as métricas de qualidade e de custo separadas.
 - `build_technique_evidence()`/`TechniqueEvidence`/`EffectPolicy` — efeito por métrica **e por estrato** (inclusive regressões escondidas por um ganho global), custos à parte, estágios não avaliados e arms indisponíveis explícitos, artifacts compartilhados e disponibilidade dos estratos; sem score geral.
