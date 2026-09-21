@@ -74,7 +74,6 @@ def test_the_contract_report_decides_only_what_the_chain_checked(tmp_path: Path)
     assert passed == {
         "ingestion.sequence_integrity",
         "state_estimation.trajectory_coverage",
-        "geometric_mapping.map_frame_consistency",
         "sensor_association.projection_validity",
         "semantic_fusion.evidence_preservation",
         "reproducibility.rerun_equivalence",

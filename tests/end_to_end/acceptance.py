@@ -130,15 +130,12 @@ def contract_results(
         "state_estimation.accuracy",
         detail="not applicable: the trajectory is the declared pose input, not an estimate",
     )
-    results["geometric_mapping.map_frame_consistency"] = _decide(
+    results["geometric_mapping.map_frame_consistency"] = GateResult.not_evaluated(
         "geometric_mapping.map_frame_consistency",
-        "geometric_mapping",
-        [
-            *chain.geometry.verify_integrity(),
-            *_findings_for(cross, "geometric_mapping"),
-        ],
-        ref("geometric_mapping"),
-        "map verifies and shares the trajectory frame and clock",
+        detail=(
+            "partially checked: the map verifies and shares the trajectory frame and clock, and "
+            "every reference resolves; transform traces and the artifact round trip were not run"
+        ),
     )
     results["sensor_association.projection_validity"] = _decide(
         "sensor_association.projection_validity",
