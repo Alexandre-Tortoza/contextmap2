@@ -94,6 +94,7 @@ from contextmap.sensor_association import (
     SensorAssociationService,
 )
 from contextmap.spatial_relations import (
+    RelationEvidence,
     RelationsRunPolicies,
     SpatialRelationsRunId,
     SpatialRelationsRunWriter,
@@ -554,7 +555,7 @@ class SpatialRelationsExecutor:
             candidates = generate_relation_candidates(
                 entities, policy=self._policies.candidate, conventions=conventions
             )
-            evidence = []
+            evidence: list[RelationEvidence] = []
             if self._policies.geometric is not None:
                 evidence.extend(
                     evaluate_geometric_candidates(
