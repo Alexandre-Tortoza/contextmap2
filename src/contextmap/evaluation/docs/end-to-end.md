@@ -112,6 +112,29 @@ Os enunciados completos de cada gate (requisito e evidência) estão no snapshot
 - `assemble_acceptance_report()` exige **exatamente um resultado por gate**: uma omissão é erro, não um `passed` implícito.
 - `unmet_required_gates()` devolve todo gate que não foi cumprido com evidência real, com a capability e o motivo; um relatório sem pendências só existe se todo gate passou com evidência real.
 
+## Invariantes entre estágios
+
+`contextmap.evaluation.cross_stage` valida as **fronteiras** entre os artifacts persistidos, lendo só manifests e objetos públicos das capabilities. Nunca repara um artifact inválido: uma fronteira quebrada vira um `CrossStageFinding` que nomeia a capability responsável, e `cross_stage_gate_results()` o converte nos quatro gates `cross_stage.*`.
+
+| Gate | O que verifica |
+|---|---|
+| `cross_stage.lineage_closure` | todo artifact declara a mesma sequência; mapa, associações e fusão apontam para a trajetória, o run de estado, o mapa e os runs de percepção e de associação exatos que foram consumidos; a calibração do mapa e das associações é a mesma e é a do artifact de sequência (quando informada) |
+| `cross_stage.coordinate_consistency` | o frame do mapa é o de referência da trajetória e ambos usam o mesmo relógio; toda referência de geometria de uma observação ou suporte aponta para o mapa do run **e resolve nele** |
+| `cross_stage.evidence_traceability` | toda observação espacial aponta para um resultado, região e claims de percepção que existem; todo suporte de fusão cita observações que uma associação produziu; nenhuma claim mantida pela associação some da contribuição da fusão |
+| `cross_stage.physical_observation_identity` | a fusão tem um grupo por frame físico das observações do suporte (inferência repetida não vira observação nova) e cada observação está no grupo do seu frame |
+
+Regras de decisão:
+
+- Um gate com achado **falha** e nomeia as capabilities; o que mais estiver sem verificar não o salva.
+- Um gate sem achado, mas com fronteiras ainda não verificáveis (Entity Resolution, Spatial Relations, artifact final), fica **`blocked`** por essas capabilities: passá-lo afirmaria uma fronteira que ninguém checou. O detalhe registra quantas checagens rodaram (um gate com zero checagens não provou nada).
+- Uma identidade que um artifact não registra vira **limitação declarada**, não passe silencioso. Exemplo real: o `ExternalPose` não consome calibração e a trajetória grava `calibration_identity = null`; a linhagem de calibração fica verificada só entre o mapa e as associações.
+
+## Harness sintético de CI
+
+`tests/end_to_end/chain.py` executa o código real de cada capability implementada sobre a sequência sintética do subconjunto de CI e persiste o artifact real de cada estágio (sequência, `ExternalPose`, mapa, uma associação por run de percepção, fusão), relido pelo leitor público. Só as saídas de modelo são falsas (máscaras e claims enlatadas); uma segunda run repete o `frame-0000` e discorda, para cobrir inferência repetida sobre uma observação física, alternativa e contradição. Duas execuções produzem os mesmos hashes contratuais em todos os estágios.
+
+`tests/end_to_end/acceptance.py` monta com essa cadeia um `AcceptanceReport` sobre o cenário de CI. Cinco gates passam com evidência `fake_contract` (integridade da sequência, cobertura da trajetória, validade da projeção, preservação de evidência na fusão, equivalência entre reexecuções); o gate de frame do mapa fica `not_evaluated` porque os traços de transformação e o round trip do artifact não rodam na cadeia; os de Entity Resolution, Spatial Relations e artifact final e os `cross_stage.*` ficam `blocked` nomeando a capability; os demais ficam `not_evaluated`. Por ser contrato, `unmet_required_gates()` continua listando os 25 gates: **o ensaio de CI nunca valida a Solution 1**.
+
 ## Reprodutibilidade e versionamento
 
 O cenário é reproduzível a partir de entradas documentadas: a sequência (identidade e digest do manifesto), a seleção (identidade e janela), a entrada de pose (digest do arquivo), o perfil (backends) e a matriz. `digest` cobre o cenário inteiro e `matrix_digest` só a matriz.
