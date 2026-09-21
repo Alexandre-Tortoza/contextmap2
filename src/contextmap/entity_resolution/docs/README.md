@@ -29,6 +29,7 @@ Existem os **contratos** de identidade e de comparação:
 - `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
 - `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
 - `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve;
+- a **comparação semântica e temporal** (`compare_semantics`, `compare_temporal`): compatibilidade de labels, hipóteses e atributos, e do histórico de observações, sem ontologia, sem senso comum e sem tratar ausência como evidência negativa ([`semantic-temporal-comparison.md`](semantic-temporal-comparison.md));
 - a **recuperação de candidatos** (`retrieve_candidate_sets`, `EntitySpatialIndex`): para cada entidade, os alvos plausíveis de comparação, de forma permissiva e determinística, sem all-pairs e sem decidir nada ([`candidate-retrieval.md`](candidate-retrieval.md)).
 
 Um canal é sempre **medido ou indisponível**: a falta de evidência nunca vira zero nem voto por `DISTINCT`. O codec é estrito e reflexivo (`_codec.py`). Os demais contratos (política, entidade resolvida, artifact e avaliação) chegam nas issues seguintes da milestone.
@@ -47,6 +48,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `GeometryEvidence`, `GeometryMeasurement`, `SupportDistance`; `SemanticEvidence`, `SemanticMeasurement`, `LabelComparison`, `LabelRelation`, `AttributeComparison`; `AppearanceEvidence`, `AppearanceMeasurement`, `FeatureContribution`; `TemporalEvidence`, `TemporalMeasurement`; `PointRepresentationEvidence`, `RepresentationMeasurement`, `RepresentationRef` — a evidência tipada de cada canal.
 - `ResolutionDecision`, `ResolutionDecisionId`, `ResolutionOutcome`, `UnresolvedReason`, `PolicyStage`, `TriggeredRule`, `DecisionProvenance`, `decision_id_for` — a decisão.
 - `CandidateRetrievalPolicy`, `CANDIDATE_RETRIEVAL_POLICY_ID`, `retrieve_candidate_sets`, `EntitySpatialIndex`, `EntityCandidateSet`, `EntityCandidate`, `RetrievalDiagnostics`, `RetrievalReason`, `ExclusionReason`, `CandidacyAssessment`, `explain_candidacy`, `candidate_pairs` — a recuperação de candidatos.
+- `SemanticCompatibilityPolicy`, `SEMANTIC_COMPATIBILITY_POLICY_ID`, `BASELINE_REFINEMENT_MODIFIERS`, `compare_semantics`, `compare_labels`, `normalize_label`; `TemporalCompatibilityPolicy`, `TEMPORAL_COMPATIBILITY_POLICY_ID`, `compare_temporal` — os canais semântico e temporal.
 - `PolicyRef` — política versionada e fingerprint da configuração, comum a canais, recuperação e políticas.
 - `encode_*` e `decode_*` de referência resolvida, evidência de comparação, decisão e conjunto de candidatos — o codec JSON, que revalida todas as invariantes.
 
@@ -54,7 +56,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 
 ## Módulos consumidos
 
-- `contextmap.semantic_mapping`: `Entity`, `EntityReference`, `EntityFeatureRef` e `AmbiguityState`, o que é comparado e referenciado.
+- `contextmap.semantic_mapping`: `Entity`, `EntityReference`, `EntityFeatureRef`, `EntitySemanticState`, `AmbiguityState`, `AttributeOrigin` e `CLASS_ATTRIBUTE_DERIVATION_ID`, o que é comparado e referenciado.
 - `contextmap.geometric_mapping`: `GeometryReference`, `MapId` e `Bounds3D`, o suporte 3D referenciado e as caixas da recuperação.
 - `contextmap.point_representation`: `PointRepresentationId` e `PointRepresentationRunId`, as representações referenciadas.
 
@@ -63,4 +65,5 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`semantic-temporal-comparison.md`](semantic-temporal-comparison.md) — regras de label, atributos e histórico de observações.
 - [`candidate-retrieval.md`](candidate-retrieval.md) — política de recuperação, diagnóstico de exclusão, índice espacial e linha de base de desempenho.

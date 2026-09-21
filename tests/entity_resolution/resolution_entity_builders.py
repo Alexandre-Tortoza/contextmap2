@@ -25,8 +25,11 @@ from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import SourceObservationId
+from contextmap.semantic_fusion import EvidenceContributionId, EvidenceReference
 from contextmap.semantic_mapping import (
+    AttributeOrigin,
     Entity,
+    EntityAttribute,
     EntityGeometry,
     EntityHypothesis,
     EntityId,
@@ -38,6 +41,7 @@ from contextmap.semantic_mapping import (
     summarize_geometry,
 )
 from contextmap.shared import Vector3
+from contextmap.visual_perception import ClaimId
 
 Center = tuple[float, float, float]
 
@@ -79,13 +83,15 @@ def geometry_at(
     return summarize_geometry(references, source=source, policy=SUMMARY_POLICY)
 
 
-def temporal_state_at(seconds: Sequence[int], *, clock_id: str = CLOCK_ID) -> EntityTemporalState:
-    """A history with one physical observation, interpreted once, per second given."""
+def temporal_state_at(
+    seconds: Sequence[int], *, clock_id: str = CLOCK_ID, inference_results: int = 1
+) -> EntityTemporalState:
+    """A history with one physical observation per second given, each interpreted N times."""
     refs = tuple(
         ObservationRef(
             physical_observation_id=SourceObservationId(f"frame-{second:04d}"),
             acquisition_timestamp=timestamp(second, clock_id=clock_id),
-            inference_result_count=1,
+            inference_result_count=inference_results,
         )
         for second in sorted(seconds)
     )
@@ -93,7 +99,7 @@ def temporal_state_at(seconds: Sequence[int], *, clock_id: str = CLOCK_ID) -> En
         first_seen=refs[0].acquisition_timestamp,
         last_seen=refs[-1].acquisition_timestamp,
         physical_observation_count=len(refs),
-        inference_result_count=len(refs),
+        inference_result_count=len(refs) * inference_results,
         observation_refs=refs,
         provenance=TemporalProvenance(
             rule_id="physical-observation-temporal-summary-v1", input_order_chronological=True
@@ -115,6 +121,8 @@ def entity_at(
     first_index: int | None = None,
     extra_points: Sequence[Vector3] = (),
     hypotheses: tuple[EntityHypothesis, ...] | None = None,
+    attributes: tuple[EntityAttribute, ...] = (),
+    inference_results: int = 1,
 ) -> Entity:
     """A real entity whose support is a box at ``center`` and which was seen at ``seconds``."""
     base = stable_index_base(entity_id) if first_index is None else first_index
@@ -132,11 +140,44 @@ def entity_at(
         semantic_state=make_semantic_state(
             (make_hypothesis(fused_evidence_id=FUSED_EVIDENCE_ID),)
             if hypotheses is None
-            else hypotheses
+            else hypotheses,
+            attributes=attributes,
         ),
         evidence=make_evidence_links(
             physical=tuple(f"frame-{second:04d}" for second in sorted(seconds))
         ),
-        temporal_state=temporal_state_at(seconds, clock_id=clock_id),
+        temporal_state=temporal_state_at(
+            seconds, clock_id=clock_id, inference_results=inference_results
+        ),
         provenance=make_provenance(),
+    )
+
+
+def hypotheses_of(*labels: str) -> tuple[EntityHypothesis, ...]:
+    """Competing hypotheses of one fused evidence, one per label, so more than one is ambiguous."""
+    return tuple(
+        make_hypothesis(f"hypothesis-{index:04d}", label) for index, label in enumerate(labels)
+    )
+
+
+def attribute(
+    name: str,
+    value: str,
+    *,
+    origin: AttributeOrigin = AttributeOrigin.OBSERVED,
+    derivation_id: str = "observed-attribute-v1",
+) -> EntityAttribute:
+    """An attribute citing one claim, unless it is external knowledge, which cites nothing."""
+    evidence = (
+        ()
+        if origin is AttributeOrigin.EXTERNAL_KNOWLEDGE
+        else (
+            EvidenceReference(
+                contribution_id=EvidenceContributionId("contribution--support-000001--spatial-a"),
+                claim_id=ClaimId("claim-0001"),
+            ),
+        )
+    )
+    return EntityAttribute(
+        name=name, value=value, origin=origin, derivation_id=derivation_id, evidence=evidence
     )

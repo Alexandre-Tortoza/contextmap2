@@ -71,6 +71,14 @@ from contextmap.entity_resolution.retrieval import (
     explain_candidacy,
     retrieve_candidate_sets,
 )
+from contextmap.entity_resolution.semantic_comparison import (
+    BASELINE_REFINEMENT_MODIFIERS,
+    SEMANTIC_COMPATIBILITY_POLICY_ID,
+    SemanticCompatibilityPolicy,
+    compare_labels,
+    compare_semantics,
+    normalize_label,
+)
 from contextmap.entity_resolution.serialization import (
     decode_candidate_set,
     decode_match_evidence,
@@ -81,10 +89,18 @@ from contextmap.entity_resolution.serialization import (
     encode_resolution_decision,
     encode_resolved_entity_reference,
 )
+from contextmap.entity_resolution.temporal_comparison import (
+    TEMPORAL_COMPATIBILITY_POLICY_ID,
+    TemporalCompatibilityPolicy,
+    compare_temporal,
+)
 
 __all__ = [
+    "BASELINE_REFINEMENT_MODIFIERS",
     "CANDIDATE_RETRIEVAL_POLICY_ID",
     "COMPARISON_GATES_POLICY_ID",
+    "SEMANTIC_COMPATIBILITY_POLICY_ID",
+    "TEMPORAL_COMPATIBILITY_POLICY_ID",
     "AppearanceEvidence",
     "AppearanceMeasurement",
     "AttributeComparison",
@@ -121,9 +137,11 @@ __all__ = [
     "ResolvedEntityReference",
     "RetrievalDiagnostics",
     "RetrievalReason",
+    "SemanticCompatibilityPolicy",
     "SemanticEvidence",
     "SemanticMeasurement",
     "SupportDistance",
+    "TemporalCompatibilityPolicy",
     "TemporalEvidence",
     "TemporalMeasurement",
     "TriggeredRule",
@@ -131,6 +149,9 @@ __all__ = [
     "UnavailableReason",
     "UnresolvedReason",
     "candidate_pairs",
+    "compare_labels",
+    "compare_semantics",
+    "compare_temporal",
     "comparison_id_for",
     "decision_id_for",
     "decode_candidate_set",
@@ -143,6 +164,7 @@ __all__ = [
     "encode_resolved_entity_reference",
     "evaluate_comparison_gates",
     "explain_candidacy",
+    "normalize_label",
     "reference_order",
     "retrieve_candidate_sets",
 ]

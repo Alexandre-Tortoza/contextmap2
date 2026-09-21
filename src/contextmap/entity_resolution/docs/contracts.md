@@ -100,13 +100,15 @@ Um canal é **medido ou indisponível, nunca os dois e nunca nenhum**. Um canal 
 
 ### Semântica (`SemanticEvidence`)
 
-`SemanticMeasurement` mantém **todas** as hipóteses em vez de um label: o estado de ambiguidade e o número de hipóteses de cada lado, a relação de cada par de labels (`same`, `refinement`, `related`, `different`, com a regra versionada) e os valores dos atributos que ambas têm. `different` não é prova de objetos diferentes.
+`SemanticMeasurement` mantém **todas** as hipóteses em vez de um label: o estado de ambiguidade e o número de hipóteses de cada lado, a relação de cada par de labels (`same`, `refinement`, `related`, `different`, com a regra versionada) e as comparações de atributos (nome, os dois valores, a origem `observed` ou `derived` de cada um e se são o mesmo; conhecimento externo nunca é comparado). `different` não é prova de objetos diferentes. Calculada por `compare_semantics` ([detalhes](semantic-temporal-comparison.md)).
 
 ### Aparência (`AppearanceEvidence`)
 
 `AppearanceMeasurement` guarda o espaço de embedding (fingerprint) em que todas as features vivem, a métrica, a política de agregação, a similaridade e a faixa das similaridades entre pares de observações, e as `FeatureContribution` de cada lado: as features agrupadas **por observação física**. Várias features do mesmo frame (inferência repetida) ficam juntas e contam como uma observação. Uma feature de outro espaço é recusada.
 
 ### Temporal (`TemporalEvidence`)
+
+Calculada por `compare_temporal` ([detalhes](semantic-temporal-comparison.md)).
 
 `TemporalMeasurement` guarda o domínio de relógio, a sobreposição e a lacuna entre os intervalos (nunca as duas), as observações físicas e os resultados de inferência de cada lado **contados à parte**, e as observações físicas compartilhadas e a união, que precisam fechar (`união = a + b - compartilhadas`).
 
