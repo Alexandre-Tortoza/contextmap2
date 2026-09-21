@@ -384,7 +384,7 @@ class TestBlockedRun:
     ) -> None:
         effective = effective_from(tmp_path, _document())
         plan = resolve_plan(effective)
-        execution = plan.scope(targets=["semantic_mapping"])  # capability inexistente
+        execution = plan.scope(targets=["context_map"])  # capability inexistente
         journal = RunJournal.create(tmp_path / "ws", effective, execution)
 
         with pytest.raises(PreflightError):

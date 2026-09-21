@@ -85,12 +85,7 @@ def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     capabilities = probe.capabilities()
     not_implemented = {c.stage_id: c.reason for c in capabilities if not c.implemented}
     assert probe.status().profiles == ("canonical/1",)
-    assert set(not_implemented) == {
-        "semantic_mapping",
-        "entity_resolution",
-        "spatial_relations",
-        "context_map",
-    }
+    assert set(not_implemented) == {"context_map"}
 
     # 2. Configuração e topologia: o frontend nunca infere o DAG, ele o lê.
     config = probe.resolve_config(files=[config_file], overrides=["policies.debug_level=standard"])

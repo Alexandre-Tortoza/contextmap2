@@ -100,10 +100,14 @@ flowchart LR
     ASA --> FUS["Semantic Fusion"]
     PTRA -.-> FUS
     FUS --> FUSA["SemanticFusionRunArtifact"]
-    FUSA -. próximo estágio ainda não integrado .-> FUT["Semantic Mapping<br/>+ downstream"]
+    FUSA --> SMP["Semantic Mapping"]
+    SMP --> SMPA["SemanticMappingRunArtifact"]
+    SMPA --> ER["Entity Resolution"]
+    ER --> ERA["EntityResolutionRunArtifact"]
+    ERA -. próximo estágio ainda não integrado .-> FUT["Spatial Relations<br/>+ downstream"]
 ```
 
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional) e Semantic Fusion possuem implementação consolidada neste ponto.
+Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional), Semantic Fusion, Semantic Mapping e Entity Resolution possuem implementação consolidada neste ponto.
 
 ## Regra fundamental
 
@@ -767,11 +771,17 @@ Uma entidade conecta:
 
 Ela não deve ser reduzida a `{id, label, confidence, xyz}`.
 
+### Implementação
+
+A política baseline `one-support-one-entity-v1` materializa **um suporte selecionado como uma entidade**, com identidade `entity--<fusion_support_id>` (local ao artifact, função pura do suporte, independente da ordem e de candidatos rejeitados). A seleção é explícita: nenhum run de fusão é carregado implicitamente. Um candidato que não vira entidade válida é registrado como rejeição com o motivo, e um suporte sem nenhuma hipótese ainda vira uma entidade válida com estado `insufficient_evidence`. O estado semântico mantém toda hipótese, alternativa, conflito, abstenção e sinal sem score; uma hipótese primária só é exposta quando exatamente uma hipótese existe e nada compete com ela.
+
+Detalhes: [documentação de Semantic Mapping](../src/contextmap/semantic_mapping/docs/README.md), [contratos](../src/contextmap/semantic_mapping/docs/contracts.md), [geometria](../src/contextmap/semantic_mapping/docs/geometry.md), [estado semântico](../src/contextmap/semantic_mapping/docs/semantic-state.md), [evidência](../src/contextmap/semantic_mapping/docs/evidence.md), [estado temporal](../src/contextmap/semantic_mapping/docs/temporal-state.md), [materialização](../src/contextmap/semantic_mapping/docs/materialization.md), [artifact](../src/contextmap/semantic_mapping/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_mapping.md).
+
 ### Saída
 
-Um artifact de entidades semânticas persistidas.
+O `SemanticMappingRunArtifact`, com as entidades semânticas persistidas.
 
-Nesse ponto, entidades podem ainda representar fragmentos/duplicatas do mesmo objeto físico. Essa decisão pertence a Entity Resolution.
+Nesse ponto, entidades podem ainda representar fragmentos/duplicatas do mesmo objeto físico: dois suportes independentes permanecem duas entidades. Essa decisão pertence a Entity Resolution, o estágio seguinte.
 
 ## 9. Entity Resolution
 
@@ -826,6 +836,18 @@ Um `ResolvedEntity` preserva:
 As entidades originais permanecem imutáveis.
 
 Saída persistida: `EntityResolutionRunArtifact`.
+
+### Estado implementado
+
+- **Candidatos:** recuperação permissiva e determinística por índice espacial em memória, sem all-pairs; semântica e evidência ausente nunca excluem um candidato.
+- **Canais:** geometria, semântica, aparência (um voto por observação física), temporal e, opcional, representação 3D, cada um **medido ou indisponível**; a ausência de um canal nunca vira zero nem voto por `DISTINCT`. Gates duros (entidades distintas, mesmo mapa geométrico, mesmo frame do mapa) bloqueiam a comparação.
+- **Decisão:** política baseline `conservative-staged-resolution-v1`, em estágios (gate, elegibilidade, evidência, regra, decisão) sobre o estado dos canais, sem soma ponderada; prefere `UNRESOLVED` a um `MATCH` sem explicação. Só pares candidatos são comparados.
+- **Materialização:** componentes conexos das decisões `MATCH`. Um componente que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction`. Toda entidade de origem pertence a exatamente uma `ResolvedEntity`; a agregação é exata (união das referências de geometria, hipóteses semânticas verbatim, tempo recalculado da união das observações físicas).
+- **Divisão:** detecção opcional de candidatos a divisão, só diagnóstico; nada é dividido nem mutado.
+- **Artifact:** `output_dir` explícito, escrita atômica, todas as decisões (não só as `MATCH`), entidades resolvidas com linhagem, contradições e métricas separadas; reabre sem NumPy nem runtime. A versão do schema e o digest do inventário são publicados para quem consome.
+- **Evaluation:** fusão falsa, duplicata (com a causa), falha de recuperação e ablação de canais, cada uma em separado, contra uma referência de identidade anotada.
+
+O que **não** existe: runtime que execute este estágio, run sobre dados reais e, portanto, limiares calibrados com evidência real. Detalhes: [documentação de Entity Resolution](../src/contextmap/entity_resolution/docs/README.md), [contratos](../src/contextmap/entity_resolution/docs/contracts.md), [política](../src/contextmap/entity_resolution/docs/resolution-policy.md), [entidades resolvidas](../src/contextmap/entity_resolution/docs/resolved-entities.md), [artifact](../src/contextmap/entity_resolution/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/entity_resolution.md).
 
 ## 10. Spatial Relations
 
@@ -893,6 +915,8 @@ Relações inversas e simétricas precisam permanecer consistentes.
 `Relation` + `RelationEvidence`.
 
 Saída persistida: `SpatialRelationsRunArtifact`.
+
+Implementado em `contextmap.spatial_relations` ([documentação](../src/contextmap/spatial_relations/docs/README.md)): candidatos determinísticos com razões de exclusão, avaliadores geométricos (`NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE`, `INTERSECTS`) e de contato por pontos (`TOUCHING`, `ON_TOP_OF`, `LEANING_AGAINST`), evidência de observação corroborante e a política de decisão conservadora, que só decide com os canais medidos, prefere `UNRESOLVED` e gera inverso e simetria depois de checar a consistência. Os eixos vertical e de profundidade vêm de convenções declaradas pela execução, porque nada a montante os define. A linhagem vem do manifest de Entity Resolution e as afirmações upstream são vinculadas às entidades resolvidas pelas observações espaciais da evidência delas. A avaliação por predicado liga entidades resolvidas às identidades anotadas pelo `IdentityEvaluation` da avaliação de Entity Resolution.
 
 ## 11. Context Map Assembly
 
@@ -968,11 +992,11 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 | Geometric Mapping | `GeometricMapArtifact` | implementado | association, point representation, evaluation |
 | Sensor Association | `SensorAssociationRunArtifact` | implementado | semantic fusion, evaluation |
 | Point Representation | `PointRepresentationRunArtifact` | implementado e opcional | semantic fusion opcional, evaluation |
-| Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping planejado, evaluation |
+| Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping, evaluation |
 | Evaluation (transversal) | reference set, relatórios, run de experimento e comparação, evidência e decisão | implementado, sem execução real | decisões de configuração e aceite E2E |
-| Semantic Mapping | semantic entity artifact | planejado | entity resolution |
-| Entity Resolution | `EntityResolutionRunArtifact` | planejado | spatial relations, final map |
-| Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |
+| Semantic Mapping | `SemanticMappingRunArtifact` | implementado | entity resolution planejado, evaluation |
+| Entity Resolution | `EntityResolutionRunArtifact` | implementado, só com dados sintéticos | spatial relations, final map, evaluation |
+| Spatial Relations | `SpatialRelationsRunArtifact` | implementado | final map, evaluation |
 | Context Map Assembly | `ContextMapArtifact` | planejado | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
@@ -1050,7 +1074,7 @@ Exemplos:
 | Sensor Association | reprojection error, occlusion, mask membership |
 | Point Representation | cobertura/falha do suporte, custo, estabilidade e ablação por braço |
 | Semantic Fusion | multi-view consistency, ambiguity retention, repeated-inference regression |
-| Entity Resolution | false merge, missed merge, unresolved rate |
+| Entity Resolution | false merge, missed merge por causa, unresolved, falha de recuperação, sem score composto |
 | Spatial Relations | precision/recall por predicate, consistency, unresolved rate |
 | Artifact | schema/integrity/lineage closure |
 

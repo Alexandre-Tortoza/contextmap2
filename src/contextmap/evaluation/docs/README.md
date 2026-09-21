@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais). Além dos harnesses por capability, o módulo possui o **cenário end-to-end** congelado e a matriz de aceitação (`end_to_end`, `canonical_scenario`) e o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip) e Entity Resolution (validação de um `EntityResolutionRunArtifact` e avaliação de identidade contra uma referência explícita, com fusão falsa, duplicata e recuperação em separado). Além dos harnesses por capability, o módulo possui o **cenário end-to-end** congelado e a matriz de aceitação (`end_to_end`, `canonical_scenario`) e o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
 
 ## O que este módulo explicitamente não possui
 
@@ -63,6 +63,36 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `ReferenceAnnotation` — rótulo de referência por observação espacial; ausência é "não aplicável".
 - `FusionArmRole`, `compare_semantic_fusion_reports()`/`SemanticFusionComparison` — comparação controlada de braços (baseline, ciente de qualidade e ablações de canais) sobre a mesma base de evidência, sem vencedor nem escore.
 - `encode_semantic_fusion_report()`/`encode_semantic_fusion_comparison()` — representação JSON com todas as identidades.
+
+### Semantic Mapping
+
+- `evaluate_semantic_mapping()`/`SemanticMappingEvaluationReport` — validação de um run de mapeamento persistido contra o run de fusão e o mapa geométrico de origem, em seis camadas (`SemanticMappingValidationLayer`), cada `SemanticMappingValidationCheck` com o que examinou e as falhas exatas; sem score composto.
+- `SemanticMappingEvaluationLineage` — identidades do run de fusão, do mapa geométrico, da política e versão de materialização, do schema das entidades, do código e do avaliador.
+- `SemanticMappingEvaluationError` — recusa a avaliação quando o upstream oferecido não é o da linhagem.
+- `encode_semantic_mapping_report()` — representação JSON com todas as identidades.
+
+Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
+
+### Spatial Relations
+
+- `evaluate_spatial_relations()`/`SpatialRelationsEvaluationReport` — avaliação de um run de relações persistido contra um `RelationAnnotationSet`, **por predicado canônico** e sem score agregado: verdadeiros positivos, relações perdidas (não resolvidas, rejeitadas ou nunca recuperadas pelo estágio de candidatos), falsos positivos (violação de negativos), negativos corretos e não resolvidos, previsões sem anotação, com precisão, revocação, F1, taxa de falsa relação, de relação perdida, de não resolvidas e recall de recuperação de candidatos.
+- `RelationPredicateEvaluation`, `RelationConsistencyViolation`, `RelationUnmatchedReport` — os contadores por predicado, as contradições estruturais das relações persistidas (inverso, simetria e suporte mútuo) e o que não pôde ser comparado e de quem é a falha (referência sem entidade casada, identidade com várias entidades, predicados sem mapeamento, estados ambíguos e desconhecidos).
+- `spatial_relations_evaluation_report()` — relatório comum com `relations.f1` e `relations.negative_violation.rate` por predicado, a linhagem (run de relações e de resolução), as políticas efetivas e o reference set.
+- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION`, `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia.
+
+Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
+
+### Entity Resolution
+
+- `evaluate_entity_resolution()`/`EntityResolutionEvaluationReport` — validação de um run de resolução persistido em três camadas (`ResolutionValidationLayer`) e avaliação de identidade contra uma `IdentityAnnotationSet` explícita: `entity.false_merge.rate` e `entity.duplicate.rate` do registro, mais cada classe de falha em separado (fusão falsa, fusão perdida por causa, `DISTINCT` errado, abstenção); sem score composto.
+- `OccurrenceLink` — vínculo explícito entre uma ocorrência anotada (amostra, observação, região) e a entidade de origem; nunca adivinhado.
+- `IdentityEvaluation.identity_of_resolved_entity` — identidade anotada de cada entidade resolvida, para quem avalia saídas construídas sobre elas (Spatial Relations).
+- `EvaluationReproducibility` — versão de schema e digest do run avaliado (`resolution_artifact_digest`), referência, políticas e código.
+- `evaluate_splits()`/`SplitReference` — diagnóstico de divisão à parte da qualidade de fusão.
+- `evaluate_channel_ablation()`/`ResolutionArm`/`ArmEvaluation` — braços por conjunto de canais sobre as mesmas entidades, candidatos e referência.
+- `encode_entity_resolution_report()` — representação JSON com todas as camadas separadas.
+
+Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 
 ### Sensor Association
 
@@ -179,6 +209,9 @@ pipeline principal.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — convenção
   open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
+- [`semantic_mapping.md`](semantic_mapping.md) — as seis camadas de validação de Semantic Mapping, a linhagem do relatório e a robustez a upstream corrompido.
+- [`spatial_relations.md`](spatial_relations.md) — avaliação por predicado de relações persistidas: contadores separados por causa, falhas de recuperação, consistência estrutural, referência expandida pela taxonomia e o envelope comum.
+- [`entity_resolution.md`](entity_resolution.md) — camadas de checagem, métricas de identidade do registro, classes de falha por causa, vínculo explícito de ocorrências, mapa entidade resolvida -> identidade, ablação de canais e limites.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
 - [`optional-techniques.md`](optional-techniques.md) — protocolos das técnicas opcionais, estratos, evidência por estrato, custos separados e decisão manter/adiar/mudar o default.

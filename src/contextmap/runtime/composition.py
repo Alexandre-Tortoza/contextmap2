@@ -746,6 +746,9 @@ _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "sensor_association": _compose_nothing,
     "point_representation": _compose_point_representation,
     "semantic_fusion": _compose_semantic_fusion,
+    "semantic_mapping": _compose_nothing,
+    "entity_resolution": _compose_nothing,
+    "spatial_relations": _compose_nothing,
 }
 
 

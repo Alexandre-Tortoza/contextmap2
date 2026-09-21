@@ -225,7 +225,7 @@ def test_a_run_that_cannot_run_is_recorded_as_blocked_and_nothing_executes(
         "-c",
         str(campaign.config),
         "--stage",
-        "semantic_mapping",
+        "context_map",
         "--workspace",
         str(campaign.workspace),
     )

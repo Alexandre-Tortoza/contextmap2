@@ -463,17 +463,12 @@ class TestStagesAndExtensionPoints:
     ) -> None:
         composed = _compose(tmp_path)
 
-        assert set(composed.unavailable_stages) == {
-            "semantic_mapping",
-            "entity_resolution",
-            "spatial_relations",
-            "context_map",
-        }
-        assert "milestone" in composed.unavailable_stages["semantic_mapping"]
+        assert set(composed.unavailable_stages) == {"context_map"}
+        assert "milestone" in composed.unavailable_stages["context_map"]
 
     def test_asking_explicitly_for_an_unavailable_stage_fails_clearly(self, tmp_path: Path) -> None:
-        with pytest.raises(StageUnavailableError, match="semantic_mapping"):
-            _compose(tmp_path, stages=["semantic_mapping"])
+        with pytest.raises(StageUnavailableError, match="context_map"):
+            _compose(tmp_path, stages=["context_map"])
 
     def test_a_subset_of_stages_builds_only_those(self, tmp_path: Path) -> None:
         recorder = _Recorder()
