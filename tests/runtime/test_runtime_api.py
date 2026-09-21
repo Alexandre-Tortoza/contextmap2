@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 from runtime_ingestion import factory, request
 from runtime_worlds import World, world_executors
 
@@ -48,12 +49,10 @@ PLAN_ORDER = (
     "sensor_association",
     "point_representation",
     "semantic_fusion",
-    "semantic_mapping",
-    "entity_resolution",
-    "spatial_relations",
-    "context_map",
 )
-RUN_ORDER = PLAN_ORDER[:7]
+RUN_ORDER = PLAN_ORDER
+# Com o estágio futuro que a fixture `unavailable_context_map` acrescenta ao preset.
+PLAN_ORDER_WITH_LATER_STAGE = (*PLAN_ORDER, "context_map")
 
 
 def _ready(_name: str) -> bool:
@@ -85,9 +84,15 @@ def _runtime(
     return runtime, world
 
 
+# O dataset é a sequência física do catálogo de teste (`Lineage(sequence=...)`).
+DATASET = "corridor-02"
+
+
 def _write(tmp_path: Path, document: dict[str, Any] | None = None) -> Path:
     path = tmp_path / "experiment.json"
-    path.write_text(json.dumps(document or selected_document()), encoding="utf-8")
+    document = document or selected_document()
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    path.write_text(json.dumps(document), encoding="utf-8")
     return path
 
 
@@ -132,18 +137,19 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     assert (bare.workspace, bare.executors, bare.verifier_configured) == (None, (), False)
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> None:
     capabilities = Runtime(module_available=_ready, environ={}).capabilities()
     by_stage = {capability.stage_id: capability for capability in capabilities}
 
-    assert tuple(by_stage) == PLAN_ORDER
+    assert tuple(by_stage) == PLAN_ORDER_WITH_LATER_STAGE
     ingestion = by_stage["ingestion"]
     assert ingestion.implemented
     assert [component.component_id for component in ingestion.components] == [
         "ingestion.source_adapter"
     ]
     assert [b.backend_id for b in ingestion.components[0].backends] == ["ros1_bag", "ros2_bag"]
-    unimplemented = by_stage["semantic_mapping"]
+    unimplemented = by_stage["context_map"]
     assert not unimplemented.implemented
     assert "not implemented yet" in unimplemented.reason
     assert unimplemented.components == ()
@@ -314,6 +320,7 @@ def test_an_unsupported_stage_or_backend_is_refused_at_resolution(
         _config(runtime, tmp_path, override)
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
@@ -322,8 +329,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
 
     by_stage = {stage.stage_id: stage for stage in plan.stages}
     assert plan.preset == "canonical/1"
-    assert plan.order == PLAN_ORDER
-    assert tuple(by_stage) == PLAN_ORDER
+    assert plan.order == PLAN_ORDER_WITH_LATER_STAGE
+    assert tuple(by_stage) == PLAN_ORDER_WITH_LATER_STAGE
     assert plan.run_stages == RUN_ORDER
     assert (plan.config_digest, plan.disabled_stages, plan.problems) == (config.digest, (), ())
     association = by_stage["sensor_association"]
@@ -339,8 +346,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
     assert by_stage["point_representation"].optional
     assert by_stage["point_representation"].output == "PointRepresentationRunArtifact"
     assert by_stage["ingestion"].in_scope
-    assert not by_stage["semantic_mapping"].available
-    assert not by_stage["semantic_mapping"].in_scope
+    assert not by_stage["context_map"].available
+    assert not by_stage["context_map"].in_scope
     assert by_stage["ingestion"].config_digest
 
 
@@ -394,6 +401,7 @@ def test_supplied_upstream_artifacts_take_the_place_of_their_stages(tmp_path: Pa
     assert [problem.path for problem in refused.problems] == ["provided.ingestion"]
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_value(
     tmp_path: Path,
 ) -> None:
@@ -407,7 +415,7 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
     assert "components.ingestion.source_adapter.backend" in edits
     assert edits["components.ingestion.source_adapter.backend"].allowed == ("ros1_bag", "ros2_bag")
     assert edits["policies.debug_level"].allowed == ("none", "standard", "full")
-    assert "inputs.selections.semantic_mapping" not in edits  # capability ainda inexistente
+    assert "inputs.selections.context_map" not in edits  # capability ainda inexistente
     for edit in plan.editable:
         if edit.current is None:
             continue
@@ -442,17 +450,18 @@ def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Pa
     assert world.runs == []
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     runtime, _ = _runtime(
         tmp_path, executors=False, module_available=lambda name: name != "rosbags"
     )
     config = _config(runtime, tmp_path)
 
-    report = runtime.preflight(config, targets=[*TARGET, "semantic_mapping", "nonexistent"])
+    report = runtime.preflight(config, targets=[*TARGET, "context_map", "nonexistent"])
 
     paths = [problem.path for problem in report.problems]
     assert not report.ok
-    assert "stages.semantic_mapping" in paths  # capability ainda inexistente
+    assert "stages.context_map" in paths  # capability ainda inexistente
     assert "targets.nonexistent" in paths
     assert "components.ingestion.source_adapter" in paths  # módulo opcional ausente
     assert any(
@@ -460,7 +469,7 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
         for problem in report.problems
     )
     assert "ingestion" in report.missing_executors
-    assert "semantic_mapping" not in report.missing_executors
+    assert "context_map" not in report.missing_executors
 
 
 def test_preflight_names_a_missing_secret_without_any_value(tmp_path: Path) -> None:
@@ -654,15 +663,16 @@ def test_a_blocked_run_is_a_result_and_nothing_executed(tmp_path: Path) -> None:
     assert set(_outcomes(result.record).values()) == {"pending"}
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_an_unimplemented_stage_blocks_the_run_explicitly(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
 
-    result = runtime.run(_config(runtime, tmp_path), targets=["semantic_mapping"])
+    result = runtime.run(_config(runtime, tmp_path), targets=["context_map"])
 
     assert result.status == "blocked"
     assert world.runs == []
     assert any(
-        problem.path == "stages.semantic_mapping" and "not implemented yet" in problem.message
+        problem.path == "stages.context_map" and "not implemented yet" in problem.message
         for problem in result.record.blocked_problems
     )
 
@@ -860,7 +870,7 @@ def test_list_runs_is_deterministic_numeric_and_lists_unreadable_records(tmp_pat
     runtime.run(config, targets=TARGET)
     world.fail_at = "ingestion"
     runtime.run(config, targets=TARGET)
-    base = tmp_path / "ws" / "runtime"
+    base = tmp_path / "ws" / DATASET
     (base / "run-9999").mkdir()
     (base / "run-9999" / "status.json").write_text("{not json", encoding="utf-8")
     (base / "run-10000").mkdir()
@@ -1001,3 +1011,33 @@ def test_an_injected_adapter_factory_backs_the_ingestion_service(tmp_path: Path)
     report = runtime.ingestion(config).preflight(request(tmp_path))
 
     assert report.ok, report.problems
+
+
+def test_list_runs_spans_every_dataset_of_the_workspace_and_orders_by_dataset_then_number(
+    tmp_path: Path,
+) -> None:
+    runtime, _ = _runtime(tmp_path)
+    base = tmp_path / "ws"
+    for dataset, names in (
+        ("corridor-03", ["run-0002"]),
+        ("corridor-02", ["run-0010", "run-0002"]),
+    ):
+        for name in names:
+            (base / dataset / name).mkdir(parents=True)
+
+    runs = runtime.list_runs()
+
+    assert [(run.run_id, run.dataset) for run in runs] == [
+        ("run-0002", "corridor-02"),
+        ("run-0010", "corridor-02"),
+        ("run-0002", "corridor-03"),
+    ]
+
+
+def test_a_run_id_present_in_two_datasets_is_ambiguous_and_never_guessed(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    for dataset in ("corridor-02", "corridor-03"):
+        (tmp_path / "ws" / dataset / "run-0001").mkdir(parents=True)
+
+    with pytest.raises(RunRecordError, match="several datasets"):
+        runtime.inspect_run("run-0001")

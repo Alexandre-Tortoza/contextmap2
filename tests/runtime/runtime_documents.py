@@ -24,6 +24,7 @@ SUPPORT_POLICY = {
 def selected_document() -> dict[str, Any]:
     return {
         "pipeline": {"stages": {"point_representation": True}},
+        "inputs": {"sequence": "S1"},
         "resources": {"device": "cpu"},
         "components": {
             "ingestion": {"source_adapter": {"backend": "ros1_bag"}},

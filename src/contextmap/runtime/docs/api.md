@@ -64,7 +64,7 @@ Problemas estruturais (ciclo, contrato incompatível, alvo desconhecido, seleç�
 - `predicted_reuse`, com uma política de reuso: o que seria reaproveitado ou recomputado, sem executar nada. O registro do run continua sendo a autoridade (a previsão é conservadora);
 - `missing_executors`: só os estágios que **rodariam** e não têm executor; um estágio que certamente será reaproveitado não precisa dele.
 
-Estágio inexistente ou de capability ainda não implementada é **explícito**: `stages.semantic_mapping: the semantic_mapping capability is not implemented yet (milestone #12)`; backend ou estágio desconhecido é recusado já na resolução.
+Estágio inexistente ou de capability ainda não implementada é **explícito**: `stages.context_map: the artifact capability is not implemented yet` (para um preset que declare um estágio assim); backend ou estágio desconhecido é recusado já na resolução.
 
 ## Execução
 
@@ -79,7 +79,7 @@ Estágio inexistente ou de capability ainda não implementada é **explícito**:
 
 ## Inspeção de runs: a linhagem persistida é a autoridade
 
-`list_runs()` lista `run-NNNN` em ordem **numérica** (não lexicográfica), inclusive um registro ilegível, que aparece com o motivo em vez de sumir. `inspect_run(run)` aceita um id sob o workspace ou um diretório e devolve o que o registro contém:
+`list_runs()` lista `<dataset>/run-NNNN` ordenando por dataset e depois em ordem **numérica** (não lexicográfica), inclusive um registro ilegível, que aparece com o motivo em vez de sumir; cada `RuntimeRunSummary` traz o `dataset`, porque `run-0001` se repete entre datasets. `inspect_run(run)` aceita um id sob algum dataset do workspace (um id presente em mais de um dataset é ambíguo e é recusado: passe o diretório) ou um diretório, e devolve o que o registro contém:
 
 - estado, `interrupted`, digests, backends por ponto de variação (da configuração persistida), alvos, artifacts fornecidos;
 - por estágio: `outcome` (`pending`, `started`, `reused`, `completed`, `failed`), **entradas exatas** (ids), saída, **decisão de reuso** (com o artifact anterior exato) e tempo;

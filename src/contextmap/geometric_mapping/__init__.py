@@ -69,9 +69,7 @@ from contextmap.geometric_mapping.run_artifact import (
     IncompleteMapArtifactError,
     MapArtifactError,
     MapDebugLevel,
-    allocate_map_run_index,
     mapping_configuration_fingerprint,
-    rebuild_map_run_registry,
 )
 from contextmap.geometric_mapping.transformation import (
     GeometryTransformError,
@@ -131,7 +129,6 @@ __all__ = [
     "TransformedScan",
     "UnsupportedPointCloudLayoutError",
     "accumulate_plan",
-    "allocate_map_run_index",
     "apply_motion_correction_policy",
     "assemble_geometry_inputs",
     "assemble_geometry_inputs_from_artifacts",
@@ -140,7 +137,6 @@ __all__ = [
     "geometry_index_of",
     "map_provenance_from_plan",
     "mapping_configuration_fingerprint",
-    "rebuild_map_run_registry",
     "resolve_point_cloud_layout",
     "transform_scan",
     "transform_scans",

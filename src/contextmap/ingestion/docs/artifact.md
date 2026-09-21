@@ -2,32 +2,35 @@
 
 Este documento descreve o formato v0 do artefato persistido por `SequenceArtifactWriter` (`src/contextmap/ingestion/sequence_artifact.py`) e o layout do workspace local. Para os contratos em memória que este artefato serializa, ver [`contracts.md`](contracts.md). Para as convenções globais de artifact/lineage/immutability, ver [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md).
 
-## Layout no workspace local
+## Layout do artefato
+
+O writer não decide onde o artefato mora: quem o chama entrega `output_dir`, o diretório final. No runtime, uma ingestion executada como estágio grava em `<workspace>/<dataset>/<run>/ingestion/` (ver [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)); nos testes, é um caminho sob `tmp_path`. O conteúdo do diretório é sempre este:
 
 ```text
-workspace/
-└── sequences/
-    └── <sequence-name>/
-        └── <artifact-id>/
-            ├── manifest.json
-            ├── index.jsonl
-            ├── rgb/
-            │   └── <observation-id>.bin
-            ├── pointcloud/
-            │   └── <observation-id>.bin
-            ├── calibration/
-            │   └── calibration.json      # opcional, ver calibration.md
-            ├── provenance/
-            │   └── provenance.json        # opcional, ver provenance.md
-            └── diagnostics/
-                ├── summary.json            # opcional, ver diagnostics.md
-                ├── warnings.jsonl          # opcional, ver diagnostics.md
-                ├── synchronization.jsonl   # opcional, decisões por associação
-                ├── dropped-events.jsonl    # opcional, eventos não selecionados
-                └── frame-graph.json        # opcional, inventário de frames
+<output_dir>/
+├── manifest.json
+├── index.jsonl
+├── rgb/
+│   └── <observation-id>.bin
+├── pointcloud/
+│   └── <observation-id>.bin
+├── calibration/
+│   └── calibration.json      # opcional, ver calibration.md
+├── provenance/
+│   └── provenance.json        # opcional, ver provenance.md
+└── diagnostics/
+    ├── summary.json            # opcional, ver diagnostics.md
+    ├── warnings.jsonl          # opcional, ver diagnostics.md
+    ├── synchronization.jsonl   # opcional, decisões por associação
+    ├── dropped-events.jsonl    # opcional, eventos não selecionados
+    └── frame-graph.json        # opcional, inventário de frames
 ```
 
-O path não é o contrato semântico — `manifest.json` é o ponto autoritativo, conforme `docs/ARTIFACTS.md`.
+O path não é o contrato semântico — `manifest.json` é o ponto autoritativo, conforme `docs/ARTIFACTS.md`. O writer não cria registro, não escreve `runs.json` e não toca em nenhum outro diretório além do temporário irmão de `output_dir`, que ele mesmo remove.
+
+## Identidade
+
+`artifact_id` é entregue pelo chamador e gravado no `manifest.json` como recebido; o writer nunca gera um (não há valor padrão). O nome do diretório não é a identidade: `output_dir` e `artifact_id` são independentes, e a identidade do artefato vive no manifest.
 
 ## Decisões desta issue (v0)
 
@@ -85,9 +88,9 @@ O artefato final só passa a existir depois que o conteúdo temporário foi escr
 
 ## Escrita em streaming e atômica
 
-`SequenceArtifactWriter.add_observation()` grava o payload (`rgb/`/`pointcloud/`) e a linha de `index.jsonl` no diretório temporário irmão (`.tmp-<artifact-id>-<random>/`) **no momento da chamada**, e calcula o hash de cada arquivo ali mesmo. O writer não retém os bytes do payload: guarda apenas contadores, o inventário parcial de arquivos e uma cópia de cada observação sem payload (`data`), usada para o resumo de diagnostics. O uso de memória do writer cresce com o número de observações, não com o tamanho dos payloads — isso permite ingerir bags maiores que a RAM (o dataset `corridor-02` tem ~24 GB de payload).
+`SequenceArtifactWriter.add_observation()` grava o payload (`rgb/`/`pointcloud/`) e a linha de `index.jsonl` no diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`) **no momento da chamada**, e calcula o hash de cada arquivo ali mesmo. O writer não retém os bytes do payload: guarda apenas contadores, o inventário parcial de arquivos e uma cópia de cada observação sem payload (`data`), usada para o resumo de diagnostics. O uso de memória do writer cresce com o número de observações, não com o tamanho dos payloads — isso permite ingerir bags maiores que a RAM (o dataset `corridor-02` tem ~24 GB de payload).
 
-Nada é escrito em disco até a primeira observação ou `finalize()`. `finalize()` grava calibração, provenance e diagnostics, gera o manifest, roda uma checagem de consistência interna (todo arquivo referenciado pelo manifest existe, com tamanho e hash corretos) e só então renomeia o diretório para o path final. O path final (`<artifact-id>/`) nunca chega a existir parcialmente escrito.
+Nada é escrito em disco até a primeira observação ou `finalize()`. `finalize()` grava calibração, provenance e diagnostics, gera o manifest, roda uma checagem de consistência interna (todo arquivo referenciado pelo manifest existe, com tamanho e hash corretos) e só então renomeia o diretório para `output_dir`. `output_dir` nunca chega a existir parcialmente escrito, e um `output_dir` que já exista é recusado, sem alterar o artefato que está lá.
 
 Como o temporário existe desde a primeira observação, um writer que não chega ao `finalize()` deixaria lixo em disco. Por isso:
 
@@ -96,7 +99,7 @@ Como o temporário existe desde a primeira observação, um writer que não cheg
 - qualquer falha em `finalize()` (inclusive "já existe um artefato no path final") e qualquer falha de I/O em `add_observation()` abortam o writer automaticamente, com a mesma regra de nota para não mascarar a causa original;
 - um `observation_id` duplicado é rejeitado sem escrever nada e o writer continua utilizável.
 
-Uma consequência do streaming: a checagem "já existe um artefato com este `artifact_id`" continua no `finalize()`, então uma colisão com `artifact_id` explícito só é detectada depois de escrever o conteúdo. Com o id aleatório padrão isso não ocorre.
+Uma consequência do streaming: a checagem "já existe um artefato em `output_dir`" continua no `finalize()`, então uma colisão só é detectada depois de escrever o conteúdo no temporário. Como o `finalize()` a recusa e remove o temporário, nada fica para trás e o artefato existente permanece intacto; o chamador que quiser falhar cedo confere `output_dir` antes de começar.
 
 ## Leitura
 

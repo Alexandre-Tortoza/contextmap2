@@ -11,7 +11,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 from runtime_worlds import World, run_cli, world_executors
 
 CANONICAL = [
@@ -76,7 +78,7 @@ class Campaign:
         )
 
     def record(self, number: int) -> Path:
-        return self.workspace / "runtime" / f"run-{number:04d}"
+        return self.workspace / "S1" / f"run-{number:04d}"
 
     def status(self, number: int) -> dict[str, Any]:
         return _document(self.record(number) / "status.json")
@@ -215,6 +217,7 @@ def _with_optional_stage(document: dict[str, Any]) -> dict[str, Any]:
     return document
 
 
+@pytest.mark.usefixtures("unavailable_context_map")
 def test_a_run_that_cannot_run_is_recorded_as_blocked_and_nothing_executes(
     tmp_path: Path,
 ) -> None:
@@ -225,7 +228,7 @@ def test_a_run_that_cannot_run_is_recorded_as_blocked_and_nothing_executes(
         "-c",
         str(campaign.config),
         "--stage",
-        "semantic_mapping",
+        "context_map",
         "--workspace",
         str(campaign.workspace),
     )

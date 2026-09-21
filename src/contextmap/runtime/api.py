@@ -78,7 +78,6 @@ from contextmap.runtime.pipeline import (
 )
 from contextmap.runtime.reuse import REUSE_SCHEMA_VERSION, FileArtifactStore, ReusePolicy
 from contextmap.runtime.runs import (
-    RUNS_DIRECTORY,
     RunJournal,
     RunSummary,
     check_resumable,
@@ -536,7 +535,8 @@ class RuntimeRunSummary:
     """One line of the run list.
 
     Attributes:
-        run_id: The run identity.
+        run_id: The run identity, unique only inside its dataset.
+        dataset: The dataset the run belongs to, the directory it lives under.
         readable: Whether the record could be read.
         status: The lifecycle state, when readable.
         interrupted: Whether the run was killed mid-way, when readable.
@@ -548,6 +548,7 @@ class RuntimeRunSummary:
     """
 
     run_id: str
+    dataset: str
     readable: bool
     status: str | None
     interrupted: bool | None
@@ -1009,28 +1010,29 @@ class Runtime:
     # --- runs --------------------------------------------------------------------------
 
     def list_runs(self) -> tuple[RuntimeRunSummary, ...]:
-        """List the persisted runs of the workspace, oldest first.
+        """List the persisted runs of the workspace, ``<workspace>/<dataset>/run-NNNN``.
 
         Returns:
-            One summary per run directory, in run-number order. A record that cannot be read is
-            listed with the reason, never skipped.
+            One summary per run directory, ordered by dataset and then by run number. A
+            record that cannot be read is listed with the reason, never skipped.
 
         Raises:
             ValueError: If this runtime has no workspace.
         """
         if self._workspace is None:
             raise ValueError("this runtime has no workspace: pass workspace= to Runtime(...)")
-        base = self._workspace / RUNS_DIRECTORY
-        if not base.is_dir():
+        if not self._workspace.is_dir():
             return ()
         numbered = sorted(
-            (int(path.name.removeprefix("run-")), path)
-            for path in base.iterdir()
+            (dataset.name, int(path.name.removeprefix("run-")), path)
+            for dataset in self._workspace.iterdir()
+            if dataset.is_dir()
+            for path in dataset.iterdir()
             if path.is_dir()
             and path.name.startswith("run-")
             and path.name.removeprefix("run-").isdigit()
         )
-        return tuple(_summary(path) for _, path in numbered)
+        return tuple(_summary(path) for _, _, path in numbered)
 
     def inspect_run(self, run: str | os.PathLike[str]) -> RuntimeRunRecord:
         """Read one persisted run: lifecycle, exact lineage, decisions and failure.
@@ -1204,15 +1206,28 @@ class Runtime:
         return Path(configured)
 
     def _run_directory(self, run: str | os.PathLike[str]) -> Path:
-        """Resolve a run id under the workspace, or a run directory."""
+        """Resolve a run id under any dataset of the workspace, or a run directory."""
         reference = os.fspath(run)
-        if self._workspace is not None and Path(reference).name == reference:
-            under = self._workspace / RUNS_DIRECTORY / reference
-            if under.is_dir():
-                return under
+        if (
+            self._workspace is not None
+            and self._workspace.is_dir()
+            and Path(reference).name == reference
+        ):
+            found = sorted(
+                dataset / reference
+                for dataset in self._workspace.iterdir()
+                if (dataset / reference).is_dir()
+            )
+            if len(found) > 1:
+                raise RunRecordError(
+                    f"run id {reference!r} exists in several datasets "
+                    f"({', '.join(path.parent.name for path in found)}): pass the run directory"
+                )
+            if found:
+                return found[0]
         if Path(reference).is_dir():
             return Path(reference)
-        where = "" if self._workspace is None else f" under {self._workspace / RUNS_DIRECTORY}"
+        where = "" if self._workspace is None else f" under {self._workspace}"
         raise RunRecordError(f"no run record for {reference!r}{where}")
 
 
@@ -1290,6 +1305,7 @@ def _summary(directory: Path) -> RuntimeRunSummary:
     except RunRecordError as error:
         return RuntimeRunSummary(
             run_id=directory.name,
+            dataset=directory.parent.name,
             readable=False,
             status=None,
             interrupted=None,
@@ -1301,6 +1317,7 @@ def _summary(directory: Path) -> RuntimeRunSummary:
         )
     return RuntimeRunSummary(
         run_id=run.run_id,
+        dataset=directory.parent.name,
         readable=True,
         status=run.status.value,
         interrupted=run.interrupted,

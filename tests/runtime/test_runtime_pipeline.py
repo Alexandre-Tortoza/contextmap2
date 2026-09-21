@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -38,12 +39,8 @@ CANONICAL_ORDER = [
     "geometric_mapping",
     "sensor_association",
     "semantic_fusion",
-    "semantic_mapping",
-    "entity_resolution",
-    "spatial_relations",
-    "context_map",
 ]
-IMPLEMENTED = CANONICAL_ORDER[:6]
+IMPLEMENTED = CANONICAL_ORDER
 
 
 def _ready(_name: str) -> bool:
@@ -109,6 +106,7 @@ class TestCanonicalDag:
         assert without.order is not None and with_stage.order is not None
         assert "point_representation" not in without.order
         assert {item.name for item in without.stage("semantic_fusion").inputs} == {
+            "sequence",
             "association",
             "perception",
             "geometry",
@@ -141,12 +139,13 @@ class TestCanonicalDag:
         )
         assert changed.digest != base.digest
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_unavailable_stages_stay_in_the_topology_with_their_reason(
         self, tmp_path: Path
     ) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
 
-        stage = plan.stage("semantic_mapping")
+        stage = plan.stage("context_map")
 
         assert not stage.available
         assert "milestone" in stage.unavailable_reason
@@ -391,6 +390,7 @@ class TestScopeAndExecution:
         assert {
             name: [ref.artifact_id for ref in refs] for name, refs in fusion.inputs.items()
         } == {
+            "sequence": ["ingestion#1"],
             "association": ["sensor_association#1"],
             "perception": ["visual_perception#1"],
             "geometry": ["geometric_mapping#1"],
@@ -458,6 +458,7 @@ class TestScopeAndExecution:
 
         assert any("nope" in problem.message for problem in report.problems)
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_preflight_blocks_before_any_stage_runs(self, tmp_path: Path) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []
@@ -465,7 +466,7 @@ class TestScopeAndExecution:
 
         with pytest.raises(PreflightError) as error:
             run_plan(
-                plan.scope(targets=["semantic_mapping"]),
+                plan.scope(targets=["context_map"]),
                 executors,
                 environ={},
                 module_available=_ready,
@@ -473,7 +474,7 @@ class TestScopeAndExecution:
             )
 
         assert log == []
-        assert any("semantic_mapping" in problem.path for problem in error.value.report.problems)
+        assert any("context_map" in problem.path for problem in error.value.report.problems)
 
     def test_preflight_reports_missing_executors_backends_and_secrets_together(
         self, tmp_path: Path

@@ -70,8 +70,6 @@ from contextmap.semantic_fusion.run_artifact import (
     SemanticFusionRunManifest,
     SemanticFusionRunReader,
     SemanticFusionRunWriter,
-    allocate_fusion_run_index,
-    rebuild_fusion_run_registry,
 )
 from contextmap.semantic_fusion.support import (
     GEOMETRY_OVERLAP_SUPPORT_POLICY_ID,
@@ -134,11 +132,9 @@ __all__ = [
     "UncertaintyRecord",
     "accumulate_baseline_evidence",
     "accumulate_quality_aware_evidence",
-    "allocate_fusion_run_index",
     "build_fusion_supports",
     "evidence_contribution_id_for",
     "fused_evidence_id_for",
     "group_by_physical_observation",
     "label_key",
-    "rebuild_fusion_run_registry",
 ]

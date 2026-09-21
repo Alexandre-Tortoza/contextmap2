@@ -29,10 +29,6 @@ GEOMETRY = "GeometricMapArtifact"
 ASSOCIATION = "SensorAssociationRunArtifact"
 REPRESENTATION = "PointRepresentationRunArtifact"
 FUSION = "SemanticFusionRunArtifact"
-ENTITIES = "SemanticEntityArtifact"
-RESOLUTION = "EntityResolutionRunArtifact"
-RELATIONS = "SpatialRelationsRunArtifact"
-CONTEXT_MAP = "ContextMapArtifact"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -276,33 +272,13 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 }
 """Every selectable variation point, keyed by ``"<capability>.<slot>"``."""
 
-
-def _unimplemented(
-    stage_id: str,
-    capability: str,
-    milestone: int,
-    *,
-    inputs: tuple[StageInput, ...],
-    output: str,
-) -> StageDeclaration:
-    return StageDeclaration(
-        stage_id=stage_id,
-        capability=capability,
-        available=False,
-        unavailable_reason=(
-            f"the {capability} capability is not implemented yet (milestone #{milestone})"
-        ),
-        inputs=inputs,
-        output=output,
-    )
-
-
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
-        "Full Solution 1 topology, from a recorded source to the ContextMapArtifact. "
-        "Stages whose capability is not implemented yet are declared unavailable and "
-        "reported explicitly instead of being skipped."
+        "The Solution 1 topology that is executable today, from a recorded source to "
+        "semantic fusion. Semantic mapping, entity resolution, spatial relations and the "
+        "ContextMapArtifact are not part of it: a later versioned preset declares them once "
+        "their capabilities exist, and this identity never changes topology."
     ),
     stages=(
         StageDeclaration(
@@ -377,6 +353,7 @@ CANONICAL_PRESET = RuntimePreset(
             capability="semantic_fusion",
             components=("semantic_fusion.support", "semantic_fusion.accumulation"),
             inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(
                     name="association",
                     contract=ASSOCIATION,
@@ -398,38 +375,6 @@ CANONICAL_PRESET = RuntimePreset(
                 ),
             ),
             output=FUSION,
-        ),
-        _unimplemented(
-            "semantic_mapping",
-            "semantic_mapping",
-            12,
-            inputs=(StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),),
-            output=ENTITIES,
-        ),
-        _unimplemented(
-            "entity_resolution",
-            "entity_resolution",
-            13,
-            inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
-            output=RESOLUTION,
-        ),
-        _unimplemented(
-            "spatial_relations",
-            "spatial_relations",
-            14,
-            inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
-            output=RELATIONS,
-        ),
-        _unimplemented(
-            "context_map",
-            "artifact",
-            15,
-            inputs=(
-                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
-                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
-                StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
-            ),
-            output=CONTEXT_MAP,
         ),
     ),
 )

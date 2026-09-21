@@ -444,12 +444,12 @@ class TestPreflightAndPrediction:
         policy = ReusePolicy(
             store=world.store(tmp_path / "index"),
             code_identity=CODE,
-            force_recompute=frozenset({"semantic_mapping"}),
+            force_recompute=frozenset({"semantic_fusion"}),
         )
 
         report = preflight(plan.scope(targets=["ingestion"]), reuse=policy)
 
-        assert any("semantic_mapping" in problem.message for problem in report.problems)
+        assert any("semantic_fusion" in problem.message for problem in report.problems)
 
     def test_the_prediction_says_what_would_be_reused_before_anything_runs(
         self, tmp_path: Path

@@ -111,11 +111,11 @@ Pontos de variação:
 
 Para uma política, o identificador de backend é a identidade que a própria capability já versiona.
 
-Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`, e os estágios cujas capabilities ainda não existem: `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map`. Estes últimos são declarados **indisponíveis** com o motivo, em vez de omitidos ou simulados; um teste falha quando a capability passar a existir, para o catálogo ser atualizado junto.
+Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`. O preset termina aí: `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` não fazem parte de `canonical/1` e entram em um preset versionado posterior, quando as capabilities existirem.
 
 ## Lacunas conhecidas
 
 - **Perfil sem backends.** Escolher SAM3, DINOv3, Qwen/Gemini ou FAST-LIO como canônicos é uma decisão científica que pertence à validação end-to-end (milestone #19), não ao runtime. Até lá, um experimento fornece um arquivo de configuração que seleciona os backends.
 - **Parâmetros por capability.** A validação dos parâmetros de cada backend (obrigatórios, tipos, faixas) acontece em `compose()`, instanciando a configuração da própria capability (`build_config()`); a resolução da configuração só garante valores JSON finitos e sem aparência de segredo. Políticas que hoje são apenas parâmetros (sincronização, voxelização, oclusão) ganham ponto de variação quando um executor de estágio as consumir.
 - **Dois `canonical/1`.** O `canonical/1` do runtime é o preset de topologia global. O `CANONICAL_PRESET_V1` de Visual Perception é o preset **interno** da percepção, com identidade própria, e continua conservando temporariamente os estágios legados de cena/região até a política de construção de `SemanticInterpretationRequest` ser promovida para a topologia default. O runtime não altera esse preset: a composition root entrega os backends atrás dos ports e não monta o preset interno; a lacuna segue registrada em [`composition.md`](composition.md) e em [`docs/runtime-composition.md`](../../../../docs/runtime-composition.md).
-- **Estágios indisponíveis.** Habilitar `semantic_mapping` em diante é válido na configuração (o preset os declara), mas nenhuma execução os cumpre enquanto as milestones #12–#15 não existirem.
+- **Estágios posteriores à fusão.** `pipeline.stages.semantic_mapping` (e os seguintes) é recusado como estágio desconhecido: `canonical/1` não os declara.

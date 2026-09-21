@@ -17,7 +17,7 @@ Um run **interrompido** é um run que nunca chegou a um estado terminal e cujo p
 
 ## O diretório do run
 
-`<workspace>/runtime/run-NNNN/`, alocado atomicamente (nunca dois runs no mesmo diretório):
+`<workspace>/<dataset>/run-NNNN/`, alocado atomicamente (nunca dois runs no mesmo diretório). O **dataset** é a sequência física da configuração (`inputs.sequence`): um run sem ela é recusado antes de criar qualquer coisa, e um nome que não seja um único componente de caminho (`../x`, `a/b`) também. O diário abaixo fica na raiz do run; cada estágio que o run executa grava o seu artifact no **próprio diretório** ao lado dele, `<run>/<estágio>/`:
 
 | Arquivo | Conteúdo |
 |---|---|
@@ -26,6 +26,7 @@ Um run **interrompido** é um run que nunca chegou a um estado terminal e cujo p
 | `status.json` | o estado atual, **substituído atomicamente** a cada transição, com o registro de falha, o ambiente e a identidade do código |
 | `execution.json` | entradas e saídas exatas; **só existe** em um run concluído |
 | `run.lock` | o pid do processo dono, enquanto o run não terminou |
+| `<estágio>/` | o artifact de um estágio **executado** neste run, criado e finalizado atomicamente pelo writer da capability; um estágio reutilizado não tem pasta aqui, é **referenciado** por `ArtifactRef`, nunca copiado |
 
 Um run `failed`, `cancelled` ou `blocked` é **histórico**: nunca é modificado depois. Nenhum run sobrescreve outro e uma falha nunca toca em um artifact publicado por um run anterior.
 

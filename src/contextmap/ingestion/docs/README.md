@@ -51,7 +51,7 @@ O adapter apenas decodifica e normaliza a fonte. Validação, sincronização, p
 - `validate_observations()` e as checagens individuais (`validate_image_observation()`, `validate_lidar_observation()`, `validate_timestamp_ordering()`, `validate_frame_references()`) — validação estrutural sobre observações decodificadas.
 - `summarize_observations()` — sumário legível de uma sequência; `SequenceSummary`, `ModalitySummary`, `SequenceDiagnostics`, `FrameGraphDiagnostics`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido, o `output_dir` recebido do chamador e a identidade, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
 
 ## Módulos consumidos
 
@@ -68,7 +68,7 @@ Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `Sou
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — campos, unidades, ownership, exemplos de mapeamento ROS 1/ROS 2.
-- [`artifact.md`](artifact.md) — formato do artefato de sequência persistido e layout do workspace local.
+- [`artifact.md`](artifact.md) — formato do artefato de sequência persistido, `output_dir` do chamador e identidade.
 - [`synchronization.md`](synchronization.md) — política de sincronização/agrupamento temporal e suas limitações conhecidas.
 - [`calibration.md`](calibration.md) — contrato de calibração e convenções de frame de coordenadas.
 - [`selection.md`](selection.md) — modelo de seleção e replay de sequência.

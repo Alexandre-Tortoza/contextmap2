@@ -34,14 +34,14 @@ Precedência: perfil < arquivos < `--set` < flags. A seleção continua explíci
 
 ### `ingest`
 
-Ingestion canônica pelo [serviço público de ingestion](ingestion-service.md): `--preflight` só confere o pedido; sem ele lê, valida, sincroniza e publica um `SequenceArtifact` imutável no workspace. O adapter **não** é uma flag: vem do backend selecionado em `components.ingestion.source_adapter.backend` e é composto pela composition root (módulo opcional ausente falha com a dica de instalação). O progresso sai em stderr e o resultado em stdout (ou JSON, com os eventos); Ctrl+C sai com `130` sem publicar nada.
+Ingestion canônica pelo [serviço público de ingestion](ingestion-service.md): `--preflight` só confere o pedido; sem ele lê, valida, sincroniza e publica um `SequenceArtifact` imutável em `--output-dir DIR` (o diretório final, que não pode existir; num run, o estágio `ingestion` publica em `<run>/ingestion` pelo mesmo serviço). O adapter **não** é uma flag: vem do backend selecionado em `components.ingestion.source_adapter.backend` e é composto pela composition root (módulo opcional ausente falha com a dica de instalação). O progresso sai em stderr e o resultado em stdout (ou JSON, com os eventos); Ctrl+C sai com `130` sem publicar nada.
 
 ### `run` e `stage`
 
 Resolvem a configuração, derivam o plano, escopam (o pipeline completo, ou os alvos de `--stage`; `stage` é exatamente um alvo), validam o preflight e executam.
 
 - **`--dry-run`**: mostra a configuração efetiva com o digest, a topologia resolvida (entradas, saídas e backends de cada estágio, o que roda, o que é fornecido por seleção, o que é indisponível e por quê), a seleção resolvida, o preflight e a cobertura de executores. **Não carrega modelo, não executa e não escreve nada.** Sai com `0` se o preflight passa e `1` se está bloqueado.
-- **execução real**: exige `--workspace` (ou `resources.workspace`), porque persiste seus registros. Cria `<workspace>/runtime/run-NNNN/` **antes** de executar e o journal grava ali o plano, os eventos, o status e, ao concluir, `execution.json` ([`lifecycle.md`](lifecycle.md)). Cada run tem seu próprio diretório e nunca sobrescreve outro. Um preflight bloqueado, um estágio que falha ou uma interrupção deixam um registro inspecionável (`run record: <diretório>` na mensagem de erro); Ctrl+C sai com `130`.
+- **execução real**: exige `--workspace` (ou `resources.workspace`), porque persiste seus registros. Exige `inputs.sequence` (o dataset) e cria `<workspace>/<dataset>/run-NNNN/` **antes** de executar e o journal grava ali o plano, os eventos, o status e, ao concluir, `execution.json` ([`lifecycle.md`](lifecycle.md)). Cada run tem seu próprio diretório e nunca sobrescreve outro. Um preflight bloqueado, um estágio que falha ou uma interrupção deixam um registro inspecionável (`run record: <diretório>` na mensagem de erro); Ctrl+C sai com `130`.
 - **reuso e retomada** (`--reuse-index DIR`, `--code-identity ID`, `--force ESTÁGIO`, `--resume RUN`): o reuso combina a identidade exata dos estágios; `--resume` retoma um run falhado, cancelado ou interrompido como um run novo. Exigem um verificador de artifacts que o dono dos executores fornece a `main(verifier=...)`: a CLI não sabe se um artifact indexado ainda existe.
 
 ### `inspect`

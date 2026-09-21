@@ -16,7 +16,7 @@ import hashlib
 import io
 import json
 import shutil
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -26,7 +26,6 @@ from uuid import uuid4
 
 _MANIFEST_FILENAME = "manifest.json"
 _README_FILENAME = "README.md"
-_REGISTRY_FILENAME = "runs.json"
 _TEMPORARY_PREFIX = ".tmp-"
 
 # Arquivos grandes (a geometria de um mapa pode ter gigabytes) nunca são lidos por inteiro.
@@ -319,53 +318,3 @@ def _require_relative_path(relative_path: str) -> None:
         raise RunDirectoryError(
             f"expected a relative path inside the run directory, got {relative_path!r}"
         )
-
-
-def _run_directories(sequence_dir: Path) -> list[Path]:
-    if not sequence_dir.is_dir():
-        return []
-    return sorted(
-        entry
-        for entry in sequence_dir.iterdir()
-        if entry.is_dir() and not entry.name.startswith(_TEMPORARY_PREFIX)
-    )
-
-
-def next_run_index(sequence_dir: Path, *, index_of: Callable[[Path], int | None]) -> int:
-    """Compute the next monotonic run index of a capability's sequence.
-
-    Scans the run directories themselves, never the registry, so an
-    interrupted, incomplete or corrupted run is not counted and allocation
-    works when the registry is absent or stale.
-
-    Args:
-        sequence_dir: Directory holding the runs of one capability and sequence.
-        index_of: Returns a directory's run index when it is a complete, valid
-            run of the capability, and ``None`` otherwise.
-
-    Returns:
-        The next index, starting at ``1`` when there is no valid run.
-    """
-    indexes = [index for run_dir in _run_directories(sequence_dir) if (index := index_of(run_dir))]
-    return max(indexes, default=0) + 1
-
-
-def write_run_registry(
-    sequence_dir: Path, *, describe: Callable[[Path], Mapping[str, Any] | None]
-) -> None:
-    """Rebuild the ``runs.json`` convenience registry from the valid runs on disk.
-
-    The registry is never the source of truth: it can be deleted and
-    regenerated at any time, and a directory that is not a valid run is
-    silently left out.
-
-    Args:
-        sequence_dir: Directory holding the runs of one capability and sequence.
-        describe: Returns the registry record of a valid run, or ``None``.
-    """
-    if not sequence_dir.is_dir():
-        return
-    runs = [record for run_dir in _run_directories(sequence_dir) if (record := describe(run_dir))]
-    (sequence_dir / _REGISTRY_FILENAME).write_text(
-        json.dumps({"runs": runs}, indent=2, sort_keys=True), encoding="utf-8"
-    )

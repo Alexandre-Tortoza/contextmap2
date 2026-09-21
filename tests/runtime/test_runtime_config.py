@@ -63,7 +63,13 @@ class TestCanonicalProfile:
         assert stages["ingestion"] is True
         assert stages["semantic_fusion"] is True
         assert stages["point_representation"] is False
-        assert "context_map" in stages
+        # O preset canônico só declara o que executa hoje; os estágios seguintes vêm em outro.
+        assert not {
+            "semantic_mapping",
+            "entity_resolution",
+            "spatial_relations",
+            "context_map",
+        } & set(stages)
 
     def test_makes_no_backend_choice_on_the_users_behalf(self) -> None:
         config = resolve_effective_config().config

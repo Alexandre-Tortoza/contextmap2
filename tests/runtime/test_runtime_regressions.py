@@ -312,7 +312,7 @@ class TestSecretsLeaveNoTrace:
             environ={"PRIVATE_MARKER": "marker-value-123"},
         )
 
-        status = (tmp_path / "ws" / "runtime" / "run-0001" / "status.json").read_text("utf-8")
+        status = (tmp_path / "ws" / "S1" / "run-0001" / "status.json").read_text("utf-8")
 
         assert "marker-value-123" not in status and "PRIVATE_MARKER" not in status
 
@@ -334,7 +334,7 @@ class TestDryRunMatchesTheRealRun:
         _, out, _ = run_cli(*base, "--dry-run", "--json")
         code, _, _ = run_cli(*base, executors=world_executors(world))
 
-        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        run_dir = tmp_path / "ws" / "S1" / "run-0001"
         status = json.loads((run_dir / "status.json").read_text("utf-8"))
         plan = json.loads((run_dir / "plan.json").read_text("utf-8"))
         dry = json.loads(out)
@@ -386,8 +386,8 @@ class TestEquivalentRerunsAreEquivalent:
             )
             assert code == 0, out + err
 
-        first = tmp_path / "ws" / "runtime" / "run-0001"
-        second = tmp_path / "ws" / "runtime" / "run-0002"
+        first = tmp_path / "ws" / "S1" / "run-0001"
+        second = tmp_path / "ws" / "S1" / "run-0002"
         for name in ("effective_config.json", "plan.json", "execution.json"):
             assert (first / name).read_bytes() == (second / name).read_bytes(), name
         assert self._trail(first) == self._trail(second)

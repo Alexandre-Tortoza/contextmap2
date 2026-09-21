@@ -44,6 +44,8 @@ Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`plan
 
 Existe, por fim, a **API pública de aplicação** (issue #264): `contextmap.runtime.Runtime`, a única superfície de que um frontend (CLI, TUI) precisa para descobrir capabilities e backends (sem carregar modelo), resolver configuração e topologia, fazer preflight, executar com eventos e cancelamento e inspecionar runs a partir do registro persistido, com contratos serializáveis, sem classe de backend, objeto ROS nem biblioteca de UI. É uma fachada: cada operação delega ao serviço que a possui. Detalhes em [`api.md`](api.md).
 
+Existem também os **executores de estágio** (issue #177): `contextmap.runtime.executors` roda State Estimation, Geometric Mapping, Sensor Association, Semantic Fusion gravando só no `StageRequest.output_dir`, e o estágio `ingestion` publica no mesmo diretório. Uma execução idêntica publica a mesma identidade, e um artifact reutilizado é aberto por `StageRequest.directory_of`. Detalhes e o que ainda falta (percepção e os estágios posteriores à fusão) em [`executors.md`](executors.md).
+
 A estratégia de testes, o mapa de cobertura e as invariantes exercitadas estão em [`testing.md`](testing.md). Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos

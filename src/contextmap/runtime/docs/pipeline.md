@@ -15,10 +15,6 @@ flowchart TD
     SA["sensor_association<br/>SensorAssociationRunArtifact"]
     PR["point_representation<br/>(opcional)<br/>PointRepresentationRunArtifact"]
     SF["semantic_fusion<br/>SemanticFusionRunArtifact"]
-    SM["semantic_mapping<br/>(indisponível)"]
-    ER["entity_resolution<br/>(indisponível)"]
-    SR["spatial_relations<br/>(indisponível)"]
-    CM["context_map<br/>(indisponível)"]
 
     ING --> VP
     ING --> ST
@@ -34,10 +30,6 @@ flowchart TD
     VP --> SF
     GM --> SF
     PR -.-> SF
-    SF --> SM --> ER --> SR
-    GM --> CM
-    ER --> CM
-    SR --> CM
 ```
 
 Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente quando o estágio de origem participa.
@@ -51,9 +43,8 @@ Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente qu
 | `sensor_association` | `sequence`, `perception`, `trajectory`, `geometry` | `SensorAssociationRunArtifact` |
 | `point_representation` (opcional) | `geometry` ← `geometric_mapping`, `association` ← `sensor_association` (opcional) | `PointRepresentationRunArtifact` |
 | `semantic_fusion` | `association`, `perception`, `geometry`, `representation` ← `point_representation` (opcional) | `SemanticFusionRunArtifact` |
-| `semantic_mapping` … `context_map` | indisponíveis (milestones #12–#15) | — |
 
-Os estágios indisponíveis continuam na topologia, com o motivo; o preflight os reporta se o escopo os incluir.
+`canonical/1` termina em `semantic_fusion`: é o pipeline executável hoje, e passa no preflight. Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` não fazem parte dele; um preset versionado posterior os declara quando as capabilities existirem, sem mudar a topologia de `canonical/1`. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
 
 ## Estágios opcionais
 
@@ -87,7 +78,7 @@ Há dois padrões, ambos declarativos e validados por contrato:
 
 ## Execução
 
-`run_plan(execution, executors, ...)` roda o preflight e bloqueia tudo se houver problema. Cada estágio recebe um `StageRequest` com os artifacts exatos que o alimentam (reutilizados ou recém-produzidos) e a configuração de seus componentes, e devolve um `ArtifactRef`. Cada entrada é uma **tupla de runs**: um run para uma entrada comum, vários (evidência distinta, em ordem determinística) para uma entrada declarada `multiple`. A primeira falha, ou uma saída que contradiz o contrato declarado, levanta `StageExecutionError` com os estágios já concluídos: nada posterior roda, nada é repetido e nada é substituído. Cada passo emite um evento estruturado (`journal`/`events`) e um `CancellationToken` para o run entre estágios ([`lifecycle.md`](lifecycle.md)).
+`run_plan(execution, executors, ...)` roda o preflight e bloqueia tudo se houver problema. Cada estágio recebe um `StageRequest` com os artifacts exatos que o alimentam (reutilizados ou recém-produzidos) e a configuração de seus componentes, e devolve um `ArtifactRef`. O `StageRequest` também traz `output_dir`, o diretório final do artifact do estágio, `<run>/<estágio>/` (o run é o diretório do `journal`): o executor o entrega, sem alteração, ao writer da capability, que o cria e o finaliza de forma atômica. O diretório ainda não existe e um executor nunca calcula um caminho próprio. Sem `journal` (uma execução em memória) `output_dir` e `workspace` são `None`, e um executor que persiste não pode rodar. Para abrir uma **entrada**, o executor usa `request.directory_of(ref)`, que resolve o `location` do `ArtifactRef` dentro do `workspace`: um artifact reutilizado de um run anterior é aberto onde foi gravado (referenciado, nunca copiado). Um `location` ausente, vazio, absoluto ou que saia do workspace é recusado, e o runner recusa um executor que declare um `location` diferente do diretório que recebeu. Cada entrada é uma **tupla de runs**: um run para uma entrada comum, vários (evidência distinta, em ordem determinística) para uma entrada declarada `multiple`. A primeira falha, ou uma saída que contradiz o contrato declarado, levanta `StageExecutionError` com os estágios já concluídos: nada posterior roda, nada é repetido e nada é substituído. Cada passo emite um evento estruturado (`journal`/`events`) e um `CancellationToken` para o run entre estágios ([`lifecycle.md`](lifecycle.md)).
 
 O `ExecutionRecord` guarda a ordem, as entradas e saídas exatas de cada estágio, a decisão de reuso de cada um (quando há uma `ReusePolicy`) e os artifacts reutilizados.
 

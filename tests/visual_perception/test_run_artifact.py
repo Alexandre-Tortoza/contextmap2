@@ -42,10 +42,8 @@ from contextmap.visual_perception import (
     StageStatus,
     VisualFeature,
     VisualViewKind,
-    allocate_run_index,
     execute_stage_graph,
     parse_semantic_response,
-    rebuild_run_registry,
     redact_semantic_secrets,
     render_semantic_prompt,
     write_semantic_audit,
@@ -54,12 +52,11 @@ from contextmap.visual_perception import (
 _PROVENANCE = BackendProvenance(
     backend_id="fake", capability="region_discovery", provider="fake", model="fake", version="0.1"
 )
-_RUN_DIR_NAME = "run-0001__frames-0000-0010__fake"
 
 
-def _run_dir(tmp_path: Path, sequence_name: str = "corridor-02", run_index: int = 1) -> Path:
-    run_dir_name = f"run-{run_index:04d}__frames-0000-0010__fake"
-    return tmp_path / "runs" / "visual-perception" / sequence_name / run_dir_name
+def _run_dir(tmp_path: Path, run_index: int = 1) -> Path:
+    """Diretório final escolhido pelo chamador; o leitor abre exatamente este caminho."""
+    return tmp_path / f"run-{run_index:04d}"
 
 
 def _result(
@@ -96,7 +93,7 @@ def _write_run(
     semantic_debug_level: SemanticDebugLevel = SemanticDebugLevel.FULL,
 ) -> PerceptionRunWriter:
     writer = PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=_run_dir(tmp_path, run_index),
         sequence_name=sequence_name,
         run_id=PerceptionRunId(f"run-{run_index:04d}"),
         run_index=run_index,
@@ -105,8 +102,6 @@ def _write_run(
         enabled_capabilities=frozenset({"region_discovery"}),
         pipeline_preset=CANONICAL_PRESET_V1,
         configuration_digest="sha256:test",
-        selection_label="frames-0000-0010",
-        profile_label="fake",
         semantic_debug_level=semantic_debug_level,
     )
     return writer
@@ -616,10 +611,42 @@ def test_readme_summarizes_the_run(tmp_path: Path) -> None:
     assert "Regions: 1" in readme
 
 
-def test_finalize_refuses_to_overwrite_an_existing_run(tmp_path: Path) -> None:
+def test_the_run_appears_exactly_at_output_dir_and_nothing_else_is_created(
+    tmp_path: Path,
+) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+
+    writer.finalize()
+
+    assert list(tmp_path.iterdir()) == [_run_dir(tmp_path)]
+    assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "runs.json").exists()
+
+
+def test_run_id_and_run_index_are_recorded_as_supplied(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path, run_index=7)
+    writer.add_result(_result("frame-0001", "run-0007"))
+
+    manifest = writer.finalize()
+
+    reopened = PerceptionRunReader(_run_dir(tmp_path, 7)).manifest
+    assert (manifest.run_id, manifest.run_index) == ("run-0007", 7)
+    assert (reopened.run_id, reopened.run_index) == ("run-0007", 7)
+
+
+def test_finalize_refuses_a_second_run_at_the_same_directory_without_altering_the_first(
+    tmp_path: Path,
+) -> None:
     first = _write_run(tmp_path)
     first.add_result(_result("frame-0001", "run-0001"))
     first.finalize()
+    run_dir = _run_dir(tmp_path)
+    before = {
+        path.relative_to(run_dir): path.read_bytes()
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
 
     second = _write_run(tmp_path)
     second.add_result(_result("frame-0002", "run-0001"))
@@ -627,70 +654,14 @@ def test_finalize_refuses_to_overwrite_an_existing_run(tmp_path: Path) -> None:
     with pytest.raises(RunArtifactError, match="already exists"):
         second.finalize()
 
-
-def test_allocate_run_index_starts_at_one_and_increments(tmp_path: Path) -> None:
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 1
-
-    writer = _write_run(tmp_path, run_index=1)
-    writer.add_result(_result("frame-0001", "run-0001"))
-    writer.finalize()
-
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 2
-
-
-def test_allocate_run_index_ignores_interrupted_tmp_directories(tmp_path: Path) -> None:
-    writer = _write_run(tmp_path, run_index=1)
-    writer.add_result(_result("frame-0001", "run-0001"))
-    writer.finalize()
-
-    # Simulate an interrupted write: a stray .tmp- directory with no manifest.
-    stray = tmp_path / "runs" / "visual-perception" / "corridor-02" / ".tmp-run-0002__x__y-deadbeef"
-    stray.mkdir(parents=True)
-
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 2
-
-
-def test_allocate_run_index_ignores_finalized_run_with_missing_output(tmp_path: Path) -> None:
-    writer = _write_run(tmp_path, run_index=9)
-    writer.add_result(_result("frame-0001", "run-0009"))
-    writer.finalize()
-    (_run_dir(tmp_path, run_index=9) / "outputs" / "results.jsonl").unlink()
-
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name="corridor-02") == 1
-
-
-def test_registry_excludes_finalized_run_with_corrupt_output(tmp_path: Path) -> None:
-    writer = _write_run(tmp_path)
-    writer.add_result(_result("frame-0001", "run-0001"))
-    writer.finalize()
-    results_path = _run_dir(tmp_path) / "outputs" / "results.jsonl"
-    results_path.write_text("corrupt\n", encoding="utf-8")
-
-    rebuild_run_registry(tmp_path, "corridor-02")
-
-    registry_path = tmp_path / "runs" / "visual-perception" / "corridor-02" / "runs.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert registry["runs"] == []
-
-
-def test_registry_is_rebuilt_after_finalize_and_can_be_rebuilt_independently(
-    tmp_path: Path,
-) -> None:
-    writer = _write_run(tmp_path, run_index=1)
-    writer.add_result(_result("frame-0001", "run-0001"))
-    writer.finalize()
-
-    registry_path = tmp_path / "runs" / "visual-perception" / "corridor-02" / "runs.json"
-    assert registry_path.is_file()
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert len(registry["runs"]) == 1
-
-    registry_path.unlink()
-    rebuild_run_registry(tmp_path, "corridor-02")
-
-    assert registry_path.is_file()
-    rebuilt = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert len(rebuilt["runs"]) == 1
+    after = {
+        path.relative_to(run_dir): path.read_bytes()
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert list(tmp_path.iterdir()) == [run_dir]  # e o run recusado não deixou nada ao redor
+    assert PerceptionRunReader(run_dir).verify_integrity() == []
 
 
 def test_opening_a_directory_without_a_manifest_fails(tmp_path: Path) -> None:

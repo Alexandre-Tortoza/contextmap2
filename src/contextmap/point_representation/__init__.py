@@ -47,9 +47,7 @@ from contextmap.point_representation.run_artifact import (
     PointRepresentationRunReader,
     PointRepresentationRunWriter,
     RunArtifactError,
-    allocate_run_index,
     center_selection_id,
-    rebuild_run_registry,
 )
 from contextmap.point_representation.serialization import encode_support_policy
 from contextmap.point_representation.service import (
@@ -91,12 +89,10 @@ __all__ = [
     "SupportStatistics",
     "SupportType",
     "UnencodableSupportError",
-    "allocate_run_index",
     "center_selection_id",
     "encode_support_policy",
     "ensure_compatible_representation_spaces",
     "ensure_compatible_representations",
-    "rebuild_run_registry",
     "representation_id_for",
     "representation_space_fingerprint",
 ]
