@@ -108,6 +108,12 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `write_annotation_set()`/`read_annotation_set()`/`encode_annotation_set()`/`decode_annotation_set()` — persistência imutável e leitura despachada pelo schema.
 - `ground_truth_regions()` e `SemanticAnnotationSet.to_semantic_annotation()` — entrega das anotações aos avaliadores de Region Discovery e Semantic Interpretation.
 
+### Integridade do reference set
+
+- `validate_reference_set()`/`ReferenceSetIntegrityReport` — relatório de blockers e warnings com identidade (`id`, `version`, `digest`), checagem opcional dos arquivos de anotação e auditoria de proveniência independente de saídas de modelo.
+- `require_valid_reference_set()`/`open_validated_reference_set()`/`ValidatedReferenceSet` — entradas das ferramentas de avaliação: recusam por padrão um reference set com blockers e não aceitam um relatório inválido, de outro reference set ou sem a checagem dos arquivos.
+- Política de split explícita por tarefa: unidade, justificativa, chaves de grupo e janela de adjacência; sobreposição, vazamento por unidade, observações compartilhadas e vizinhança temporal entre splits são blockers.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -128,6 +134,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
