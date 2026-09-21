@@ -31,6 +31,7 @@ from typing import Any, TextIO
 from contextmap import __version__
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import CANONICAL_PROFILE_ID
+from contextmap.runtime.composition import compose
 from contextmap.runtime.config import (
     DEBUG_LEVELS,
     ConfigProblem,
@@ -40,7 +41,20 @@ from contextmap.runtime.config import (
     resolve_effective_config,
     resolve_secrets,
 )
-from contextmap.runtime.errors import PipelineError, PreflightError, RunRecordError
+from contextmap.runtime.errors import (
+    BackendUnavailableError,
+    CompositionError,
+    PipelineError,
+    PreflightError,
+    RunRecordError,
+)
+from contextmap.runtime.ingestion_service import (
+    IngestionRequest,
+    IngestionResult,
+    IngestionService,
+    SourceAdapterFactory,
+)
+from contextmap.runtime.lifecycle import ExecutionEvent
 from contextmap.runtime.pipeline import (
     ExecutionPlan,
     PipelinePlan,
@@ -98,6 +112,7 @@ class _Session:
     environ: Mapping[str, str] | None
     module_available: Callable[[str], bool] | None
     verifier: Callable[[ArtifactRef], bool] | None
+    adapter_factory: SourceAdapterFactory | None
     out: TextIO
     err: TextIO
 
@@ -141,6 +156,7 @@ def main(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     verifier: Callable[[ArtifactRef], bool] | None = None,
+    adapter_factory: SourceAdapterFactory | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
@@ -154,6 +170,8 @@ def main(
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
             flags need it, and only the owner of the executors can provide it.
+        adapter_factory: Builds the source adapter for ``ingest``; by default it is composed
+            from the configuration's selected adapter backend.
         stdout: Stream for results; defaults to ``sys.stdout``.
         stderr: Stream for errors; defaults to ``sys.stderr``.
 
@@ -173,6 +191,7 @@ def main(
             environ=environ,
             module_available=module_available,
             verifier=verifier,
+            adapter_factory=adapter_factory,
             out=out,
             err=err,
         )
@@ -185,7 +204,9 @@ def main(
             return session.fail("invalid configuration", error.problems)
         except PreflightError as error:
             return session.fail("the plan cannot run", error.report.problems)
-        except (PipelineError, _Failure) as error:
+        except BackendUnavailableError as error:
+            return session.fail("a selected backend is unavailable", error.problems)
+        except (PipelineError, CompositionError, _Failure) as error:
             return session.fail(str(error))
 
 
@@ -226,6 +247,17 @@ def _build_parser() -> argparse.ArgumentParser:
     stage.add_argument("stage", metavar="STAGE", help="the stage to produce")
     _execution_flags(stage)
     stage.set_defaults(handler=_stage_command)
+
+    ingest = commands.add_parser(
+        "ingest",
+        parents=[_ingest_options()],
+        help="ingest a recorded source into an immutable sequence artifact",
+        description=(
+            "Run canonical ingestion through the public ingestion service: preflight, then "
+            "read, validate, synchronize and publish a SequenceArtifact."
+        ),
+    )
+    ingest.set_defaults(handler=_ingest)
 
     inspect = commands.add_parser("inspect", help="show the configuration, the plan or an artifact")
     subjects = inspect.add_subparsers(dest="subject", required=True, metavar="SUBJECT")
@@ -294,6 +326,67 @@ def _config_options() -> argparse.ArgumentParser:
     return common
 
 
+def _ingest_options() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    group = common.add_argument_group("configuration")
+    group.add_argument("-c", "--config", action="append", metavar="FILE", help="configuration file")
+    group.add_argument("--profile", default=CANONICAL_PROFILE_ID, metavar="ID", help="base profile")
+    group.add_argument("--set", action="append", metavar="PATH=VALUE", help="override one setting")
+    group.add_argument("--workspace", metavar="DIR", help="workspace that receives the sequence")
+    source = common.add_argument_group("source and request")
+    source.add_argument("--source", required=True, metavar="PATH", help="the recorded source")
+    source.add_argument(
+        "--sequence-name", required=True, metavar="NAME", help="name of the sequence"
+    )
+    source.add_argument(
+        "--topic",
+        action="append",
+        type=_parse_topic,
+        metavar="KEY=TOPIC",
+        help="a topic to read, for example rgb=/camera; repeat for several",
+    )
+    source.add_argument(
+        "--required", action="append", metavar="KEY", help="a topic that must exist in the source"
+    )
+    source.add_argument("--clock-id", metavar="ID", help="identity of the shared header clock")
+    source.add_argument(
+        "--sync-reference", required=True, metavar="MODALITY", help="synchronization anchor"
+    )
+    source.add_argument(
+        "--sync-tolerance-ns",
+        required=True,
+        type=int,
+        metavar="N",
+        help="synchronization tolerance, in nanoseconds",
+    )
+    source.add_argument(
+        "--on-problems",
+        choices=("fail", "warn"),
+        default="fail",
+        help="what to do with structural problems (default: fail)",
+    )
+    source.add_argument(
+        "--no-duplicate-timestamps",
+        action="store_true",
+        help="report two observations of one clock at the same timestamp",
+    )
+    source.add_argument(
+        "--no-source-hash", action="store_true", help="skip hashing the source bytes (recorded)"
+    )
+    source.add_argument(
+        "--preflight", action="store_true", help="only check that the request can run"
+    )
+    _json_flag(common)
+    return common
+
+
+def _parse_topic(text: str) -> tuple[str, str]:
+    key, separator, topic = text.partition("=")
+    if not separator or not key or not topic:
+        raise argparse.ArgumentTypeError(f"{text!r}: expected KEY=TOPIC")
+    return key, topic
+
+
 def _execution_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dry-run",
@@ -341,16 +434,17 @@ def _parse_select(text: str) -> tuple[str, list[str]]:
 def _overrides(args: argparse.Namespace) -> list[str]:
     """Translate the flags into configuration overrides; a flag beats an earlier --set."""
     overrides = list(args.set or [])
-    if args.sequence is not None:
+    # Nem todo comando tem todas as flags de configuração (`ingest` tem um subconjunto).
+    if getattr(args, "sequence", None) is not None:
         overrides.append(f"inputs.sequence={json.dumps(args.sequence)}")
-    for stage, references in args.select or []:
+    for stage, references in getattr(args, "select", None) or []:
         value = references if len(references) > 1 else references[0]
         overrides.append(f"inputs.selections.{stage}={json.dumps(value)}")
     if args.workspace is not None:
         overrides.append(f"resources.workspace={json.dumps(args.workspace)}")
-    if args.device is not None:
+    if getattr(args, "device", None) is not None:
         overrides.append(f"resources.device={json.dumps(args.device)}")
-    if args.debug_level is not None:
+    if getattr(args, "debug_level", None) is not None:
         overrides.append(f"policies.debug_level={json.dumps(args.debug_level)}")
     return overrides
 
@@ -624,6 +718,111 @@ def _run_lines(summary: RunSummary, *, events: bool) -> list[str]:
             f"    {e.sequence:>3} {e.time} {e.kind}{' ' + e.stage_id if e.stage_id else ''}"
             for e in summary.events
         )
+    return lines
+
+
+def _ingest(session: _Session) -> int:
+    """Ingest a recorded source through the public ingestion service."""
+    args = session.args
+    effective = _effective(args)
+    workspace = effective.config.resources.workspace
+    if workspace is None:
+        raise _UsageError(
+            "ingest publishes a sequence: pass --workspace DIR (or resources.workspace)"
+        )
+    adapter = effective.config.components.get("ingestion.source_adapter")
+    if adapter is None or adapter.backend is None:
+        raise _UsageError(
+            "select the source adapter: set components.ingestion.source_adapter.backend "
+            "in a configuration file or with --set"
+        )
+    document = {
+        "source_path": args.source,
+        "sequence_name": args.sequence_name,
+        "topics": dict(args.topic or []),
+        "required_topics": list(args.required or []),
+        "timestamp_clock_id": args.clock_id,
+        "synchronization": {
+            "reference_modality": args.sync_reference,
+            "tolerance_nanoseconds": args.sync_tolerance_ns,
+        },
+        "validation": {
+            "allow_duplicate_timestamps": not args.no_duplicate_timestamps,
+            "on_problems": args.on_problems,
+        },
+        "hash_source": not args.no_source_hash,
+        "config_identity": effective.digest,
+    }
+    try:
+        request = IngestionRequest.from_document(
+            document, workspace=workspace, source_type=adapter.backend
+        )
+    except ValueError as error:
+        raise _Failure(str(error)) from error
+    factory = session.adapter_factory or _composed_adapter_factory(session, effective)
+    service = IngestionService(factory)
+
+    if args.preflight:
+        report = service.preflight(request)
+        lines = [
+            f"ingestion preflight {report.identity}: {'ok' if report.ok else 'BLOCKED'}",
+            *(f"  - {problem}" for problem in report.problems),
+            *(f"  warning: {warning}" for warning in report.warnings),
+        ]
+        session.emit(report.to_document(), lines)
+        return EXIT_OK if report.ok else EXIT_FAILED
+
+    events: list[ExecutionEvent] = []
+
+    class _Progress:
+        def emit(self, event: ExecutionEvent) -> None:
+            events.append(event)
+            if not args.json:
+                print(f"{event.kind}", file=session.err)
+
+    secrets = resolve_secrets(effective.config, environ=session.environ)
+    try:
+        result = service.run(request, event_sink=_Progress(), redact=secrets.redact)
+    except KeyboardInterrupt:
+        print("cancelled; nothing was published", file=session.err)
+        return EXIT_INTERRUPTED
+    document_out = result.to_document()
+    document_out["events"] = [event.to_document() for event in events]
+    session.emit(document_out, _ingestion_lines(result))
+    if result.status == "completed":
+        return EXIT_OK
+    return EXIT_INTERRUPTED if result.status == "cancelled" else EXIT_FAILED
+
+
+def _composed_adapter_factory(
+    session: _Session, effective: EffectiveConfig
+) -> SourceAdapterFactory:
+    """Compose the configured source adapter; a missing module or selection fails explicitly."""
+    composed = compose(
+        effective,
+        stages=["ingestion"],
+        environ=session.environ,
+        module_available=session.module_available,
+    )
+    assert composed.source_adapter is not None  # o estágio `ingestion` foi composto
+    return composed.source_adapter
+
+
+def _ingestion_lines(result: IngestionResult) -> list[str]:
+    lines = [f"ingestion {result.status}: {result.sequence_name}"]
+    if result.failure is not None:
+        failure = result.failure
+        lines.append(f"  failure: {failure.category} during {failure.phase}: {failure.message}")
+    if result.artifact_path is not None:
+        lines.append(f"  artifact: {result.artifact_path}")
+    counts = ", ".join(f"{name}={count}" for name, count in result.observation_counts.items())
+    lines.append(f"  observations: {counts}")
+    lines.extend(f"  warning: {warning}" for warning in result.warnings)
+    metrics = result.metrics
+    lines.append(
+        f"  metrics: {metrics.elapsed_s}s, {metrics.files_written} files, "
+        f"{metrics.bytes_written} bytes, {metrics.dropped_events} dropped events"
+    )
     return lines
 
 

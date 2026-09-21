@@ -40,7 +40,9 @@ Existe ainda a **seleção explícita de runs e o vínculo de linhagem** (issue 
 
 Existe ainda a **CLI** (issue #166), uma camada fina que traduz flags em overrides e chama esses serviços: `run`, `stage`, `inspect` e `validate`, com dry-run que mostra o plano resolvido sem carregar modelo, saída `--json`, erros acionáveis e verificação de integridade só com a biblioteca padrão. Detalhes em [`cli.md`](cli.md).
 
-Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`planned`, `running`, `completed`, `failed`, `blocked`, `cancelled`), eventos estruturados append-only, registro de falha com categoria, cancelamento cooperativo, ambiente para reprodução, segredos sempre redigidos e retomada como um run novo que só reutiliza artifacts que passam nas checagens normais de reuso. Detalhes em [`lifecycle.md`](lifecycle.md). A estratégia de testes, o mapa de cobertura e as invariantes exercitadas estão em [`testing.md`](testing.md). Configuração em [`configuration.md`](configuration.md).
+Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`planned`, `running`, `completed`, `failed`, `blocked`, `cancelled`), eventos estruturados append-only, registro de falha com categoria, cancelamento cooperativo, ambiente para reprodução, segredos sempre redigidos e retomada como um run novo que só reutiliza artifacts que passam nas checagens normais de reuso. Detalhes em [`lifecycle.md`](lifecycle.md). Existe também o **serviço público de ingestion** (issue #263): um caminho único e neutro de frontend (`preflight` e `run` com eventos, cancelamento cooperativo e resultado estruturado) que a CLI, uma TUI e o DAG compartilham, com o adapter vindo da composition root e nenhuma regra de fonte, validação ou sincronização duplicada. Detalhes em [`ingestion-service.md`](ingestion-service.md).
+
+A estratégia de testes, o mapa de cobertura e as invariantes exercitadas estão em [`testing.md`](testing.md). Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -60,6 +62,7 @@ Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`plan
 - `ExecutionPlan`, `preflight()`, `PreflightReport` — o escopo de uma execução e a validação antes dela.
 - `run_plan()`, `StageExecutor`, `StageRequest`, `ArtifactRef`, `ExecutionRecord`, `StageRecord` — a execução e o registro exato de entradas e saídas.
 - `write_plan()`, `write_execution_record()`, `read_plan_document()` — a persistência da topologia e da execução.
+- `IngestionService`, `IngestionRequest`, `ValidationPolicy`, `IngestionPreflight`, `IngestionResult`, `IngestionFailure`, `IngestionMetrics`, `IngestionStageExecutor` — o serviço público de ingestion e sua execução como estágio do DAG.
 - `RunJournal`, `read_run()`, `RunSummary`, `RunStatus`, `FailureRecord`, `resume_plan()`, `check_resumable()` — o journal persistente de um run, sua leitura e a retomada.
 - `ExecutionEvent`, `EventSink`, `CancellationToken`, `StageFailure`, `FailureCategory`, `capture_environment()`, `categorize_failure()` — eventos, cancelamento, categorias de falha e ambiente.
 - `RunCancelledError`, `RunRecordError`, `ResumeError` — falhas do ciclo de vida, todas explícitas.
@@ -70,4 +73,4 @@ Existe ainda o **ciclo de vida do run** (issue #167): estados explícitos (`plan
 
 ## Módulos consumidos
 
-A configuração e o catálogo não importam capability alguma. A composition root importa, **dentro da factory que os usa**, os backends concretos e as configurações das capabilities que compõe (`ingestion`, `visual_perception`, `state_estimation`, `point_representation`, `semantic_fusion`); é a única exceção permitida à regra de não importar backends. Os testes verificam que as identidades de política e o canal de evidência que o catálogo nomeia ainda existem em `contextmap.semantic_fusion`, e que o catálogo e a tabela de factories concordam.
+A configuração e o catálogo não importam capability alguma. O serviço de ingestion importa **somente a raiz pública** de `contextmap.ingestion` (nunca um adapter). A composition root importa, **dentro da factory que os usa**, os backends concretos e as configurações das capabilities que compõe (`ingestion`, `visual_perception`, `state_estimation`, `point_representation`, `semantic_fusion`); é a única exceção permitida à regra de não importar backends. Os testes verificam que as identidades de política e o canal de evidência que o catálogo nomeia ainda existem em `contextmap.semantic_fusion`, e que o catálogo e a tabela de factories concordam.

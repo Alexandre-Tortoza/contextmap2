@@ -72,6 +72,15 @@ EVENT_KINDS = frozenset(
         "run_failed",
         "run_cancelled",
         "run_completed",
+        "ingestion.planned",
+        "ingestion.reading-source",
+        "ingestion.progress",
+        "ingestion.validating",
+        "ingestion.synchronizing",
+        "ingestion.writing-artifact",
+        "ingestion.completed",
+        "ingestion.failed",
+        "ingestion.cancelled",
     }
 )
 TERMINAL_EVENTS = frozenset({"run_blocked", "run_failed", "run_cancelled", "run_completed"})

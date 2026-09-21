@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_ingestion import factory as fake_factory
 from runtime_worlds import World
 
 from contextmap.runtime import (
@@ -969,3 +970,152 @@ class TestLifecycleCommands:
         assert code == 0
         assert reuse["ingestion"]["kind"] == "reused"
         assert reuse["geometric_mapping"]["kind"] == "recomputed"
+
+
+class TestIngestCommand:
+    def _args(self, tmp_path: Path, *extra: str) -> list[str]:
+        source = tmp_path / "recording.bag"
+        source.write_bytes(b"raw-source-bytes")
+        return [
+            "ingest",
+            "-c",
+            str(_config(tmp_path)),
+            "--source",
+            str(source),
+            "--sequence-name",
+            "corridor-02",
+            "--topic",
+            "rgb=/camera",
+            "--topic",
+            "imu=/imu",
+            "--clock-id",
+            "fake:header",
+            "--sync-reference",
+            "image",
+            "--sync-tolerance-ns",
+            "100000000",
+            "--workspace",
+            str(tmp_path / "ws"),
+            *extra,
+        ]
+
+    def _published(self, tmp_path: Path) -> list[Path]:
+        root = tmp_path / "ws" / "sequences" / "corridor-02"
+        return sorted(root.iterdir()) if root.exists() else []
+
+    def test_the_preflight_reports_readiness_without_reading_or_writing(
+        self, tmp_path: Path
+    ) -> None:
+        code, out, _ = cli(
+            *self._args(tmp_path, "--preflight", "--json"), adapter_factory=fake_factory()
+        )
+
+        document = _json(out)
+        assert code == 0 and document["ok"] is True
+        assert document["capabilities"]["rgb"] is True
+        assert not (tmp_path / "ws").exists()
+
+    def test_a_blocked_preflight_lists_the_problems_and_exits_non_zero(
+        self, tmp_path: Path
+    ) -> None:
+        args = self._args(tmp_path, "--preflight", "--required", "lidar")
+
+        code, out, err = cli(*args, adapter_factory=fake_factory())
+
+        assert code == 1
+        assert "lidar" in out + err and "BLOCKED" in out
+
+    def test_it_publishes_a_sequence_artifact_and_reports_progress(self, tmp_path: Path) -> None:
+        code, out, err = cli(*self._args(tmp_path), adapter_factory=fake_factory())
+
+        assert code == 0, out + err
+        assert "ingestion completed: corridor-02" in out
+        assert "observations:" in out and "artifact:" in out
+        assert "ingestion.reading-source" in err and "ingestion.completed" in err
+        published = self._published(tmp_path)
+        assert len(published) == 1 and (published[0] / "manifest.json").is_file()
+
+    def test_the_json_result_carries_the_events_and_the_identity(self, tmp_path: Path) -> None:
+        code, out, err = cli(*self._args(tmp_path, "--json"), adapter_factory=fake_factory())
+
+        document = _json(out)
+        assert code == 0, out + err
+        assert document["status"] == "completed"
+        assert document["request_identity"].startswith("sha256:")
+        assert document["events"][0]["kind"] == "ingestion.planned"
+        assert document["metrics"]["observations_read"] == 6
+
+    def test_a_failure_names_the_category_and_the_phase_and_publishes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        code, out, _ = cli(*self._args(tmp_path), adapter_factory=fake_factory(fail_after=2))
+
+        assert code == 1
+        assert "source during reading-source" in out and "bag corrupt" in out
+        assert self._published(tmp_path) == []
+
+    def test_an_interrupt_exits_with_the_conventional_code_and_publishes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        def interrupt(index: int) -> None:
+            if index == 1:
+                raise KeyboardInterrupt
+
+        code, out, err = cli(
+            *self._args(tmp_path), adapter_factory=fake_factory(on_observation=interrupt)
+        )
+
+        assert code == 130 and "cancelled" in out + err
+        assert self._published(tmp_path) == []
+
+    def test_a_workspace_is_required(self, tmp_path: Path) -> None:
+        args = self._args(tmp_path)
+        position = args.index("--workspace")
+        without = args[:position] + args[position + 2 :]
+
+        code, out, err = cli(*without, adapter_factory=fake_factory())
+
+        assert code == 2 and "--workspace" in out + err
+
+    def test_a_selected_adapter_is_required(self, tmp_path: Path) -> None:
+        document = _document()
+        del document["components"]["ingestion"]
+        bare = tmp_path / "bare.json"
+        bare.write_text(json.dumps(document), encoding="utf-8")
+        args = self._args(tmp_path)
+        args[args.index("-c") + 1] = str(bare)
+
+        code, out, err = cli(*args, adapter_factory=fake_factory())
+
+        assert code == 2
+        assert "components.ingestion.source_adapter.backend" in out + err
+
+    def test_an_unknown_topic_key_lists_the_known_ones(self, tmp_path: Path) -> None:
+        code, out, err = cli(
+            *self._args(tmp_path, "--topic", "thermal=/cam"), adapter_factory=fake_factory()
+        )
+
+        assert code == 1
+        assert "thermal" in out + err and "lidar" in out + err
+
+    def test_a_missing_optional_module_is_explained_with_its_install_hint(
+        self, tmp_path: Path
+    ) -> None:
+        code, out, err = cli(*self._args(tmp_path), module_available=lambda name: name != "rosbags")
+
+        assert code == 1
+        assert "rosbags" in out + err and "contextmap[ros1]" in out + err
+        assert self._published(tmp_path) == []
+
+    def test_the_adapter_family_is_not_a_command_line_choice(self) -> None:
+        # Sem `adapter_factory`, a CLI compõe o backend selecionado na configuração.
+        source = Path(sys.modules["contextmap.runtime.cli"].__file__ or "").read_text("utf-8")
+
+        assert "--source-type" not in source and "--adapter" not in source
+
+    def test_a_malformed_topic_flag_is_a_usage_error(self, tmp_path: Path) -> None:
+        code, out, err = cli(
+            *self._args(tmp_path, "--topic", "rgb"), adapter_factory=fake_factory()
+        )
+
+        assert code == 2 and "KEY=TOPIC" in out + err
