@@ -28,9 +28,10 @@ effective configuration live inside ``manifest.json`` instead of separate ``conf
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -39,7 +40,11 @@ from typing import Any, NewType, TypeVar
 
 from contextmap.entity_resolution import (
     EntityResolutionRunId,
+    EntityResolutionRunManifest,
+    EntityResolutionRunReader,
+    ForeignResolvedEntityReferenceError,
     ResolvedEntityReference,
+    UnknownResolvedEntityError,
     decode_resolved_entity_reference,
     encode_resolved_entity_reference,
 )
@@ -143,8 +148,9 @@ class RelationsRunLineage:
         entity_resolution_run_id: The selected Entity Resolution run: the scope of every resolved
             entity reference in the run.
         entity_resolution_schema_version: The schema version of that run.
-        entity_resolution_artifact_digest: Digest of that run's identity and inventory, computed by
-            Entity Resolution so that a later change of the upstream artifact is detectable.
+        entity_resolution_artifact_digest: Digest of that run's identity and inventory, so that
+            a later change of the upstream artifact is detectable; see
+            :func:`resolution_artifact_digest`.
         geometric_map_id: The immutable geometric map the geometric evidence was measured on.
     """
 
@@ -167,6 +173,50 @@ class RelationsRunLineage:
         ):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"{name} must not be empty")
+
+
+def resolution_artifact_digest(manifest: EntityResolutionRunManifest) -> str:
+    """Digest the identity and the inventory of a persisted Entity Resolution run.
+
+    The digest covers the run identity, its schema version and the path and hash of every
+    contractual file, so it is independent of the run's layout and of anything that is not
+    contractual (creation time, code version, ``debug/``), and it changes if anything the relations
+    were built on changes. It follows the convention of the sibling artifacts.
+
+    Args:
+        manifest: The manifest of the run, read through Entity Resolution's public reader.
+
+    Returns:
+        ``sha256:`` followed by the digest.
+    """
+    canonical = json.dumps(
+        {
+            "run_id": str(manifest.run_id),
+            "schema_version": manifest.schema_version,
+            "files": sorted([entry.path, entry.content_hash] for entry in manifest.file_inventory),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+def lineage_from_resolution_manifest(manifest: EntityResolutionRunManifest) -> RelationsRunLineage:
+    """Derive the lineage of a relations run from the resolution run it consumes.
+
+    Args:
+        manifest: The manifest of the selected Entity Resolution run.
+
+    Returns:
+        The lineage: that run's identity, schema version and digest, and the geometric map its
+        entities were resolved on.
+    """
+    return RelationsRunLineage(
+        entity_resolution_run_id=manifest.run_id,
+        entity_resolution_schema_version=manifest.schema_version,
+        entity_resolution_artifact_digest=resolution_artifact_digest(manifest),
+        geometric_map_id=manifest.lineage.geometric_map_id,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -628,25 +678,46 @@ class SpatialRelationsRunReader:
         """
         return check_file_inventory(self._root, self._manifest.file_inventory)
 
-    def validate_references(
-        self, entities: Collection[ResolvedEntityReference]
-    ) -> tuple[ResolvedEntityReference, ...]:
-        """Check that every entity the relations name is one of the given resolved entities.
+    def validate_resolution(self, resolution: EntityResolutionRunReader) -> tuple[str, ...]:
+        """Check the run against the Entity Resolution run it says it was built on.
 
         Args:
-            entities: The resolved entities of the Entity Resolution run this run selected.
+            resolution: A reader of the Entity Resolution run the lineage names.
 
         Returns:
-            The referenced entities that are not in ``entities``, in canonical order; empty means
-            every reference resolves.
+            Human-readable problems; empty means the lineage matches that run (its identity, schema
+            version and digest) and every resolved entity the relations name exists in it. A run
+            that is not the one named is reported alone, since nothing else can be compared.
         """
-        known = set(entities)
-        unknown = {
-            reference
-            for row in self._load_index()
-            if (reference := decode_resolved_entity_reference(row["entity_ref"])) not in known
-        }
-        return tuple(sorted(unknown, key=reference_key))
+        lineage = self._manifest.lineage
+        if lineage.entity_resolution_run_id != resolution.run_id:
+            return (
+                f"the run names resolution run {lineage.entity_resolution_run_id!r}, but the "
+                f"reader opened {resolution.run_id!r}",
+            )
+        issues: list[str] = []
+        manifest = resolution.manifest
+        if lineage.entity_resolution_schema_version != manifest.schema_version:
+            issues.append(
+                f"the run records resolution schema version "
+                f"{lineage.entity_resolution_schema_version!r}, but that run has "
+                f"{manifest.schema_version!r}"
+            )
+        if lineage.entity_resolution_artifact_digest != resolution_artifact_digest(manifest):
+            issues.append(
+                "the resolution artifact digest recorded by the run is not the digest of that "
+                "run: the upstream artifact changed"
+            )
+        for row in self._load_index():
+            reference = decode_resolved_entity_reference(row["entity_ref"])
+            try:
+                resolution.resolved_entity(reference)
+            except (UnknownResolvedEntityError, ForeignResolvedEntityReferenceError):
+                issues.append(
+                    f"the run references resolved entity {reference.resolved_entity_id!r}, which "
+                    f"the resolution run does not have"
+                )
+        return tuple(issues)
 
     def _load_relations(self) -> dict[RelationId, Relation]:
         if self._relations is None:
