@@ -32,8 +32,12 @@ from contextmap.artifact import (
     ValidationStatus,
     validate_context_map_artifact,
 )
-from contextmap.artifact.manifest import create_manifest, decode_manifest, encode_manifest
-from contextmap.artifact.tables import canonical_json_line, encode_record_table
+from contextmap.artifact.serialization.manifest import (
+    create_manifest,
+    decode_manifest,
+    encode_manifest,
+)
+from contextmap.artifact.serialization.tables import canonical_json_line, encode_record_table
 from contextmap.shared import file_entry
 
 FULL = ValidationLevel.FULL
@@ -532,7 +536,7 @@ def test_validation_never_changes_or_repairs_the_artifact(artifact: Path) -> Non
 def test_the_validator_needs_no_model_or_robotics_runtime() -> None:
     program = (
         "import sys\n"
-        "import contextmap.artifact.validation\n"
+        "import contextmap.artifact.serialization.validation\n"
         "blocked = ('torch', 'transformers', 'rclpy', 'rosbags', 'cv2', 'PIL')\n"
         "found = [name for name in blocked if name in sys.modules]\n"
         "assert not found, found\n"

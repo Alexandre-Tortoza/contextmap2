@@ -29,8 +29,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-from contextmap.artifact.errors import ManifestError, UnsupportedFormatVersionError
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.errors import ManifestError, UnsupportedFormatVersionError
+from contextmap.artifact.serialization.layout import (
     ARTIFACT_TYPE,
     FORMAT_VERSION,
     SUPPORTED_FORMAT_VERSIONS,

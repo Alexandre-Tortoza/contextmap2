@@ -1,6 +1,6 @@
 # Layout e formatos de armazenamento do `ContextMapArtifact`
 
-Este documento decide **como** o `ContextMap` é gravado em disco (issue #155) e por quê. Ele descreve `src/contextmap/artifact/layout.py` e `manifest.py`. O que o mapa **significa** (frame, unidades, entidades, relações, linhagem) pertence ao schema e não depende dos nomes de arquivo abaixo: um artifact declara o que contém no `manifest.json` e no `map-metadata.json`, nunca pela presença de um arquivo.
+Este documento decide **como** o `ContextMap` é gravado em disco (issue #155) e por quê. Ele descreve `src/contextmap/artifact/serialization/layout.py` e `manifest.py`. O que o mapa **significa** (frame, unidades, entidades, relações, linhagem) pertence ao schema e não depende dos nomes de arquivo abaixo: um artifact declara o que contém no `manifest.json` e no `map-metadata.json`, nunca pela presença de um arquivo.
 
 As regras gerais de artifacts (imutabilidade, escrita atômica, inventário com hash) estão em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) e são implementadas uma vez em `contextmap.shared.run_directory`. Aqui ficam só as decisões do `ContextMapArtifact`.
 

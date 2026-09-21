@@ -12,7 +12,7 @@ and is never a place a reader may look for authoritative data.
 
 from __future__ import annotations
 
-from contextmap.artifact.errors import ManifestError
+from contextmap.artifact.serialization.errors import ManifestError
 
 ARTIFACT_TYPE = "context_map"
 """``artifact_type`` recorded in the manifest of every ContextMapArtifact."""

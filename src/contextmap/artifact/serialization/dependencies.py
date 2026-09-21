@@ -19,9 +19,13 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from contextmap.artifact.errors import UpstreamArtifactError
-from contextmap.artifact.layout import MANIFEST
-from contextmap.artifact.manifest import DependencyRecord, Requirement, inventory_digest
+from contextmap.artifact.serialization.errors import UpstreamArtifactError
+from contextmap.artifact.serialization.layout import MANIFEST
+from contextmap.artifact.serialization.manifest import (
+    DependencyRecord,
+    Requirement,
+    inventory_digest,
+)
 from contextmap.shared import FileEntry, check_file_inventory
 
 GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
@@ -29,7 +33,7 @@ GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
 
 
 @dataclass(frozen=True, kw_only=True)
-class UpstreamArtifact:
+class EvidenceArtifact:
     """An upstream artifact, on disk, that a map is written against.
 
     Attributes:

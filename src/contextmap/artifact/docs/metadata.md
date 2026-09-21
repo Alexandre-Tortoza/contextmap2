@@ -63,7 +63,7 @@ Duas distinções importam:
 - **presente e vazia é diferente de ausente.** `RELATIONS` declarada com nenhuma relação significa que o estágio rodou e nada encontrou; `RELATIONS` não declarada significa que relações nunca foram calculadas. Um consumidor não pode tratar os dois casos como iguais;
 - `relation_predicates` lista os tipos de relação presentes (ordenados e únicos) e só existe quando `RELATIONS` é declarada.
 
-A declaração é canônica (ordenada por valor e única). A checagem da declaração contra o conteúdo real do mapa (entidades, relações e proveniência) depende dos contratos de composição e de linhagem e é introduzida com eles.
+A declaração é canônica (ordenada por valor e única) e é checada contra o conteúdo real do mapa ([`composition.md`](composition.md)) e contra os artifacts da linhagem que a respaldam ([`lineage.md`](lineage.md)).
 
 ## Rejeição por validação de schema
 

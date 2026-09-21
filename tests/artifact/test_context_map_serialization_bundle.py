@@ -34,11 +34,11 @@ from contextmap.artifact import (
     validate_context_map_artifact,
     verify_bundle,
 )
-from contextmap.artifact import bundle as bundle_module
-from contextmap.artifact.bundle import read_bundle_manifest
-from contextmap.artifact.dependencies import read_inventory
-from contextmap.artifact.layout import BUNDLE_ARTIFACT_TYPE, MANIFEST
-from contextmap.artifact.manifest import decode_manifest, inventory_digest
+from contextmap.artifact.serialization import bundle as bundle_module
+from contextmap.artifact.serialization.bundle import read_bundle_manifest
+from contextmap.artifact.serialization.dependencies import read_inventory
+from contextmap.artifact.serialization.layout import BUNDLE_ARTIFACT_TYPE, MANIFEST
+from contextmap.artifact.serialization.manifest import decode_manifest, inventory_digest
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 
 MAP = "corridor-02--run-0001"
@@ -306,7 +306,9 @@ def test_every_copied_byte_is_verified_against_the_upstream_inventory(
         payload.write_bytes(bytes(data))
         return report
 
-    monkeypatch.setattr("contextmap.artifact.bundle.validate_context_map_artifact", racing)
+    monkeypatch.setattr(
+        "contextmap.artifact.serialization.bundle.validate_context_map_artifact", racing
+    )
 
     with pytest.raises(BundleError, match=r"geometry\.bin"):
         _export(tmp_path, source, ClosurePolicy.REQUIRED)

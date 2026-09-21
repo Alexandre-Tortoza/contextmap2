@@ -1,6 +1,6 @@
 # Leitor do `ContextMapArtifact`
 
-Este documento descreve `src/contextmap/artifact/reader.py`, `directory.py` e `dependencies.py` (issue #157). O layout está em [`storage-layout.md`](storage-layout.md) e a escrita em [`writer.md`](writer.md).
+Este documento descreve `src/contextmap/artifact/serialization/reader.py`, `directory.py` e `dependencies.py` (issue #157). O layout está em [`storage-layout.md`](storage-layout.md) e a escrita em [`writer.md`](writer.md).
 
 O leitor abre um artifact **só pelo próprio diretório** e responde o que um consumidor precisa para entender o mapa. Ele é um leitor de dados, não um motor de consulta: não faz busca, linguagem natural, planejamento, navegação, inferência de relações nem resolução de entidades. Só instalação base (Python e NumPy): importar `contextmap.artifact.reader` não importa `torch`, `transformers`, `rclpy`, `rosbags`, `cv2` nem `PIL`, e há um teste que garante isso.
 
@@ -67,4 +67,4 @@ O leitor só abre arquivos para leitura: não escreve índice, cache nem lock, e
 
 ## Limites
 
-Entidades e relações são devolvidas como `EntityEntry`/`RelationEntry` (chave, extremos e o registro canônico opaco); quando o schema (#150) as tipar, o leitor as decodifica com ele. A conferência de hash de um artifact e de referências entre registros pertence ao validador ([`validation.md`](validation.md)).
+Entidades e relações são devolvidas como `EntityEntry`/`RelationEntry` (chave, extremos e o registro canônico opaco); quando o schema (#150) as tipar, o leitor as decodifica com ele. A conferência de hash de um artifact e de referências entre registros pertence ao validador ([`integrity-validation.md`](integrity-validation.md)).

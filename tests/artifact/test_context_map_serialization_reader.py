@@ -42,8 +42,16 @@ from contextmap.artifact import (
     UnsupportedFormatVersionError,
     UnsupportedSchemaVersionError,
 )
-from contextmap.artifact.errors import BrokenIndexError, MissingPayloadError, RecordNotFoundError
-from contextmap.artifact.manifest import create_manifest, decode_manifest, encode_manifest
+from contextmap.artifact.serialization.errors import (
+    BrokenIndexError,
+    MissingPayloadError,
+    RecordNotFoundError,
+)
+from contextmap.artifact.serialization.manifest import (
+    create_manifest,
+    decode_manifest,
+    encode_manifest,
+)
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometryReference,
@@ -180,7 +188,9 @@ def test_the_geometry_is_opened_only_when_it_is_asked_for(
             opened.append(run_dir)
             super().__init__(run_dir)
 
-    monkeypatch.setattr("contextmap.artifact.reader.GeometricMapArtifactReader", Counting)
+    monkeypatch.setattr(
+        "contextmap.artifact.serialization.reader.GeometricMapArtifactReader", Counting
+    )
 
     with ContextMapArtifactReader.open(artifact) as reader:
         reader.metadata()
@@ -477,7 +487,7 @@ def test_the_reader_has_no_search_query_or_planning_behavior() -> None:
 def test_the_reader_needs_no_model_or_robotics_runtime() -> None:
     program = (
         "import sys\n"
-        "import contextmap.artifact.reader\n"
+        "import contextmap.artifact.serialization.reader\n"
         "blocked = ('torch', 'transformers', 'rclpy', 'rosbags', 'cv2', 'PIL')\n"
         "found = [name for name in blocked if name in sys.modules]\n"
         "assert not found, found\n"

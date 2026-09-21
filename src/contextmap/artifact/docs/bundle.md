@@ -1,6 +1,6 @@
 # Bundle portátil do `ContextMapArtifact`
 
-Este documento descreve `src/contextmap/artifact/bundle.py` (issue #159). O layout do artifact está em [`storage-layout.md`](storage-layout.md) e a validação em [`validation.md`](validation.md).
+Este documento descreve `src/contextmap/artifact/serialization/bundle.py` (issue #159). O layout do artifact está em [`storage-layout.md`](storage-layout.md) e a validação em [`integrity-validation.md`](integrity-validation.md).
 
 Um `ContextMapArtifact` **referencia** os artifacts de que depende (a geometria, e evidência opcional) em vez de copiá-los. Movê-lo sozinho mantém tudo que não precisa de geometria legível, mas deixa a geometria para trás. Um **bundle** é um diretório que leva o artifact e, por uma política de fechamento explícita, os artifacts a montante de que ele precisa, para que possa ser movido para outro filesystem e aberto lá sem nenhum caminho do workspace original. Não há upload em nuvem nem formato de arquivo compactado: é um diretório (um `tar` dele é só transporte, como em `storage-layout.md`).
 

@@ -19,21 +19,24 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from contextmap.artifact.dependencies import (
+from contextmap.artifact.metadata import MapCapability
+from contextmap.artifact.models import ContextMap
+from contextmap.artifact.records import context_map_to_record
+from contextmap.artifact.serialization.dependencies import (
     GEOMETRIC_MAP_ARTIFACT_TYPE,
-    UpstreamArtifact,
+    EvidenceArtifact,
     read_inventory,
     relative_locator,
     verify_inventory,
 )
-from contextmap.artifact.entries import EntityEntry, RelationEntry
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.entries import EntityEntry, RelationEntry
+from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     ContextMapArtifactError,
     InvalidContentError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.layout import (
     ENTITIES,
     ENTITY_INDEX,
     ENTITY_RELATION_INDEX,
@@ -44,7 +47,7 @@ from contextmap.artifact.layout import (
     RELATION_INDEX,
     RELATIONS,
 )
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     DependencyRecord,
     Payload,
@@ -56,10 +59,7 @@ from contextmap.artifact.manifest import (
     encode_manifest,
     inventory_digest,
 )
-from contextmap.artifact.metadata import MapCapability
-from contextmap.artifact.models import ContextMap
-from contextmap.artifact.records import context_map_to_record
-from contextmap.artifact.tables import (
+from contextmap.artifact.serialization.tables import (
     document_json,
     encode_entity_relation_index,
     encode_record_table,
@@ -94,7 +94,7 @@ class ContextMapArtifactWriter:
         geometry_dir: Path,
         entities: Iterable[EntityEntry] = (),
         relations: Iterable[RelationEntry] = (),
-        evidence: Iterable[UpstreamArtifact] = (),
+        evidence: Iterable[EvidenceArtifact] = (),
     ) -> ContextMapArtifactManifest:
         """Validate the map and publish it atomically.
 
@@ -199,7 +199,7 @@ class ContextMapArtifactWriter:
         return published
 
     def _dependencies(
-        self, context_map: ContextMap, geometry_dir: Path, evidence: tuple[UpstreamArtifact, ...]
+        self, context_map: ContextMap, geometry_dir: Path, evidence: tuple[EvidenceArtifact, ...]
     ) -> tuple[DependencyRecord, ...]:
         """Verify every upstream artifact and pin it by the digest of its inventory."""
         seen: set[tuple[str, str]] = set()

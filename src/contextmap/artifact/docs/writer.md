@@ -1,6 +1,6 @@
 # Writer do `ContextMapArtifact`
 
-Este documento descreve `src/contextmap/artifact/writer.py` (issue #156). O layout e os formatos estão em [`storage-layout.md`](storage-layout.md); as regras gerais de artifact, em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md).
+Este documento descreve `src/contextmap/artifact/serialization/writer.py` (issue #156). O layout e os formatos estão em [`storage-layout.md`](storage-layout.md); as regras gerais de artifact, em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md).
 
 ## Uso
 

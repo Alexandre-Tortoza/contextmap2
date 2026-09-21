@@ -21,7 +21,10 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from contextmap.artifact.dependencies import (
+from contextmap.artifact.metadata import ContextMapMetadata
+from contextmap.artifact.models import ContextMap
+from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
+from contextmap.artifact.serialization.dependencies import (
     GEOMETRIC_MAP_ARTIFACT_TYPE,
     DependencyResolution,
     DependencyStatus,
@@ -29,9 +32,9 @@ from contextmap.artifact.dependencies import (
     resolve_dependency,
     verify_inventory,
 )
-from contextmap.artifact.directory import check_files_present, load_manifest
-from contextmap.artifact.entries import EntityEntry, RelationEntry
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.directory import check_files_present, load_manifest
+from contextmap.artifact.serialization.entries import EntityEntry, RelationEntry
+from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
     ContextMapArtifactError,
     DependencyMismatchError,
@@ -41,7 +44,7 @@ from contextmap.artifact.errors import (
     UnresolvedReferenceError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.layout import (
     ENTITIES,
     ENTITY_INDEX,
     ENTITY_RELATION_INDEX,
@@ -50,11 +53,8 @@ from contextmap.artifact.layout import (
     RELATION_INDEX,
     RELATIONS,
 )
-from contextmap.artifact.manifest import ContextMapArtifactManifest, DependencyRecord
-from contextmap.artifact.metadata import ContextMapMetadata
-from contextmap.artifact.models import ContextMap
-from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
-from contextmap.artifact.tables import RecordTable
+from contextmap.artifact.serialization.manifest import ContextMapArtifactManifest, DependencyRecord
+from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.geometric_mapping import (
     Bounds3D,
     GeometricMapArtifactReader,

@@ -23,10 +23,10 @@ from contextmap.artifact import (
     ContextMapArtifactManifest,
     ContextMapArtifactWriter,
     EntityEntry,
+    EvidenceArtifact,
     MapCapability,
     RelationEntry,
     Requirement,
-    UpstreamArtifact,
 )
 from contextmap.geometric_mapping import MapId
 from contextmap.shared import AtomicRunDirectory
@@ -64,7 +64,7 @@ def make_evidence(
     artifact_id: str = "run-0003",
     requirement: Requirement = Requirement.OPTIONAL,
     artifact_type: str = "semantic_fusion_run",
-) -> UpstreamArtifact:
+) -> EvidenceArtifact:
     """Publish a small evidence artifact: a manifest with an inventory, a payload and debug."""
     final_dir = root / name
     with AtomicRunDirectory(final_dir) as run:
@@ -72,7 +72,7 @@ def make_evidence(
         run.write_text("outputs/summary.json", json.dumps({"run": artifact_id}))
         run.write_text("debug/notes.txt", "human only", contractual=False)
         run.publish(manifest={"run_id": artifact_id, "schema_version": "0.1.0"}, readme="# run\n")
-    return UpstreamArtifact(
+    return EvidenceArtifact(
         artifact_type=artifact_type,
         artifact_id=artifact_id,
         location=final_dir,
@@ -116,7 +116,7 @@ def write_artifact(
     context_map: ContextMap | None = None,
     entities: tuple[EntityEntry, ...] | None = None,
     relations: tuple[RelationEntry, ...] | None = None,
-    evidence: tuple[UpstreamArtifact, ...] = (),
+    evidence: tuple[EvidenceArtifact, ...] = (),
     written_at: datetime | None = None,
 ) -> tuple[Path, ContextMapArtifactManifest]:
     """Write a small artifact under ``tmp_path/out/<name>`` and return it with its manifest."""

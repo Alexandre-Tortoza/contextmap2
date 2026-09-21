@@ -26,15 +26,18 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from contextmap.artifact.dependencies import (
+from contextmap.artifact.metadata import MapCapability
+from contextmap.artifact.models import ContextMap
+from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
+from contextmap.artifact.serialization.dependencies import (
     GEOMETRIC_MAP_ARTIFACT_TYPE,
     DependencyResolution,
     DependencyStatus,
     read_inventory,
     resolve_dependency,
 )
-from contextmap.artifact.directory import load_manifest
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.directory import load_manifest
+from contextmap.artifact.serialization.errors import (
     ArtifactIntegrityError,
     ContextMapArtifactError,
     IncompleteContextMapArtifactError,
@@ -44,7 +47,7 @@ from contextmap.artifact.errors import (
     UnsupportedFormatVersionError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import (
+from contextmap.artifact.serialization.layout import (
     CONTRACTUAL_FILES,
     DEBUG_DIRECTORY,
     ENTITIES,
@@ -58,17 +61,14 @@ from contextmap.artifact.layout import (
     RELATION_INDEX,
     RELATIONS,
 )
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     DependencyRecord,
     PayloadRole,
     RecordPayload,
     Requirement,
 )
-from contextmap.artifact.metadata import MapCapability
-from contextmap.artifact.models import ContextMap
-from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
-from contextmap.artifact.tables import (
+from contextmap.artifact.serialization.tables import (
     RecordTable,
     encode_entity_relation_index,
     rebuild_index,

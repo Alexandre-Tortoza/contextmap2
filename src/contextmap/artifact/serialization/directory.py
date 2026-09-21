@@ -10,15 +10,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.errors import (
     ArtifactIntegrityError,
     IncompleteContextMapArtifactError,
     ManifestError,
     MissingPayloadError,
     UnsupportedArtifactSchemaError,
 )
-from contextmap.artifact.layout import BUNDLE_ARTIFACT_TYPE, CONTRACTUAL_FILES, MANIFEST
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.layout import (
+    BUNDLE_ARTIFACT_TYPE,
+    CONTRACTUAL_FILES,
+    MANIFEST,
+)
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     decode_manifest,
     manifest_content_identity,

@@ -34,27 +34,27 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from contextmap.artifact.dependencies import (
+from contextmap.artifact.serialization.dependencies import (
     DependencyResolution,
     DependencyStatus,
     read_inventory,
     resolve_dependency,
 )
-from contextmap.artifact.directory import load_manifest
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.directory import load_manifest
+from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     BundleError,
     ContextMapArtifactError,
 )
-from contextmap.artifact.layout import BUNDLE_ARTIFACT_TYPE, MANIFEST, README
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.layout import BUNDLE_ARTIFACT_TYPE, MANIFEST, README
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     DependencyRecord,
     Requirement,
     encode_manifest,
     manifest_content_identity,
 )
-from contextmap.artifact.validation import (
+from contextmap.artifact.serialization.validation import (
     VALIDATOR_VERSION,
     Severity,
     ValidationLevel,

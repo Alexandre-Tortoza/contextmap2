@@ -930,6 +930,8 @@ ContextMap
 └── provenance / lineage refs
 ```
 
+O **schema** deste contrato já existe em `contextmap.artifact` ([documentação](../src/contextmap/artifact/docs/README.md)): a capability é somente schema, sem layout em disco, serializador, ROS nem modelos. A **montagem** que produz um `ContextMap` a partir dos artifacts de geometria, resolução de entidades e relações, o serializador e o `ContextMapArtifact` persistido continuam planejados.
+
 ### Metadata espacial
 
 O mapa deve declarar explicitamente:
@@ -943,7 +945,7 @@ O mapa deve declarar explicitamente:
 - source sequences;
 - capabilities presentes.
 
-Um map frame local de estimator não deve ser confundido com um frame global/geodeticamente alinhado.
+Um map frame local de estimator não deve ser confundido com um frame global/geodeticamente alinhado: o schema distingue origem local de estimador de origem ancorada externamente e nunca implica comparabilidade de coordenadas entre mapas sem um alinhamento a uma mesma referência externa ([metadados](../src/contextmap/artifact/docs/metadata.md)).
 
 ### Portabilidade
 
@@ -972,7 +974,7 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 | Semantic Mapping | semantic entity artifact | planejado | entity resolution |
 | Entity Resolution | `EntityResolutionRunArtifact` | planejado | spatial relations, final map |
 | Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |
-| Context Map Assembly | `ContextMapArtifact` | planejado | external consumers |
+| Context Map Assembly | `ContextMapArtifact` | schema `ContextMap` implementado; montagem e artifact persistido planejados | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
 

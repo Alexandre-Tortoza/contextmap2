@@ -21,7 +21,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
     MissingPayloadError,
     RecordNotFoundError,

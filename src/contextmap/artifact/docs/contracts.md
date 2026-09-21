@@ -1,6 +1,6 @@
 # Contratos do ContextMap
 
-Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `frame.py`, `versioning.py` e `records.py`.
+Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `frame.py`, `references.py`, `versioning.py` e `records.py`.
 
 ## `ContextMap`
 
@@ -9,7 +9,10 @@ ContextMap
 ├── context_map_id
 ├── schema_version
 ├── metadata
-└── geometry_ref
+├── geometry_ref
+├── entities[]
+├── relations[]
+└── lineage[]
 ```
 
 | Campo | Significado |
@@ -18,6 +21,9 @@ ContextMap
 | `schema_version` | versão da **semântica dos dados** sob a qual o mapa foi escrito (`MAJOR.MINOR.PATCH`) |
 | `metadata` | o que o mapa é, de onde veio e como foi criado |
 | `geometry_ref` | o `GeometricMapArtifact` dono da geometria autoritativa |
+| `entities` | entidades resolvidas, ordenadas por id e únicas (ver [`composition.md`](composition.md)) |
+| `relations` | relações direcionadas entre entidades do mapa, ordenadas por id e únicas |
+| `lineage` | todo artifact a montante citado pelo mapa, com as identidades exatas para auditá-lo (ver [`lineage.md`](lineage.md)) |
 
 Um mapa é imutável (`frozen`), comparável por valor e não carrega objeto de backend, tensor, tipo de ROS nem caminho de arquivo.
 
@@ -55,7 +61,7 @@ A geometria é **referenciada**, nunca embutida. O contrato decide isso por trê
 
 `schema_version` descreve a **semântica dos dados**, não a versão do pacote Python nem a de um serializador; as três mudam de forma independente. Construir um `ContextMap` com uma versão malformada ou ilegível levanta `UnsupportedSchemaVersionError` antes de qualquer outra validação, e nada é lido parcialmente.
 
-A regra de leitura, `SchemaVersion.is_readable_by(reader)`, é deliberadamente estreita: durante a fase de validação (`MAJOR == 0`, ver [`docs/versioning.md`](../../../../docs/versioning.md)) só a mesma `MAJOR.MINOR` é legível, porque uma mudança de `MINOR` pode ser incompatível; a partir de `1.0.0`, qualquer versão do mesmo `MAJOR` é legível.
+A regra de leitura, `SchemaVersion.is_readable_by(reader)`, é deliberadamente estreita: durante a fase de validação (`MAJOR == 0`, ver [`docs/versioning.md`](../../../../docs/versioning.md)) só a mesma `MAJOR.MINOR` é legível, porque uma mudança de `MINOR` pode ser incompatível; a partir de `1.0.0`, qualquer versão do mesmo `MAJOR` é legível. As regras completas de evolução (mudança incompatível versus aditiva, campos desconhecidos, descontinuação, migração e impressão digital) estão em [`versioning.md`](versioning.md).
 
 ## Visão canônica em registros
 

@@ -35,23 +35,28 @@ from contextmap.artifact import (
     context_map_from_record,
     inventory_digest,
 )
-from contextmap.artifact.dependencies import UpstreamArtifact, read_inventory
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.dependencies import EvidenceArtifact, read_inventory
+from contextmap.artifact.serialization.errors import (
     ArtifactExistsError,
     ContextMapArtifactError,
     InvalidContentError,
     RecordTableError,
     UpstreamArtifactError,
 )
-from contextmap.artifact.layout import CONTRACTUAL_FILES, FORMAT_VERSION, MANIFEST, README
-from contextmap.artifact.manifest import (
+from contextmap.artifact.serialization.layout import (
+    CONTRACTUAL_FILES,
+    FORMAT_VERSION,
+    MANIFEST,
+    README,
+)
+from contextmap.artifact.serialization.manifest import (
     ContextMapArtifactManifest,
     PayloadRole,
     RecordPayload,
     decode_manifest,
     manifest_content_identity,
 )
-from contextmap.artifact.tables import RecordTable
+from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.geometric_mapping import GeometricMapArtifactReader, MapId
 from contextmap.ingestion import FrameId
 from contextmap.shared import check_file_inventory
@@ -63,7 +68,7 @@ def geometry_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def evidence(tmp_path: Path) -> UpstreamArtifact:
+def evidence(tmp_path: Path) -> EvidenceArtifact:
     return make_evidence(tmp_path)
 
 
@@ -206,7 +211,7 @@ def test_the_geometry_is_referenced_by_identity_and_never_copied(
 
 
 def test_dependencies_are_pinned_by_content_and_located_by_a_relative_hint(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
+    tmp_path: Path, geometry_dir: Path, evidence: EvidenceArtifact
 ) -> None:
     output_dir, manifest = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
 
@@ -225,7 +230,7 @@ def test_dependencies_are_pinned_by_content_and_located_by_a_relative_hint(
 
 
 def test_the_lineage_lists_the_exact_upstream_identities_without_paths(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
+    tmp_path: Path, geometry_dir: Path, evidence: EvidenceArtifact
 ) -> None:
     output_dir, manifest = write_artifact(tmp_path, geometry_dir, evidence=(evidence,))
 
@@ -456,7 +461,7 @@ def test_a_damaged_or_missing_geometry_is_refused_before_anything_is_written(
 
 
 def test_evidence_that_is_damaged_repeated_or_a_geometric_map_is_refused(
-    tmp_path: Path, geometry_dir: Path, evidence: UpstreamArtifact
+    tmp_path: Path, geometry_dir: Path, evidence: EvidenceArtifact
 ) -> None:
     with pytest.raises(InvalidContentError, match="duplicate"):
         write_artifact(tmp_path, geometry_dir, name="a", evidence=(evidence, evidence))
@@ -513,7 +518,7 @@ def test_the_readme_is_deterministic_and_carries_no_time_or_path(
 def test_the_writer_needs_no_model_or_robotics_runtime() -> None:
     program = (
         "import sys\n"
-        "import contextmap.artifact.writer\n"
+        "import contextmap.artifact.serialization.writer\n"
         "blocked = ('torch', 'transformers', 'rclpy', 'rosbags', 'cv2', 'PIL')\n"
         "found = [name for name in blocked if name in sys.modules]\n"
         "assert not found, found\n"

@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 
-from contextmap.artifact.errors import (
+from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
     ContextMapArtifactError,
     MissingPayloadError,
     RecordNotFoundError,
     RecordTableError,
 )
-from contextmap.artifact.tables import (
+from contextmap.artifact.serialization.tables import (
     RecordTable,
     canonical_json_line,
     document_json,
