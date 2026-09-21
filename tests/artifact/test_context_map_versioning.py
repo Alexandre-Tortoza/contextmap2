@@ -29,7 +29,7 @@ VERSIONING_DOC = (
 # estrutura muda, este teste falha de propósito: classifique a mudança em docs/versioning.md,
 # suba CONTEXT_MAP_SCHEMA_VERSION quando exigido e registre a nova impressão aqui.
 PINNED_FINGERPRINTS = {
-    "0.1.0": "sha256:c3b52a589e7cb61abe59dff2d4783b02330ae8f99a0439091f9eb539c9da3613",
+    "0.1.0": "sha256:d372e4ff26cb378912393fe1a014ed8d1a583a737006aa53c04c1a10a8155047",
 }
 
 
@@ -200,7 +200,17 @@ def test_the_structure_of_each_promised_version_is_pinned() -> None:
 def test_the_fingerprint_covers_the_types_the_schema_reuses() -> None:
     description = describe_schema()
 
-    for name in ("GeometryReference", "Bounds3D", "SourceTimestamp", "MapId", "ContextEntity"):
+    for name in (
+        "GeometryReference",
+        "Bounds3D",
+        "SourceTimestamp",
+        "MapId",
+        "ContextEntity",
+        "ResolvedEntityReference",
+        "EntityReference",
+        "RelationPredicate",
+        "RelationState",
+    ):
         assert name in description
 
 

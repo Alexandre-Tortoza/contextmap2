@@ -8,8 +8,9 @@ ContextMap
 │                                            configuration_fingerprint, code_version, model_identities[]
 ├── entities[]
 │   ├── origin         EvidenceOrigin    ── kind, derived_from[] (UpstreamRecordRef), policy?
-│   ├── member_entities[]      entidades de origem que foram resolvidas em uma
-│   ├── resolution_decisions[] decisões de resolução
+│   ├── member_entities[]      EntityReference: entidades de origem resolvidas em uma
+│   ├── resolution_decisions[] ResolutionDecisionId: decisões que as agruparam
+│   ├── unresolved_neighbors[] EntityReference: deixadas UNRESOLVED contra um membro
 │   └── semantic_state.hypotheses[].origin
 └── relations[].origin
 ```
@@ -50,8 +51,8 @@ A categoria é **metadado de proveniência**, não uma pontuação: não ordena 
 Todo registro citado pelo mapa resolve para essa tabela com o **tipo certo** (`ReferenceIntegrityError` caso contrário):
 
 - `geometry_ref` → `GEOMETRIC_MAP`; cada `source_sequences` → `SEQUENCE`;
-- `ContextEntity.source` e `resolution_decisions` → `ENTITY_RESOLUTION_RUN`; `member_entities` → `SEMANTIC_MAP`;
-- `ContextRelation.source` → `SPATIAL_RELATIONS_RUN`;
+- `ContextEntity.source.resolution_run_id` → `ENTITY_RESOLUTION_RUN` (as `resolution_decisions` são locais a esse run e não precisam de outra entrada); `member_entities` e `unresolved_neighbors` (`semantic_map_id`) → `SEMANTIC_MAP`;
+- `ContextRelation.source_run_id` → `SPATIAL_RELATIONS_RUN`;
 - todo artifact em `derived_from` de qualquer origem.
 
 `ContextMap.upstream_artifact(artifact_id)` resolve um artifact citado às suas identidades exatas; é a travessia que um consumidor usa para ir de um resultado até a evidência sem carregar debug.
@@ -78,8 +79,8 @@ Declarar sem o artifact, ou listar o artifact sem declarar, é `ValueError`. Uma
 
 ## Linhagem de entidade e de relação
 
-- **Resolução de entidade**: `member_entities` guarda todas as entidades de origem que foram resolvidas em uma e `resolution_decisions` as decisões de resolução; pelo menos uma entidade de origem é obrigatória. Enquanto Entity Resolution não existe na `dev`, esses campos são referências textuais (`UpstreamRecordRef`) e a forma exata do registro de decisão (`MATCH`, `DISTINCT`, `UNRESOLVED`) fica a montante;
-- **Relação**: `origin.derived_from` cita a evidência da relação (registros de Spatial Relations e a geometria de suporte) e `origin.policy` registra a política/versão da taxonomia que a derivou.
+- **Resolução de entidade**: `member_entities` guarda todas as entidades de origem que foram resolvidas em uma (`EntityReference` de Semantic Mapping) e `resolution_decisions` os `ResolutionDecisionId` das decisões `MATCH` que as agruparam, como `ResolvedEntity` os define; pelo menos uma entidade de origem é obrigatória. `unresolved_neighbors` preserva as entidades que uma decisão deixou `UNRESOLVED`, para o mapa nunca afirmar mais certeza de identidade do que o run de resolução;
+- **Relação**: `origin.derived_from` cita a evidência da relação (os `RelationEvidenceId` de Spatial Relations e a geometria de suporte, como `UpstreamRecordRef`) e `origin.policy` registra a política e a versão da taxonomia que a derivaram.
 
 ## Round-trip
 

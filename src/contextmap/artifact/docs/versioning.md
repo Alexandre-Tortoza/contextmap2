@@ -32,7 +32,7 @@ Cada linha é um exemplo executável: `tests/artifact/test_context_map_versionin
 | --- | --- | --- |
 | novo campo opcional com padrão explícito | MINOR | um leitor antigo o ignora sem reinterpretar nada; a ausência significa "não presente" |
 | nova capacidade opcional em MapCapability | MINOR | conteúdo a mais, declarado; quem não a conhece a ignora e a reporta |
-| novo predicado de relação | MINOR | predicados são texto de uma taxonomia versionada; um predicado novo não altera os existentes |
+| novo predicado de relação | MINOR | um `RelationPredicate` novo, da taxonomia versionada de Spatial Relations, não altera os existentes |
 | novo ArtifactKind apenas de evidência | MINOR | evidência opcional não é necessária para resolver o mapa |
 | novo DerivationKind | MINOR | é metadado de proveniência; um leitor que não o conhece o reporta como origem não reconhecida e nunca o trata como uma categoria conhecida |
 | esclarecimento de documentação | PATCH | não muda dado nem validação |
@@ -59,10 +59,10 @@ Uma correção de validação que só rejeita dados que **já eram inválidos pe
 | Vocabulário | Regra |
 | --- | --- |
 | `MapCapability` (aberto) | membro novo é `MINOR`; um leitor que não o conhece o ignora e o reporta como capacidade não reconhecida |
-| `relation_predicates` (texto) | predicado novo é `MINOR`; mudar direção, simetria ou significado de um existente é `MAJOR` (a versão da taxonomia fica na política da origem) |
+| `relation_predicates` (`RelationPredicate`, aberto) | predicado novo é `MINOR`; mudar direção, simetria ou significado de um existente é `MAJOR` (a versão da taxonomia fica em `origin.policy`) |
 | `DerivationKind` (aberto) | membro novo é `MINOR`, com a regra de origem não reconhecida acima |
 | `ArtifactKind` | evidência opcional é `MINOR`; um tipo estrutural é `MAJOR` |
-| `LengthUnit`, `Handedness`, `AnchorKind`, `AmbiguityStatus`, `RelationState` (fechados) | membro novo é sempre `MAJOR` |
+| `LengthUnit`, `Handedness`, `AnchorKind`, `AmbiguityStatus`, `RelationState`, `RelationUncertaintyKind` (fechados) | membro novo é sempre `MAJOR` |
 
 Um valor **removido** de qualquer enum é `MAJOR`.
 
@@ -93,6 +93,10 @@ Uma versão fora da janela é recusada **explicitamente**, com as duas versões 
 ## Migração
 
 Um artifact finalizado é imutável e **nunca é reescrito** para "atualizar" o schema. A v0.1.0 **não exige migração automática** de versões históricas. Migrar um mapa significa gerar **outro** `ContextMap`, com outra identidade, a partir dos artifacts a montante (reexecutando a montagem). Se um dia uma ferramenta de migração for necessária, ela é explícita, produz um artifact novo cuja linhagem aponta o antigo e pertence à release que introduz o `MAJOR`. Fixtures de cada versão prometida como legível são mantidas pelos testes de serialização.
+
+## Tipos reutilizados de outras capabilities
+
+O schema usa os contratos reais de `entity_resolution` (`ResolvedEntityReference`, `ResolutionDecisionId`), `semantic_mapping` (`EntityReference`), `spatial_relations` (`RelationPredicate`, `RelationState`, `RelationUncertaintyKind`, `RelationId`, `SpatialRelationsRunId`) e `geometric_mapping`. Eles fazem parte do schema: uma mudança neles muda a estrutura do `ContextMap` e a impressão digital, e é classificada aqui como qualquer outra (por exemplo, um membro novo de `RelationState` é `MAJOR`). O `0.1.0` ainda não foi publicado, então a adoção desses contratos **não** subiu a versão: apenas registrou a nova impressão.
 
 ## Impressão digital estrutural
 
