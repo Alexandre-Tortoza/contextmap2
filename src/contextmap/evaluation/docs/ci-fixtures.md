@@ -7,7 +7,7 @@ O subconjunto protege contra regressões. **Não é evidência de qualidade no m
 ## Conteúdo
 
 ```text
-tests/fixtures/ci_subset/1.0.0/
+tests/fixtures/ci_subset/1.0.1/
 ├── manifest.json          # ReferenceSetManifest (ver reference-set.md)
 ├── catalogue.json         # casos, valores esperados, tolerâncias, cobertura
 └── annotations/           # uma família de anotação por arquivo (ver annotations.md)
@@ -63,15 +63,20 @@ O catálogo traz a matriz de cobertura, verificada em CI, com o que **não** est
 
 ## Versionamento e revisão
 
-- A versão é o diretório (`ci_subset/1.0.0/`) e está em `manifest.json` e `catalogue.json`. **Qualquer** mudança em um arquivo gerado exige uma nova versão.
+- A versão é o diretório (`ci_subset/1.0.1/`) e está em `manifest.json` e `catalogue.json`. **Qualquer** mudança em um arquivo gerado exige uma nova versão.
 - O teste `test_the_committed_subset_is_exactly_what_the_generator_produces` regenera o subconjunto e exige que cada arquivo commitado seja idêntico byte a byte: alterar o gerador sem regenerar (ou o contrário) falha a CI, e a mudança aparece inteira no diff.
 - Para atualizar: aumente `CI_FIXTURE_VERSION`, gere a nova versão e commite-a junto com o código:
 
 ```bash
-python -m contextmap.evaluation.ci_fixtures tests/fixtures/ci_subset/<nova-versão>
+python -c "from pathlib import Path; from contextmap.evaluation import generate_ci_fixture_subset; generate_ci_fixture_subset(Path('tests/fixtures/ci_subset/<nova-versão>'))"
 ```
 
 A escrita é imutável: o gerador recusa sobrescrever um diretório existente.
+
+### Histórico de versões
+
+- **1.0.1** — a relação `rel-supports-ambiguous` passou a ser ancorada em `frame-0001`, onde as duas identidades aparecem. A versão 1.0.0 a ancorava em `frame-0002`, onde `pallet-2` não é visto: o defeito foi encontrado pelo QA das anotações ([`annotation-qa.md`](annotation-qa.md)), que agora roda sobre o próprio subconjunto.
+- **1.0.0** — versão inicial (substituída; nunca saiu da branch da milestone).
 
 ## Licença e redistribuição
 

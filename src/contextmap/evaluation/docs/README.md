@@ -134,6 +134,13 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.
 - `run_experiment()`/`ExperimentRun`/`ArmExecutor` — executa cada arm por um executor injetado e emite um run manifest e um relatório por arm mais um `ComparisonManifest`; arms indisponíveis ou com resultado inconsistente ficam explícitos e tornam a comparação incompleta (`require_complete_comparison()`), sem fallback e sem score geral.
 
+### QA das anotações e reprodutibilidade
+
+- `check_annotation_quality()`/`AnnotationQaReport`/`AnnotationQaPolicy` — verifica o conteúdo dos arquivos de anotação (tamanho de máscara/caixa e imagem, geometria 3D, consistência de identidade, existência de sujeito/objeto e simetria/inverso de relações, semântica de ambiguidade, duplicatas e conflitos) e embute o relatório de integridade. **Blockers**, warnings, observações permissíveis (ambiguidade, desconhecido, cobertura parcial) e divergências entre anotadores ficam separados.
+- `DisagreementSummary` — divergência entre anotadores, visível e sem escolha silenciosa: mostra o que cada arquivo diz; não há campo de resolução.
+- `certify_reference_set()`/`CertifiedReferenceSet` — exige integridade e QA sem blockers; a integridade é pré-requisito das execuções oficiais.
+- `check_evaluator_reproducibility()`/`compare_evaluation_reports()`/`NondeterministicField` — rodam um evaluator repetidamente sobre as mesmas entradas e recusam qualquer diferença não declarada; valores de recursos são excluídos explicitamente e o não determinismo inevitável exige motivo.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -154,6 +161,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`annotation-qa.md`](annotation-qa.md) — verificações do conteúdo das anotações por família, ambiguidade permissível, divergência entre anotadores, certificação e reprodutibilidade dos evaluators.
 - [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.

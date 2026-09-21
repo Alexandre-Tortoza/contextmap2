@@ -54,8 +54,8 @@
     {
       "anchors": [
         {
-          "observation_id": "frame-0002",
-          "sample_id": "sample-0002"
+          "observation_id": "frame-0001",
+          "sample_id": "sample-0001"
         }
       ],
       "object_identity_id": "pallet-1",
