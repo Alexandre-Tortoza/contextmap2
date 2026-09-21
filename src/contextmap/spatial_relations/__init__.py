@@ -39,6 +39,13 @@ from contextmap.spatial_relations.frame_conventions import (
     IncompatibleFrameError,
     UndeclaredAxisError,
 )
+from contextmap.spatial_relations.geometric_predicates import (
+    GEOMETRIC_POLICY_ID,
+    GEOMETRIC_PREDICATES,
+    GeometricPredicatePolicy,
+    evaluate_geometric_candidates,
+    evaluate_geometric_predicate,
+)
 from contextmap.spatial_relations.models import (
     Relation,
     RelationId,
@@ -67,6 +74,8 @@ from contextmap.spatial_relations.taxonomy import (
 __all__ = [
     "CANDIDATE_POLICY_ID",
     "FRAME_CONVENTIONS_POLICY_ID",
+    "GEOMETRIC_POLICY_ID",
+    "GEOMETRIC_PREDICATES",
     "PREDICATE_SPECS",
     "TAXONOMY_VERSION",
     "AxisDirection",
@@ -80,6 +89,7 @@ __all__ = [
     "FrameConventionError",
     "FrameConventions",
     "FrameRequirement",
+    "GeometricPredicatePolicy",
     "IncompatibleFrameError",
     "MeasuredGeometry",
     "PredicateFamily",
@@ -105,6 +115,8 @@ __all__ = [
     "decode_relation_evidence",
     "encode_relation",
     "encode_relation_evidence",
+    "evaluate_geometric_candidates",
+    "evaluate_geometric_predicate",
     "evidence_id_for",
     "generate_relation_candidates",
     "predicate_spec",
