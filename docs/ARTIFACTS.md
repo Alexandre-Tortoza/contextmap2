@@ -393,6 +393,24 @@ Política e linhagem ficam em `manifest.json` (uma política por papel: recupera
 
 O `SpatialRelationsRunArtifact` guarda as relações de um run com a evidência de cada uma, a decisão por trás dela, os candidatos avaliados e descartados e um índice das relações de cada entidade resolvida, para a montagem do Context Map reutilizá-las sem recalcular avaliações de par. O escritor grava num **`output_dir` explícito** (o diretório final, com `AtomicRunDirectory`): não há contador de runs, `runs.json` nem caminho `run-NNNN` calculado dentro, e a identidade do run vem de quem chama. `outputs/` traz `relations`, `relation-evidence`, `relation-candidates`, `relation-decisions` e `entity-relation-index`; `manifest.json` traz a linhagem (run de Entity Resolution, versão e digest, e o mapa geométrico), a versão da taxonomia, cada política efetiva com id, fingerprint e parâmetros, os eixos declarados e o inventário com SHA-256. Relações `SUPPORTED`, `REJECTED` e `UNRESOLVED` são todas persistidas e distinguíveis, e nada de entidade ou geometria é copiado. O leitor só precisa do diretório do run, lê por identidade e pelo índice, detecta corrupção e recusa `debug/` como fonte. A linhagem, as políticas e a configuração ficam no manifest, seguindo os artifacts irmãos, em vez de `config.yaml`, `lineage.json`, `environment.json` e `events.jsonl` separados. Detalhes: [Spatial Relations artifact](../src/contextmap/spatial_relations/docs/artifact.md).
 
+### `ContextMapArtifact` atual
+
+```text
+<diretório do artifact>/                # escolhido por quem chama (a runtime); nunca é identidade
+├── README.md
+├── manifest.json                       # identidade, versões, payloads, dependências e inventário SHA-256
+├── map-metadata.json                   # ContextMapMetadata
+├── geometry/geometry-reference.json    # GeometricMapLink: a geometria fica no GeometricMapArtifact
+├── entities/entities.jsonl             # uma ContextEntity por linha, ordenadas por id
+├── relations/relations.jsonl           # uma ContextRelation por linha, ordenadas por id
+├── indexes/                            # entity-index, relation-index e entity-relation-index (derivados)
+└── lineage/lineage.json                # os artifacts a montante que o mapa cita
+```
+
+O diretório é o artifact canônico; um arquivo compactado seria só transporte. Os formatos são JSON e JSON Lines com índice de deslocamentos, sem dependência além da instalação base, e a geometria nunca é copiada: é referenciada pelo `GeometricMapArtifact`, fixado pelo digest de artifact que os irmãos já usam (identidade, versão do schema e hash de cada arquivo). O manifest separa a `format_version` (layout) da `schema_version` (semântica), classifica cada dependência como `required` (as estruturais do schema: mapa geométrico e runs de Entity Resolution e Spatial Relations) ou `optional` (evidência), e sua `content_identity` ignora o horário de escrita e as dicas de localização, então o mesmo mapa escrito duas vezes tem a mesma identidade. Não há `debug/`, `runs.json` nem índice de run: quem chama informa o diretório final, publicado por `AtomicRunDirectory`.
+
+O `ContextMapArtifactReader` abre pelo próprio diretório, lê metadados, entidades e relações um registro por vez e abre a geometria só sob demanda (por `mmap`), sem mutação e sem fallback para `debug/`. O `validate_context_map_artifact` devolve um relatório determinístico legível por máquina, em nível estrutural (`structurally_valid` no máximo) ou completo (hashes, registros, referências, índices reconstruídos e arquivos a montante; só ele responde `verified`). `export_bundle` gera um diretório portátil com a política de fechamento explícita (`core-only`, `core+required`, `core+selected-evidence`). Detalhes: [Layout e formatos](../src/contextmap/artifact/docs/storage-layout.md), [writer](../src/contextmap/artifact/docs/writer.md), [leitor](../src/contextmap/artifact/docs/reader.md), [validação de integridade](../src/contextmap/artifact/docs/integrity-validation.md) e [bundle](../src/contextmap/artifact/docs/bundle.md).
+
 ### Evidência auditável de Region Discovery
 
 Region Discovery possui um writer de evidência de estágio próprio para experimentação, inspeção e avaliação. Ele não cria uma nova identidade de percepção paralela ao `PerceptionRunArtifact`; registra os intermediários e métricas necessários para explicar como `Region2D[]` foi produzido.
@@ -943,9 +961,10 @@ descrevem artifacts **planejados**, exceto pelo trecho de entidade
 SourceObservation`), que o `SemanticMappingRunArtifact` já persiste e que
 `trace_entity_evidence` percorre por identidade, e pelo de resolução
 (`ResolvedEntity → ResolutionDecision → Source Entity`), que o
-`EntityResolutionRunArtifact` já persiste (`merge-lineage.jsonl`). A
-capability `artifact` ainda não existe; `spatial_relations` já persiste o
-`SpatialRelationsRunArtifact`.
+`EntityResolutionRunArtifact` já persiste (`merge-lineage.jsonl`).
+`spatial_relations` já persiste o `SpatialRelationsRunArtifact`. Da
+capability `artifact` existe apenas o **schema** `ContextMap` (sem escrita,
+leitura nem artifact persistido).
 
 ```mermaid
 flowchart RL
@@ -1008,6 +1027,8 @@ ContextMap
 ```
 
 Ele deve permanecer legível sem model runtimes.
+
+O schema `ContextMap` ([contratos](../src/contextmap/artifact/docs/contracts.md), [linhagem](../src/contextmap/artifact/docs/lineage.md)) já define esse fechamento: `lineage` lista todo artifact a montante que o mapa cita, com identidade de conteúdo, configuração, código e modelos, e cada referência do mapa resolve a essa tabela com o tipo certo. `GEOMETRIC_MAP`, `ENTITY_RESOLUTION_RUN` e `SPATIAL_RELATIONS_RUN` são dependências estruturais; os demais são evidência opcional; saída de debug e conjuntos de referência de avaliação não têm tipo e nunca podem ser citados. O layout em disco, os hashes do inventário, a escrita atômica, a leitura, a validação de integridade e o bundle portátil são do serializador em `contextmap.artifact.serialization`, descrito em [Layout e formatos](../src/contextmap/artifact/docs/storage-layout.md).
 
 Um consumidor que só precisa de entidades/relações não deve precisar baixar raw bags, checkpoints ou debug artifacts.
 

@@ -277,26 +277,6 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 """Every selectable variation point, keyed by ``"<capability>.<slot>"``."""
 
 
-def _unimplemented(
-    stage_id: str,
-    capability: str,
-    milestone: int,
-    *,
-    inputs: tuple[StageInput, ...],
-    output: str,
-) -> StageDeclaration:
-    return StageDeclaration(
-        stage_id=stage_id,
-        capability=capability,
-        available=False,
-        unavailable_reason=(
-            f"the {capability} capability is not implemented yet (milestone #{milestone})"
-        ),
-        inputs=inputs,
-        output=output,
-    )
-
-
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
@@ -417,10 +397,9 @@ CANONICAL_PRESET = RuntimePreset(
             inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
             output=RELATIONS,
         ),
-        _unimplemented(
-            "context_map",
-            "artifact",
-            15,
+        StageDeclaration(
+            stage_id="context_map",
+            capability="artifact",
             inputs=(
                 StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
                 StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),

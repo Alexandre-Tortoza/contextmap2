@@ -1,0 +1,63 @@
+{
+  "upstream_artifacts": [
+    {
+      "artifact_id": "corridor-02--map-run-0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:174e26cb6d24e49b842d446b96630c51bbe1c339617d19d20d533ae4704c17f3",
+      "content_identity": "sha256:5a4434e2000332f299619fd0585c50f8c4c3eefaade28819bf3f6ce156ba339f",
+      "kind": "geometric_map",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "entity-resolution--run-0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:dbef3973cf3796f35efac3bceaa682b6e32f4fb49f05e5edc061aa8cc3369473",
+      "content_identity": "sha256:35093371bd3c7548cd370335466c82366c97067509678017e2777bbe1cb788ca",
+      "kind": "entity_resolution_run",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "perception-run--0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:446887ebf66aaf59c94c2c1f0a2619842353e3a8b957cde70d210b3f7aecd8e6",
+      "content_identity": "sha256:aa83279b3a56aedb4016fc0cba62920552b206d4087eebd824483c8f885347ae",
+      "kind": "perception_run",
+      "model_identities": [
+        "qwen2.5-vl-7b@rev-2",
+        "sam2-hiera-large@rev-1"
+      ]
+    },
+    {
+      "artifact_id": "semantic-fusion--run-0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:dd366e71293ae4670040dbf998c603ea6443b36e18d309cd4ff35b67c00b895c",
+      "content_identity": "sha256:1d45ffcb1b703ae62ab517a61cd14ec02d2e355d9014f07618f2934847a0aa5e",
+      "kind": "semantic_fusion_run",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "semantic-map--0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:5da1c324cfedb199d9ad15a590ac575660bada4388d37ff2cb0daf670f81d4b7",
+      "content_identity": "sha256:a9c9c13eb2933ef068f03493fda61ba6d1f74d87e73b13e2a5647db82b9abafc",
+      "kind": "semantic_map",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "sequence--corridor-02--e145f73f",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:52de61381ecb1b5bf8f037f5f347af2c50c78a0d02710c9af0d4d0d8154b4efc",
+      "content_identity": "sha256:13490d0fa5997711b6d77ab4a6352e767ff393b85eee5adc6a44008beefbef2f",
+      "kind": "sequence",
+      "model_identities": []
+    },
+    {
+      "artifact_id": "spatial-relations--run-0001",
+      "code_version": "a1b2c3d",
+      "configuration_fingerprint": "sha256:8111bafca0a28cc9cc78dcbeb40c6d67b1acbae1a9567390f3be8b97be98585c",
+      "content_identity": "sha256:89a2e053e0f9271be3820e33c5bf731d17aaa1bd11917313c466d8e15b60352d",
+      "kind": "spatial_relations_run",
+      "model_identities": []
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -141,6 +142,7 @@ class TestCanonicalDag:
         )
         assert changed.digest != base.digest
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_unavailable_stages_stay_in_the_topology_with_their_reason(
         self, tmp_path: Path
     ) -> None:
@@ -462,6 +464,7 @@ class TestScopeAndExecution:
 
         assert any("nope" in problem.message for problem in report.problems)
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_preflight_blocks_before_any_stage_runs(self, tmp_path: Path) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []

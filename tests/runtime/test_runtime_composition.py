@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
@@ -458,6 +459,7 @@ class TestStagesAndExtensionPoints:
         assert composed.point_encoder is None
         assert "point_representation" not in composed.stages
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_stages_without_an_implemented_capability_are_listed_not_simulated(
         self, tmp_path: Path
     ) -> None:
@@ -466,6 +468,7 @@ class TestStagesAndExtensionPoints:
         assert set(composed.unavailable_stages) == {"context_map"}
         assert "milestone" in composed.unavailable_stages["context_map"]
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_asking_explicitly_for_an_unavailable_stage_fails_clearly(self, tmp_path: Path) -> None:
         with pytest.raises(StageUnavailableError, match="context_map"):
             _compose(tmp_path, stages=["context_map"])
