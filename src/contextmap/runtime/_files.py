@@ -37,3 +37,30 @@ def publish_text(directory: Path, filename: str, text: str) -> Path:
     finally:
         temporary.unlink(missing_ok=True)
     return final
+
+
+def replace_text(directory: Path, filename: str, text: str) -> Path:
+    """Replace ``directory/filename`` atomically with ``text``.
+
+    Only for repairing a document that is known to be invalid; a valid published
+    document is never replaced (see :func:`publish_text`).
+
+    Args:
+        directory: Target directory; created when missing.
+        filename: Name of the file.
+        text: UTF-8 content.
+
+    Returns:
+        Path of the file.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        final = directory / filename
+        os.replace(temporary, final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return final

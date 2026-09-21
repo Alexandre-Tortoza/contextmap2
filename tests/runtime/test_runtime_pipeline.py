@@ -583,6 +583,7 @@ class TestScopeAndExecution:
                 "stage_id": "ingestion",
                 "contract": "SequenceArtifact",
                 "artifact_id": "ingestion#1",
+                "content_hash": None,
             }
         }
         assert document["stages"][1]["output"]["artifact_id"] == "state_estimation#1"

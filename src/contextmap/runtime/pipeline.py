@@ -18,11 +18,12 @@ import hashlib
 import json
 import os
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
 from contextmap.runtime._files import publish_text
+from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import PRESETS, RuntimePreset
 from contextmap.runtime.config import (
     ComponentConfig,
@@ -32,35 +33,13 @@ from contextmap.runtime.config import (
     check_component_selection,
 )
 from contextmap.runtime.errors import PlanDocumentError, PreflightError, StageExecutionError
+from contextmap.runtime.reuse import ReuseDecision, ReuseKey, ReusePolicy
 
 PLAN_SCHEMA_VERSION = "0.1.0"
 """Version of the persisted plan and execution-record documents."""
 
 PLAN_FILENAME = "plan.json"
 EXECUTION_FILENAME = "execution.json"
-
-
-@dataclass(frozen=True, kw_only=True)
-class ArtifactRef:
-    """A handle to one immutable stage artifact.
-
-    Attributes:
-        stage_id: Stage that produced it.
-        contract: Artifact kind, for example ``"SequenceArtifact"``.
-        artifact_id: Identity of the exact artifact or run, never a directory name.
-    """
-
-    stage_id: str
-    contract: str
-    artifact_id: str
-
-    def to_document(self) -> dict[str, str]:
-        """Return the JSON-compatible form persisted in execution records."""
-        return {
-            "stage_id": self.stage_id,
-            "contract": self.contract,
-            "artifact_id": self.artifact_id,
-        }
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -341,12 +320,15 @@ class StageRecord:
     Attributes:
         stage_id: The stage.
         inputs: The exact artifacts it consumed, by input name.
-        output: The artifact it produced.
+        output: The artifact it produced, or the prior artifact it reused.
+        decision: Whether it was reused or recomputed and why, when the execution had a
+            reuse policy.
     """
 
     stage_id: str
     inputs: Mapping[str, ArtifactRef]
     output: ArtifactRef
+    decision: ReuseDecision | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -377,6 +359,7 @@ class ExecutionRecord:
                     "stage_id": record.stage_id,
                     "inputs": {name: ref.to_document() for name, ref in record.inputs.items()},
                     "output": record.output.to_document(),
+                    "decision": None if record.decision is None else record.decision.to_document(),
                 }
                 for record in self.stages
             ],
@@ -507,6 +490,7 @@ def preflight(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    reuse: ReusePolicy | None = None,
 ) -> PreflightReport:
     """Validate an execution before any stage runs or any model loads.
 
@@ -516,6 +500,11 @@ def preflight(
     the backend's optional modules and secrets are present, and, when executors are
     given, that each stage has one. Nothing is imported or loaded.
 
+    With a reuse policy, a stage that will certainly be reused (its exact inputs are
+    known and an identical, still valid artifact is indexed) needs neither an executor
+    nor its optional modules and secrets: nothing of it will run. Its configuration must
+    still be complete. A forced stage that is not part of the execution is a problem.
+
     Args:
         execution: The scoped execution.
         executors: The executors that would run, to check coverage.
@@ -523,32 +512,45 @@ def preflight(
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies,
             so their bundled modules are not required.
+        reuse: The reuse policy of the execution, if any.
 
     Returns:
         Every problem found, all at once.
     """
     problems = list(execution.problems)
+    predicted = {} if reuse is None else predict_reuse(execution, reuse)
+    if reuse is not None:
+        in_scope = {stage.stage_id for stage in execution.stages}
+        for stage_id in sorted(reuse.force_recompute - in_scope):
+            problems.append(
+                ConfigProblem(
+                    path=f"reuse.force_recompute.{stage_id}",
+                    message=f"{stage_id!r} is not a stage of this execution",
+                )
+            )
     for stage in execution.stages:
         if not stage.available:
             problems.append(
                 ConfigProblem(path=f"stages.{stage.stage_id}", message=stage.unavailable_reason)
             )
             continue
+        will_run = stage.stage_id not in predicted or predicted[stage.stage_id].kind != "reused"
         for component_id, component in stage.component_configs.items():
             missing = check_component_selection(component_id, component)
             if missing is not None:
                 problems.append(missing)
                 continue
-            problems.extend(
-                check_component_availability(
-                    component_id,
-                    component,
-                    environ=environ,
-                    module_available=module_available,
-                    check_modules=component_id not in provided_runtimes,
+            if will_run:
+                problems.extend(
+                    check_component_availability(
+                        component_id,
+                        component,
+                        environ=environ,
+                        module_available=module_available,
+                        check_modules=component_id not in provided_runtimes,
+                    )
                 )
-            )
-        if executors is not None and stage.stage_id not in executors:
+        if will_run and executors is not None and stage.stage_id not in executors:
             problems.append(
                 ConfigProblem(
                     path=f"stages.{stage.stage_id}", message="no executor is registered for it"
@@ -561,6 +563,93 @@ def preflight(
     )
 
 
+def predict_reuse(execution: ExecutionPlan, reuse: ReusePolicy) -> dict[str, ReuseDecision]:
+    """Predict, without running anything, which stages would be reused.
+
+    Stages are visited in dependency order and looked up in the index. The prediction is
+    conservative: a stage downstream of one that will be recomputed is reported as
+    recomputed, because its inputs are not known yet, although the run may still reuse it
+    when the recomputation reproduces the same content. The execution record is the
+    authority.
+
+    Args:
+        execution: The scoped execution.
+        reuse: The reuse policy.
+
+    Returns:
+        A decision per stage of the execution.
+    """
+    known: dict[str, ArtifactRef | None] = dict(execution.reused)
+    decisions: dict[str, ReuseDecision] = {}
+    for stage in execution.stages:
+        inputs: dict[str, ArtifactRef] = {}
+        unknown: set[str] = set()
+        for item in stage.inputs:
+            ref = known.get(item.source)
+            if ref is None:
+                unknown.add(item.source)
+            else:
+                inputs[item.name] = ref
+        if unknown:
+            decisions[stage.stage_id] = ReuseDecision(
+                kind="recomputed",
+                reason=(
+                    f"upstream stage(s) {', '.join(sorted(unknown))} will be recomputed, so this "
+                    "stage's inputs are not known yet"
+                ),
+            )
+            known[stage.stage_id] = None
+            continue
+        decision, hit, _ = _decide(stage, inputs, reuse)
+        decisions[stage.stage_id] = decision
+        known[stage.stage_id] = hit
+    return decisions
+
+
+def _decide(
+    stage: PlannedStage, inputs: Mapping[str, ArtifactRef], reuse: ReusePolicy
+) -> tuple[ReuseDecision, ArtifactRef | None, ReuseKey | None]:
+    """Decide between reusing an indexed artifact and recomputing one stage.
+
+    Returns:
+        The decision, the artifact to reuse (or ``None``) and the reuse key (or ``None``
+        when the inputs cannot be keyed).
+    """
+    hashes: dict[str, tuple[str, str]] = {}
+    missing = []
+    for name, ref in sorted(inputs.items()):
+        if ref.content_hash is None:
+            missing.append(name)
+        else:
+            hashes[name] = (ref.contract, ref.content_hash)
+    if missing:
+        reason = (
+            f"input {', '.join(missing)} has no content hash, so its identity cannot be checked"
+        )
+        return ReuseDecision(kind="recomputed", reason=reason), None, None
+    key = ReuseKey(
+        stage_id=stage.stage_id,
+        contract=stage.output or "",
+        stage_config_digest=stage.config_digest,
+        inputs=hashes,
+        code_identity=reuse.code_identity,
+        identities=dict(reuse.identities.get(stage.stage_id, {})),
+    )
+    if stage.stage_id in reuse.force_recompute:
+        decision = ReuseDecision(
+            kind="recomputed", reason="forced recomputation requested", key_digest=key.digest
+        )
+        return decision, None, key
+    found = reuse.store.find(key)
+    if found.artifact is None:
+        decision = ReuseDecision(kind="recomputed", reason=found.reason, key_digest=key.digest)
+        return decision, None, key
+    decision = ReuseDecision(
+        kind="reused", reason=found.reason, key_digest=key.digest, reused_from=found.artifact
+    )
+    return decision, found.artifact, key
+
+
 def run_plan(
     execution: ExecutionPlan,
     executors: Mapping[str, StageExecutor],
@@ -568,6 +657,7 @@ def run_plan(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    reuse: ReusePolicy | None = None,
 ) -> ExecutionRecord:
     """Execute a scoped plan in dependency order.
 
@@ -576,15 +666,22 @@ def run_plan(
     first failure, or an output that contradicts the stage's declared contract, stops the
     run: nothing later runs and nothing is substituted.
 
+    With a reuse policy, each stage is decided in dependency order against the index of
+    completed artifacts: identical identity reuses the exact prior artifact without
+    running the stage; anything else runs it and, once it completes, indexes its output.
+    A stage that fails leaves nothing indexed. Every decision is recorded with its reason.
+
     Args:
         execution: The scoped execution.
         executors: One executor per stage to run.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
+        reuse: How to decide between reusing and recomputing, or ``None`` to always run.
 
     Returns:
-        The execution record: order, exact inputs and outputs, and reused artifacts.
+        The execution record: order, exact inputs and outputs, decisions and reused
+        artifacts.
 
     Raises:
         PreflightError: If preflight found problems; nothing was executed.
@@ -596,6 +693,7 @@ def run_plan(
         environ=environ,
         module_available=module_available,
         provided_runtimes=provided_runtimes,
+        reuse=reuse,
     )
     if not report.ok:
         raise PreflightError(report)
@@ -604,32 +702,61 @@ def run_plan(
     records: list[StageRecord] = []
     for stage in execution.stages:
         inputs = {item.name: outputs[item.source] for item in stage.inputs}
-        request = StageRequest(
-            stage_id=stage.stage_id,
-            inputs=inputs,
-            components=stage.component_configs,
-            config_digest=stage.config_digest,
-        )
         completed = [record.stage_id for record in records]
-        try:
-            produced = executors[stage.stage_id].execute(request)
-        except Exception as error:
-            raise StageExecutionError(stage.stage_id, completed, str(error)) from error
-        if produced.contract != stage.output or produced.stage_id != stage.stage_id:
-            raise StageExecutionError(
-                stage.stage_id,
-                completed,
-                f"returned a {produced.contract!r} artifact from stage {produced.stage_id!r}; "
-                f"the stage declares {stage.output!r}",
+        decision: ReuseDecision | None = None
+        key: ReuseKey | None = None
+        produced: ArtifactRef | None = None
+        if reuse is not None:
+            decision, produced, key = _decide(stage, inputs, reuse)
+        if produced is None:
+            executor = executors.get(stage.stage_id)
+            if executor is None:
+                raise StageExecutionError(stage.stage_id, completed, "no executor is registered")
+            request = StageRequest(
+                stage_id=stage.stage_id,
+                inputs=inputs,
+                components=stage.component_configs,
+                config_digest=stage.config_digest,
             )
+            try:
+                produced = executor.execute(request)
+            except Exception as error:
+                raise StageExecutionError(stage.stage_id, completed, str(error)) from error
+            if produced.contract != stage.output or produced.stage_id != stage.stage_id:
+                raise StageExecutionError(
+                    stage.stage_id,
+                    completed,
+                    f"returned a {produced.contract!r} artifact from stage "
+                    f"{produced.stage_id!r}; the stage declares {stage.output!r}",
+                )
+            if reuse is not None and decision is not None and key is not None:
+                decision = _index(reuse, key, produced, decision)
         outputs[stage.stage_id] = produced
-        records.append(StageRecord(stage_id=stage.stage_id, inputs=inputs, output=produced))
+        records.append(
+            StageRecord(stage_id=stage.stage_id, inputs=inputs, output=produced, decision=decision)
+        )
     return ExecutionRecord(
         plan_digest=execution.plan.digest,
         order=tuple(record.stage_id for record in records),
         stages=tuple(records),
         reused=dict(execution.reused),
     )
+
+
+def _index(
+    reuse: ReusePolicy, key: ReuseKey, produced: ArtifactRef, decision: ReuseDecision
+) -> ReuseDecision:
+    """Index a completed output and say in the decision if it could not become the entry."""
+    if produced.content_hash is None:
+        return replace(
+            decision, reason=f"{decision.reason}; the output has no content hash and is not indexed"
+        )
+    if not reuse.store.record(key, produced):
+        return replace(
+            decision,
+            reason=f"{decision.reason}; an earlier artifact of this identity stays indexed",
+        )
+    return decision
 
 
 def write_plan(plan: PipelinePlan, directory: str | os.PathLike[str]) -> Path:

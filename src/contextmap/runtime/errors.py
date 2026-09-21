@@ -119,3 +119,7 @@ class StageExecutionError(PipelineError):
         self.completed = tuple(completed)
         done = ", ".join(self.completed) or "none"
         super().__init__(f"stage {stage_id!r} failed: {reason} (completed before it: {done})")
+
+
+class ReuseError(PipelineError):
+    """Raised when an artifact cannot be indexed under the identity it was produced for."""
