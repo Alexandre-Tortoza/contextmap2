@@ -52,6 +52,7 @@ class Scene:
         self.frame = frame
         self._coordinates: dict[int, Vector3] = {}
         self._members: dict[str, list[int]] = {}
+        self._source: GeometrySource | None = None
 
     def add_points(self, name: str, points: Sequence[Vector3]) -> None:
         """Add a named set made of exactly these points."""
@@ -61,6 +62,7 @@ class Scene:
             self._coordinates[index] = point
             indexes.append(index)
         self._members[name] = indexes
+        self._source = None
 
     def add_box(self, name: str, minimum: Vector3, maximum: Vector3) -> None:
         """Add a named set filling an axis-aligned box with a lattice of points.
@@ -71,8 +73,10 @@ class Scene:
         self.add_points(name, [(x, y, z) for x, y, z in product(*axes)])
 
     def source(self) -> GeometrySource:
-        """The in-memory geometry source of every point of the scene."""
-        return in_memory_source(self.map_id, self._coordinates, frame=self.frame)
+        """The in-memory geometry source of every point of the scene, built once per change."""
+        if self._source is None:
+            self._source = in_memory_source(self.map_id, self._coordinates, frame=self.frame)
+        return self._source
 
     def references(self, name: str) -> tuple[GeometryReference, ...]:
         """The geometry references of a named set."""
