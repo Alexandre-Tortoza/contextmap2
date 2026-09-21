@@ -23,13 +23,16 @@ from contextmap.artifact._invariants import (
     check_entities,
     check_relations,
 )
+from contextmap.artifact._lineage_checks import check_lineage
 from contextmap.artifact.composition import ContextEntity, ContextRelation
 from contextmap.artifact.metadata import ContextMapMetadata
+from contextmap.artifact.provenance import UpstreamArtifact
 from contextmap.artifact.references import (
     ContextEntityId,
     ContextEntityReference,
     ContextMapId,
     ForeignContextEntityReferenceError,
+    ReferenceIntegrityError,
     UnknownContextEntityError,
 )
 from contextmap.artifact.versioning import require_supported_schema_version
@@ -73,6 +76,8 @@ class ContextMap:
         entities: The resolved entities, sorted by id and unique; may be empty when the entities
             capability is not declared, or declared and empty.
         relations: The relations between entities, sorted by id and unique.
+        lineage: Every upstream artifact the map cites, with the identities needed to audit it,
+            sorted by artifact id and unique. Every reference in the map resolves to this table.
     """
 
     context_map_id: ContextMapId
@@ -81,16 +86,18 @@ class ContextMap:
     geometry_ref: GeometricMapLink
     entities: tuple[ContextEntity, ...]
     relations: tuple[ContextRelation, ...]
+    lineage: tuple[UpstreamArtifact, ...]
 
     def __post_init__(self) -> None:
-        """Validate the identity, the version and every reference inside the map.
+        """Validate the identity, the version, every reference and the provenance closure.
 
         Raises:
             ValueError: If the identity is blank or a path, a collection is not canonical, or
-                the declared capabilities disagree with the content.
+                the declared capabilities disagree with the content or the lineage.
             UnsupportedSchemaVersionError: If the schema version is malformed or unreadable.
             ReferenceIntegrityError: If a geometry, entity or upstream reference does not
                 resolve inside the scope it names.
+            ProvenanceError: If an origin claims a derivation its evidence does not support.
         """
         require_artifact_identity(self, "context_map_id")
         require_supported_schema_version(self.schema_version)
@@ -103,6 +110,33 @@ class ContextMap:
         check_declared_capabilities(
             self.metadata.capabilities, entities=self.entities, relations=self.relations
         )
+        check_lineage(
+            self.lineage,
+            geometry_map_id=self.geometry_ref.map_id,
+            source_sequences=self.metadata.source_sequences,
+            capabilities=self.metadata.capabilities,
+            entities=self.entities,
+            relations=self.relations,
+        )
+
+    def upstream_artifact(self, artifact_id: str) -> UpstreamArtifact:
+        """Resolve an artifact cited by the map to its exact identities.
+
+        Args:
+            artifact_id: Identity of an upstream artifact named by a reference of the map.
+
+        Returns:
+            The lineage entry: kind, content identity, configuration, code and models.
+
+        Raises:
+            ReferenceIntegrityError: If the map does not list that artifact.
+        """
+        try:
+            return self._lineage_by_id[artifact_id]
+        except KeyError:
+            raise ReferenceIntegrityError(
+                f"artifact {artifact_id!r} is not in the lineage of map {self.context_map_id!r}"
+            ) from None
 
     def entity(self, reference: ContextEntityReference) -> ContextEntity:
         """Resolve a reference to its entity.
@@ -148,6 +182,11 @@ class ContextMap:
     def _entities_by_id(self) -> dict[ContextEntityId, ContextEntity]:
         """Index of the entities; derived, never authoritative."""
         return {entity.entity_id: entity for entity in self.entities}
+
+    @cached_property
+    def _lineage_by_id(self) -> dict[str, UpstreamArtifact]:
+        """Index of the lineage; derived, never authoritative."""
+        return {item.artifact_id: item for item in self.lineage}
 
     @cached_property
     def _relations_by_entity(self) -> dict[ContextEntityId, tuple[ContextRelation, ...]]:

@@ -6,12 +6,14 @@ what it changes instead of repeating the whole map.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from typing import Any
 
 from contextmap.artifact import (
     AmbiguityStatus,
     AnchorKind,
+    ArtifactKind,
     ContextEntity,
     ContextEntityId,
     ContextEntityReference,
@@ -22,6 +24,8 @@ from contextmap.artifact import (
     ContextRelationId,
     ContextSemanticState,
     DeclaredCapabilities,
+    DerivationKind,
+    EvidenceOrigin,
     GeometricMapLink,
     Handedness,
     LabelHypothesis,
@@ -34,6 +38,7 @@ from contextmap.artifact import (
     PolicyRef,
     RelationState,
     SourceSequence,
+    UpstreamArtifact,
     UpstreamRecordRef,
 )
 from contextmap.geometric_mapping import Bounds3D, GeometryReference, MapId, geometry_id_for
@@ -49,6 +54,12 @@ MAP_FRAME_ID = "map"
 CLOCK_ID = "fixture:header"
 ENTITY_RESOLUTION_ARTIFACT_ID = "entity-resolution--run-0001"
 SPATIAL_RELATIONS_ARTIFACT_ID = "spatial-relations--run-0001"
+PERCEPTION_ARTIFACT_ID = "perception-run--0001"
+FUSION_ARTIFACT_ID = "semantic-fusion--run-0001"
+SEMANTIC_MAP_ARTIFACT_ID = "semantic-map--0001"
+POINT_REPRESENTATION_ARTIFACT_ID = "point-representation--run-0001"
+ANNOTATION_ARTIFACT_ID = "human-annotations--0001"
+MODEL_IDENTITIES = ("qwen2.5-vl-7b@rev-2", "sam2-hiera-large@rev-1")
 
 
 def policy(policy_id: str = "context-map-assembly", version: str = "1") -> PolicyRef:
@@ -165,11 +176,92 @@ def entity_reference(
     )
 
 
+def digest(text: str) -> str:
+    return f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
+
+
+def upstream_artifact(artifact_id: str, kind: ArtifactKind, **overrides: Any) -> UpstreamArtifact:
+    return replace(
+        UpstreamArtifact(
+            artifact_id=artifact_id,
+            kind=kind,
+            content_identity=digest(artifact_id),
+            configuration_fingerprint=digest(f"configuration-of-{artifact_id}"),
+            code_version="a1b2c3d",
+            model_identities=(),
+        ),
+        **overrides,
+    )
+
+
+def default_lineage(capabilities: DeclaredCapabilities) -> tuple[UpstreamArtifact, ...]:
+    """List the upstream artifacts a map with these capabilities cites, sorted by id."""
+    items = [
+        upstream_artifact(SEQUENCE_ARTIFACT_ID, ArtifactKind.SEQUENCE),
+        upstream_artifact(str(GEOMETRIC_MAP_ID), ArtifactKind.GEOMETRIC_MAP),
+    ]
+    if MapCapability.ENTITIES in capabilities.content:
+        items += [
+            upstream_artifact(
+                PERCEPTION_ARTIFACT_ID,
+                ArtifactKind.PERCEPTION_RUN,
+                model_identities=MODEL_IDENTITIES,
+            ),
+            upstream_artifact(FUSION_ARTIFACT_ID, ArtifactKind.SEMANTIC_FUSION_RUN),
+            upstream_artifact(SEMANTIC_MAP_ARTIFACT_ID, ArtifactKind.SEMANTIC_MAP),
+            upstream_artifact(ENTITY_RESOLUTION_ARTIFACT_ID, ArtifactKind.ENTITY_RESOLUTION_RUN),
+        ]
+    if MapCapability.RELATIONS in capabilities.content:
+        items.append(
+            upstream_artifact(SPATIAL_RELATIONS_ARTIFACT_ID, ArtifactKind.SPATIAL_RELATIONS_RUN)
+        )
+    if MapCapability.POINT_REPRESENTATION_EVIDENCE in capabilities.content:
+        items.append(
+            upstream_artifact(
+                POINT_REPRESENTATION_ARTIFACT_ID, ArtifactKind.POINT_REPRESENTATION_RUN
+            )
+        )
+    return tuple(sorted(items, key=lambda item: item.artifact_id))
+
+
+def origin(
+    kind: DerivationKind, *records: UpstreamRecordRef, policy_ref: PolicyRef | None = None
+) -> EvidenceOrigin:
+    return EvidenceOrigin(kind=kind, derived_from=tuple(sorted(records)), policy=policy_ref)
+
+
+def fused_origin(seed: str) -> EvidenceOrigin:
+    return origin(
+        DerivationKind.MULTIVIEW_FUSED,
+        upstream_record(FUSION_ARTIFACT_ID, f"fused-{seed}"),
+        policy_ref=policy("baseline-evidence-accumulation"),
+    )
+
+
+def inferred_origin(seed: str) -> EvidenceOrigin:
+    return origin(
+        DerivationKind.MODEL_INFERRED, upstream_record(PERCEPTION_ARTIFACT_ID, f"claim-{seed}")
+    )
+
+
+def geometric_origin(seed: str) -> EvidenceOrigin:
+    return origin(
+        DerivationKind.GEOMETRY_DERIVED,
+        upstream_record(SPATIAL_RELATIONS_ARTIFACT_ID, f"evidence-{seed}"),
+        upstream_record(str(GEOMETRIC_MAP_ID), f"geometry-{seed}"),
+        policy_ref=policy("geometric-relations"),
+    )
+
+
+def hypothesis(label: str, origin_: EvidenceOrigin | None = None) -> LabelHypothesis:
+    return LabelHypothesis(label=label, origin=origin_ or inferred_origin(label))
+
+
 def semantic_state(
     status: AmbiguityStatus = AmbiguityStatus.UNAMBIGUOUS, labels: tuple[str, ...] = ("chair",)
 ) -> ContextSemanticState:
     return ContextSemanticState(
-        status=status, hypotheses=tuple(LabelHypothesis(label=label) for label in labels)
+        status=status, hypotheses=tuple(hypothesis(label) for label in labels)
     )
 
 
@@ -181,8 +273,11 @@ def entity(
         ContextEntity(
             entity_id=ContextEntityId(entity_id),
             source=upstream_record(ENTITY_RESOLUTION_ARTIFACT_ID, f"resolved-{entity_id}"),
+            member_entities=(upstream_record(SEMANTIC_MAP_ARTIFACT_ID, f"semantic-{entity_id}"),),
+            resolution_decisions=(),
             geometry_refs=tuple(geometry_ref(index) for index in geometry),
             semantic_state=semantic_state(),
+            origin=fused_origin(entity_id),
         ),
         **overrides,
     )
@@ -203,6 +298,7 @@ def relation(
             predicate=predicate,
             object=entity_reference(object_),
             state=RelationState.SUPPORTED,
+            origin=geometric_origin(relation_id),
         ),
         **overrides,
     )
@@ -221,18 +317,21 @@ def entity_capabilities(*predicates: str) -> DeclaredCapabilities:
 
 
 def context_map(**overrides: Any) -> ContextMap:
-    """Build a valid geometry-only map; override the parts a test changes."""
-    return replace(
-        ContextMap(
-            context_map_id=CONTEXT_MAP_ID,
-            schema_version="0.1.0",
-            metadata=metadata(),
-            geometry_ref=geometry_link(),
-            entities=(),
-            relations=(),
-        ),
-        **overrides,
-    )
+    """Build a valid geometry-only map; override the parts a test changes.
+
+    The lineage follows the declared capabilities unless a test overrides it.
+    """
+    fields: dict[str, Any] = {
+        "context_map_id": CONTEXT_MAP_ID,
+        "schema_version": "0.1.0",
+        "metadata": metadata(),
+        "geometry_ref": geometry_link(),
+        "entities": (),
+        "relations": (),
+    }
+    fields.update(overrides)
+    fields.setdefault("lineage", default_lineage(fields["metadata"].capabilities))
+    return ContextMap(**fields)
 
 
 def populated_map(**overrides: Any) -> ContextMap:

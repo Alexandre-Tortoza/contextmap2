@@ -11,7 +11,8 @@ ContextMap
 ├── metadata
 ├── geometry_ref
 ├── entities[]
-└── relations[]
+├── relations[]
+└── lineage[]
 ```
 
 | Campo | Significado |
@@ -22,6 +23,7 @@ ContextMap
 | `geometry_ref` | o `GeometricMapArtifact` dono da geometria autoritativa |
 | `entities` | entidades resolvidas, ordenadas por id e únicas (ver [`composition.md`](composition.md)) |
 | `relations` | relações direcionadas entre entidades do mapa, ordenadas por id e únicas |
+| `lineage` | todo artifact a montante citado pelo mapa, com as identidades exatas para auditá-lo (ver [`lineage.md`](lineage.md)) |
 
 Um mapa é imutável (`frozen`), comparável por valor e não carrega objeto de backend, tensor, tipo de ROS nem caminho de arquivo.
 

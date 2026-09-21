@@ -16,6 +16,7 @@ from context_map_builders import (
     entity_capabilities,
     entity_reference,
     geometry_ref,
+    hypothesis,
     metadata,
     populated_map,
     relation,
@@ -28,7 +29,6 @@ from contextmap.artifact import (
     ContextEntity,
     ContextRelation,
     ForeignContextEntityReferenceError,
-    LabelHypothesis,
     ReferenceIntegrityError,
     RelationState,
     UnknownContextEntityError,
@@ -177,7 +177,7 @@ def test_an_upstream_artifact_identity_is_not_a_path() -> None:
 
 
 def test_an_unambiguous_entity_has_exactly_one_hypothesis() -> None:
-    assert semantic_state().hypotheses == (LabelHypothesis(label="chair"),)
+    assert [item.label for item in semantic_state().hypotheses] == ["chair"]
     with pytest.raises(ValueError, match="exactly one"):
         semantic_state(AmbiguityStatus.UNAMBIGUOUS, ("box", "table"))
 
@@ -205,7 +205,7 @@ def test_hypotheses_are_sorted_unique_and_labelled() -> None:
     with pytest.raises(ValueError, match="unique"):
         semantic_state(AmbiguityStatus.AMBIGUOUS, ("box", "box"))
     with pytest.raises(ValueError, match="label"):
-        LabelHypothesis(label=" ")
+        hypothesis(" ")
 
 
 def test_a_conflicting_entity_is_kept_not_resolved_by_the_map() -> None:
