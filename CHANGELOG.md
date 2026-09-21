@@ -18,6 +18,7 @@ Estado de `origin/dev` em 2026-09-21. O conteúdo do v0.1.0 ainda não está con
 - Point representation (opcional): descritor geométrico determinístico, fronteira do PTv3 e `PointRepresentationRunArtifact`.
 - Semantic fusion: `FusionSupport`, acumulação baseline e ciente de qualidade e `SemanticFusionRunArtifact`.
 - Evaluation: protocolos determinísticos para cada capability acima.
+- Runtime: configuração e perfil `canonical/1`, composition root, DAG de estágios, reuso, seleção de runs, ciclo de vida e o CLI `contextmap` (também `python -m contextmap`), integrados a partir da PR #387; os executores das capabilities reais ainda não estão ligados.
 - Empacotamento: extras `ros1`, `ros2` e `vision`; licença como expressão SPDX (`AGPL-3.0-only`); smoke de instalação em ambiente novo; jobs de CI para compatibilidade de Python, pacote e instalação leve.
 - Release: workflow com gate de ancestralidade em `main`, reuso da CI, conferência da versão da wheel, checksums e notas validadas.
 - Documentação: instalação, licenças de terceiros, estado verificado das configurações do repositório e escopo do v0.1.0.
@@ -29,4 +30,4 @@ Estado de `origin/dev` em 2026-09-21. O conteúdo do v0.1.0 ainda não está con
 
 ### Pendente para o v0.1.0
 
-Runtime e CLI, semantic mapping, entity resolution, spatial relations, `ContextMapArtifact` (schema, escrita, leitura e validação), execução end-to-end e o relatório de aceitação. Veja o checklist em [docs/release-v0.1.0.md](docs/release-v0.1.0.md).
+Executores reais das capabilities na runtime, semantic mapping, entity resolution, spatial relations, `ContextMapArtifact` (schema, escrita, leitura e validação), execução end-to-end e o relatório de aceitação. Veja o checklist em [docs/release-v0.1.0.md](docs/release-v0.1.0.md).

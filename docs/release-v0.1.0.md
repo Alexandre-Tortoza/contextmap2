@@ -15,7 +15,7 @@ O produto do release é o `ContextMapArtifact` e o pacote que o produz e o lê. 
 | Dimensão | Proposta para o v0.1.0 | Estado em `origin/dev` |
 | --- | --- | --- |
 | Fonte de entrada | bag ROS 1 (`Ros1BagSourceAdapter`, extra `ros1`); confirmar em #176 que o formato do `corridor-02` é esse | adapters ROS 1 e ROS 2 implementados; o ROS 2 não tem validação real registrada, então fica como suportado por contrato, sem evidência |
-| Perfil de runtime canônico | `canonical/1` (`CANONICAL_PROFILE_ID`) | a runtime e o perfil estão na PR #387 (`milestone/runtime-configuration`), ainda não em `dev`; os estágios `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` estão declarados indisponíveis nessa branch |
+| Perfil de runtime canônico | `canonical/1` (`CANONICAL_PROFILE_ID`) | a runtime e o perfil estão integrados a esta branch (PR #387, ainda aberta para `dev`); os estágios `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` seguem declarados indisponíveis no catálogo da runtime, e os executores das capabilities reais ainda não estão ligados |
 | Estágios obrigatórios | ingestion, visual_perception, state_estimation, geometric_mapping, sensor_association, semantic_fusion, semantic_mapping, entity_resolution, spatial_relations, context_map | os seis primeiros existem em `dev`; os quatro últimos dependem das milestones de semantic mapping (PR #367), entity resolution, spatial relations e context map |
 | Estágio opcional | `point_representation`, desligado por padrão no perfil canônico | implementado com o descritor geométrico determinístico; o PTv3 é só fronteira; a justificativa por avaliação controlada não existe |
 | Backends com evidência real registrada | SAM2/SAM3 (region discovery), DINOv2 e CLIP (features), Qwen (interpretação), `ExternalPose` (trajetória do dataset) | execuções reais de 2026-09-20 com escopos distintos, descritos nos documentos de cada adapter; não há avaliação científica comparativa comum |
@@ -41,7 +41,7 @@ Derivadas das constantes do código em `origin/dev`. O congelamento registra a v
 | `PointRepresentationRunArtifact` | 0.1.0 |
 | `SemanticFusionRunArtifact` | 0.1.0 |
 | `ContextMapArtifact` | **pendente** (milestones de schema e serialização) |
-| Configuração de runtime (`canonical/1`) | **pendente** (PR #387) |
+| Configuração de runtime (`canonical/1`): configuração, plano, run, catálogo, reuso, pedido de ingestão | 0.1.0 cada (`CONFIG_SCHEMA_VERSION`, `PLAN_SCHEMA_VERSION`, `RUN_SCHEMA_VERSION`, `CATALOG_SCHEMA_VERSION`, `REUSE_SCHEMA_VERSION`, `INGESTION_REQUEST_SCHEMA_VERSION`) |
 
 ## 2. Checklist de aceitação
 
@@ -53,7 +53,7 @@ Estados: **feito** (com evidência), **preparado** (existe, falta comprovação 
 | --- | --- | --- | --- |
 | A1 | A instalação base importa os contratos e lê os artifacts atuais sem ROS, Torch ou modelos | `tests/packaging/`, jobs `package` e `lightweight-install` da CI ([installation.md](installation.md)) | feito, para os artifacts atuais |
 | A2 | Os extras instalam o que anunciam | jobs `lightweight-install` (`ros1`, `ros2`); resolução de `vision` por `pip install --dry-run` | feito; `vision` só foi verificado por resolução, não por instalação completa |
-| A3 | O comando `contextmap` existe no pacote instalado | testes preparados em `tests/packaging/test_release_metadata.py` e o smoke | bloqueado até a integração com a runtime (PR #387) |
+| A3 | O comando `contextmap` existe no pacote instalado | `[project.scripts]` no `pyproject.toml`, `tests/packaging/test_release_metadata.py` e o smoke em venv novo (`contextmap --help` e `--version` saem com 0; 140 módulos importam sem extras) | feito; a runtime chega a `dev` pela PR #387 |
 | A4 | O pacote reporta a versão da tag | smoke `--expect-version` no workflow `Release` | preparado; só é comprovado pela primeira release |
 | A5 | CI e release endurecidos | #186 (PR #396) | feito; falta comprovar o reuso do `ci.yml` em uma release real |
 | A6 | Higiene, licenças e segurança | #189 (PR #403), [third-party-licenses.md](third-party-licenses.md), [repository-settings.md](repository-settings.md) | feito, com decisões do mantenedor pendentes |
@@ -82,7 +82,7 @@ Cada linha exige a PR mesclada e a evidência de aceitação da própria milesto
 
 | # | Capability | Situação em 2026-09-21 |
 | --- | --- | --- |
-| C1 | Runtime e configuração | PR #387 aberta |
+| C1 | Runtime e configuração | PR #387 aberta; integrada a esta branch, com o CLI empacotado e testado |
 | C2 | Semantic mapping e modelo de entidades | PR #367 aberta |
 | C3 | Conjunto de referência e avaliação | PR #377 aberta |
 | C4 | Entity resolution, spatial relations | em desenvolvimento em branches de milestone |
