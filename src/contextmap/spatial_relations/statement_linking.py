@@ -3,10 +3,11 @@
 An upstream statement names things the way perception saw them: as regions in a frame, projected
 into the map as spatial observations. It does not know which resolved entity those observations
 ended up in. That knowledge lives in Entity Resolution: a resolved entity carries the spatial
-observations of *every* one of its members in its evidence, and lists the members it merged. This
-module derives the link from exactly that, and from nothing else:
+observations of *every* one of its members in its evidence, and lists the members it merged, and the
+run reader answers which resolved entities a spatial observation supports. This module derives the
+link from exactly that answer, and from nothing else:
 
-* an end is linked to the resolved entity whose evidence contains its spatial observation;
+* an end is linked to the one resolved entity the reader says its spatial observation supports;
 * an observation that no resolved entity has, or that several have, is **not** linked and is
   reported with the reason, never guessed and never resolved by proximity or by label;
 * a statement whose two ends land in the same resolved entity cannot be a relation between two
@@ -19,17 +20,11 @@ loss is visible.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
-from contextmap.entity_resolution import (
-    ResolvedEntity,
-    ResolvedEntityId,
-    ResolvedEntityReference,
-    ResolvedEntitySet,
-)
+from contextmap.entity_resolution import EntityResolutionRunReader, ResolvedEntityReference
 from contextmap.spatial_relations._checks import require_present
 from contextmap.spatial_relations.statements import (
     EndpointLink,
@@ -131,34 +126,28 @@ class LinkedStatements:
 
 
 def link_statements(
-    statements: Iterable[UpstreamRelationStatement], *, resolved: ResolvedEntitySet
+    statements: Iterable[UpstreamRelationStatement], *, resolution: EntityResolutionRunReader
 ) -> LinkedStatements:
     """Tie the ends of upstream statements to the resolved entities that hold them.
 
     Args:
         statements: The upstream statements, in any order.
-        resolved: The resolved entities of one resolution run, read through Entity Resolution's
-            public API.
+        resolution: The reader of one Entity Resolution run. Its ``resolved_of_spatial_observation``
+            says which resolved entities a spatial observation supports and never picks one: zero
+            or several are reported here, not chosen.
 
     Returns:
         The linked statements and the unlinked ones with their reasons. The same statements and
-        entities always give the same result, whatever the order of the statements.
+        run always give the same result, whatever the order of the statements.
     """
-    holders: dict[str, list[ResolvedEntity]] = defaultdict(list)
-    for entity in resolved.entities:
-        for observation in entity.evidence.spatial_observation_ids:
-            holders[str(observation)].append(entity)
+    members: dict[ResolvedEntityReference, str] = {}
     linked: list[ObservationRelationStatement] = []
     unlinked: list[UnlinkedStatement] = []
     for statement in sorted(statements, key=lambda item: item.sort_key):
-        subject, subject_failure = _holder(statement.subject_spatial_observation_id, holders)
-        obj, object_failure = _holder(statement.object_spatial_observation_id, holders)
+        subject, subject_failure = _holder(statement.subject_spatial_observation_id, resolution)
+        obj, object_failure = _holder(statement.object_spatial_observation_id, resolution)
         failures = {item for item in (subject_failure, object_failure) if item is not None}
-        if (
-            subject is not None
-            and obj is not None
-            and subject.resolved_entity_id == (obj.resolved_entity_id)
-        ):
+        if subject is not None and subject == obj:
             failures.add(LinkFailure.BOTH_ENDS_IN_ONE_ENTITY)
         if failures or subject is None or obj is None:
             unlinked.append(
@@ -172,9 +161,11 @@ def link_statements(
         linked.append(
             ObservationRelationStatement(
                 source=statement.source,
-                subject=_link(statement.subject_spatial_observation_id, subject, resolved),
+                subject=_link(
+                    statement.subject_spatial_observation_id, subject, resolution, members
+                ),
                 predicate_text=statement.predicate_text,
-                object=_link(statement.object_spatial_observation_id, obj, resolved),
+                object=_link(statement.object_spatial_observation_id, obj, resolution, members),
                 polarity=statement.polarity,
             )
         )
@@ -182,9 +173,9 @@ def link_statements(
 
 
 def _holder(
-    observation: str, holders: dict[str, list[ResolvedEntity]]
-) -> tuple[ResolvedEntity | None, LinkFailure | None]:
-    found = holders.get(observation, [])
+    observation: str, resolution: EntityResolutionRunReader
+) -> tuple[ResolvedEntityReference | None, LinkFailure | None]:
+    found = resolution.resolved_of_spatial_observation(observation)
     if not found:
         return None, LinkFailure.NOT_IN_ANY_ENTITY
     if len(found) > 1:
@@ -192,17 +183,23 @@ def _holder(
     return found[0], None
 
 
-def _link(observation: str, entity: ResolvedEntity, resolved: ResolvedEntitySet) -> EndpointLink:
-    members = ", ".join(sorted(str(member.entity_ref.entity_id) for member in entity.members))
+def _link(
+    observation: str,
+    entity: ResolvedEntityReference,
+    resolution: EntityResolutionRunReader,
+    members: dict[ResolvedEntityReference, str],
+) -> EndpointLink:
+    if entity not in members:
+        merged = resolution.resolved_entity(entity)
+        members[entity] = ", ".join(
+            sorted(str(member.entity_ref.entity_id) for member in merged.members)
+        )
     return EndpointLink(
         upstream_ref=observation,
-        entity_ref=ResolvedEntityReference(
-            resolution_run_id=resolved.resolution_run_id,
-            resolved_entity_id=ResolvedEntityId(entity.resolved_entity_id),
-        ),
+        entity_ref=entity,
         linked_through=(
             f"spatial observation {observation} is in the evidence of resolved entity "
-            f"{entity.resolved_entity_id} (members: {members})"
+            f"{entity.resolved_entity_id} (members: {members[entity]})"
         ),
     )
 
@@ -211,7 +208,7 @@ def _explain(
     statement: UpstreamRelationStatement,
     subject_failure: LinkFailure | None,
     object_failure: LinkFailure | None,
-    subject: ResolvedEntity | None,
+    subject: ResolvedEntityReference | None,
 ) -> str:
     parts: list[str] = []
     for observation, failure in (
