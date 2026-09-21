@@ -8,14 +8,24 @@ its geometry: entities are named by reference and geometry by identity.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from contextmap.entity_resolution import (
+    ResolvedEntityReference,
     decode_resolved_entity_reference,
     encode_resolved_entity_reference,
 )
 from contextmap.geometric_mapping import GeometryId, GeometryReference, MapId
+from contextmap.spatial_relations.candidates import (
+    CandidateExclusion,
+    CandidateExclusionReason,
+    CandidateProvenance,
+    CandidateReason,
+    RelationCandidate,
+    RelationCandidateSet,
+    SkippedPredicate,
+)
 from contextmap.spatial_relations.decision import DecisionRule, EvidenceUse, RelationDecision
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
@@ -42,7 +52,7 @@ from contextmap.spatial_relations.statements import (
     StatementPolarity,
     UpstreamStatementRef,
 )
-from contextmap.spatial_relations.taxonomy import RelationPredicate
+from contextmap.spatial_relations.taxonomy import FrameRequirement, RelationPredicate
 
 
 def _field(record: Mapping[str, Any], name: str) -> Any:
@@ -323,4 +333,152 @@ def _decode_statement(record: Mapping[str, Any]) -> ObservationRelationStatement
         predicate_text=_field(record, "predicate_text"),
         object=_decode_link(_field(record, "object")),
         polarity=StatementPolarity(_field(record, "polarity")),
+    )
+
+
+def encode_candidate_set(candidates: RelationCandidateSet) -> list[dict[str, Any]]:
+    """Encode a candidate set as records: one ``set`` record, then its members.
+
+    The first record carries the counts and the provenance, so the set can be rebuilt from the
+    records alone; the others are one per candidate, exclusion and skipped predicate.
+    """
+    provenance = candidates.provenance
+    rows: list[dict[str, Any]] = [
+        {
+            "record": "set",
+            "entity_count": candidates.entity_count,
+            "pairs_not_enumerated": candidates.pairs_not_enumerated,
+            "provenance": {
+                "policy_id": provenance.policy_id,
+                "configuration_fingerprint": provenance.configuration_fingerprint,
+                "taxonomy_version": provenance.taxonomy_version,
+                "map_frame": provenance.map_frame,
+                "geometric_map_id": (
+                    None
+                    if provenance.geometric_map_id is None
+                    else str(provenance.geometric_map_id)
+                ),
+                "frame_conventions_fingerprint": provenance.frame_conventions_fingerprint,
+            },
+        }
+    ]
+    for item in candidates.candidates:
+        rows.append(
+            {
+                "record": "candidate",
+                **_encode_pair(item.subject_entity_ref, item.predicate, item.object_entity_ref),
+                "reasons": [reason.value for reason in item.reasons],
+                "bounds_gap_m": item.bounds_gap_m,
+            }
+        )
+    for exclusion in candidates.exclusions:
+        rows.append(
+            {
+                "record": "exclusion",
+                **_encode_pair(
+                    exclusion.subject_entity_ref, exclusion.predicate, exclusion.object_entity_ref
+                ),
+                "reason": exclusion.reason.value,
+                "bounds_gap_m": exclusion.bounds_gap_m,
+            }
+        )
+    for skipped in candidates.skipped_predicates:
+        rows.append(
+            {
+                "record": "skipped_predicate",
+                "predicate": skipped.predicate.value,
+                "requirement": skipped.requirement.value,
+                "detail": skipped.detail,
+            }
+        )
+    return rows
+
+
+def decode_candidate_set(rows: Sequence[Mapping[str, Any]]) -> RelationCandidateSet:
+    """Decode the records of :func:`encode_candidate_set` and revalidate the set.
+
+    Raises:
+        ValueError: If the records do not hold exactly one ``set`` record, a record is of an
+            unknown kind or a field is missing, or the set violates its contract.
+    """
+    header = [row for row in rows if row.get("record") == "set"]
+    if len(header) != 1:
+        raise ValueError("candidate records need exactly one 'set' record")
+    provenance = _field(header[0], "provenance")
+    map_id = _field(provenance, "geometric_map_id")
+    candidates: list[RelationCandidate] = []
+    exclusions: list[CandidateExclusion] = []
+    skipped: list[SkippedPredicate] = []
+    for row in rows:
+        kind = _field(row, "record")
+        if kind == "set":
+            continue
+        if kind == "candidate":
+            subject, predicate, obj = _decode_pair(row)
+            candidates.append(
+                RelationCandidate(
+                    subject_entity_ref=subject,
+                    predicate=predicate,
+                    object_entity_ref=obj,
+                    reasons=tuple(CandidateReason(item) for item in _field(row, "reasons")),
+                    bounds_gap_m=float(_field(row, "bounds_gap_m")),
+                )
+            )
+        elif kind == "exclusion":
+            subject, predicate, obj = _decode_pair(row)
+            exclusions.append(
+                CandidateExclusion(
+                    subject_entity_ref=subject,
+                    predicate=predicate,
+                    object_entity_ref=obj,
+                    reason=CandidateExclusionReason(_field(row, "reason")),
+                    bounds_gap_m=float(_field(row, "bounds_gap_m")),
+                )
+            )
+        elif kind == "skipped_predicate":
+            skipped.append(
+                SkippedPredicate(
+                    predicate=RelationPredicate(_field(row, "predicate")),
+                    requirement=FrameRequirement(_field(row, "requirement")),
+                    detail=_field(row, "detail"),
+                )
+            )
+        else:
+            raise ValueError(f"unknown candidate record kind {kind!r}")
+    return RelationCandidateSet(
+        candidates=tuple(candidates),
+        exclusions=tuple(exclusions),
+        skipped_predicates=tuple(skipped),
+        entity_count=_field(header[0], "entity_count"),
+        pairs_not_enumerated=_field(header[0], "pairs_not_enumerated"),
+        provenance=CandidateProvenance(
+            policy_id=_field(provenance, "policy_id"),
+            configuration_fingerprint=_field(provenance, "configuration_fingerprint"),
+            taxonomy_version=_field(provenance, "taxonomy_version"),
+            map_frame=_field(provenance, "map_frame"),
+            geometric_map_id=None if map_id is None else MapId(map_id),
+            frame_conventions_fingerprint=_field(provenance, "frame_conventions_fingerprint"),
+        ),
+    )
+
+
+def _encode_pair(
+    subject: ResolvedEntityReference,
+    predicate: RelationPredicate,
+    obj: ResolvedEntityReference,
+) -> dict[str, Any]:
+    return {
+        "subject_entity_ref": encode_resolved_entity_reference(subject),
+        "predicate": predicate.value,
+        "object_entity_ref": encode_resolved_entity_reference(obj),
+    }
+
+
+def _decode_pair(
+    record: Mapping[str, Any],
+) -> tuple[ResolvedEntityReference, RelationPredicate, ResolvedEntityReference]:
+    return (
+        decode_resolved_entity_reference(_field(record, "subject_entity_ref")),
+        RelationPredicate(_field(record, "predicate")),
+        decode_resolved_entity_reference(_field(record, "object_entity_ref")),
     )
