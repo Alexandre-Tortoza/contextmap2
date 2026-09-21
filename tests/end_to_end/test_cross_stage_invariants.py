@@ -94,6 +94,33 @@ def test_a_map_built_from_another_trajectory_run_breaks_lineage_at_geometry(
     }
 
 
+def test_a_map_built_with_another_calibration_than_the_sequence_is_a_lineage_break(
+    chain: SyntheticChain,
+) -> None:
+    inputs = cross_stage_inputs(chain)
+    assert inputs.sequence_calibration_identity is not None
+    other = replace(inputs, sequence_calibration_identity="sha256:" + "0" * 64)
+
+    findings = _findings(other)
+
+    assert {(f.gate_id, f.failing_capability) for f in findings} >= {
+        (LINEAGE_CLOSURE, "geometric_mapping"),
+        (LINEAGE_CLOSURE, "sensor_association"),
+    }
+    assert any("sequence calibration" in f.message for f in findings)
+
+
+def test_without_the_sequence_calibration_the_comparison_is_a_stated_limitation(
+    chain: SyntheticChain,
+) -> None:
+    inputs = replace(cross_stage_inputs(chain), sequence_calibration_identity=None)
+
+    report = check_cross_stage(inputs)
+
+    assert report.findings == ()
+    assert any("sequence calibration" in note for note in report.notes)
+
+
 def test_a_fusion_run_that_names_another_map_or_omits_an_association_run_breaks_lineage(
     chain: SyntheticChain,
 ) -> None:

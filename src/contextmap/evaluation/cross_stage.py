@@ -51,6 +51,9 @@ class CrossStageInputs:
 
     Attributes:
         sequence: Manifest of the canonical sequence.
+        sequence_calibration_identity: Identity of the calibration the sequence artifact
+            carries, when the caller supplies it; the map and the associations must have
+            used exactly that calibration.
         trajectory: Manifest of the state estimation run.
         geometry: Manifest of the geometric map.
         geometry_source: The read boundary of that map, to resolve references.
@@ -72,6 +75,7 @@ class CrossStageInputs:
     spatial_observations: Mapping[SpatialObservationId, SpatialObservation]
     fusion: SemanticFusionRunManifest
     fusion_outcomes: Sequence[FusionOutcome]
+    sequence_calibration_identity: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -235,6 +239,26 @@ def _check_lineage(inputs: CrossStageInputs, collector: _Collector) -> None:
         geometry.state_estimation_run_id,
         trajectory.run_id,
     )
+    sequence_calibration = inputs.sequence_calibration_identity
+    if sequence_calibration is None:
+        collector.notes.append(
+            "the sequence calibration identity was not supplied, so the calibration the map and "
+            "the associations used is not compared with the sequence artifact's"
+        )
+    else:
+        expect(
+            _GEOMETRIC_MAPPING,
+            "map sequence calibration",
+            geometry.calibration_identity,
+            sequence_calibration,
+        )
+        for association in inputs.associations:
+            expect(
+                _SENSOR_ASSOCIATION,
+                f"association run {association.run_id} sequence calibration",
+                association.calibration_identity,
+                sequence_calibration,
+            )
     if trajectory.calibration_identity is None:
         collector.notes.append(
             "the trajectory records no calibration identity (the backend does not consume "

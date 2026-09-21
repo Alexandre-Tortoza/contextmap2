@@ -80,6 +80,7 @@ from contextmap.state_estimation import (
     TrajectoryId,
     TrajectoryLookup,
     allocate_run_index,
+    calibration_identity,
     execute_state_estimation,
 )
 from contextmap.state_estimation.backends.external_pose import (
@@ -505,6 +506,7 @@ def cross_stage_inputs(chain: SyntheticChain) -> CrossStageInputs:
     """The manifests and objects the cross-stage evaluator reads, taken from the readers."""
     return CrossStageInputs(
         sequence=chain.sequence.manifest,
+        sequence_calibration_identity=calibration_identity(chain.sequence.read_calibration()),
         trajectory=chain.trajectory.manifest,
         geometry=chain.geometry.manifest,
         geometry_source=chain.geometry.geometry(),
