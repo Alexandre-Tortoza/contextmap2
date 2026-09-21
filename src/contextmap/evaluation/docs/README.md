@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais). Além dos harnesses por capability, o módulo possui o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais). Além dos harnesses por capability, o módulo possui o **cenário end-to-end** congelado e a matriz de aceitação (`end_to_end`, `canonical_scenario`) e o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
 
 ## O que este módulo explicitamente não possui
 
@@ -93,6 +93,14 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
 - `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
 
+### Cenário end-to-end e matriz de aceitação
+
+- `E2EScenario`/`ScenarioSubject`/`ScenarioStage`/`AblationOnlyOption` — o cenário congelado: a sequência registrada e a seleção fixadas por identidade, o perfil canônico de backends e as opções que só entram por ablação. Tem `digest` próprio e `matrix_digest`; um snapshot JSON revisável fica em `docs/scenarios/`.
+- `canonical_real_scenario()`/`canonical_ci_scenario()` — o cenário sobre a amostra real do `corridor-02` e sobre o subconjunto sintético de CI, com a mesma matriz.
+- `AcceptanceGate`/`GateKind` — um gate por requisito de estágio, com a capability responsável, as métricas do registro e as anotações que exige. Não há score global.
+- `GateResult`/`GateStatus`/`EvidenceClass` — resultado por gate: `passed`, `failed`, `blocked` ou `not_evaluated`, com evidência `real` ou `fake_contract` e a capability que responde por falha ou bloqueio.
+- `assemble_acceptance_report()`/`AcceptanceReport`/`unmet_required_gates()`/`encode_acceptance_report()`/`write_acceptance_report()` — o relatório de aceitação: exatamente um resultado por gate, evidência de contrato nunca cumpre um gate, escrita imutável.
+
 ### Reference set
 
 - `ReferenceSetManifest`/`ReferenceSetIdentity` — manifesto versionado e hasheado do reference set: fontes, calibrações, amostras ligadas a `SourceObservationId`, estratos, anotações, proveniência e splits.
@@ -172,6 +180,7 @@ pipeline principal.
 - [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
+- [`end-to-end.md`](end-to-end.md) — cenário canônico congelado, perfil de backends, opções só por ablação, matriz de aceitação por estágio, relatório sem score global e regras de versionamento.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.

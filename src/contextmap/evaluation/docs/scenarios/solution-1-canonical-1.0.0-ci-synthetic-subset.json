@@ -1,0 +1,499 @@
+{
+  "ablation_only": [
+    {
+      "component_id": "point_representation",
+      "option": "off-vs-deterministic-vs-ptv3",
+      "reason": "Optional evidence with a cost that no controlled ablation has justified yet; off in the canonical run."
+    },
+    {
+      "component_id": "semantic_fusion.accumulation",
+      "option": "quality-aware-evidence-accumulation-v1",
+      "reason": "Not adopted until a controlled end-to-end comparison shows a benefit."
+    },
+    {
+      "component_id": "visual_perception.semantic_interpretation",
+      "option": "gemini",
+      "reason": "Sends frames to an external paid service; needs exact model identity and recorded availability and cost, and is compared, not adopted."
+    },
+    {
+      "component_id": "visual_perception.semantic_interpretation",
+      "option": "florence2",
+      "reason": "Speaks in task tokens; its translation to claims is a separate experiment."
+    },
+    {
+      "component_id": "visual_perception.region_discovery",
+      "option": "sam3",
+      "reason": "Text-prompted concept segmentation with different semantics from SAM2."
+    },
+    {
+      "component_id": "visual_perception.dense_features",
+      "option": "dinov3",
+      "reason": "No real execution is recorded; compared against DINOv2, not adopted."
+    },
+    {
+      "component_id": "visual_perception.dense_features",
+      "option": "feature-resolution-enhancement",
+      "reason": "Optional DAG stage; compared on the same DINO artifact, not adopted."
+    },
+    {
+      "component_id": "visual_perception.region_features",
+      "option": "alphaclip",
+      "reason": "No verified checkpoint source; compared against CLIP if one exists."
+    },
+    {
+      "component_id": "state_estimation.estimator",
+      "option": "fast_lio",
+      "reason": "Compared against the pose input as an estimator, not the baseline."
+    },
+    {
+      "component_id": "entity_resolution",
+      "option": "geometry-plus-semantic-and-appearance-evidence",
+      "reason": "The baseline resolves on geometry; extra evidence is an ablation."
+    }
+  ],
+  "digest": "sha256:af9ed60393bd0069d87912c447ce33af7bd691d038ce3cc3a53113a43d851779",
+  "gates": [
+    {
+      "capability": "ingestion",
+      "evidence": "Sequence artifact reader verification and the ingestion integrity report.",
+      "gate_id": "ingestion.sequence_integrity",
+      "kind": "invariant",
+      "metrics": [
+        "ingestion.integrity.violations",
+        "ingestion.modality.coverage"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "The selected window of the SequenceArtifact validates with zero integrity violations, holds RGB and LiDAR under the one declared clock, carries a calibration identity, and its selection identity equals the scenario's."
+    },
+    {
+      "capability": "state_estimation",
+      "evidence": "State estimation run artifact, lookup outcomes and the pose-gap report.",
+      "gate_id": "state_estimation.trajectory_coverage",
+      "kind": "invariant",
+      "metrics": [
+        "state.gap.ratio"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "Every selected image and LiDAR timestamp resolves to a pose, exact or interpolated within the declared lookup policy, or is rejected explicitly; the frame graph connects every sensor frame to the map frame."
+    },
+    {
+      "capability": "state_estimation",
+      "evidence": "State estimation evaluation report with the comparison protocol.",
+      "gate_id": "state_estimation.accuracy",
+      "kind": "report",
+      "metrics": [
+        "state.ate.rmse",
+        "state.rpe.translation.rmse"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "ATE and RPE are reported against an independent trusted reference; when the trajectory is the declared pose input itself they are reported as not applicable, never as zero."
+    },
+    {
+      "capability": "geometric_mapping",
+      "evidence": "Geometric map artifact, transform traces and the round-trip report.",
+      "gate_id": "geometric_mapping.map_frame_consistency",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "The map is expressed in the trajectory's frame, every source point of the selected scans has an auditable transform trace, geometry references are stable, and the map survives a round trip through its artifact unchanged."
+    },
+    {
+      "capability": "geometric_mapping",
+      "evidence": "Geometric mapping evaluation report.",
+      "gate_id": "geometric_mapping.quality_report",
+      "kind": "report",
+      "metrics": [
+        "geometry.scan_overlap.plane_distance.median"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "Density, range, bounds and scan-to-scan overlap of the map are reported with their sampling protocol."
+    },
+    {
+      "capability": "visual_perception",
+      "evidence": "Perception run artifact and its multi-run reader.",
+      "gate_id": "visual_perception.evidence_completeness",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every selected frame has a perception result with an explicit status per stage; failures are recorded rather than dropped, and each claim carries its backend, model, prompt policy and source region."
+    },
+    {
+      "capability": "visual_perception",
+      "evidence": "Region discovery evaluation against the reference set.",
+      "gate_id": "visual_perception.region_quality",
+      "kind": "report",
+      "metrics": [
+        "region.iou.mean",
+        "region.recall.mean",
+        "region.duplicate_rate.mean"
+      ],
+      "needs_reference_annotations": [
+        "regions"
+      ],
+      "requirement": "Region overlap, recall and duplicate rate are reported over the annotated frames."
+    },
+    {
+      "capability": "visual_perception",
+      "evidence": "Semantic interpretation evaluation against the reference set.",
+      "gate_id": "visual_perception.semantic_quality",
+      "kind": "report",
+      "metrics": [
+        "semantic.acceptable_claim_rate",
+        "semantic.unsupported_claim_rate",
+        "semantic.ambiguity_preservation_rate"
+      ],
+      "needs_reference_annotations": [
+        "semantics"
+      ],
+      "requirement": "Acceptable, unsupported and ambiguity-preserving claim rates are reported; an unannotated open-vocabulary concept is never counted as wrong."
+    },
+    {
+      "capability": "sensor_association",
+      "evidence": "Sensor association run artifact and its calibration and timing diagnostics.",
+      "gate_id": "sensor_association.projection_validity",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every SpatialObservation references geometry that exists in the run's map, the visible, occluded, outside and invalid counts add up, and a frame without a valid pose is rejected explicitly."
+    },
+    {
+      "capability": "sensor_association",
+      "evidence": "Sensor association evaluation report.",
+      "gate_id": "sensor_association.projection_quality",
+      "kind": "report",
+      "metrics": [
+        "association.visible_support.ratio",
+        "association.reprojection_error.median",
+        "association.feature_anchoring.rate"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "Visible support, reprojection error and feature anchoring are reported by stratum with an explicit unavailable stratum."
+    },
+    {
+      "capability": "semantic_fusion",
+      "evidence": "Semantic fusion run artifact and its lineage.",
+      "gate_id": "semantic_fusion.evidence_preservation",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Fusion consumes only the run's spatial observations, groups repeated inference over one physical observation instead of duplicating it, keeps alternatives and conflicts as uncertainty, and creates no object identity."
+    },
+    {
+      "capability": "semantic_fusion",
+      "evidence": "Semantic fusion evaluation against the reference set.",
+      "gate_id": "semantic_fusion.reference_recovery",
+      "kind": "report",
+      "metrics": [
+        "fusion.reference_recovery.rate",
+        "fusion.ambiguity_retention.rate",
+        "fusion.view_consistency.rate"
+      ],
+      "needs_reference_annotations": [
+        "semantics"
+      ],
+      "requirement": "Reference recovery, ambiguity retention and multi-view consistency are reported over the annotated supports."
+    },
+    {
+      "capability": "entity_resolution",
+      "evidence": "Entity resolution run artifact and the entity materialization artifact.",
+      "gate_id": "entity_resolution.identity_lineage",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every resolved entity lists its member entities and their fused evidence, every merge, split or keep decision records the evidence it used, and an undecided case stays unresolved."
+    },
+    {
+      "capability": "entity_resolution",
+      "evidence": "Entity resolution evaluation against the identity annotations.",
+      "gate_id": "entity_resolution.identity_quality",
+      "kind": "report",
+      "metrics": [
+        "entity.false_merge.rate",
+        "entity.duplicate.rate",
+        "entity.semantic_accuracy.rate"
+      ],
+      "needs_reference_annotations": [
+        "identity"
+      ],
+      "requirement": "False merges, duplicates and semantic accuracy are reported separately, so a resolution error is never attributed to fusion or the reverse."
+    },
+    {
+      "capability": "spatial_relations",
+      "evidence": "Spatial relations run artifact.",
+      "gate_id": "spatial_relations.reference_integrity",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every relation references resolved entities of the run and carries its evidence; a relation never replaces the evidence that supports it."
+    },
+    {
+      "capability": "spatial_relations",
+      "evidence": "Spatial relations evaluation against the relation annotations.",
+      "gate_id": "spatial_relations.relation_quality",
+      "kind": "report",
+      "metrics": [
+        "relations.f1",
+        "relations.negative_violation.rate"
+      ],
+      "needs_reference_annotations": [
+        "relations"
+      ],
+      "requirement": "Relation precision and recall are reported by predicate, with explicit negatives kept apart from missing annotations."
+    },
+    {
+      "capability": "artifact",
+      "evidence": "Artifact reader verification and the round-trip report.",
+      "gate_id": "artifact.integrity",
+      "kind": "invariant",
+      "metrics": [
+        "artifact.integrity.violations",
+        "artifact.round_trip.mismatches"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "The ContextMapArtifact reads back on the base install with verified hashes and without mutation, its dependency closure is complete, and it references geometry rather than copying it."
+    },
+    {
+      "capability": "cross_stage",
+      "evidence": "Cross-stage lineage check over the persisted artifacts.",
+      "gate_id": "cross_stage.lineage_closure",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every stage artifact names the exact upstream artifacts it consumed and each equals the artifact actually read; the dependency closure of the final artifact has no unnamed input."
+    },
+    {
+      "capability": "cross_stage",
+      "evidence": "Cross-stage coordinate check over the persisted artifacts.",
+      "gate_id": "cross_stage.coordinate_consistency",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "One map frame runs from trajectory to geometry to association to entities; every boundary states its frame and units and no stage converts implicitly."
+    },
+    {
+      "capability": "cross_stage",
+      "evidence": "Cross-stage trace of sampled final facts back to source observations.",
+      "gate_id": "cross_stage.evidence_traceability",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Sampled final entities and relations trace to the exact source observations and geometry through the recorded path, and no stage repaired an invalid upstream artifact."
+    },
+    {
+      "capability": "cross_stage",
+      "evidence": "Cross-stage check of physical observation identity across fusion and entities.",
+      "gate_id": "cross_stage.physical_observation_identity",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Repeated inference over one physical observation never becomes duplicated physical evidence downstream."
+    },
+    {
+      "capability": "runtime",
+      "evidence": "Run manifest and stage provenance.",
+      "gate_id": "runtime.provenance_identity",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Every stage artifact records the exact backend, model revision or checkpoint hash and the effective configuration digest; an external service records its availability and cost metadata."
+    },
+    {
+      "capability": "runtime",
+      "evidence": "Resource profile of the canonical run.",
+      "gate_id": "runtime.resource_reporting",
+      "kind": "report",
+      "metrics": [
+        "runtime.wall_time",
+        "runtime.throughput",
+        "runtime.peak_memory",
+        "runtime.storage_size",
+        "runtime.failure_rate"
+      ],
+      "needs_reference_annotations": [],
+      "requirement": "Wall time, throughput, peak CPU memory, peak GPU memory with device and precision, storage and counts are recorded per stage with the warm or cold, reuse and selection-size conditions; failures and out-of-memory stay explicit."
+    },
+    {
+      "capability": "runtime",
+      "evidence": "Comparison of repeated canonical runs.",
+      "gate_id": "reproducibility.rerun_equivalence",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "Repeated canonical runs select the same stages and configuration and yield equivalent artifacts, metric reports and final map within the documented tolerance of each stage."
+    },
+    {
+      "capability": "runtime",
+      "evidence": "Fault-injection run and its resume record.",
+      "gate_id": "reproducibility.interruption_recovery",
+      "kind": "invariant",
+      "metrics": [],
+      "needs_reference_annotations": [],
+      "requirement": "A run interrupted at a representative stage resumes by reusing immutable artifacts, never promotes an incomplete artifact and preserves lineage."
+    }
+  ],
+  "matrix_digest": "sha256:ac91ea8697efb77692584b839a81c00cdf179fa1016a4e850d9c6bdab1ed9e6a",
+  "scenario_id": "solution-1-canonical",
+  "schema": "contextmap.e2e.scenario/v1",
+  "stages": [
+    {
+      "capability": "ingestion",
+      "components": [
+        {
+          "backend": "ros1_bag",
+          "component_id": "ingestion.source_adapter",
+          "external_service": false,
+          "model": null
+        }
+      ],
+      "rationale": "corridor-02 is a ROS 1 bag; the adapter only yields canonical observations.",
+      "stage_id": "ingestion"
+    },
+    {
+      "capability": "visual_perception",
+      "components": [
+        {
+          "backend": "sam2",
+          "component_id": "visual_perception.region_discovery",
+          "external_service": false,
+          "model": "facebook/sam2.1-hiera-tiny"
+        },
+        {
+          "backend": "dinov2",
+          "component_id": "visual_perception.dense_features",
+          "external_service": false,
+          "model": "facebook/dinov2-base"
+        },
+        {
+          "backend": "clip",
+          "component_id": "visual_perception.region_features",
+          "external_service": false,
+          "model": "openai/clip-vit-large-patch14"
+        },
+        {
+          "backend": "qwen",
+          "component_id": "visual_perception.semantic_interpretation",
+          "external_service": false,
+          "model": "Qwen/Qwen3-VL-4B-Instruct"
+        }
+      ],
+      "rationale": "Local, open-weight backends that already ran on the sample and fit an 8 GB GPU. SAM2 segments without labels, so segmentation is not read as classification.",
+      "stage_id": "visual_perception"
+    },
+    {
+      "capability": "state_estimation",
+      "components": [
+        {
+          "backend": "external_pose",
+          "component_id": "state_estimation.estimator",
+          "external_service": false,
+          "model": null
+        }
+      ],
+      "rationale": "The dataset trajectory is a declared pose input; the canonical run does not need a container. An estimator run is an ablation, not the baseline.",
+      "stage_id": "state_estimation"
+    },
+    {
+      "capability": "geometric_mapping",
+      "components": [],
+      "rationale": "One persistent map in the trajectory frame; geometry has no backend choice.",
+      "stage_id": "geometric_mapping"
+    },
+    {
+      "capability": "sensor_association",
+      "components": [],
+      "rationale": "Calibrated projection with explicit visibility and occlusion policies.",
+      "stage_id": "sensor_association"
+    },
+    {
+      "capability": "semantic_fusion",
+      "components": [
+        {
+          "backend": "geometry-jaccard-support-v1",
+          "component_id": "semantic_fusion.support",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "baseline-evidence-accumulation-v1",
+          "component_id": "semantic_fusion.accumulation",
+          "external_service": false,
+          "model": null
+        }
+      ],
+      "rationale": "The baseline policy is the reference every option is compared with; no decision to adopt the quality-aware policy has been taken.",
+      "stage_id": "semantic_fusion"
+    },
+    {
+      "capability": "semantic_mapping",
+      "components": [],
+      "rationale": "Materializes entities from fused evidence without cross-support merging.",
+      "stage_id": "semantic_mapping"
+    },
+    {
+      "capability": "entity_resolution",
+      "components": [],
+      "rationale": "Decides identity across supports; prefers unresolved to a silent merge.",
+      "stage_id": "entity_resolution"
+    },
+    {
+      "capability": "spatial_relations",
+      "components": [],
+      "rationale": "Derives relations from resolved entities and never replaces their evidence.",
+      "stage_id": "spatial_relations"
+    },
+    {
+      "capability": "artifact",
+      "components": [],
+      "rationale": "The portable ContextMapArtifact is the product of the repository.",
+      "stage_id": "context_map"
+    }
+  ],
+  "subject": {
+    "dataset_id": "contextmap-ci-subset",
+    "evidence_class": "fake_contract",
+    "external_inputs": [
+      {
+        "digest": null,
+        "location": "ExternalPoseMeasurement observations of the synthetic sequence",
+        "name": "pose_source",
+        "role": "pose_input"
+      }
+    ],
+    "note": "Synthetic formulas with no GPU, network or model. It rehearses the contracts between stages and protects regressions; it is never evidence that Solution 1 is validated.",
+    "reference_set": {
+      "digest": "sha256:752df30cbd3a5f85b6ab0ea1606c9071e602a83769bb8ebcecc93c0ceff62742",
+      "reference_set_id": "contextmap-ci-subset",
+      "version": "1.0.1"
+    },
+    "selection": {
+      "clock_id": "fixture:header",
+      "end_ns": 2000000000,
+      "image_count": 3,
+      "imu_count": 0,
+      "lidar_scan_count": 3,
+      "selected_images": [
+        {
+          "nearest_lidar_id": "scan-0000",
+          "observation_id": "frame-0000",
+          "timestamp_ns": 0
+        },
+        {
+          "nearest_lidar_id": "scan-0001",
+          "observation_id": "frame-0001",
+          "timestamp_ns": 1000000000
+        },
+        {
+          "nearest_lidar_id": "scan-0002",
+          "observation_id": "frame-0002",
+          "timestamp_ns": 2000000000
+        }
+      ],
+      "selection_identity": null,
+      "start_ns": 0
+    },
+    "sequence_artifact_id": null,
+    "sequence_manifest_digest": null,
+    "subject_id": "ci-synthetic-subset"
+  },
+  "version": "1.0.0"
+}
