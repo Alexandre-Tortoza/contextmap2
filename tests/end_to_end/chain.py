@@ -79,7 +79,6 @@ from contextmap.state_estimation import (
     StaticRelationRequirement,
     TrajectoryId,
     TrajectoryLookup,
-    allocate_run_index,
     calibration_identity,
     execute_state_estimation,
 )
@@ -201,16 +200,13 @@ def _estimate(workspace: Path, sequence: SequenceArtifactReader) -> StateEstimat
             ),
         ),
     )
-    index = allocate_run_index(workspace_root=workspace, sequence_name=SEQUENCE_NAME)
+    directory = workspace / "state_estimation"
     StateEstimationRunWriter(
-        workspace_root=workspace,
+        output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         run_id=StateEstimationRunId("state-run-0001"),
-        run_index=index,
-        selection_label="full-sequence",
-        backend_label="external-pose",
+        run_index=1,
     ).finalize(outcome)
-    directory = next((workspace / "runs" / "state-estimation" / SEQUENCE_NAME).glob("run-0001__*"))
     return StateEstimationRunReader(directory)
 
 

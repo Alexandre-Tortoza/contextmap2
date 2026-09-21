@@ -39,7 +39,7 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup tempora
 - `run_geometry_preflight()`, `GeometryRequirements`, `StaticRelationRequirement`, `GeometryPreflightReport`, `PreflightStatus`, `PreflightTolerances`, `calibration_identity()` — preflight READY/BLOCKED por capability.
 - `execute_state_estimation()`, `StateEstimationOutcome`, `GeometryPreflightError` — executa um backend somente depois do preflight.
 - `summarize_motion()`, `motion_deltas()`, `MotionSummary`, `MotionDelta`, `DistributionSummary` — distribuições de deslocamento, rotação e velocidades por intervalo.
-- `StateEstimationRunWriter`, `StateEstimationRunReader`, `StateEstimationRunManifest`, `StateEstimationRunId`, `StateEstimationDebugLevel`, `allocate_run_index()`, `rebuild_run_registry()`, `RunArtifactError`, `IncompleteRunArtifactError` — persistência imutável e leitura de um run.
+- `StateEstimationRunWriter`, `StateEstimationRunReader`, `StateEstimationRunManifest`, `StateEstimationRunId`, `StateEstimationDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError` — persistência imutável e leitura de um run.
 
 Os backends `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) e `contextmap.state_estimation.backends.fast_lio` (`FastLioEstimator`, `FastLioConfig`, `FastLioRunner`) não são reexportados por `contextmap.state_estimation`; são importados pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
 

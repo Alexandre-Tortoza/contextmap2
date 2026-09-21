@@ -8,24 +8,24 @@ Quando um mapa ou uma associação câmera-LiDAR sai errada, é preciso descobri
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/state_estimation/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/state-estimation/<sequence>/
-├── runs.json                              # registry reconstruível
-└── run-000N__<selection>__<backend>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/                           # contratual
-    │   ├── trajectory.json                # metadados da trajetória (sem poses)
-    │   ├── poses.jsonl                    # uma pose por linha
-    │   ├── pose-index.jsonl               # id, timestamp_ns, offset e tamanho de cada pose
-    │   ├── frame-summary.json             # frames dinâmicos, frames/arestas estáticas, convenções
-    │   └── quality.json                   # amostragem, gaps, contagens
-    ├── metrics/                           # contratual
-    │   ├── preflight.json                 # relatório completo do preflight de geometria
-    │   ├── motion.json                    # distribuições de translação, rotação e velocidades
-    │   ├── runtime.json                   # somente quando o tempo foi medido
-    │   └── diagnostics.jsonl              # eventos do backend, somente quando existem
-    └── debug/                             # nunca contratual
+<output_dir>/
+├── README.md
+├── manifest.json
+├── outputs/                           # contratual
+│   ├── trajectory.json                # metadados da trajetória (sem poses)
+│   ├── poses.jsonl                    # uma pose por linha
+│   ├── pose-index.jsonl               # id, timestamp_ns, offset e tamanho de cada pose
+│   ├── frame-summary.json             # frames dinâmicos, frames/arestas estáticas, convenções
+│   └── quality.json                   # amostragem, gaps, contagens
+├── metrics/                           # contratual
+│   ├── preflight.json                 # relatório completo do preflight de geometria
+│   ├── motion.json                    # distribuições de translação, rotação e velocidades
+│   ├── runtime.json                   # somente quando o tempo foi medido
+│   └── diagnostics.jsonl              # eventos do backend, somente quando existem
+└── debug/                             # nunca contratual
 ```
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a linhagem e a configuração efetiva (`estimator.configuration_fingerprint`) ficam no `manifest.json` e os eventos em `metrics/diagnostics.jsonl`. Criar arquivos sem produtor real violaria YAGNI, o mesmo critério adotado por `PerceptionRunArtifact`.
@@ -64,8 +64,7 @@ Os projetos XY/XZ são CSV, não imagens: o artifact não exige nenhuma tecnolog
 ## Integridade, imutabilidade e identidade
 
 - a escrita acontece em um diretório temporário e o run só aparece no caminho final depois de a checagem de inventário passar; uma escrita interrompida não pode parecer um run válido;
-- um run finalizado nunca é sobrescrito; reexecutar cria outro `run_index`;
-- `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest levanta `IncompleteRunArtifactError`;
-- `allocate_run_index()` percorre os diretórios de run válidos (nunca o registry), então runs incompletos ou corrompidos não são contados; `rebuild_run_registry()` regenera `runs.json`.
+- um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, e reexecutar grava em outro diretório;
+- `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest levanta `IncompleteRunArtifactError`.
 
-O `run_index` é conveniente e legível, mas não substitui identidade nem hash.
+`run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.

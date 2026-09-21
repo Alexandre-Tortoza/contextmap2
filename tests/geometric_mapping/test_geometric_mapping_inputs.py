@@ -523,17 +523,14 @@ def _write_artifacts(workspace: Path) -> tuple[SequenceArtifactReader, StateEsti
         estimator,
         _request(observations, calibration),
     )
+    run_dir = workspace / "state_estimation"
     StateEstimationRunWriter(
-        workspace_root=workspace,
+        output_dir=run_dir,
         sequence_name="corridor-02",
         run_id=StateEstimationRunId("run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        backend_label="external-pose",
     ).finalize(outcome)
 
-    run_dir = workspace / "runs" / "state-estimation" / "corridor-02"
-    run_dir = run_dir / "run-0001__full-sequence__external-pose"
     return (
         SequenceArtifactReader(workspace / "sequences" / "corridor-02" / str(SEQUENCE_ID)),
         StateEstimationRunReader(run_dir),
