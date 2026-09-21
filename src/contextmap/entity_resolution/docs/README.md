@@ -29,6 +29,7 @@ Existem os **contratos** de identidade e de comparação:
 - `EntityResolutionRunId`, `ResolvedEntityId` e `ResolvedEntityReference`, com o codec JSON que revalida a referência;
 - `EntityMatchEvidence`: a evidência de **uma comparação**, com a evidência tipada de cada canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) mantida separada e sem nenhum score que a resuma, mais os resultados dos gates duros de validade (`evaluate_comparison_gates`);
 - `ResolutionDecision`: o veredito de uma política versionada, `MATCH`, `DISTINCT` ou `UNRESOLVED`, com a evidência de origem, as regras que dispararam, os canais usados e ignorados e o motivo quando não resolve;
+- a **comparação geométrica** (`compare_geometry`, `GeometryComparisonPolicy`): o canal de geometria, com sinais próprios e regras versionadas, sem semântica e sem decisão ([`geometry-comparison.md`](geometry-comparison.md));
 - a **recuperação de candidatos** (`retrieve_candidate_sets`, `EntitySpatialIndex`): para cada entidade, os alvos plausíveis de comparação, de forma permissiva e determinística, sem all-pairs e sem decidir nada ([`candidate-retrieval.md`](candidate-retrieval.md)).
 
 Um canal é sempre **medido ou indisponível**: a falta de evidência nunca vira zero nem voto por `DISTINCT`. O codec é estrito e reflexivo (`_codec.py`). Os demais contratos (política, entidade resolvida, artifact e avaliação) chegam nas issues seguintes da milestone.
@@ -47,6 +48,7 @@ Uma entidade resolvida **nunca substitui** os membros: as entidades de origem ma
 - `GeometryEvidence`, `GeometryMeasurement`, `SupportDistance`; `SemanticEvidence`, `SemanticMeasurement`, `LabelComparison`, `LabelRelation`, `AttributeComparison`; `AppearanceEvidence`, `AppearanceMeasurement`, `FeatureContribution`; `TemporalEvidence`, `TemporalMeasurement`; `PointRepresentationEvidence`, `RepresentationMeasurement`, `RepresentationRef` — a evidência tipada de cada canal.
 - `ResolutionDecision`, `ResolutionDecisionId`, `ResolutionOutcome`, `UnresolvedReason`, `PolicyStage`, `TriggeredRule`, `DecisionProvenance`, `decision_id_for` — a decisão.
 - `CandidateRetrievalPolicy`, `CANDIDATE_RETRIEVAL_POLICY_ID`, `retrieve_candidate_sets`, `EntitySpatialIndex`, `EntityCandidateSet`, `EntityCandidate`, `RetrievalDiagnostics`, `RetrievalReason`, `ExclusionReason`, `CandidacyAssessment`, `explain_candidacy`, `candidate_pairs` — a recuperação de candidatos.
+- `GeometryComparisonPolicy`, `SupportDistancePolicy`, `GEOMETRY_COMPARISON_POLICY_ID`, `compare_geometry` — o canal de geometria.
 - `PolicyRef` — política versionada e fingerprint da configuração, comum a canais, recuperação e políticas.
 - `encode_*` e `decode_*` de referência resolvida, evidência de comparação, decisão e conjunto de candidatos — o codec JSON, que revalida todas as invariantes.
 
@@ -54,8 +56,8 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 
 ## Módulos consumidos
 
-- `contextmap.semantic_mapping`: `Entity`, `EntityReference`, `EntityFeatureRef` e `AmbiguityState`, o que é comparado e referenciado.
-- `contextmap.geometric_mapping`: `GeometryReference`, `MapId` e `Bounds3D`, o suporte 3D referenciado e as caixas da recuperação.
+- `contextmap.semantic_mapping`: `Entity`, `EntityGeometry`, `EntityReference`, `EntityFeatureRef`, `AmbiguityState` e `resolve_geometry`, o que é comparado e referenciado.
+- `contextmap.geometric_mapping`: `GeometryReference`, `MapId`, `Bounds3D` e `GeometrySource`, o suporte 3D referenciado, as caixas e a leitura opcional dos pontos.
 - `contextmap.point_representation`: `PointRepresentationId` e `PointRepresentationRunId`, as representações referenciadas.
 
 As dependências estão declaradas em `tests/architecture/test_boundaries.py` e são sempre feitas pela API pública.
@@ -63,4 +65,5 @@ As dependências estão declaradas em `tests/architecture/test_boundaries.py` e 
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — contratos, escopo de identidade e invariantes.
+- [`geometry-comparison.md`](geometry-comparison.md) — sinais geométricos, regras, casos explícitos e custo.
 - [`candidate-retrieval.md`](candidate-retrieval.md) — política de recuperação, diagnóstico de exclusão, índice espacial e linha de base de desempenho.
