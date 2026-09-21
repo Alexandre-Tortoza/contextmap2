@@ -42,7 +42,7 @@ Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObse
 - `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
 - `accumulate_quality_aware_evidence()`, `QualityAwareAccumulationPolicy`, `QualityRamp`, `QualityInput`, `QUALITY_AWARE_ACCUMULATION_POLICY_ID` — a política opcional que pondera as contribuições por qualidade mensurável, com rampas declaradas e fator neutro registrado.
 - `QualityWeighting`, `ContributionWeight`, `ComponentFactor`, `ComponentTreatment`, `HypothesisSupport`, `ObservationFactor` — o peso derivado, inspecionável: por componente, por contribuição e o suporte de cada hipótese antes e depois.
-- `SemanticFusionRunWriter`, `SemanticFusionRunReader`, `SemanticFusionRunManifest`, `FusionRunLineage`, `FusionOutcome`, `SemanticFusionDebugLevel`, `SemanticFusionRunId`, `FusionRunArtifactError`, `IncompleteFusionRunArtifactError`, `allocate_fusion_run_index()`, `rebuild_fusion_run_registry()` — o artifact persistido: escrita atômica em fluxo, leitura por identidade, linhagem explícita, métricas separadas e debug nunca contratual.
+- `SemanticFusionRunWriter`, `SemanticFusionRunReader`, `SemanticFusionRunManifest`, `FusionRunLineage`, `FusionOutcome`, `SemanticFusionDebugLevel`, `SemanticFusionRunId`, `FusionRunArtifactError`, `IncompleteFusionRunArtifactError` — o artifact persistido: escrita atômica em fluxo, leitura por identidade, linhagem explícita, métricas separadas e debug nunca contratual.
 - `EvidenceChannel`, `ChannelProvenance` — os canais tipados (claims, scores, features, qualidade, geometria, estrutura 3D) e a proveniência do que alimentou cada canal ativo.
 - `FusedHypothesis`, `FusedHypothesisId`, `HypothesisEvidence`, `EvidenceStance` — um candidato semântico e cada claim que o sustenta, contradiz ou deixa ambíguo.
 - `SupportSignal`, `SupportSignalKind` — score tipado de uma claim, com o modelo que o produziu; `None` significa não pontuado.
@@ -59,7 +59,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as regras de co
 - `contextmap.geometric_mapping`: `GeometrySource`, `GeometryReference`, `GeometryId`, `Bounds3D`, `MapId`.
 - `contextmap.ingestion`: `SourceObservationId`.
 - `contextmap.state_estimation`: `TimeBounds`, reutilizado para o intervalo fechado de aquisição em vez de duplicar a regra.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index`, `write_run_registry`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
 
 A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe apenas para identidades e para o tipo de intervalo temporal, sempre pela API pública; Semantic Fusion não usa a lógica dessas capabilities. Ela está declarada em `tests/architecture/test_boundaries.py`.
 

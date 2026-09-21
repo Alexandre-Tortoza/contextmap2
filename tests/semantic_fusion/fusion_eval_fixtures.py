@@ -247,24 +247,17 @@ def make_eval_fixture(root: Path, *, extra_frame: bool = False) -> EvalFixture:
     runs: dict[str, Path] = {}
     roles: dict[str, FusionArmRole] = {}
     for index, (arm, (role, outcomes)) in enumerate(arms.items(), start=1):
+        # Cada braço da ablação grava no próprio diretório, escolhido aqui pelo chamador.
+        runs[arm] = root / arm.replace("_", "-")
         writer = SemanticFusionRunWriter(
-            workspace_root=root,
+            output_dir=runs[arm],
             sequence_name="sequence-0001",
             run_id=SemanticFusionRunId(f"fusion-run-{index:04d}"),
             run_index=index,
-            selection_label="all-frames",
-            policy_label=arm.replace("_", "-"),
             lineage=LINEAGE,
             code_version="test",
         )
         writer.write(outcomes, excluded=parts.excluded)
-        runs[arm] = (
-            root
-            / "runs"
-            / "semantic-fusion"
-            / "sequence-0001"
-            / f"run-{index:04d}__all-frames__{arm.replace('_', '-')}"
-        )
         roles[arm] = role
     door_view = spatial_id("run-a", "frame-0120")
     annotations = (
