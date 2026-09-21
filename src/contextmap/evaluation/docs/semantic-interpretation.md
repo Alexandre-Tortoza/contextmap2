@@ -96,3 +96,56 @@ corridor-02 de 20 frames. Os relatórios reais dessa amostra são, portanto,
 visibilidade são N/A, e só contagens, resultados por request, estabilidade,
 concentração de rótulos e custo são medidos. Essas medidas não sustentam
 conclusão sobre qual backend tem melhor qualidade semântica.
+
+## Execução real de referência (2026-09-21, sem anotações)
+
+Todos os números abaixo são **reais** (GPU RTX 3060 compartilhada, decoding
+determinístico, uma amostra pequena) e não são correção semântica. Amostra: os
+20 frames de `outputs/validation/2026-09-21/selection.json`; requests de cena
+sobre o frame completo e requests de região sobre as 5 maiores regiões SAM2
+aceitas (`vp-sam2-rerun`, área ≥ 1500 px), 100 regiões, com o tight crop como
+evidência primária. Contagens da execução primária (`repeat_index=0`); latência
+em nearest-rank; o pico de memória é o do processo, com pesos.
+
+| Backend e configuração | Modo | Requests | Interpretadas | Falha de parser | Falha de backend | Latência p50 / p95 | Pico de GPU |
+|---|---|---|---|---|---|---|---|
+| Qwen3-VL-4B, nf4 | scene | 20 | 17 | 3 | 0 | 7,9 s / 22,7 s | 3246 MiB |
+| Qwen3-VL-4B, nf4 | region | 100 | 53 | 47 | 0 | 4,7 s / 6,3 s | 3144 MiB |
+| Florence-2 `<DETAILED_CAPTION>` | scene | 20 | 20 | 0 | 0 | 0,50 s / 0,59 s | 1819 MiB |
+| Florence-2 `<REGION_TO_CATEGORY>` | region | 100 | 100 | 0 | 0 | 0,23 s / 0,25 s | 1819 MiB |
+| Florence-2 `<REGION_TO_DESCRIPTION>` | region | 100 | 100 | 0 | 0 | 0,31 s / 0,39 s | 1819 MiB |
+
+- **Estabilidade.** Com decoding guloso ou determinístico, as repetições foram
+  idênticas: 120 requests do Qwen (2 repetições) e as do Florence-2 devolveram o
+  mesmo texto bruto, inclusive as falhas de parser.
+- **Falhas de parser do Qwen.** Nenhuma é falha do runtime: a maior parte é o
+  modelo omitir `confidence` (o schema exige `null`) ou pôr atributos não
+  escalares; poucas coincidem com truncamento. O relatório preserva o texto
+  rejeitado de cada uma.
+- **Concentração de rótulos.** O Florence-2 `<REGION_TO_CATEGORY>` produziu 24
+  rótulos distintos em 200 respostas, o mais frequente (`poster`) com 17,5%. As
+  hipóteses do Qwen são frases descritivas quase todas distintas, e por isso o
+  acordo exato entre backends (`primary_agreement_count`) foi 0 de 17 (cena) e 0
+  de 53 (região): comparar frase com rótulo por `casefold-exact/1` não mede
+  concordância semântica.
+- **Ablação de evidência** (mesma região e backend, pareadas por observação e
+  região). Florence-2 `<REGION_TO_CATEGORY>`, 100 regiões: mascarar o fundo
+  (`masked_subject`) manteve o rótulo do tight crop em apenas 11 regiões,
+  então o canal de evidência muda a resposta na maior parte dos casos, e sem
+  anotação não há como dizer qual variante está certa. Qwen3-VL-4B nf4, 50
+  regiões dos 10 primeiros frames, 1 repetição: respostas parseadas em 27
+  (tight crop), 26 (contextual crop) e 45 (masked subject) de 50. É uma medida de
+  aderência ao schema, não de qualidade, e a diferença não tem causa
+  demonstrada.
+- **Quantização** (5 primeiros frames, 30 requests, tight crop). nf4 interpretou
+  19 de 30 (região 14/25, cena 5/5) com latência p50 4,7 s e pico de 3246 MiB;
+  int8 interpretou 21 de 30 (região 19/25, cena 2/5) com p50 12,8 s e pico de
+  4938 MiB, porque o LLM.int8 é cerca de 2,7 vezes mais lento e ocupa mais VRAM.
+  Amostra pequena, sem anotação.
+
+Os relatórios completos (`*.report.json`, comparações e variantes), as
+execuções brutas com a resposta bruta de cada request e o driver ficam fora do
+git em
+`workspace/corridor-02/validation-semantic-interpretation-20260921/visual_perception/`.
+O Gemini não tem relatório real: não há credencial nem consentimento para enviar
+frames a um serviço externo.
