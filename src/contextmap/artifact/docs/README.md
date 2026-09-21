@@ -56,6 +56,7 @@ Nenhum dentro do Solution 1 hoje. O serializador (Context Map Serialization) e a
 - [`storage-layout.md`](storage-layout.md) — layout do `ContextMapArtifact` em disco, formatos escolhidos, manifest, identidade e dependências.
 - [`writer.md`](writer.md) — escrita determinística e publicação atômica.
 - [`reader.md`](reader.md) — leitor leve, acesso preguiçoso, resolução de referências e dependências.
+- [`validation.md`](validation.md) — validação de integridade, níveis, relatório legível por máquina.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `ContextMap` no contexto global de contratos.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — o `ContextMapArtifact` no fluxo de artifacts.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — a etapa de Context Map Assembly.

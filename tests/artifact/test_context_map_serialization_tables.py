@@ -22,7 +22,9 @@ from contextmap.artifact.tables import (
     RecordTable,
     canonical_json_line,
     document_json,
+    encode_entity_relation_index,
     encode_record_table,
+    rebuild_index,
 )
 
 
@@ -233,6 +235,44 @@ def test_a_line_that_is_not_terminated_by_a_newline_is_detected(tmp_path: Path) 
 
     with pytest.raises(BrokenIndexError, match="newline"):
         table.read("entity-a")
+
+
+def test_the_index_can_be_rebuilt_from_the_payload_alone() -> None:
+    table = encode_record_table(_lines())
+
+    assert rebuild_index(table.payload) == table.index
+    assert rebuild_index(b"") == b""
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        (b'{"key":"a"}', "newline"),
+        (b"not json\n", "valid JSON"),
+        (b'{"record":{}}\n', "key"),
+        (b'{"key":""}\n', "key"),
+        (b'{"key":"b"}\n{"key":"a"}\n', "ascending"),
+        (b'{"key":"a"}\n{"key":"a"}\n', "duplicate"),
+    ],
+)
+def test_a_payload_that_is_not_a_canonical_table_cannot_be_indexed(
+    payload: bytes, message: str
+) -> None:
+    with pytest.raises(RecordTableError, match=message):
+        rebuild_index(payload)
+
+
+def test_the_traversal_index_refuses_an_endpoint_that_is_not_an_entity() -> None:
+    with pytest.raises(RecordTableError, match="entity-zzz"):
+        encode_entity_relation_index(["entity-a"], [("relation-1", "entity-a", "entity-zzz")])
+
+    encoded = encode_entity_relation_index(
+        ["entity-b", "entity-a"], [("relation-1", "entity-a", "entity-b")]
+    )
+    assert [json.loads(line) for line in encoded.splitlines()] == [
+        {"key": "entity-a", "as_subject": ["relation-1"], "as_object": []},
+        {"key": "entity-b", "as_subject": [], "as_object": ["relation-1"]},
+    ]
 
 
 def test_the_table_errors_belong_to_the_artifact_error_family() -> None:
