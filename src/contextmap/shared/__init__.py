@@ -28,8 +28,6 @@ from contextmap.shared.run_directory import (
     RunDirectoryError,
     check_file_inventory,
     file_entry,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.shared.time import SourceTimestamp
 
@@ -47,7 +45,6 @@ __all__ = [
     "file_entry",
     "invert_rigid",
     "is_unit_quaternion",
-    "next_run_index",
     "normalize_quaternion",
     "quaternion_angle_between",
     "quaternion_conjugate",
@@ -55,5 +52,4 @@ __all__ = [
     "quaternion_norm",
     "quaternion_to_rotation_matrix",
     "rotate_vector",
-    "write_run_registry",
 ]
