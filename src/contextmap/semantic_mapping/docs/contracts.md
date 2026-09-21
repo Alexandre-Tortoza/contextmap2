@@ -88,11 +88,18 @@ Nada aqui copia imagens, máscaras, embeddings nem payloads de fusão. Uma repre
 
 ## `EntityTemporalState`
 
+Quando e quantas vezes a entidade foi observada; detalhes em [`temporal-state.md`](temporal-state.md).
+
 | Campo | Significado |
 | --- | --- |
-| `first_seen`, `last_seen` | Aquisição da primeira e da última observação física; mesmo clock, `last_seen` não antecede `first_seen`. |
+| `first_seen`, `last_seen` | Aquisição do primeiro e do último frame físico que contribuiu; mesmo clock, `last_seen` não antecede `first_seen`. |
 | `physical_observation_count` | Frames físicos distintos, no mínimo 1. |
 | `inference_result_count` | Resultados de inferência sobre esses frames, correlacionados dentro de cada frame; nunca menor que os frames. |
+| `observation_refs` | `ObservationRef` (frame, instante de aquisição, resultados de inferência), em ordem cronológica e sem repetição: o índice de histórico. |
+| `provenance` | `TemporalProvenance`: regra versionada e se a seleção chegou em ordem cronológica. |
+| `lifecycle` | `EntityLifecycle` (`observed`, `stale`, `uncertain`) ou `None`. |
+
+O intervalo e as contagens devem concordar com o histórico, e `Entity` exige que o histórico e os vínculos de evidência listem os mesmos frames físicos. Não há velocidade, trajetória nem rastreamento.
 
 ## Serialização
 

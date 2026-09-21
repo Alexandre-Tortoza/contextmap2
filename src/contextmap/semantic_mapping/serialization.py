@@ -70,7 +70,12 @@ from contextmap.semantic_mapping.semantic_state import (
     EntityUncertainty,
     SemanticStateProvenance,
 )
-from contextmap.semantic_mapping.temporal import EntityTemporalState
+from contextmap.semantic_mapping.temporal import (
+    EntityLifecycle,
+    EntityTemporalState,
+    ObservationRef,
+    TemporalProvenance,
+)
 from contextmap.sensor_association import SpatialObservationId
 from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.visual_perception import (
@@ -538,13 +543,41 @@ def _encode_temporal_state(state: EntityTemporalState) -> dict[str, Any]:
         "last_seen": state.last_seen.to_record(),
         "physical_observation_count": state.physical_observation_count,
         "inference_result_count": state.inference_result_count,
+        "observation_refs": [
+            {
+                "physical_observation_id": str(item.physical_observation_id),
+                "acquisition_timestamp": item.acquisition_timestamp.to_record(),
+                "inference_result_count": item.inference_result_count,
+            }
+            for item in state.observation_refs
+        ],
+        "provenance": {
+            "rule_id": state.provenance.rule_id,
+            "input_order_chronological": state.provenance.input_order_chronological,
+        },
+        "lifecycle": None if state.lifecycle is None else state.lifecycle.value,
     }
 
 
 def _decode_temporal_state(record: Mapping[str, Any]) -> EntityTemporalState:
+    provenance = record["provenance"]
+    lifecycle = record["lifecycle"]
     return EntityTemporalState(
         first_seen=SourceTimestamp.from_record(record["first_seen"]),
         last_seen=SourceTimestamp.from_record(record["last_seen"]),
         physical_observation_count=record["physical_observation_count"],
         inference_result_count=record["inference_result_count"],
+        observation_refs=tuple(
+            ObservationRef(
+                physical_observation_id=SourceObservationId(item["physical_observation_id"]),
+                acquisition_timestamp=SourceTimestamp.from_record(item["acquisition_timestamp"]),
+                inference_result_count=item["inference_result_count"],
+            )
+            for item in record["observation_refs"]
+        ),
+        provenance=TemporalProvenance(
+            rule_id=provenance["rule_id"],
+            input_order_chronological=provenance["input_order_chronological"],
+        ),
+        lifecycle=None if lifecycle is None else EntityLifecycle(lifecycle),
     )

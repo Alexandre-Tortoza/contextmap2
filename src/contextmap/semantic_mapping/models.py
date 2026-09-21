@@ -119,8 +119,9 @@ class Entity:
 
         Raises:
             ValueError: If an identity is empty, a hypothesis or an uncertainty record comes
-                from a fused evidence the entity does not link to, or a 3D representation is
-                anchored outside the entity's geometry support.
+                from a fused evidence the entity does not link to, the observation history and
+                the evidence links list different physical observations, or a 3D representation
+                is anchored outside the entity's geometry support.
         """
         require_present(self, "entity_id", "semantic_map_id")
         linked = {ref.fused_evidence_id for ref in self.evidence.fused_evidence}
@@ -136,6 +137,14 @@ class Entity:
                     f"uncertainty comes from fused evidence {item.fused_evidence_id!r}, which "
                     f"the entity does not link to"
                 )
+        contributed = {
+            item.physical_observation_id for item in self.temporal_state.observation_refs
+        }
+        if contributed != set(self.evidence.physical_observation_ids):
+            raise ValueError(
+                "the observation history and the evidence links must list the same physical "
+                "observations"
+            )
         support = set(self.geometry.geometry_refs)
         for representation in self.evidence.point_representation_refs:
             if representation.geometry_reference not in support:

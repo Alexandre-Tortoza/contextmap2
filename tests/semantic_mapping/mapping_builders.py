@@ -29,14 +29,17 @@ from contextmap.semantic_mapping import (
     EntityHypothesis,
     EntityHypothesisRef,
     EntityId,
+    EntityLifecycle,
     EntityProvenance,
     EntitySemanticState,
     EntityTemporalState,
     EntityUncertainty,
     FusedEvidenceRef,
     GeometrySummaryPolicy,
+    ObservationRef,
     SemanticMapId,
     SemanticStateProvenance,
+    TemporalProvenance,
     derive_ambiguity_state,
     summarize_geometry,
 )
@@ -188,7 +191,7 @@ def make_evidence_links(
     fused_evidence_id: FusedEvidenceId = FUSED_EVIDENCE_ID,
     fusion_support_id: FusionSupportId = FUSION_SUPPORT_ID,
     spatial: tuple[str, ...] = ("spatial--run-a--frame-0120--region-0001",),
-    physical: tuple[str, ...] = ("frame-0120",),
+    physical: tuple[str, ...] = ("frame-0120", "frame-0121"),
     features: tuple[EntityFeatureRef, ...] = (),
     representations: tuple[PointRepresentationRef, ...] = (),
 ) -> EntityEvidenceLinks:
@@ -205,14 +208,33 @@ def make_evidence_links(
     )
 
 
+FRAMES = (("frame-0120", 10, 2), ("frame-0121", 12, 1))
+"""Two physical frames, the first interpreted by two inference runs: ``(id, seconds, results)``."""
+
+
 def make_temporal_state(
-    *, first: int = 10, last: int = 12, physical: int = 2, inference: int = 3
+    frames: Sequence[tuple[str, int, int]] = FRAMES,
+    *,
+    lifecycle: EntityLifecycle | None = EntityLifecycle.OBSERVED,
 ) -> EntityTemporalState:
+    refs = tuple(
+        ObservationRef(
+            physical_observation_id=SourceObservationId(frame),
+            acquisition_timestamp=timestamp(seconds),
+            inference_result_count=results,
+        )
+        for frame, seconds, results in frames
+    )
     return EntityTemporalState(
-        first_seen=timestamp(first),
-        last_seen=timestamp(last),
-        physical_observation_count=physical,
-        inference_result_count=inference,
+        first_seen=refs[0].acquisition_timestamp,
+        last_seen=refs[-1].acquisition_timestamp,
+        physical_observation_count=len(refs),
+        inference_result_count=sum(item.inference_result_count for item in refs),
+        observation_refs=refs,
+        provenance=TemporalProvenance(
+            rule_id="physical-observation-temporal-summary-v1", input_order_chronological=True
+        ),
+        lifecycle=lifecycle,
     )
 
 

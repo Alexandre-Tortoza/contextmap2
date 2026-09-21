@@ -26,11 +26,11 @@ from contextmap.semantic_fusion import (
 from contextmap.semantic_mapping import (
     Entity,
     EntityId,
-    EntityTemporalState,
     SemanticMapId,
     evidence_links_from_fused_evidence,
     semantic_state_from_fused_evidence,
     summarize_geometry,
+    summarize_temporal_state,
 )
 
 __all__ = ["ClaimSpec", "FusionRun", "View", "entity_from_outcome", "fuse", "write_fusion_run"]
@@ -110,11 +110,6 @@ def entity_from_outcome(
         ),
         semantic_state=semantic_state_from_fused_evidence(evidence),
         evidence=evidence_links_from_fused_evidence(evidence, manifest=run.manifest),
-        temporal_state=EntityTemporalState(
-            first_seen=evidence.temporal_summary.start,
-            last_seen=evidence.temporal_summary.end,
-            physical_observation_count=evidence.physical_observation_count,
-            inference_result_count=evidence.inference_result_count,
-        ),
+        temporal_state=summarize_temporal_state(evidence.physical_observation_groups),
         provenance=make_provenance(),
     )
