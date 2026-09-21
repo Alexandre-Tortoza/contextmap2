@@ -85,6 +85,7 @@ Os detalhes implementados pertencem aos documentos dos módulos. Os documentos g
 10. [versioning.md](versioning.md), Semantic Versioning e releases.
 11. [installation.md](installation.md), instalação base, extras opcionais e runtimes que não vêm do PyPI.
 12. [third-party-licenses.md](third-party-licenses.md), licenças declaradas de dependências, modelos e runtimes, e o que o repositório redistribui.
+13. [release-v0.1.0.md](release-v0.1.0.md), rascunho do escopo congelado do v0.1.0 e checklist de aceitação com a evidência de cada item.
 
 ## Mapa da documentação
 
@@ -104,6 +105,7 @@ flowchart TD
     R --> V[versioning.md]
     R --> I[installation.md]
     R --> L[third-party-licenses.md]
+    R --> RL[release-v0.1.0.md]
 
     A --> M[docs específicos dos módulos]
     API --> M
@@ -144,6 +146,7 @@ flowchart TD
 | `versioning.md` | Como versões e releases são identificadas? |
 | `installation.md` | O que cada instalação e cada extra traz, e o que fica por conta do usuário? |
 | `third-party-licenses.md` | Sob quais licenças estão as dependências, os modelos e os runtimes, e o que o repositório redistribui? |
+| `release-v0.1.0.md` | O que entra no v0.1.0 e qual evidência sustenta cada item de aceitação? |
 
 ## Pipeline em uma linha
 
