@@ -120,6 +120,7 @@ flowchart TD
     M --> SA[src/contextmap/sensor_association/docs/README.md]
     M --> PR[src/contextmap/point_representation/docs/README.md]
     M --> SF[src/contextmap/semantic_fusion/docs/README.md]
+    M --> SM[src/contextmap/semantic_mapping/docs/README.md]
     M --> EV[src/contextmap/evaluation/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]

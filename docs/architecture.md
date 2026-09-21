@@ -104,6 +104,7 @@ flowchart TD
     EV -. validates .-> SA
     EV -. validates .-> PR
     EV -. validates .-> SF
+    EV -. validates .-> SM
     EV -. validates .-> ER
     EV -. validates .-> SR
 ```
