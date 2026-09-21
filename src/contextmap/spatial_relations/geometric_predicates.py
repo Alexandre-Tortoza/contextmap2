@@ -35,13 +35,16 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
 
 from contextmap.entity_resolution import ResolvedEntityReference
-from contextmap.semantic_mapping import (
-    EntityGeometry,
-    GeometryDiagnosticKind,
-    geometry_set_digest,
+from contextmap.semantic_mapping import EntityGeometry
+from contextmap.spatial_relations._assessment import (
+    Assessment,
+    at_least,
+    at_most,
+    decide,
+    measured_geometry,
+    quantity,
 )
 from contextmap.spatial_relations._bounds import (
     axis_overlap_m,
@@ -52,14 +55,10 @@ from contextmap.spatial_relations._bounds import (
 from contextmap.spatial_relations._checks import require_finite
 from contextmap.spatial_relations.candidates import RelationCandidateSet
 from contextmap.spatial_relations.evidence import (
-    EvidenceCaveat,
-    EvidenceCaveatKind,
-    MeasuredGeometry,
     Quantity,
     RelationEvidence,
     RelationEvidenceChannel,
     RelationEvidenceProvenance,
-    RelationEvidenceStatus,
     evidence_id_for,
 )
 from contextmap.spatial_relations.frame_conventions import AxisDirection, FrameConventions
@@ -168,64 +167,6 @@ class GeometricPredicatePolicy:
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
 
-class _Verdict(Enum):
-    """The outcome of one comparison against one threshold."""
-
-    MEETS = "meets"
-    FAILS = "fails"
-    WITHIN_TOLERANCE = "within_tolerance"
-
-
-@dataclass(frozen=True)
-class _Check:
-    """One condition of a predicate, decided under the boundary tolerance."""
-
-    name: str
-    verdict: _Verdict
-    value: float
-    threshold: float
-    tolerance: float
-
-    def caveat(self) -> EvidenceCaveat:
-        return EvidenceCaveat(
-            kind=EvidenceCaveatKind.WITHIN_TOLERANCE,
-            detail=(
-                f"{self.name} {self.value:.6g} is within {self.tolerance:.6g} m of its "
-                f"threshold {self.threshold:.6g}"
-            ),
-        )
-
-
-def _at_least(name: str, value: float, threshold: float, tolerance: float) -> _Check:
-    if value - tolerance >= threshold:
-        verdict = _Verdict.MEETS
-    elif value + tolerance < threshold:
-        verdict = _Verdict.FAILS
-    else:
-        verdict = _Verdict.WITHIN_TOLERANCE
-    return _Check(name, verdict, value, threshold, tolerance)
-
-
-def _at_most(name: str, value: float, threshold: float, tolerance: float) -> _Check:
-    if value + tolerance <= threshold:
-        verdict = _Verdict.MEETS
-    elif value - tolerance > threshold:
-        verdict = _Verdict.FAILS
-    else:
-        verdict = _Verdict.WITHIN_TOLERANCE
-    return _Check(name, verdict, value, threshold, tolerance)
-
-
-@dataclass(frozen=True)
-class _Assessment:
-    """The numbers and conditions of one predicate over one pair, before they become evidence."""
-
-    measurements: list[Quantity]
-    thresholds: list[Quantity]
-    checks: list[_Check]
-    measures_penetration_depth: bool = False
-
-
 def evaluate_geometric_predicate(
     predicate: RelationPredicate,
     *,
@@ -262,7 +203,7 @@ def evaluate_geometric_predicate(
     spec = predicate_spec(predicate)
     conventions.require_evaluable(spec.frame_requirement, subject_geometry, object_geometry)
     assessment = _ASSESSORS[predicate](subject_geometry, object_geometry, policy, conventions)
-    status, caveats = _decide(assessment, subject_geometry, object_geometry)
+    status, caveats = decide(assessment, subject_geometry, object_geometry)
     uses_axes = spec.frame_requirement is not FrameRequirement.MAP_FRAME
     return RelationEvidence(
         evidence_id=evidence_id_for(
@@ -279,8 +220,8 @@ def evaluate_geometric_predicate(
         measurements=tuple(sorted(assessment.measurements, key=lambda item: item.name)),
         thresholds=tuple(sorted(assessment.thresholds, key=lambda item: item.name)),
         geometry=(
-            _measured_geometry("object", object_geometry),
-            _measured_geometry("subject", subject_geometry),
+            measured_geometry("object", object_geometry),
+            measured_geometry("subject", subject_geometry),
         ),
         caveats=tuple(sorted(caveats, key=lambda item: (item.kind.value, item.detail))),
         provenance=RelationEvidenceProvenance(
@@ -349,80 +290,6 @@ def _require_geometric(predicate: RelationPredicate) -> None:
     raise ValueError(f"{predicate.name} belongs to the contact channel, not to bounds geometry")
 
 
-def _decide(
-    assessment: _Assessment, subject: EntityGeometry, obj: EntityGeometry
-) -> tuple[RelationEvidenceStatus, list[EvidenceCaveat]]:
-    verdicts = [check.verdict for check in assessment.checks]
-    if _Verdict.FAILS in verdicts:
-        status = RelationEvidenceStatus.CONFLICTS
-    elif all(verdict is _Verdict.MEETS for verdict in verdicts):
-        status = RelationEvidenceStatus.SUPPORTS
-    else:
-        status = RelationEvidenceStatus.AMBIGUOUS
-    caveats = [
-        check.caveat() for check in assessment.checks if check.verdict is _Verdict.WITHIN_TOLERANCE
-    ]
-    unreliable = _reliability_caveats(subject, obj, assessment.measures_penetration_depth)
-    if unreliable:
-        # Limites de um suporte esparso, desconexo ou plano podem não descrever o objeto: nunca
-        # decisivos, mas as medições e a razão continuam registradas.
-        status = RelationEvidenceStatus.AMBIGUOUS
-        caveats.extend(unreliable)
-    return status, caveats
-
-
-def _reliability_caveats(
-    subject: EntityGeometry, obj: EntityGeometry, measures_penetration_depth: bool
-) -> list[EvidenceCaveat]:
-    caveats: list[EvidenceCaveat] = []
-    for role, geometry in (("subject", subject), ("object", obj)):
-        kinds = geometry.diagnostic_kinds()
-        if GeometryDiagnosticKind.SPARSE_SUPPORT in kinds:
-            caveats.append(
-                EvidenceCaveat(
-                    kind=EvidenceCaveatKind.UNRELIABLE_GEOMETRY,
-                    detail=(
-                        f"the {role} support is sparse ({geometry.statistics.point_count} "
-                        f"points): its bounds may not describe the object"
-                    ),
-                )
-            )
-        if GeometryDiagnosticKind.DISCONNECTED_SUPPORT in kinds:
-            caveats.append(
-                EvidenceCaveat(
-                    kind=EvidenceCaveatKind.UNRELIABLE_GEOMETRY,
-                    detail=(
-                        f"the {role} support is disconnected "
-                        f"({geometry.statistics.component_count} components): its bounds may not "
-                        f"describe one object"
-                    ),
-                )
-            )
-        if measures_penetration_depth and GeometryDiagnosticKind.DEGENERATE_EXTENT in kinds:
-            caveats.append(
-                EvidenceCaveat(
-                    kind=EvidenceCaveatKind.DEGENERATE_GEOMETRY,
-                    detail=(
-                        f"the {role} support is flat on some axis, so an interpenetration depth "
-                        f"cannot be measured along it"
-                    ),
-                )
-            )
-    return caveats
-
-
-def _measured_geometry(role: str, geometry: EntityGeometry) -> MeasuredGeometry:
-    return MeasuredGeometry(
-        role=role,
-        point_count=geometry.statistics.point_count,
-        geometry_digest=geometry_set_digest(geometry.geometry_refs),
-    )
-
-
-def _quantity(name: str, value: float, unit: str) -> Quantity:
-    return Quantity(name=name, value=value, unit=unit)
-
-
 def _axis_overlaps(subject: EntityGeometry, obj: EntityGeometry) -> list[float]:
     return [axis_overlap_m(subject.bounds, obj.bounds, axis) for axis in range(3)]
 
@@ -434,7 +301,7 @@ def _policy_thresholds(policy: GeometricPredicatePolicy, *names: str) -> list[Qu
         "containment_slack": policy.containment_slack_m,
         "next_to_max_gap": policy.next_to_max_gap_m,
     }
-    return [_quantity(name, values[name], "m") for name in names]
+    return [quantity(name, values[name], "m") for name in names]
 
 
 def _assess_next_to(
@@ -442,21 +309,21 @@ def _assess_next_to(
     obj: EntityGeometry,
     policy: GeometricPredicatePolicy,
     conventions: FrameConventions,
-) -> _Assessment:
+) -> Assessment:
     gap = bounds_gap_m(subject.bounds, obj.bounds)
     depth = min(_axis_overlaps(subject, obj))
     tolerance = policy.boundary_tolerance_m
-    return _Assessment(
+    return Assessment(
         measurements=[
-            _quantity("bounds_gap", gap, "m"),
-            _quantity("min_axis_overlap", depth, "m"),
+            quantity("bounds_gap", gap, "m"),
+            quantity("min_axis_overlap", depth, "m"),
         ],
         thresholds=_policy_thresholds(
             policy, "adjacent_penetration", "boundary_tolerance", "next_to_max_gap"
         ),
         checks=[
-            _at_most("bounds_gap", gap, policy.next_to_max_gap_m, tolerance),
-            _at_most("min_axis_overlap", depth, policy.adjacent_penetration_m, tolerance),
+            at_most("bounds_gap", gap, policy.next_to_max_gap_m, tolerance),
+            at_most("min_axis_overlap", depth, policy.adjacent_penetration_m, tolerance),
         ],
         measures_penetration_depth=True,
     )
@@ -467,20 +334,20 @@ def _assess_intersects(
     obj: EntityGeometry,
     policy: GeometricPredicatePolicy,
     conventions: FrameConventions,
-) -> _Assessment:
+) -> Assessment:
     overlaps = _axis_overlaps(subject, obj)
     depth = min(overlaps)
-    return _Assessment(
+    return Assessment(
         measurements=[
             *(
-                _quantity(f"axis_overlap_{letter}", overlap, "m")
+                quantity(f"axis_overlap_{letter}", overlap, "m")
                 for letter, overlap in zip(_AXIS_LETTERS, overlaps, strict=True)
             ),
-            _quantity("min_axis_overlap", depth, "m"),
+            quantity("min_axis_overlap", depth, "m"),
         ],
         thresholds=_policy_thresholds(policy, "adjacent_penetration", "boundary_tolerance"),
         checks=[
-            _at_least(
+            at_least(
                 "min_axis_overlap",
                 depth,
                 policy.adjacent_penetration_m,
@@ -496,7 +363,7 @@ def _assess_inside(
     obj: EntityGeometry,
     policy: GeometricPredicatePolicy,
     conventions: FrameConventions,
-) -> _Assessment:
+) -> Assessment:
     margin = min(
         min(
             subject.bounds.minimum_m[axis] - obj.bounds.minimum_m[axis],
@@ -504,11 +371,11 @@ def _assess_inside(
         )
         for axis in range(3)
     )
-    return _Assessment(
-        measurements=[_quantity("containment_margin", margin, "m")],
+    return Assessment(
+        measurements=[quantity("containment_margin", margin, "m")],
         thresholds=_policy_thresholds(policy, "boundary_tolerance", "containment_slack"),
         checks=[
-            _at_least(
+            at_least(
                 "containment_margin",
                 margin,
                 -policy.containment_slack_m,
@@ -524,7 +391,7 @@ def _assess_directional(
     policy: GeometricPredicatePolicy,
     direction: AxisDirection,
     clearance_name: str,
-) -> _Assessment:
+) -> Assessment:
     """Assess "the subject lies further along ``direction`` than the object, over the same spot".
 
     Two conditions, both decided under the boundary tolerance: the subject's low face along the
@@ -536,25 +403,25 @@ def _assess_directional(
     subject_low, _ = directed_interval(subject.bounds, direction)
     _, object_high = directed_interval(obj.bounds, direction)
     clearance = subject_low - object_high
-    measurements = [_quantity(clearance_name, clearance, "m")]
+    measurements = [quantity(clearance_name, clearance, "m")]
     thresholds = _policy_thresholds(policy, "adjacent_penetration", "boundary_tolerance")
     thresholds.append(
-        _quantity("directional_overlap_fraction", policy.directional_overlap_fraction, "ratio")
+        quantity("directional_overlap_fraction", policy.directional_overlap_fraction, "ratio")
     )
-    checks = [_at_least(clearance_name, clearance, -policy.adjacent_penetration_m, tolerance)]
+    checks = [at_least(clearance_name, clearance, -policy.adjacent_penetration_m, tolerance)]
     for axis in cross_section_axes(direction):
         letter = _AXIS_LETTERS[axis]
         overlap = axis_overlap_m(subject.bounds, obj.bounds, axis)
         smaller_extent = min(subject.extent_m[axis], obj.extent_m[axis])
         required = policy.directional_overlap_fraction * smaller_extent
-        measurements.append(_quantity(f"footprint_overlap_{letter}", overlap, "m"))
+        measurements.append(quantity(f"footprint_overlap_{letter}", overlap, "m"))
         if smaller_extent > 0.0:
             measurements.append(
-                _quantity(f"footprint_overlap_fraction_{letter}", overlap / smaller_extent, "ratio")
+                quantity(f"footprint_overlap_fraction_{letter}", overlap / smaller_extent, "ratio")
             )
-        thresholds.append(_quantity(f"required_footprint_overlap_{letter}", required, "m"))
-        checks.append(_at_least(f"footprint_overlap_{letter}", overlap, required, tolerance))
-    return _Assessment(measurements=measurements, thresholds=thresholds, checks=checks)
+        thresholds.append(quantity(f"required_footprint_overlap_{letter}", required, "m"))
+        checks.append(at_least(f"footprint_overlap_{letter}", overlap, required, tolerance))
+    return Assessment(measurements=measurements, thresholds=thresholds, checks=checks)
 
 
 def _assess_above(
@@ -562,7 +429,7 @@ def _assess_above(
     obj: EntityGeometry,
     policy: GeometricPredicatePolicy,
     conventions: FrameConventions,
-) -> _Assessment:
+) -> Assessment:
     return _assess_directional(
         subject, obj, policy, _declared(conventions.up_axis), "vertical_clearance"
     )
@@ -573,7 +440,7 @@ def _assess_in_front_of(
     obj: EntityGeometry,
     policy: GeometricPredicatePolicy,
     conventions: FrameConventions,
-) -> _Assessment:
+) -> Assessment:
     return _assess_directional(
         subject, obj, policy, _declared(conventions.forward_axis), "forward_clearance"
     )
