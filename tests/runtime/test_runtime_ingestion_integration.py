@@ -94,7 +94,7 @@ def _ingest(tmp_path: Path, bag: Path, *extra: str) -> tuple[int, str, str]:
         "image",
         "--sync-tolerance-ns",
         "100000000",
-        "--workspace",
+        "--output-dir",
         str(tmp_path / "ws"),
         "--json",
         *extra,

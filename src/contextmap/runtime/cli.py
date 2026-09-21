@@ -328,11 +328,17 @@ def _config_options() -> argparse.ArgumentParser:
 
 def _ingest_options() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
+    # `ingest` não tem workspace nem run: o destino é o diretório final do artifact (--output-dir).
+    common.set_defaults(workspace=None)
     group = common.add_argument_group("configuration")
     group.add_argument("-c", "--config", action="append", metavar="FILE", help="configuration file")
     group.add_argument("--profile", default=CANONICAL_PROFILE_ID, metavar="ID", help="base profile")
     group.add_argument("--set", action="append", metavar="PATH=VALUE", help="override one setting")
-    group.add_argument("--workspace", metavar="DIR", help="workspace that receives the sequence")
+    group.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        help="final directory of the sequence artifact (must not exist)",
+    )
     source = common.add_argument_group("source and request")
     source.add_argument("--source", required=True, metavar="PATH", help="the recorded source")
     source.add_argument(
@@ -734,11 +740,9 @@ def _ingest(session: _Session) -> int:
     """Ingest a recorded source through the public ingestion service."""
     args = session.args
     effective = _effective(args)
-    workspace = effective.config.resources.workspace
-    if workspace is None:
-        raise _UsageError(
-            "ingest publishes a sequence: pass --workspace DIR (or resources.workspace)"
-        )
+    output_dir = args.output_dir
+    if output_dir is None:
+        raise _UsageError("ingest publishes a sequence artifact: pass --output-dir DIR")
     adapter = effective.config.components.get("ingestion.source_adapter")
     if adapter is None or adapter.backend is None:
         raise _UsageError(
@@ -764,7 +768,7 @@ def _ingest(session: _Session) -> int:
     }
     try:
         request = IngestionRequest.from_document(
-            document, workspace=workspace, source_type=adapter.backend
+            document, output_dir=output_dir, source_type=adapter.backend
         )
     except ValueError as error:
         raise _Failure(str(error)) from error

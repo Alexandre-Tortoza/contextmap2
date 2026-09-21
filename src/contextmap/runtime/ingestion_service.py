@@ -128,7 +128,8 @@ class IngestionRequest:
         source_type: Adapter family identity, for example ``"ros1_bag"``.
         source_path: Path of the recorded source.
         sequence_name: Name of the sequence artifact to publish; a single path segment.
-        workspace: Workspace that receives ``sequences/<sequence_name>/<artifact_id>``.
+        output_dir: The final directory of the sequence artifact (in a run, ``<run>/ingestion``).
+            It must not exist: a published artifact is never replaced.
         topics: The topics or channels to read.
         synchronization: The synchronization policy applied before persisting.
         required_topics: Topic names that must exist in the source.
@@ -140,12 +141,15 @@ class IngestionRequest:
             O(source size); turning it off is recorded in the provenance.
         config_identity: Digest of the runtime effective configuration this request belongs
             to, recorded for reproduction.
+        artifact_id: Identity to publish under; a fresh one is generated when omitted. A run
+            derives it from the stage identity so that identical executions publish the same
+            identity.
     """
 
     source_type: str
     source_path: str
     sequence_name: str
-    workspace: str
+    output_dir: str
     topics: SourceTopicMapping
     synchronization: SynchronizationConfig
     required_topics: frozenset[str] = frozenset()
@@ -154,10 +158,11 @@ class IngestionRequest:
     validation: ValidationPolicy = field(default_factory=ValidationPolicy)
     hash_source: bool = True
     config_identity: str | None = None
+    artifact_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the shape of the request; whether it can run is decided by preflight."""
-        for name in ("source_type", "source_path", "sequence_name", "workspace"):
+        for name in ("source_type", "source_path", "sequence_name", "output_dir"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must not be empty")
         if (
@@ -195,14 +200,20 @@ class IngestionRequest:
     def identity(self) -> str:
         """Return the deterministic identity of what this request asks for.
 
-        The workspace is where the result is written, not part of what is ingested, so two
-        requests that differ only in it have the same identity.
+        The output directory and the identity to publish under say where and as what the result
+        is written, not what is ingested, so two requests that differ only in them have the same
+        identity.
         """
         return _digest(self.to_document())
 
     @classmethod
     def from_document(
-        cls, document: Mapping[str, Any], *, workspace: str, source_type: str | None = None
+        cls,
+        document: Mapping[str, Any],
+        *,
+        output_dir: str,
+        source_type: str | None = None,
+        artifact_id: str | None = None,
     ) -> IngestionRequest:
         """Build a request from a primitive document, as a CLI or a TUI form produces it.
 
@@ -210,8 +221,9 @@ class IngestionRequest:
             document: A mapping with ``source_path``, ``sequence_name``, ``topics``,
                 ``synchronization`` and optionally ``required_topics``, ``timestamp_clock_id``,
                 ``validation``, ``hash_source`` and ``config_identity``.
-            workspace: The output workspace.
+            output_dir: The final directory of the sequence artifact.
             source_type: The adapter family, when the document does not carry it.
+            artifact_id: The identity to publish under, when the caller fixes it.
 
         Returns:
             The request.
@@ -230,7 +242,7 @@ class IngestionRequest:
                 source_type=document.get("source_type", source_type) or "",
                 source_path=document["source_path"],
                 sequence_name=document["sequence_name"],
-                workspace=workspace,
+                output_dir=output_dir,
                 topics=topics,
                 synchronization=synchronization,
                 required_topics=frozenset(document.get("required_topics", ())),
@@ -238,6 +250,7 @@ class IngestionRequest:
                 validation=validation,
                 hash_source=document.get("hash_source", True),
                 config_identity=document.get("config_identity"),
+                artifact_id=artifact_id,
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid ingestion request: {error!r}") from error
@@ -534,17 +547,20 @@ class IngestionService:
             problems.append(_problem("request.timestamp_clock_id", "must not be empty"))
 
     def _check_output(self, request: IngestionRequest, problems: list[ConfigProblem]) -> None:
-        workspace = Path(request.workspace)
-        if workspace.exists() and not workspace.is_dir():
-            problems.append(_problem("output.workspace", f"{workspace} is not a directory"))
+        output = Path(request.output_dir)
+        if output.exists():
+            problems.append(
+                _problem(
+                    "output.output_dir",
+                    f"{output} already exists: a published artifact is never replaced",
+                )
+            )
             return
-        nearest = workspace
+        nearest = output.parent
         while not nearest.exists() and nearest != nearest.parent:
             nearest = nearest.parent
-        if not os.access(nearest, os.W_OK):
-            problems.append(
-                _problem("output.workspace", f"{workspace} cannot be created or written")
-            )
+        if not nearest.is_dir() or not os.access(nearest, os.W_OK):
+            problems.append(_problem("output.output_dir", f"{output} cannot be created or written"))
 
     def _build_adapter(
         self, request: IngestionRequest, problems: list[ConfigProblem]
@@ -641,8 +657,8 @@ class IngestionService:
 
         # O serviço é o chamador do writer: ele escolhe a identidade e o diretório final. O writer
         # apenas grava onde lhe mandam e nunca aloca nada.
-        artifact_id = SequenceArtifactId(uuid4().hex)
-        directory = Path(request.workspace) / "sequences" / request.sequence_name / artifact_id
+        artifact_id = SequenceArtifactId(request.artifact_id or uuid4().hex)
+        directory = Path(request.output_dir)
         with SequenceArtifactWriter(
             output_dir=directory, sequence_name=request.sequence_name, artifact_id=artifact_id
         ) as writer:
@@ -919,8 +935,14 @@ class IngestionStageExecutor:
         Raises:
             StageFailure: If the ingestion failed or was cancelled.
         """
+        if request.output_dir is None or request.workspace is None:
+            raise StageFailure("ingestion needs the run's output directory", category="execution")
         result = self._service.run(
-            self._request,
+            dataclasses.replace(
+                self._request,
+                output_dir=str(request.output_dir),
+                artifact_id=request.identity(),
+            ),
             event_sink=self._event_sink,
             cancellation=self._cancellation,
             redact=self._redact,
@@ -936,6 +958,7 @@ class IngestionStageExecutor:
             contract="SequenceArtifact",
             artifact_id=result.artifact_id,
             content_hash=result.content_hash,
+            location=request.output_dir.relative_to(request.workspace).as_posix(),
         )
 
 

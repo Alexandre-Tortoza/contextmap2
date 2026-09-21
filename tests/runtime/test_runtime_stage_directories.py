@@ -193,3 +193,50 @@ def test_the_cli_refuses_a_real_run_without_a_dataset_and_creates_nothing(tmp_pa
     assert code == 2
     assert "inputs.sequence" in err
     assert not (tmp_path / "ws").exists()
+
+
+def _request(digest: str = "d1", **inputs: str | None) -> StageRequest:
+    refs = {
+        name: (ArtifactRef(stage_id="s", contract="c", artifact_id=name, content_hash=value),)
+        for name, value in inputs.items()
+    }
+    return StageRequest(
+        stage_id="geometric_mapping", inputs=refs, components={}, config_digest=digest
+    )
+
+
+def test_the_identity_of_an_execution_repeats_and_follows_its_configuration_and_inputs() -> None:
+    base = _request(sequence="sha256:a", trajectory="sha256:b")
+
+    assert base.identity() == _request(sequence="sha256:a", trajectory="sha256:b").identity()
+    assert len(base.identity()) == 32
+    assert base.identity() != _request("d2", sequence="sha256:a", trajectory="sha256:b").identity()
+    assert base.identity() != _request(sequence="sha256:x", trajectory="sha256:b").identity()
+
+
+def test_an_input_without_a_content_hash_cannot_take_part_in_an_identity() -> None:
+    with pytest.raises(ValueError, match="no content hash"):
+        _request(sequence=None).identity()
+
+
+def test_the_run_number_is_read_from_the_run_directory_and_is_zero_otherwise(
+    tmp_path: Path,
+) -> None:
+    numbered = StageRequest(
+        stage_id="s",
+        inputs={},
+        components={},
+        config_digest="d",
+        output_dir=tmp_path / "ws" / "corridor-02" / "run-0007" / "s",
+    )
+    named = StageRequest(
+        stage_id="s",
+        inputs={},
+        components={},
+        config_digest="d",
+        output_dir=tmp_path / "ws" / "corridor-02" / "validation" / "s",
+    )
+
+    assert numbered.run_number() == 7
+    assert named.run_number() == 0
+    assert _request().run_number() == 0

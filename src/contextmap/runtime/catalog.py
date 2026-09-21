@@ -357,6 +357,7 @@ CANONICAL_PRESET = RuntimePreset(
             capability="semantic_fusion",
             components=("semantic_fusion.support", "semantic_fusion.accumulation"),
             inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(
                     name="association",
                     contract=ASSOCIATION,
@@ -382,7 +383,10 @@ CANONICAL_PRESET = RuntimePreset(
         StageDeclaration(
             stage_id="semantic_mapping",
             capability="semantic_mapping",
-            inputs=(StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),),
+            inputs=(
+                StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
             output=ENTITIES,
         ),
         StageDeclaration(
@@ -394,7 +398,10 @@ CANONICAL_PRESET = RuntimePreset(
         StageDeclaration(
             stage_id="spatial_relations",
             capability="spatial_relations",
-            inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
+            inputs=(
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
             output=RELATIONS,
         ),
         StageDeclaration(

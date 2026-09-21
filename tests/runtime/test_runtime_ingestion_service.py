@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -132,10 +133,10 @@ class TestPreflight:
         missing = make_request(tmp_path, source_path=str(tmp_path / "nowhere.bag"))
         not_a_directory = tmp_path / "file"
         not_a_directory.write_text("x", encoding="utf-8")
-        blocked = make_request(tmp_path, workspace=str(not_a_directory))
+        blocked = make_request(tmp_path, output_dir=str(not_a_directory))
 
         assert any(p.path == "source.path" for p in _service().preflight(missing).problems)
-        assert any(p.path == "output.workspace" for p in _service().preflight(blocked).problems)
+        assert any(p.path == "output.output_dir" for p in _service().preflight(blocked).problems)
 
     def test_an_adapter_that_cannot_open_the_source_is_a_problem_naming_the_error(
         self, tmp_path: Path
@@ -191,12 +192,15 @@ class TestPreflight:
 
 
 class TestRequestIdentity:
-    def test_it_is_deterministic_and_independent_of_the_workspace(self, tmp_path: Path) -> None:
+    def test_it_is_deterministic_and_independent_of_the_output_directory(
+        self, tmp_path: Path
+    ) -> None:
         first = make_request(tmp_path)
 
         assert first.identity == make_request(tmp_path).identity
         assert (
-            first.identity == make_request(tmp_path, workspace=str(tmp_path / "elsewhere")).identity
+            first.identity
+            == make_request(tmp_path, output_dir=str(tmp_path / "elsewhere")).identity
         )
 
     @pytest.mark.parametrize(
@@ -222,12 +226,12 @@ class TestRequestIdentity:
         document = original.to_document()
 
         rebuilt = IngestionRequest.from_document(
-            document, workspace=original.workspace, source_type=None
+            document, output_dir=original.output_dir, source_type=None
         )
 
         assert rebuilt.identity == original.identity
         assert json.loads(json.dumps(document)) == document
-        assert "workspace" not in document
+        assert "output_dir" not in document
 
     def test_an_invalid_document_is_refused(self, tmp_path: Path) -> None:
         good = make_request(tmp_path).to_document()
@@ -238,10 +242,10 @@ class TestRequestIdentity:
                     **good,
                     "synchronization": {"reference_modality": "nope", "tolerance_nanoseconds": 1},
                 },
-                workspace="ws",
+                output_dir="ws",
             )
         with pytest.raises(ValueError, match="invalid ingestion request"):
-            IngestionRequest.from_document({"source_path": "x"}, workspace="ws")
+            IngestionRequest.from_document({"source_path": "x"}, output_dir="ws")
 
     @pytest.mark.parametrize("name", ["", "a/b", "..", "a\\b"])
     def test_a_sequence_name_must_be_a_single_safe_segment(self, tmp_path: Path, name: str) -> None:
@@ -259,7 +263,10 @@ class TestSuccessfulRun:
         assert reader.verify_integrity() == []
         assert str(reader.manifest.artifact_id) == result.artifact_id
         assert dict(reader.manifest.observation_counts)["image"] == 3
-        assert [p.name for p in _published(tmp_path / "ws")] == [result.artifact_id]
+        assert [p.name for p in _published(tmp_path / "ws")] == ["artifact-1"]
+        assert SequenceArtifactReader(_published(tmp_path / "ws")[0]).manifest.artifact_id == (
+            result.artifact_id
+        )
 
     def test_the_result_carries_counts_diagnostics_and_operational_metrics(
         self, tmp_path: Path
@@ -337,7 +344,12 @@ class TestSuccessfulRun:
     ) -> None:
         request = make_request(tmp_path)
         first = _service().run(request)
-        second = _service().run(request)
+        second = _service().run(
+            dataclasses.replace(
+                request,
+                output_dir=str(tmp_path / "ws" / "sequences" / "corridor-02" / "artifact-2"),
+            )
+        )
 
         assert first.artifact_id != second.artifact_id
         assert first.request_identity == second.request_identity
@@ -547,30 +559,51 @@ class TestUnexpectedFailures:
 class TestAsTheIngestionStageOfTheDag:
     def _plan(self, tmp_path: Path) -> Any:
         effective = effective_from(tmp_path, selected_document())
-        return resolve_plan(effective).scope(targets=["ingestion"])
+        return effective, resolve_plan(effective).scope(targets=["ingestion"])
 
-    def test_the_executor_returns_the_published_artifact_with_its_content_hash(
+    def _run(self, tmp_path: Path, service: IngestionService, **options: Any) -> Any:
+        effective, execution = self._plan(tmp_path)
+        journal = RunJournal.create(tmp_path / "ws", effective, execution)
+        executor = IngestionStageExecutor(service, make_request(tmp_path))
+        return journal, run_plan(
+            execution,
+            {"ingestion": executor},
+            environ={},
+            module_available=lambda _n: True,
+            journal=journal,
+            **options,
+        )
+
+    def test_the_executor_publishes_into_the_stage_directory_of_the_run(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
-        executor = IngestionStageExecutor(_service(), make_request(tmp_path))
-
-        record = run_plan(
-            execution, {"ingestion": executor}, environ={}, module_available=lambda _n: True
-        )
+        journal, record = self._run(tmp_path, _service())
 
         artifact = record.stages[0].output
         assert artifact.contract == "SequenceArtifact" and artifact.content_hash
-        published = _published(tmp_path / "ws")
-        assert [p.name for p in published] == [artifact.artifact_id]
+        assert artifact.location == f"S1/{journal.directory.name}/ingestion"
+        directory = tmp_path / "ws" / str(artifact.location)
+        assert SequenceArtifactReader(directory).manifest.artifact_id == artifact.artifact_id
+        # Nada é publicado fora da pasta do estágio: o executor só usa o diretório que recebeu.
+        assert not (tmp_path / "ws" / "sequences").exists()
+
+    def test_the_artifact_identity_is_derived_from_the_stage_and_is_repeatable(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        _, first = self._run(tmp_path / "a", _service())
+        _, second = self._run(tmp_path / "b", _service())
+
+        assert first.stages[0].output.artifact_id == second.stages[0].output.artifact_id
 
     def test_the_same_ingestion_is_reused_by_identity_and_a_changed_one_is_recomputed(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
+        effective, execution = self._plan(tmp_path)
 
         def verify(ref: ArtifactRef) -> bool:
-            return any((tmp_path / "ws" / "sequences").glob(f"*/{ref.artifact_id}/manifest.json"))
+            return ref.location is not None and (tmp_path / "ws" / ref.location).is_dir()
 
         policy = ReusePolicy(
             store=FileArtifactStore(tmp_path / "index", verify=verify), code_identity="c1"
@@ -578,6 +611,7 @@ class TestAsTheIngestionStageOfTheDag:
         service = _service()
 
         def run() -> Any:
+            journal = RunJournal.create(tmp_path / "ws", effective, execution)
             executor = IngestionStageExecutor(service, make_request(tmp_path))
             return run_plan(
                 execution,
@@ -585,21 +619,20 @@ class TestAsTheIngestionStageOfTheDag:
                 environ={},
                 module_available=lambda _n: True,
                 reuse=policy,
+                journal=journal,
             )
 
         first, second = run(), run()
 
         assert first.stages[0].output == second.stages[0].output
         assert second.stages[0].decision is not None and second.stages[0].decision.kind == "reused"
-        assert len(_published(tmp_path / "ws")) == 1
+        assert len(list((tmp_path / "ws" / "S1").glob("run-*/ingestion"))) == 1
 
     def test_an_ingestion_failure_becomes_a_categorized_failure_record(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
-        journal = RunJournal.create(
-            tmp_path / "records", effective_from(tmp_path, selected_document()), execution
-        )
+        effective, execution = self._plan(tmp_path)
+        journal = RunJournal.create(tmp_path / "records", effective, execution)
         executor = IngestionStageExecutor(_service(fail_after=1), make_request(tmp_path))
 
         with pytest.raises(StageExecutionError, match="bag corrupt"):

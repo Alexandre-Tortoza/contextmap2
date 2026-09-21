@@ -179,7 +179,7 @@ def request(
         "source_type": source_type,
         "source_path": str(source),
         "sequence_name": name,
-        "workspace": str(tmp_path / "ws"),
+        "output_dir": str(tmp_path / "ws" / "sequences" / name / "artifact-1"),
         "topics": topics or SourceTopicMapping(rgb="/camera", imu="/imu"),
         "synchronization": SynchronizationConfig(
             reference_modality=reference, tolerance_nanoseconds=tolerance_ns

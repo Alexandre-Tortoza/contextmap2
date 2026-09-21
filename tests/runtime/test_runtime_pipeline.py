@@ -110,6 +110,7 @@ class TestCanonicalDag:
         assert without.order is not None and with_stage.order is not None
         assert "point_representation" not in without.order
         assert {item.name for item in without.stage("semantic_fusion").inputs} == {
+            "sequence",
             "association",
             "perception",
             "geometry",
@@ -397,6 +398,7 @@ class TestScopeAndExecution:
         assert {
             name: [ref.artifact_id for ref in refs] for name, refs in fusion.inputs.items()
         } == {
+            "sequence": ["ingestion#1"],
             "association": ["sensor_association#1"],
             "perception": ["visual_perception#1"],
             "geometry": ["geometric_mapping#1"],
