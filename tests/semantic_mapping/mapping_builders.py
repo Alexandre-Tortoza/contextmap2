@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from mapping_geometry_fake import InMemoryGeometrySource
+
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
-from contextmap.ingestion import FrameId
 from contextmap.semantic_fusion import (
     EvidenceContributionId,
     EvidenceStance,
@@ -27,9 +28,11 @@ from contextmap.semantic_mapping import (
     EntitySemanticState,
     EntityTemporalState,
     FusedEvidenceRef,
+    GeometrySummaryPolicy,
     SemanticMapId,
+    summarize_geometry,
 )
-from contextmap.shared import SourceTimestamp
+from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
 
 MAP_ID = MapId("map-0001")
@@ -115,12 +118,24 @@ def make_hypothesis(
     )
 
 
+SUMMARY_POLICY = GeometrySummaryPolicy(sparse_point_threshold=3, connectivity_radius_m=0.5)
+
+
+def default_coordinates(index: int) -> Vector3:
+    """Distinct, non-flat coordinates for a geometry index."""
+    return (0.1 * index, 0.2 * (index % 3), 0.05 * (index % 5))
+
+
 def make_geometry(
-    indexes: Sequence[int] = (0, 1, 2, 3), *, map_id: MapId = MAP_ID, frame: str = "map"
+    indexes: Sequence[int] = (0, 1, 2, 3),
+    *,
+    map_id: MapId = MAP_ID,
+    policy: GeometrySummaryPolicy = SUMMARY_POLICY,
 ) -> EntityGeometry:
-    return EntityGeometry(
-        geometry_refs=geometry_refs(indexes, map_id=map_id), map_frame=FrameId(frame)
+    source = InMemoryGeometrySource(
+        map_id, {index: default_coordinates(index) for index in indexes}
     )
+    return summarize_geometry(geometry_refs(indexes, map_id=map_id), source=source, policy=policy)
 
 
 def make_semantic_state(

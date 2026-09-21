@@ -17,6 +17,7 @@ from itertools import pairwise
 from typing import Any
 
 from contextmap.geometric_mapping import (
+    Bounds3D,
     GeometryReference,
     MapId,
     geometry_id_for,
@@ -35,7 +36,14 @@ from contextmap.semantic_fusion import (
     SupportSignalKind,
 )
 from contextmap.semantic_mapping.evidence import EntityEvidenceLinks, FusedEvidenceRef
-from contextmap.semantic_mapping.geometry import EntityGeometry
+from contextmap.semantic_mapping.geometry import (
+    EntityGeometry,
+    EntityOrientation,
+    GeometryDiagnostic,
+    GeometryDiagnosticKind,
+    SpatialSummaryProvenance,
+    SupportStatistics,
+)
 from contextmap.semantic_mapping.models import (
     Entity,
     EntityId,
@@ -45,7 +53,7 @@ from contextmap.semantic_mapping.models import (
 )
 from contextmap.semantic_mapping.semantic_state import EntityHypothesis, EntitySemanticState
 from contextmap.semantic_mapping.temporal import EntityTemporalState
-from contextmap.shared import SourceTimestamp
+from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.visual_perception import BackendProvenance, ClaimId, HypothesisRole
 
 
@@ -111,13 +119,100 @@ def decode_entity(record: Mapping[str, Any]) -> Entity:
 
 
 def _encode_geometry(geometry: EntityGeometry) -> dict[str, Any]:
-    return {"map_frame": str(geometry.map_frame), **_encode_geometry_refs(geometry.geometry_refs)}
+    orientation = geometry.orientation
+    statistics = geometry.statistics
+    summary = geometry.summary
+    return {
+        "map_frame": str(geometry.map_frame),
+        **_encode_geometry_refs(geometry.geometry_refs),
+        "centroid_m": list(geometry.centroid_m),
+        "bounds": {
+            "frame_id": str(geometry.bounds.frame_id),
+            "minimum_m": list(geometry.bounds.minimum_m),
+            "maximum_m": list(geometry.bounds.maximum_m),
+        },
+        "extent_m": list(geometry.extent_m),
+        "statistics": {
+            "point_count": statistics.point_count,
+            "volume_m3": statistics.volume_m3,
+            "density_per_m3": statistics.density_per_m3,
+            "component_count": statistics.component_count,
+            "largest_component_fraction": statistics.largest_component_fraction,
+        },
+        "summary": {
+            "algorithm_id": summary.algorithm_id,
+            "map_frame": str(summary.map_frame),
+            "input_geometry_count": summary.input_geometry_count,
+            "input_geometry_digest": summary.input_geometry_digest,
+            "numerical_conventions": summary.numerical_conventions,
+            "filtering": summary.filtering,
+            "configuration_fingerprint": summary.configuration_fingerprint,
+        },
+        "orientation": None
+        if orientation is None
+        else {
+            "axes": [list(axis) for axis in orientation.axes],
+            "variances_m2": list(orientation.variances_m2),
+            "method": orientation.method,
+        },
+        "diagnostics": [
+            {"kind": item.kind.value, "detail": item.detail} for item in geometry.diagnostics
+        ],
+    }
 
 
 def _decode_geometry(record: Mapping[str, Any]) -> EntityGeometry:
+    bounds = record["bounds"]
+    statistics = record["statistics"]
+    summary = record["summary"]
+    orientation = record["orientation"]
     return EntityGeometry(
-        geometry_refs=_decode_geometry_refs(record), map_frame=FrameId(record["map_frame"])
+        geometry_refs=_decode_geometry_refs(record),
+        map_frame=FrameId(record["map_frame"]),
+        centroid_m=_vector(record["centroid_m"]),
+        bounds=Bounds3D(
+            frame_id=FrameId(bounds["frame_id"]),
+            minimum_m=_vector(bounds["minimum_m"]),
+            maximum_m=_vector(bounds["maximum_m"]),
+        ),
+        extent_m=_vector(record["extent_m"]),
+        statistics=SupportStatistics(
+            point_count=statistics["point_count"],
+            volume_m3=statistics["volume_m3"],
+            density_per_m3=statistics["density_per_m3"],
+            component_count=statistics["component_count"],
+            largest_component_fraction=statistics["largest_component_fraction"],
+        ),
+        summary=SpatialSummaryProvenance(
+            algorithm_id=summary["algorithm_id"],
+            map_frame=FrameId(summary["map_frame"]),
+            input_geometry_count=summary["input_geometry_count"],
+            input_geometry_digest=summary["input_geometry_digest"],
+            numerical_conventions=summary["numerical_conventions"],
+            filtering=summary["filtering"],
+            configuration_fingerprint=summary["configuration_fingerprint"],
+        ),
+        orientation=None
+        if orientation is None
+        else EntityOrientation(
+            axes=(
+                _vector(orientation["axes"][0]),
+                _vector(orientation["axes"][1]),
+                _vector(orientation["axes"][2]),
+            ),
+            variances_m2=_vector(orientation["variances_m2"]),
+            method=orientation["method"],
+        ),
+        diagnostics=tuple(
+            GeometryDiagnostic(kind=GeometryDiagnosticKind(item["kind"]), detail=item["detail"])
+            for item in record["diagnostics"]
+        ),
     )
+
+
+def _vector(values: Sequence[float]) -> Vector3:
+    x, y, z = values
+    return (x, y, z)
 
 
 def _encode_geometry_refs(references: Sequence[GeometryReference]) -> dict[str, Any]:

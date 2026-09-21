@@ -8,7 +8,23 @@ physical object, which belongs to Entity Resolution. See
 """
 
 from contextmap.semantic_mapping.evidence import EntityEvidenceLinks, FusedEvidenceRef
-from contextmap.semantic_mapping.geometry import EntityGeometry
+from contextmap.semantic_mapping.geometry import (
+    GEOMETRY_SUMMARY_ALGORITHM_ID,
+    EmptyGeometrySupportError,
+    EntityGeometry,
+    EntityOrientation,
+    GeometryDiagnostic,
+    GeometryDiagnosticKind,
+    GeometryResolutionError,
+    GeometrySummaryPolicy,
+    OrientationPolicy,
+    SpatialSummaryProvenance,
+    SupportStatistics,
+    geometry_set_digest,
+    resolve_geometry,
+    summarize_geometry,
+    verify_geometry_summary,
+)
 from contextmap.semantic_mapping.models import (
     Entity,
     EntityId,
@@ -23,11 +39,14 @@ from contextmap.semantic_mapping.semantic_state import EntityHypothesis, EntityS
 from contextmap.semantic_mapping.temporal import EntityTemporalState
 
 __all__ = [
+    "GEOMETRY_SUMMARY_ALGORITHM_ID",
+    "EmptyGeometrySupportError",
     "Entity",
     "EntityEvidenceLinks",
     "EntityGeometry",
     "EntityHypothesis",
     "EntityId",
+    "EntityOrientation",
     "EntityProvenance",
     "EntityReference",
     "EntitySemanticState",
@@ -35,6 +54,17 @@ __all__ = [
     "EntityTemporalState",
     "ForeignEntityReferenceError",
     "FusedEvidenceRef",
+    "GeometryDiagnostic",
+    "GeometryDiagnosticKind",
+    "GeometryResolutionError",
+    "GeometrySummaryPolicy",
+    "OrientationPolicy",
     "SemanticMapId",
+    "SpatialSummaryProvenance",
+    "SupportStatistics",
     "UnknownEntityError",
+    "geometry_set_digest",
+    "resolve_geometry",
+    "summarize_geometry",
+    "verify_geometry_summary",
 ]

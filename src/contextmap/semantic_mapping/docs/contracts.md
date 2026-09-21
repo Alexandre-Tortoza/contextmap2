@@ -41,12 +41,19 @@ As entidades de **um** semantic map, ordenadas por `entity_id` e únicas, todas 
 
 ## `EntityGeometry`
 
+O suporte 3D persistente e seus resumos derivados; detalhes em [`geometry.md`](geometry.md).
+
 | Campo | Significado |
 | --- | --- |
-| `geometry_refs` | `GeometryReference` ordenadas por `geometry_id`, únicas, de um só mapa e **nunca vazias**. |
-| `map_frame` | Frame do mapa ao qual o suporte pertence. |
+| `geometry_refs` | `GeometryReference` ordenadas por `geometry_id`, únicas, de um só mapa e **nunca vazias**: é a autoridade. |
+| `map_frame` | Frame do mapa; todo resumo está expresso nele. |
+| `centroid_m`, `bounds`, `extent_m` | Centroide, `Bounds3D` justo e lados da caixa, derivados do suporte. |
+| `statistics` | `SupportStatistics`: pontos, volume, densidade (`None` se a caixa é plana), componentes conexos. |
+| `summary` | `SpatialSummaryProvenance`: algoritmo, frame, conjunto de entrada (contagem e digest), convenções numéricas, filtragem e fingerprint da política. |
+| `orientation` | `EntityOrientation` (eixos ortonormais destros e variâncias) ou `None`. |
+| `diagnostics` | `GeometryDiagnostic` (`sparse_support`, `disconnected_support`, `degenerate_extent`, `orientation_not_justified`). |
 
-Suporte vazio não pode se passar por geometria válida: a construção é recusada.
+Suporte vazio não pode se passar por geometria válida: a construção é recusada (`EmptyGeometrySupportError`). O contrato também recusa resumos em outro frame, centroide fora dos limites, extensão que não é o tamanho da caixa, estatísticas ou digest que não correspondem às referências e diagnósticos que contradizem as estatísticas.
 
 ## `EntitySemanticState` e `EntityHypothesis`
 
