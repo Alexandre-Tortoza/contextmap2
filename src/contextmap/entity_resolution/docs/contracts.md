@@ -118,7 +118,9 @@ Calculada por `compare_temporal` ([detalhes](semantic-temporal-comparison.md)).
 
 ### Representação 3D (`PointRepresentationEvidence`)
 
-Canal opcional. `RepresentationMeasurement` é o análogo de aparência para um espaço de representação: o fingerprint do espaço, a métrica, a política de agregação, a similaridade e as `RepresentationRef` de cada lado (com o `representation_space_id` e a geometria em que estão ancoradas). Uma representação de outro espaço é recusada.
+Calculada por `RepresentationComparator` ([detalhes](representation-comparison.md)).
+
+Canal opcional. `RepresentationMeasurement` é o análogo de aparência para um espaço de representação: o fingerprint do espaço, a métrica, a política de agregação, a similaridade e as `RepresentationRef` de cada lado (com o `representation_space_id` e a geometria em que estão ancoradas), a `dimension` do espaço e os `compared_components` sobre os quais a similaridade foi calculada (componentes indefinidos ficam fora, nunca são lidos como zero). Uma representação de outro espaço é recusada.
 
 ## `ResolutionDecision`
 

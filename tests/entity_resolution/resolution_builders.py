@@ -244,6 +244,8 @@ def representation_evidence(
             pair_similarity_max=0.9,
             representations_a=(representation_ref(0),),
             representations_b=(representation_ref(1),),
+            dimension=4,
+            compared_components=3,
         ),
         findings=(
             finding(status, "representation-similarity", metric="similarity", observed=0.84),
