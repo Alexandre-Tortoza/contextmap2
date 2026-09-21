@@ -62,14 +62,35 @@ Medição ad hoc (não versionada): 149 centros sobre um corredor sintético de 
 
 Esses números mostram o que o relatório reporta para o **controle geométrico**; eles não dizem nada sobre um encoder aprendido, que continua sem execução real.
 
+## Execução real de amostra (descritor, geometria real do corredor-02)
+
+Diferente da seção sintética acima, esta usa **geometria real**: o `GeometricMap` que o Geometric Mapping produziu a partir da trajetória `ExternalPose` de `datasets/corridor-02/corridor-02-gt.txt` na janela de 90 s da validação (14 422 535 pontos, 860 varreduras LiDAR; run `geometric-mapping/corridor-02/run-0001__ts-w336-90s__external-pose-all-points`, lido sem modificação e com integridade verificada). Real, e não simulada: a geometria e o descritor. **Não há PTv3 nem downstream nesta seção.**
+
+**Por que um recorte.** Avaliar suportes sobre o mapa inteiro não foi tentado: o harness materializa em memória uma cópia de toda a geometria por variação (14 milhões de objetos `GeometryPoint`), e com 860 varreduras sobrepostas o índice `scan_bounds` tende a selecionar muitas delas por consulta (não medido aqui). A geometria avaliada é um **recorte** do mapa real: os pontos numa caixa de ±4 m em x e y (e de -1,5 a +3,5 m em z) em torno da pose do meio da janela, reduzidos a **um ponto real por voxel de 10 cm** (o de menor índice de geometria). Cada ponto mantido é um `GeometryPoint` real do mapa, com identidade e proveniência próprias, então as referências continuam válidas no mapa. O recorte tem 28 787 pontos (de 1 458 162 na caixa) e o SHA-256 do conjunto de índices mantidos é `sha256:fcf58d10369514dabbba1313f7fb25fda98f51fbfd672ac40e4d2967893a2d4b`.
+
+**Protocolo.** 100 centros reais, sorteados com semente 0 entre os pontos a pelo menos 0,5 m das faces da caixa (para não medir truncamento de suporte); suporte por raio de 0,5 m com centralização; as seis variações da seção sintética. Braços `off` e `descriptor`. Não há configuração downstream fixada, e o fingerprint dela carrega a identidade do recorte. O relatório completo (`report_cpu-arms.json`, `sha256:eeaf10b8d19e2c9b81e9b8fe4db1fdd7417ee91d1fd58ea9149364c7e6a40a76`) e o run artifact do descritor ficam em `workspace/corridor-02/validation-point-representation-20260921/point_representation/`, fora do controle de versão; o driver é `scripts/10_evaluate_real_geometry.py` (`sha256:95938f0bc36b33e135fffde9d85e42843621386a1627e7ad5957b502f7fe504c`), executado no commit `b495e3a`, que não alterou o harness.
+
+- **Cobertura**: 100 de 100 representadas, 0 parciais, 0 falhas. **Repetibilidade**: diferença máxima `0.0`.
+- **Norma L2**: mediana 641, p95 779 (mínimo 113, máximo 792). **Custo**: 1,5 ms por representação (0,13 s de extração de suporte e 0,02 s no encoder para os 100 centros) e 112 bytes de payload por representação.
+- **Translação rígida**: mudança L2 relativa `0` (invariante).
+- **Rotação de 30° em z**: mediana de `7,7e-4` (p95 `1,1e-3`).
+- **Ruído** de 5 mm e de 2 cm: mediana de `8,0e-3` (p95 `0,026`) e de `0,016` (p95 `0,067`).
+- **Subamostragem** que mantém 70% e 40% dos pontos: mediana de `0,30` (p95 `0,34`) e de `0,59` (p95 `0,64`).
+- **Separação entre lugares** (diagnóstico do driver, não do harness): a distância L2 relativa entre pares de centros distintos tem mediana `0,133` (p95 `0,61`). Uma remoção de 30% dos pontos move o descritor cerca de `2,2` vezes mais que a diferença típica entre dois lugares diferentes do corredor, e uma de 60% cerca de `4,4` vezes: o descritor é dominado pelos componentes de densidade e tamanho do suporte, então **não é robusto à densidade**, propriedade que num LiDAR real varia com a distância. É uma limitação da linha de base, medida, e não uma falha do harness.
+
+Isso caracteriza o **controle geométrico** em geometria real. Nada aqui diz algo sobre um encoder aprendido nem sobre o efeito downstream.
+
 ## Estado e pendências
 
-- **Braço C (PTv3) sem execução real**: não há torch nem pesos no ambiente, então a comparação contra `off` e o descritor com um PTv3 real está pendente.
+- **Braço C (PTv3) sem execução real registrada no harness**: o runtime real existe (`backends/ptv3_pointcept.py`, ver [`ptv3.md`](../../point_representation/docs/ptv3.md)), mas a passagem real dele sobre este recorte, com tempo e pico de VRAM, ainda não foi registrada. O comando do driver para isso é `10_evaluate_real_geometry.py --arms off,descriptor,ptv3` no venv do modelo, sob o lock da GPU. Até lá a comparação do descritor com um PTv3 real e as medidas de acordo entre os dois espaços continuam pendentes.
 - **Ablação downstream pendente**: Semantic Fusion já existe e aceita Point
   Representation como canal opcional, mas nenhum resultado downstream foi
-  medido; Entity Resolution ainda não existe. O harness já carrega e compara as
-  condições, sem transformar essa capacidade estrutural em evidência de ganho.
-- **Checagem em dados reais pendente**: não há aqui uma fonte real de Geometric Mapping do corredor; a validação usa geometria sintética.
+  medido; Entity Resolution ainda não existe, então falsas fusões, duplicatas e
+  taxa de não resolvidas não podem ser medidas nem simuladas. O harness já
+  carrega e compara as condições, sem transformar essa capacidade estrutural em
+  evidência de ganho.
+- **Decisão baseada em evidência**: com o que existe, a única conclusão sustentada é manter Point Representation **opcional** e adiar a adoção de um backend aprendido; a decisão de adotar ou descartar o PTv3 exige o braço C real e o efeito downstream.
+- **Anotações de estrutura em dado real**: não há rótulos de estrutura do corredor, então a capacidade de um espaço distinguir tipos de estrutura não é medida; só estabilidade, invariância, separação entre lugares e custo.
 
 ## Restrições
 
