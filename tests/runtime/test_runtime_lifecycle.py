@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import subprocess
@@ -37,6 +38,7 @@ from contextmap.runtime import (
     resume_plan,
     run_plan,
 )
+from contextmap.runtime.catalog import PRESETS
 
 STAGES = [
     "ingestion",
@@ -761,6 +763,34 @@ class TestResume:
         with pytest.raises(ResumeError, match=what):
             self._resume(tmp_path, world, policy, previous, document=_document(**change))
 
+        assert world.runs == []
+
+    def test_resuming_after_the_topology_itself_changed_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        world, policy, previous = self._failed_then_fixed(tmp_path)
+        preset = PRESETS["canonical/1"]
+
+        def narrowed(stage: Any) -> Any:
+            if stage.stage_id != "semantic_fusion":
+                return stage
+            inputs = tuple(
+                dataclasses.replace(item, multiple=False) if item.name == "perception" else item
+                for item in stage.inputs
+            )
+            return dataclasses.replace(stage, inputs=inputs)
+
+        # Mesma configuração efetiva, topologia diferente (por exemplo, outra versão do código).
+        monkeypatch.setitem(
+            PRESETS,
+            "canonical/1",
+            dataclasses.replace(preset, stages=tuple(narrowed(s) for s in preset.stages)),
+        )
+
+        with pytest.raises(ResumeError, match="topology") as error:
+            self._resume(tmp_path, world, policy, previous)
+
+        assert "effective configuration" not in str(error.value)
         assert world.runs == []
 
     def test_resuming_with_other_targets_is_refused(self, tmp_path: Path) -> None:
