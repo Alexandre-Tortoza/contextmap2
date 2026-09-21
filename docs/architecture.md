@@ -251,6 +251,8 @@ spatial_relations ─────────────┘
 
 O grafo acima é conceitual e transitivo. O que o teste `tests/architecture/test_boundaries.py` autoriza são imports diretos da API pública do produtor. `semantic_fusion` importa, além de `sensor_association`, `point_representation` e `visual_perception`, identidades de `geometric_mapping` (`GeometryReference`, `Bounds3D`) e `ingestion` (`SourceObservationId`) e o intervalo temporal `TimeBounds` de `state_estimation`, apenas como tipos: não usa a lógica dessas capabilities.
 
+`artifact` depende apenas de `shared` e de `geometric_mapping` hoje (`MapId`, `GeometryReference`, `Bounds3D`, `geometry_index_of`), sem ampliar a fronteira declarada em `tests/architecture/test_boundaries.py`. Por isso não importa `TimeBounds` de `state_estimation` nem identidades de `ingestion`: `ObservationWindow` repete a regra do intervalo fechado em um relógio e as identidades de artifacts a montante são textos opacos (`UpstreamRecordRef`). Promover `TimeBounds` a `shared` é o caminho limpo se preferirem reutilizá-lo.
+
 `runtime` depende das capabilities para compô-las. Capabilities nunca dependem de `runtime`.
 
 ## Data dependency não é import de backend
