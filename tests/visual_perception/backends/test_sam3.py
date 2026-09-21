@@ -1,7 +1,9 @@
 import json
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,7 @@ from contextmap.visual_perception import (
     Region2D,
     RegionDiscovery,
 )
+from contextmap.visual_perception.backends import sam3 as sam3_module
 from contextmap.visual_perception.backends.sam3 import (
     Sam3Config,
     Sam3ImageProcessorRuntime,
@@ -22,6 +25,8 @@ from contextmap.visual_perception.backends.sam3 import (
     Sam3Strategy,
 )
 from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass, PassKind
+from contextmap.visual_perception.normalization import normalize_regions
+from contextmap.visual_perception.region_models import RejectionReason
 
 
 @dataclass(frozen=True)
@@ -229,3 +234,195 @@ def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallbac
 
     with pytest.raises(ValueError, match="supports only text_prompt"):
         runtime.predict(_input(), config)
+
+
+def _config() -> Sam3Config:
+    return Sam3Config(
+        checkpoint="facebook/sam3",
+        model_version="3.0",
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="floor",
+        score_threshold=0.5,
+    )
+
+
+def _proposal(box: tuple[float, float, float, float], mask: tuple[bool, ...]) -> Sam3NativeProposal:
+    return Sam3NativeProposal(
+        proposal_id="proposal-1",
+        box=box,
+        mask=mask,
+        score_name="concept_score",
+        score=0.9,
+        query_id="text-prompt-000000",
+    )
+
+
+class ProposalRuntime:
+    def __init__(self, *proposals: Sam3NativeProposal) -> None:
+        self._proposals = proposals
+
+    def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
+        return Sam3NativeOutput(proposals=self._proposals)
+
+
+def _mask_5x4(*, x_range: range, y_range: range) -> tuple[bool, ...]:
+    return tuple(x in x_range and y in y_range for y in range(4) for x in range(5))
+
+
+def test_sam3_derives_the_candidate_box_from_the_mask_and_keeps_the_native_box() -> None:
+    # A caixa nativa vem de um head independente e aqui não contém a máscara.
+    proposal = _proposal((1.0, 1.0, 4.0, 3.0), _mask_5x4(x_range=range(0, 5), y_range=range(0, 2)))
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(proposal))
+
+    candidate = backend.discover_candidates(_input()).candidates[0]
+
+    assert candidate.bounding_box == BoundingBox(x_min=0, y_min=0, x_max=5, y_max=2)
+    metadata = dict(candidate.native_metadata)
+    assert (
+        metadata["native_box_x_min"],
+        metadata["native_box_y_min"],
+        metadata["native_box_x_max"],
+        metadata["native_box_y_max"],
+    ) == (1.0, 1.0, 4.0, 3.0)
+    assert metadata["native_box_contains_mask"] is False
+    assert len(backend.discover(_input().prepared_image)) == 1
+
+
+def test_sam3_native_box_outside_the_image_does_not_abort_discovery() -> None:
+    proposal = _proposal((-0.4, 0.0, 5.6, 4.2), _mask_5x4(x_range=range(0, 5), y_range=range(2, 4)))
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(proposal))
+
+    candidate = backend.discover_candidates(_input()).candidates[0]
+
+    assert candidate.bounding_box == BoundingBox(x_min=0, y_min=2, x_max=5, y_max=4)
+    assert dict(candidate.native_metadata)["native_box_x_min"] == -0.4
+    assert dict(candidate.native_metadata)["native_box_contains_mask"] is True
+    regions = backend.discover(_input().prepared_image)
+    assert len(regions) == 1
+    assert regions[0].area_pixels == 10
+
+
+def test_sam3_empty_masks_are_rejected_explicitly_by_normalization() -> None:
+    empty = (False,) * 20
+    inside = _proposal((1.0, 1.0, 3.0, 3.0), empty)
+    outside = Sam3NativeProposal(
+        proposal_id="proposal-2",
+        box=(-5.0, -5.0, -1.0, -1.0),
+        mask=empty,
+        score_name="concept_score",
+        score=0.8,
+        query_id="text-prompt-000001",
+    )
+    backend = Sam3RegionDiscovery(config=_config(), runtime=ProposalRuntime(inside, outside))
+
+    output = backend.discover_candidates(_input())
+    result = normalize_regions(
+        output.candidates, _input().prepared_image, backend.backend_provenance()
+    )
+
+    assert len(output.candidates) == 2
+    assert result.regions == ()
+    assert {item.reason for item in result.rejected} == {RejectionReason.INVALID_GEOMETRY}
+
+
+class RecordingProcessor:
+    """Official-processor stand-in that records call order into a shared event list."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def set_image(self, image: object) -> object:
+        self._events.append("image")
+        return {}
+
+    def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+        self._events.append("threshold")
+        return state
+
+    def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+        self._events.append("prompt")
+        return {"boxes": [], "scores": [], "masks": []}
+
+
+class RecordingContext:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def __enter__(self) -> None:
+        self._events.append("enter")
+
+    def __exit__(self, *exc_info: object) -> None:
+        self._events.append("exit")
+
+
+def _text_prompt_config(precision: str) -> Sam3Config:
+    return Sam3Config(
+        checkpoint="facebook/sam3",
+        device="cuda:0",
+        precision=precision,
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="floor",
+    )
+
+
+def test_sam3_precision_must_be_a_supported_inference_precision() -> None:
+    with pytest.raises(ValueError, match="precision"):
+        Sam3Config(checkpoint="sam3", precision="int8")
+    for precision in ("float32", "float16", "bfloat16"):
+        assert Sam3Config(checkpoint="sam3", precision=precision).precision == precision
+
+
+def test_official_sam3_runtime_runs_the_sdk_inside_the_configured_inference_context() -> None:
+    events: list[str] = []
+    received: list[Sam3Config] = []
+
+    def autocast(config: Sam3Config) -> RecordingContext:
+        received.append(config)
+        return RecordingContext(events)
+
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events),
+        image_loader=_materialized_image,
+        autocast=autocast,
+    )
+    config = _text_prompt_config("bfloat16")
+
+    runtime.predict(_input(), config)
+
+    assert received == [config]
+    assert events == ["enter", "image", "threshold", "prompt", "exit"]
+
+
+def test_official_sam3_runtime_float32_needs_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(name: str) -> object:
+        raise AssertionError(f"float32 inference must not import {name}")
+
+    monkeypatch.setattr(sam3_module, "import_module", unavailable)
+    events: list[str] = []
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events), image_loader=_materialized_image
+    )
+
+    runtime.predict(_input(), _text_prompt_config("float32"))
+
+    assert events == ["image", "threshold", "prompt"]
+
+
+def test_official_sam3_runtime_default_context_is_torch_autocast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def autocast(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return nullcontext()
+
+    fake_torch = SimpleNamespace(autocast=autocast, bfloat16="torch.bfloat16")
+    monkeypatch.setattr(sam3_module, "import_module", lambda name: fake_torch)
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor([]), image_loader=_materialized_image
+    )
+
+    runtime.predict(_input(), _text_prompt_config("bfloat16"))
+
+    assert calls == [{"device_type": "cuda", "dtype": "torch.bfloat16"}]

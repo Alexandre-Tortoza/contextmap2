@@ -322,3 +322,77 @@ def test_parser_records_safe_code_fence_repair_but_rejects_semantic_repairs() ->
     }
     with pytest.raises(SemanticResponseParseError, match="confidence"):
         _parse(json.dumps(invalid_confidence), request)
+
+
+_PRIMARY_CLAIM = {
+    "hypothesis": "wooden pallet",
+    "role": "primary",
+    "category": "load carrier",
+    "region_kind": "thing",
+    "attributes": {"material": "wood"},
+    "confidence": None,
+}
+
+
+def test_region_parser_treats_an_omitted_null_scene_context_as_null_and_records_it() -> None:
+    request = _request(SemanticInterpretationMode.REGION)
+    with_key = _parse(
+        json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM], "scene_context": None}),
+        request,
+    )
+
+    without_key = _parse(json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM]}), request)
+
+    assert without_key.claims == with_key.claims
+    assert without_key.scene_context is None
+    assert with_key.diagnostics == ()
+    assert [item.code for item in without_key.diagnostics] == ["defaulted_null_scene_context"]
+
+
+def test_region_parser_accepts_an_abstention_without_scene_context() -> None:
+    parsed = _parse(
+        json.dumps({"abstained": True, "claims": []}),
+        _request(SemanticInterpretationMode.REGION),
+    )
+
+    assert parsed.abstained is True
+    assert [item.code for item in parsed.diagnostics] == ["defaulted_null_scene_context"]
+
+
+def test_region_parser_records_the_code_fence_and_the_defaulted_key_in_order() -> None:
+    raw = "```json\n" + json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM]}) + "\n```"
+
+    parsed = _parse(raw, _request(SemanticInterpretationMode.REGION))
+
+    assert [item.code for item in parsed.diagnostics] == [
+        "removed_code_fence",
+        "defaulted_null_scene_context",
+    ]
+
+
+def test_region_parser_still_rejects_a_non_null_scene_context() -> None:
+    raw = json.dumps(
+        {"abstained": False, "claims": [_PRIMARY_CLAIM], "scene_context": {"scene_type": "x"}}
+    )
+
+    with pytest.raises(SemanticResponseParseError, match="scene_context must be null"):
+        _parse(raw, _request(SemanticInterpretationMode.REGION))
+
+
+def test_scene_parser_still_requires_scene_context() -> None:
+    raw = json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM]})
+
+    with pytest.raises(SemanticResponseParseError, match=r"missing required fields.*scene_context"):
+        _parse(raw, _request(SemanticInterpretationMode.SCENE))
+
+
+def test_region_parser_still_rejects_other_missing_or_unexpected_keys() -> None:
+    request = _request(SemanticInterpretationMode.REGION)
+
+    with pytest.raises(SemanticResponseParseError, match=r"missing required fields.*claims"):
+        _parse(json.dumps({"abstained": False}), request)
+    with pytest.raises(SemanticResponseParseError, match=r"unexpected fields.*notes"):
+        _parse(
+            json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM], "notes": "extra"}),
+            request,
+        )

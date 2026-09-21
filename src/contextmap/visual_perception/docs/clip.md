@@ -42,7 +42,7 @@ adapter separado em `backends/semantic_scoring.py`.
 
 ## Runtime Hugging Face
 
-O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz resize bicúbico direto configurado sem center crop, chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. A interpolação é explícita e não depende do default carregado pelo processor. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
+O runtime lazy decodifica a imagem uma vez, materializa os crops declarados, faz o resize bicúbico direto configurado no **Pillow**, sem center crop, usa o processor apenas para rescale e normalização (`do_resize=False`), chama somente `CLIPModel.get_image_features()` e converte o resultado projetado para NumPy. O resize é do adapter, não do processor: a implementação de resize do processor depende do backend instalado (torchvision ou PIL) e dá pixels diferentes (até 1,75e-2) e features diferentes (cosseno mínimo por patch 0,981) para o mesmo checkpoint, config e imagem. Com o resize no Pillow, os dois backends concordam a 2,4e-7 (issue #339). Dependências: `torch`, `transformers` (>= 4.56, que introduziu `dtype=`) e `Pillow`; com `transformers` 5.x o processor padrão importa também `torchvision`, que precisa estar instalado; um pacote ausente vira `ClipDependencyError`. PyTorch, Transformers e Pillow permanecem em `backends/` e só são importados na primeira execução.
 
 `local_files_only=True` é o default; nenhuma inferência baixa pesos implicitamente. `revision` exige o SHA Git completo de 40 caracteres e rejeita referências móveis como `main` antes do carregamento. Dependência, device, checkpoint e inferência possuem erros separados e não acionam fallback.
 
@@ -60,7 +60,11 @@ de debug é dependência downstream.
 
 Os testes com runtime fake cobrem modos global/região, crops com contexto e borda, proveniência por view, persistência, normalização, compatibilidade de espaço, validação e ausência de scoring.
 
-O backend também foi executado com pesos reais em frames de `corridor-02` durante a correção #339. Depois que o resize bicúbico passou a ser explícito em Pillow, os caminhos de processor PIL e torchvision diferiram no máximo `3.7e-7` e ambos coincidiram com uma referência Pillow independente. Isso valida o preprocessamento e a estabilidade numérica dessa configuração, não a qualidade semântica do embedding nem um benchmark científico do modelo.
+Execução controlada com pesos reais (issue #70, 2026-09-20; RTX 3060, torch 2.14, transformers 5.17, frames reais de `corridor-02`): `openai/clip-vit-large-patch14` no escopo global produz `(1, 768)` com norma L2 1,0 e repetição idêntica. O vetor está no espaço conjunto imagem-texto: para um frame de corredor, "a photo of an indoor corridor" pontua 0,229 contra 0,137 (cat), 0,118 (forest) e 0,109 (beach). No escopo de região com crops `context_box`, há um vetor por região com `feature_id` único e `region_id` preservado, e uma região não aceita é rejeitada com `ClipInferenceError`. fp16 contra fp32 tem cosseno 0,999994.
+
+Antes da correção do pré-processamento (issue #339) o adapter tinha cosseno 0,99995 (diferença máxima 1,2e-3) contra uma referência independente; depois dela a diferença máxima é 3,6e-7 e os backends torchvision e PIL do processor coincidem.
+
+Esses resultados validam o carregamento, os contratos e a estabilidade numérica dessa configuração; não constituem benchmark científico comparativo da qualidade semântica do embedding.
 
 ## O que este backend não faz
 

@@ -227,6 +227,8 @@ Motivos:
 
 Cálculos internos podem usar NumPy livremente dentro da capability adequada. A regra vale para a fronteira pública, não para toda implementação.
 
+NumPy é **dependência base** do pacote (fixado abaixo de 2.4 por causa dos stubs; ver `pyproject.toml`): a acumulação de Geometric Mapping e as buscas de vizinhos da avaliação precisam dele. Isso não afrouxa a regra acima. Continuam valendo, e são testadas: nenhuma primitiva pública exige `numpy.ndarray`, e os leitores de artifact abrem um run sem importar NumPy, porque o import é tardio e fica dentro do cálculo que realmente o usa.
+
 ## Estrutura materializada
 
 A árvore atual contém somente os módulos com consumidores reais:

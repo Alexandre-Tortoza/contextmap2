@@ -31,17 +31,18 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
-Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; DINOv2/CLIP tiveram o preprocessamento verificado com pesos reais, enquanto DINOv3/AlphaCLIP permanecem sem execução real. Detalhes e limites estão em [`feature-extraction.md`](feature-extraction.md).
+Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2 e CLIP e segue pendente para DINOv3 e AlphaCLIP. Detalhes, resultados e limites estão em [`feature-extraction.md`](feature-extraction.md), [`dinov2.md`](dinov2.md) e [`clip.md`](clip.md).
 
 Semantic Interpretation possui contratos canônicos para claims/contexto, request,
 prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 implementam
 o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
 isolados e testes determinísticos. `ClipSemanticScorer` e
-`AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Houve
-smoke/diagnósticos reais limitados para SAM2/SAM3, DINOv2/CLIP e Qwen; DINOv3,
-AlphaCLIP, Gemini e Florence-2 semântico continuam sem execução real registrada.
-Nenhum desses checks substitui uma avaliação científica controlada, que permanece
-pendente. O `CANONICAL_PRESET_V1` ainda preserva
+`AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Há
+execuções reais registradas de SAM2/SAM3 e DINOv2/CLIP, além de um diagnóstico
+real limitado com Qwen; DINOv3, AlphaCLIP, Gemini e Florence-2 semântico
+continuam sem execução real registrada. Nenhuma dessas validações substitui uma
+avaliação científica comparativa comum, que permanece pendente. O
+`CANONICAL_PRESET_V1` ainda preserva
 temporariamente os estágios legados de cena/região até a construção de
 `SemanticInterpretationRequest` ser integrada ao preset canônico. Detalhes estão em
 [`semantic-interpretation.md`](semantic-interpretation.md).
