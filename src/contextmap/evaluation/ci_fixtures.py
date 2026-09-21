@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import struct
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -112,7 +111,7 @@ from contextmap.visual_perception import InlineMask
 CI_FIXTURE_ID = "contextmap-ci-subset"
 """Stable name of the CI fixture subset across versions."""
 
-CI_FIXTURE_VERSION = "1.0.0"
+CI_FIXTURE_VERSION = "1.0.1"
 """Version of the subset; it changes whenever any generated file changes."""
 
 CATALOGUE_SCHEMA = "contextmap.ci-fixtures/v1"
@@ -504,7 +503,6 @@ def build_annotation_sets() -> dict[str, AnnotationSet]:
     )
     anchor0 = ObservationRef(sample_id=s0, observation_id=f0)
     anchor1 = ObservationRef(sample_id=s1, observation_id=f1)
-    anchor2 = ObservationRef(sample_id=s2, observation_id=f2)
     relations = RelationAnnotationSet(
         normalization=exact,
         predicate_rules=(
@@ -535,7 +533,7 @@ def build_annotation_sets() -> dict[str, AnnotationSet]:
                 predicate="supports",
                 object_identity_id="pallet-1",
                 status=RelationStatus.AMBIGUOUS,
-                anchors=(anchor2,),
+                anchors=(anchor1,),
             ),
         ),
     )
@@ -1294,20 +1292,3 @@ def annotation_documents() -> dict[str, dict[str, Any]]:
         stem: encode_annotation_set(annotation_set)
         for stem, annotation_set in build_annotation_sets().items()
     }
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Generate the subset into the directory given on the command line.
-
-    ``python -m contextmap.evaluation.ci_fixtures tests/fixtures/ci_subset/1.0.0``
-    """
-    arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 1:
-        print("usage: python -m contextmap.evaluation.ci_fixtures <version-directory>")
-        return 2
-    generate_ci_fixture_subset(Path(arguments[0]))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -594,12 +594,12 @@
       "status": "not_yet_available"
     }
   ],
-  "digest": "sha256:f1ecc8dca689060ff58ad1da89746921cc4ce0ebada60a89acf105ad395f0538",
+  "digest": "sha256:779d42482bb0d4862cd548a7c029453756126e21f8dcea5b7b5a665add0c1b61",
   "reference_set": {
-    "digest": "sha256:007a3d0f89b6ec38bb9a7dae65c971f2aa43a7ac57fb29effc5455fd3fa41b30",
+    "digest": "sha256:752df30cbd3a5f85b6ab0ea1606c9071e602a83769bb8ebcecc93c0ceff62742",
     "reference_set_id": "contextmap-ci-subset",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "schema": "contextmap.ci-fixtures/v1",
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

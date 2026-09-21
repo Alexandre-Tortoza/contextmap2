@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from contextmap.evaluation.annotation_qa import AnnotationQaPolicy, check_annotation_quality
 from contextmap.evaluation.annotations import (
     RegionAnnotationSet,
     SemanticAnnotationSet,
@@ -32,8 +33,12 @@ from contextmap.evaluation.ci_fixtures import (
     generate_ci_fixture_subset,
     read_catalogue,
 )
+from contextmap.evaluation.evaluator_reproducibility import check_evaluator_reproducibility
+from contextmap.evaluation.metrics import default_metric_registry
 from contextmap.evaluation.reference_integrity import open_validated_reference_set
-from contextmap.evaluation.reference_set import ReferenceSampleId
+from contextmap.evaluation.reference_set import ReferenceSampleId, read_reference_set
+from contextmap.evaluation.report_adapters import semantic_interpretation_evaluation_report
+from contextmap.evaluation.report_schema import EvaluationReport
 from contextmap.evaluation.semantic_interpretation import (
     SemanticEvaluationContext,
     SemanticEvaluationInput,
@@ -453,6 +458,74 @@ def test_the_semantic_annotations_grade_the_canned_responses() -> None:
 
 def test_a_replaced_case_would_change_the_catalogue_digest() -> None:
     catalogue = read_catalogue(FIXTURE_ROOT)
-    other = replace(catalogue, version="1.0.1")
+    other = replace(catalogue, version="9.9.9")
 
     assert other.digest() != catalogue.digest()
+
+
+_QA_POLICY = AnnotationQaPolicy(
+    policy_id="annotation-qa/1",
+    duplicate_pixel_tolerance_px=0.5,
+    duplicate_point_tolerance_m=0.05,
+    region_match_iou=0.5,
+)
+
+
+def test_the_subset_passes_annotation_qa_and_keeps_its_ambiguity_as_permissible() -> None:
+    manifest = read_reference_set(FIXTURE_ROOT)
+
+    report = check_annotation_quality(manifest, FIXTURE_ROOT, policy=_QA_POLICY)
+
+    assert report.is_valid, [f"{item.code}: {item.message}" for item in report.blockers]
+    assert {item.kind for item in report.permissible} >= {
+        "ambiguous-semantics",
+        "unknown-semantics",
+        "ambiguous-relation",
+        "unknown-visibility",
+        "partial-identity-coverage",
+        "partial-region-coverage",
+    }
+    assert report.disagreements == ()
+
+
+def test_evaluating_the_subset_twice_gives_equivalent_reports() -> None:
+    manifest = read_reference_set(FIXTURE_ROOT)
+    annotations = read_annotation_set(FIXTURE_ROOT / "annotations" / "semantics.json")
+    assert isinstance(annotations, SemanticAnnotationSet)
+    case = _case("semantic-claims-variants")
+    labeled = annotations.find(
+        ReferenceSampleId("sample-0000"), SourceObservationId("frame-0000"), "region-a"
+    )
+    assert labeled is not None
+
+    def evaluate() -> EvaluationReport:
+        execution = _execute(
+            case.inputs["responses"]["primary_with_alternative"],
+            case.inputs["observation_id"],
+            SemanticConfidencePolicy.UNSCORED_ONLY,
+        )
+        report = evaluate_semantic_interpretation(
+            context=SemanticEvaluationContext(
+                evaluation_id="ci-fixture-eval",
+                reference_set_version=CI_FIXTURE_VERSION,
+                selection_id="ci",
+                perception_run_id="canned-run",
+                artifact_id="canned-artifact",
+                pipeline_configuration_digest="sha256:pipeline",
+                evaluator_version="semantic-evaluator/1",
+            ),
+            inputs=(
+                SemanticEvaluationInput(
+                    execution=execution,
+                    evidence_variant_id="tight-crop",
+                    annotation=annotations.to_semantic_annotation(labeled),
+                ),
+            ),
+        )
+        return semantic_interpretation_evaluation_report(
+            report, registry=default_metric_registry(), reference_set=manifest.identity()
+        )
+
+    check = check_evaluator_reproducibility(evaluate, repetitions=3)
+
+    assert check.reproducible, check.differences

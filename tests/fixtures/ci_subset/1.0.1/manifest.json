@@ -50,13 +50,12 @@
     },
     {
       "annotation_id": "ann-relations",
-      "content_hash": "sha256:c023c8cb7092c1b0dcaad2f2ee77ddf105f4a81be2d3325bef0c327e2604789b",
+      "content_hash": "sha256:7ea087d5fc027908570437a611ae0c435f7c73fe6887bf95e6d6941ebda3ce6d",
       "path": "annotations/relations.json",
       "provenance_id": "prov-synthetic",
       "sample_ids": [
         "sample-0000",
-        "sample-0001",
-        "sample-0002"
+        "sample-0001"
       ],
       "schema": "contextmap.reference.relations/v1",
       "trust": "trusted_ground_truth"
@@ -93,7 +92,7 @@
       "source_id": "ci-corridor"
     }
   ],
-  "digest": "sha256:007a3d0f89b6ec38bb9a7dae65c971f2aa43a7ac57fb29effc5455fd3fa41b30",
+  "digest": "sha256:752df30cbd3a5f85b6ab0ea1606c9071e602a83769bb8ebcecc93c0ceff62742",
   "provenance": [
     {
       "annotator": "contextmap.evaluation.ci_fixtures",
@@ -102,7 +101,7 @@
       "provenance_id": "prov-synthetic",
       "review": null,
       "seeded_from_artifacts": [],
-      "tool_version": "1.0.0"
+      "tool_version": "1.0.1"
     }
   ],
   "reference_set_id": "contextmap-ci-subset",
@@ -223,7 +222,7 @@
   "sources": [
     {
       "content_hash": "sha256:2c7e3a764b790174b21eddf160abc643f86dae328b2e656cd3b63c6097ac6f08",
-      "identity": "contextmap-ci-subset/1.0.0/sequence",
+      "identity": "contextmap-ci-subset/1.0.1/sequence",
       "kind": "synthetic_fixture",
       "license": "AGPL-3.0 (repository LICENSE)",
       "redistributable": true,
@@ -260,5 +259,5 @@
       ]
     }
   ],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }
