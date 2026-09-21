@@ -11,7 +11,8 @@ flowchart LR
     Q["ObservationQuality<br/>(Sensor Association)"] -. referência .-> SF
     PR["PointRepresentation<br/>(opcional)"] -. referência .-> SF
     SF --> FE["FusedEvidence<br/>(hipóteses, conflitos, incerteza)"]
-    FE --> DOWN["Semantic Mapping"]
+    FE --> EVAL["Evaluation<br/>(implementado)"]
+    FE -. próximo boundary .-> DOWN["Semantic Mapping<br/>(planejado)"]
 ```
 
 Fusão não é identidade. Um `FusionSupport` afirma apenas que observações espaciais veem geometria compatível sob uma política; não afirma mesmo objeto, mesma classe nem identidade persistente entre versões do mapa.
@@ -64,7 +65,9 @@ A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe a
 
 ## Módulos que consomem este
 
-`semantic_mapping`, sempre através de `contextmap.semantic_fusion`.
+Hoje, `evaluation`, sempre através de `contextmap.semantic_fusion`.
+`semantic_mapping` será o consumidor downstream quando esse módulo planejado
+for materializado.
 
 ## Onde estão os documentos detalhados
 
@@ -74,5 +77,6 @@ A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe a
 - [`accumulation.md`](accumulation.md) — política baseline de acumulação, regra de label, stances e fronteira de qualidade.
 - [`artifact.md`](artifact.md) — layout, linhagem, métricas, leitura, integridade e debug do `SemanticFusionRunArtifact`.
 - [`quality-aware.md`](quality-aware.md) — política opcional ciente de qualidade: regras versionadas, fator neutro, correlação preservada e diagnósticos.
+- [avaliação de Semantic Fusion](../../evaluation/docs/semantic_fusion.md) — consistência, incerteza, canais, estratificação e comparação controlada.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — o estágio de Semantic Fusion no fluxo.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `FusionSupport` e `FusedEvidence` no contexto global de contratos.

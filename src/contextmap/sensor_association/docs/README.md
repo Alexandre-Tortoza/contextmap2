@@ -11,7 +11,7 @@ flowchart LR
     CAL["Calibração + modelo de câmera<br/>(Ingestion)"] --> SA
     PERC["PerceptionResult<br/>(Region2D, features, claims)"] --> SA
     SA --> SO["SpatialObservation<br/>(evidência, por região)"]
-    SO --> DOWN["Semantic Fusion /<br/>Point Representation"]
+    SO --> DOWN["Semantic Fusion / Evaluation"]
 ```
 
 Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta execução. Não é crença nem conhecimento — não fixa label, identidade ou entidade, não escolhe um vencedor entre regiões sobrepostas e não copia XYZ, embeddings ou claims. Tudo o que ela aponta é alcançado por referência.
@@ -37,7 +37,11 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 - **Diagnósticos** de calibração, reprojeção e alinhamento temporal, com achados explícitos, referência confiável e varredura de deslocamento temporal ([`diagnostics.md`](diagnostics.md)).
 - **Serviço e artifact de run**: `SensorAssociationService`, canais de features densas distintos e o `SensorAssociationRunArtifact` imutável, com tabelas colunares compactas, linhagem e evidência de depuração ([`artifact.md`](artifact.md)).
 
-A **validação** (relatório de avaliação sobre o artifact) está planejada e será documentada aqui quando for implementada.
+A **validação** lê o artifact pela API pública e produz relatórios estratificados
+de alcance, visibilidade, densidade de suporte, borda da imagem, ângulo de vista,
+tempo, reprojeção e caminhos de features. Está implementada em
+`contextmap.evaluation.sensor_association` e documentada em
+[`evaluation/docs/sensor_association.md`](../../evaluation/docs/sensor_association.md).
 
 ## Contratos públicos
 
@@ -65,7 +69,11 @@ A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPrepa
 
 ## Módulos que consomem este
 
-`semantic_fusion`, `point_representation`, `runtime`, `evaluation` e `artifact`, sempre através de `contextmap.sensor_association`.
+Hoje, `semantic_fusion` e `evaluation`, sempre através de
+`contextmap.sensor_association`. `point_representation` não consome esta
+capability: extrai suporte diretamente de Geometric Mapping e só pode fornecer
+um canal opcional posterior a Semantic Fusion. A composition root em `runtime`
+e o módulo global `artifact` continuam planejados.
 
 ## Onde estão os documentos detalhados
 
@@ -78,5 +86,6 @@ A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPrepa
 - [`quality.md`](quality.md) — qualidade da observação: componentes, ausência explícita, proveniência e derivação.
 - [`diagnostics.md`](diagnostics.md) — diagnósticos de calibração, reprojeção e alinhamento temporal, achados e varredura de deslocamento.
 - [`artifact.md`](artifact.md) — serviço, artifact de run, tabelas compactas, canais de features e debug.
+- [avaliação de Sensor Association](../../evaluation/docs/sensor_association.md) — estratificação, tempo, reprojeção, caminhos de features e comparação controlada.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `SpatialObservation` no contexto global de contratos.

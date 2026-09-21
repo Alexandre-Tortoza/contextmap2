@@ -102,6 +102,7 @@ flowchart TD
     EV -. validates .-> ST
     EV -. validates .-> GM
     EV -. validates .-> SA
+    EV -. validates .-> PR
     EV -. validates .-> SF
     EV -. validates .-> ER
     EV -. validates .-> SR
@@ -111,7 +112,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` já materializam os sete primeiros boundaries da arquitetura. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação, além dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP, e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. As execuções reais de referência dos adapters semânticos permanecem pendentes em #77/#78. O restante do grafo acima continua sendo arquitetura alvo até que suas milestones correspondentes sejam implementadas.
+Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion` já materializam os sete primeiros boundaries de domínio da arquitetura; `evaluation` materializa os harnesses de qualidade, regressão e custo dessas capabilities. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação, além dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP, e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. `SemanticScorer` possui adapters CLIP/AlphaCLIP separados. Existem execuções reais registradas de parte desses adapters, com escopos documentados individualmente, mas não uma avaliação científica comparativa comum. Runtime global, Semantic Mapping, Entity Resolution, Spatial Relations e o artifact final continuam sendo arquitetura alvo.
 
 ```mermaid
 flowchart LR
@@ -149,7 +150,8 @@ Documentação implementacional:
 - [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md);
 - [Sensor Association](../src/contextmap/sensor_association/docs/README.md);
 - [Point Representation](../src/contextmap/point_representation/docs/README.md);
-- [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md).
+- [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md);
+- [Evaluation](../src/contextmap/evaluation/docs/README.md).
 
 
 ## Ownership
@@ -291,9 +293,9 @@ flowchart LR
     ACLIP["AlphaCLIP"] -->|implementado| FE
     Q["Qwen"] -->|adapter canônico implementado| SI
     G["Gemini"] -->|adapter canônico implementado| SI
-    F2 -. adapter semântico separado .-> SI
-    CLIP -. scorer separado .-> SS
-    ACLIP -. scorer separado .-> SS
+    F2 -->|adapter semântico implementado| SI
+    CLIP -->|scorer implementado| SS
+    ACLIP -->|scorer implementado| SS
     EXT["ExternalPose"] -->|implementado| SE
     FL["FAST-LIO"] -->|implementado,<br/>execução de referência pendente| SE
     DET["deterministic descriptor"] -->|implementado| PE
@@ -302,11 +304,11 @@ flowchart LR
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
 
-No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction possui adapters DINOv2, DINOv3, CLIP e AlphaCLIP atrás do mesmo port; eles não são selecionados implicitamente pelo preset e o enhancement não possui backend aprendido nem faz parte do preset canônico. Semantic Interpretation possui `QwenSemanticInterpreter` e `GeminiSemanticInterpreter` implementando o mesmo boundary canônico, além do adapter Florence-2, com runtime/client injetáveis, parsing/provenance compartilhados e testes determinísticos; a execução real controlada permanece em #77/#78. `visual_perception.pipeline` conhece a capability `semantic_interpreter`, mas `CANONICAL_PRESET_V1` ainda usa temporariamente as operações legadas `scene_interpretation`/`region_interpretation` até existir uma política explícita de construção de request. `SemanticScorer` possui adapters CLIP/AlphaCLIP e está disponível como capability explícita do DAG, mas não integra `CANONICAL_PRESET_V1` automaticamente. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. `state_estimation` possui o port `StateEstimator` com os adapters `ExternalPose` e FAST-LIO, este com o processo isolado atrás de um `FastLioRunner`; a construção de ambos pertence ao `runtime`. `point_representation` possui o port `PointEncoder` com o descritor geométrico determinístico e a fronteira do PTv3, este atrás de um `PTv3Runtime` injetável que isola torch, CUDA e checkpoint; um backend aprendido nunca substitui o baseline por queda silenciosa, e a construção pertence ao `runtime`. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) e [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
+No estado atual, os ports `RegionDiscovery`, `FeatureExtractor`, `FeatureResolutionEnhancement`, `SemanticInterpreter` e `SemanticScorer` já existem em `visual_perception`. Region Discovery possui adapters concretos SAM2, SAM3 e Florence-2. Feature Extraction possui adapters DINOv2, DINOv3, CLIP e AlphaCLIP atrás do mesmo port; eles não são selecionados implicitamente pelo preset e o enhancement não possui backend aprendido nem faz parte do preset canônico. Semantic Interpretation possui `QwenSemanticInterpreter`, `GeminiSemanticInterpreter` e `Florence2SemanticInterpreter` implementando o mesmo boundary canônico, com runtime/client injetáveis, parsing/provenance compartilhados e testes determinísticos; houve um diagnóstico real limitado com Qwen, mas não uma comparação controlada dos três backends. `visual_perception.pipeline` conhece a capability `semantic_interpreter`, mas `CANONICAL_PRESET_V1` ainda usa temporariamente as operações legadas `scene_interpretation`/`region_interpretation` até existir uma política explícita de construção de request. `SemanticScorer` possui adapters CLIP/AlphaCLIP e está disponível como capability explícita do DAG, mas não integra `CANONICAL_PRESET_V1` automaticamente. Ingestion possui adapters concretos ROS 1 e ROS 2 atrás de `SourceAdapter`. `state_estimation` possui o port `StateEstimator` com os adapters `ExternalPose` e FAST-LIO, este com o processo isolado atrás de um `FastLioRunner`; a construção concreta caberá à composition root global planejada. `point_representation` possui o port `PointEncoder` com o descritor geométrico determinístico e a fronteira do PTv3, este atrás de um `PTv3Runtime` injetável que isola torch, CUDA e checkpoint; um backend aprendido nunca substitui o baseline por queda silenciosa, e a construção concreta também caberá à composition root planejada. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md) e [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
 
 ## Composition root
 
-Construção de implementações concretas pertence ao runtime.
+Construção de implementações concretas pertencerá ao runtime global planejado. Enquanto `contextmap.runtime` não existe, callers e testes constroem os adapters explicitamente.
 
 ```mermaid
 flowchart LR

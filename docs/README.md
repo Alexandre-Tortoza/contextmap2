@@ -32,7 +32,7 @@ Visualização, busca em linguagem natural, navegação, planejamento, agentes e
 
 ## Estado materializado na `dev`
 
-A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os sete primeiros boundaries de domínio estão implementados e integrados por contratos públicos:
+A documentação global descreve o canonical pipeline completo, mas o código atualmente materializado deve ser lido de forma separada do alvo futuro. Hoje, os sete primeiros boundaries de domínio estão implementados e integrados por contratos públicos; `evaluation` também existe como capability transversal:
 
 ```mermaid
 flowchart LR
@@ -57,7 +57,7 @@ flowchart LR
     FUA -. próximo boundary .-> NEXT["Semantic Mapping<br/>e downstream planejados"]
 ```
 
-Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto, Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação, e o boundary canônico de Semantic Interpretation. Esse boundary inclui `SemanticClaim`/`SceneContext`, requests auditáveis, prompts/parsing versionados, `SemanticInterpretationExecution`, persistência das views exatas e adapters Qwen/Gemini/Florence-2 isolados por seams testáveis. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. Os adapters de features têm testes determinísticos sem pesos; DINOv2 e CLIP foram validados com pesos reais, enquanto DINOv3 e AlphaCLIP seguem pendentes (acesso gated e checkpoints), e as execuções reais de referência de Qwen/Gemini permanecem pendentes nas issues #77/#78.
+Ingestion possui adapters ROS 1/ROS 2, observações canônicas, calibração, sincronização, seleção/replay, provenance, validação e `SequenceArtifact`. Visual Perception possui o core de execução, Region Discovery concreto, Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP, além de compatibilidade de embeddings, payload store, sampling denso, pooling por região, diagnostics e avaliação, e o boundary canônico de Semantic Interpretation. Esse boundary inclui `SemanticClaim`/`SceneContext`, requests auditáveis, prompts/parsing versionados, `SemanticInterpretationExecution`, persistência das views exatas e adapters Qwen/Gemini/Florence-2 isolados por seams testáveis. `SemanticScorer` também possui adapters CLIP/AlphaCLIP separados das claims. `PerceptionRunArtifact` e leitura multi-run continuam preservando evidência sem fusão implícita. A CI usa runtimes/clients injetados; SAM2/SAM3, DINOv2/CLIP e Qwen possuem execuções reais registradas com escopos distintos. DINOv3, AlphaCLIP, Gemini e Florence-2 semântico continuam sem execução real registrada, e não há avaliação científica comparativa comum desses adapters.
 
 State Estimation possui os contratos `PoseEstimate`/`Trajectory`, lookup temporal com interpolação auditável, frame graph estático e preflight de geometria, o port `StateEstimator` com os backends `ExternalPose` e FAST-LIO, o `StateEstimationRunArtifact` e o harness de avaliação em `evaluation`. A execução de referência com o FAST-LIO instalado ainda está pendente: o backend foi testado com um processo substituto, não com o binário real.
 
@@ -65,7 +65,7 @@ Geometric Mapping possui os contratos `GeometryPoint`/`GeometryReference`/`Geome
 
 Sensor Association possui os contratos `SpatialObservation` e `ObservationQuality`, os modelos de câmera calibrados (pinhole, fisheye e MEI, com o MEI adicionado à calibração canônica de Ingestion), a cadeia mapa → câmera → imagem preparada, a resolução de visibilidade e oclusão, o pertencimento à máscara de `Region2D`, a amostragem de features densas (nativas ou melhoradas, como canais distintos), os diagnósticos de calibração, reprojeção e alinhamento temporal, o `SensorAssociationRunArtifact` e o harness de avaliação estratificada em `evaluation`. Toda a verificação usa fixtures sintéticos determinísticos: não há mapa geométrico no frame da trajetória (depende da execução real do FAST-LIO) nem correspondências de referência reais.
 
-Point Representation é uma capability **opcional**: possui os contratos `PointRepresentation`/`RepresentationSpace`, a extração de suporte local sobre `GeometrySource`, o port `PointEncoder` e o serviço de execução independente de backend, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3, o `PointRepresentationRunArtifact` e o harness de ablação em `evaluation`. Ela deve justificar seu custo por avaliação controlada, e essa justificativa **não existe ainda**: o PTv3 nunca foi executado (sem torch nem pesos), a ablação downstream depende de Semantic Fusion e Entity Resolution e toda a verificação usa geometria sintética.
+Point Representation é uma capability **opcional**: possui os contratos `PointRepresentation`/`RepresentationSpace`, a extração de suporte local sobre `GeometrySource`, o port `PointEncoder` e o serviço de execução independente de backend, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3, o `PointRepresentationRunArtifact` e o harness de ablação em `evaluation`. Ela deve justificar seu custo por avaliação controlada, e essa justificativa **não existe ainda**: o PTv3 nunca foi executado (sem torch nem pesos), a ablação downstream sobre Semantic Fusion ainda não foi realizada, Entity Resolution permanece planejada e toda a verificação usa geometria sintética.
 
 Semantic Fusion acumula a evidência multi-vista **sem criar identidade de objeto**: possui `FusionSupport`, `EvidenceContribution`, o agrupamento por observação física, a política baseline de acumulação (hipóteses por chave de label, stances e sinais tipados, abstenção configurável e registros de incerteza), os canais de evidência tipados, a política opcional ciente de qualidade, o `SemanticFusionRunArtifact` e o harness de validação em `evaluation`. Toda a verificação usa fixtures sintéticos: não há run de fusão sobre dados reais nem anotações de referência reais, então **nenhuma decisão foi tomada** sobre manter a política ciente de qualidade opcional ou adotá-la.
 
@@ -111,6 +111,12 @@ flowchart TD
 
     M --> ING[src/contextmap/ingestion/docs/README.md]
     M --> VP[src/contextmap/visual_perception/docs/README.md]
+    M --> ST[src/contextmap/state_estimation/docs/README.md]
+    M --> GM[src/contextmap/geometric_mapping/docs/README.md]
+    M --> SA[src/contextmap/sensor_association/docs/README.md]
+    M --> PR[src/contextmap/point_representation/docs/README.md]
+    M --> SF[src/contextmap/semantic_fusion/docs/README.md]
+    M --> EV[src/contextmap/evaluation/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]

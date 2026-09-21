@@ -60,11 +60,13 @@ rejeitados antes que qualquer payload seja entregue ao artifact writer.
 
 ## Validação desta implementação
 
-Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download, GPU ou inferência real.
+Os testes de contrato usam um runtime injetado e determinístico. Eles cobrem metadata, persistência, mapeamento espacial, identidade de embedding, normalização, determinismo, port, pooling comum e falhas explícitas sem download ou GPU.
 
 Execução controlada com pesos reais (issue #68, 2026-09-20; RTX 3060, torch 2.14, transformers 5.17, frames reais de `corridor-02`): `facebook/dinov2-base` com entrada 448×336 produz o mapa `(24, 32, 768)` com stride e suporte de 20 px (`14 × 640/448`) e origem `(0, 0)`. A saída é idêntica (diferença 0,0) em execuções repetidas, na mesma instância e em uma instância nova; fp16 contra fp32 tem cosseno mínimo por patch de 0,9967. O resultado é idêntico a um forward direto do modelo sobre os mesmos pixels, o que confirma a remoção do CLS e o reshape linha×coluna, e um teste de espelhamento horizontal confirma a ordem das linhas e colunas (0,87 alinhado contra 0,61 desalinhado). A saída alimenta `pool_region_feature` com células e pesos corretos.
 
 Após a correção do pré-processamento (issue #339), o adapter contra uma referência independente em Pillow tem diferença máxima de 3e-4 e cosseno mínimo por patch de 0,9999999, e os backends torchvision e PIL do processor produzem o mesmo resultado.
+
+Esses resultados validam o carregamento, o layout espacial, os contratos e a estabilidade numérica dessa configuração; não constituem avaliação científica comparativa da qualidade dos embeddings nem substituem um reference set versionado.
 
 ## O que este backend não faz
 

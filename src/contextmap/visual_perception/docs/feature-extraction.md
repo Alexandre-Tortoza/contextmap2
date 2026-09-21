@@ -50,6 +50,8 @@ O core de Feature Extraction está materializado e exportado por `contextmap.vis
 
 Os quatro adapters concretos ficam em `visual_perception/backends/` e satisfazem o mesmo port sem expor PyTorch, Transformers, AlphaCLIP, Pillow ou arrays na API pública da capability. Carregamento é lazy, checkpoints locais são o default e falhas de dependência, device, checkpoint e inferência permanecem explícitas. Os testes usam runtimes determinísticos injetados e não baixam pesos. Os adapters DINOv2 e CLIP foram executados com pesos reais em 2026-09-20 (resultados em `dinov2.md` e `clip.md`); DINOv3 (repositório *gated*) e AlphaCLIP (checkpoints ausentes) ainda não têm execução real e não devem ser tratados como validados. Os adapters de Hugging Face fazem o resize no Pillow e deixam ao processor só rescale e normalização, para que o vetor não dependa do backend do processor.
 
+As execuções reais validam os adapters e a reprodutibilidade numérica nas configurações registradas; não constituem comparação científica da qualidade dos embeddings.
+
 Os adapters não são registrados nem selecionados implicitamente por `CANONICAL_PRESET_V1`. A composition root deve importar o módulo interno correspondente, construir a configuração efetiva e fornecê-lo ao `StageBackendFactory`.
 
 ## Contrato `VisualFeature`

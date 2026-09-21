@@ -10,7 +10,7 @@ As regras gerais de ownership e imports permanecem em [architecture.md](architec
 
 ## Estado atual de `contextmap.shared`
 
-`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` (com `to_record()`/`from_record()`, o formato de registro compartilhado do timestamp e do clock) e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`); os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
+`shared` continua deliberadamente mínimo. As primitivas transversais materializadas são `SourceTimestamp` (com `to_record()`/`from_record()`, o formato de registro compartilhado do timestamp e do clock) e as primitivas geométricas de `contextmap.shared.geometry` (`Vector3`, `Quaternion`, `RotationMatrix`, validação, norma e normalização de quaternions, `quaternion_multiply`, `quaternion_conjugate`, `rotate_vector`, `quaternion_to_rotation_matrix`, `quaternion_angle_between`, `compose_rigid` e `invert_rigid`). `contextmap.shared.run_directory` materializa a mecânica transversal de diretório de run descrita abaixo; os demais conceitos permanecem com seus owners de domínio enquanto não houver necessidade real de compartilhamento.
 
 ```mermaid
 flowchart LR
@@ -229,22 +229,20 @@ Cálculos internos podem usar NumPy livremente dentro da capability adequada. A 
 
 NumPy é **dependência base** do pacote (fixado abaixo de 2.4 por causa dos stubs; ver `pyproject.toml`): a acumulação de Geometric Mapping e as buscas de vizinhos da avaliação precisam dele. Isso não afrouxa a regra acima. Continuam valendo, e são testadas: nenhuma primitiva pública exige `numpy.ndarray`, e os leitores de artifact abrem um run sem importar NumPy, porque o import é tardio e fica dentro do cálculo que realmente o usa.
 
-## Estrutura mínima
+## Estrutura materializada
 
-Não criar a árvore inteira antes de existir código que a use.
-
-Quando as primeiras primitives concretas forem necessárias, a estrutura pode crescer incrementalmente:
+A árvore atual contém somente os módulos com consumidores reais:
 
 ```text
 src/contextmap/shared/
 ├── __init__.py
-├── time.py          # somente quando Timestamp for implementado
-├── geometry.py      # somente quando Vector3/Quaternion/Transform3D forem necessários
-├── identifiers.py   # somente se surgir primitive realmente transversal
-└── provenance.py    # somente após contrato transversal real
+├── time.py          # SourceTimestamp
+├── geometry.py      # Vector3, Quaternion, RotationMatrix e operações rígidas
+└── run_directory.py # escrita atômica, inventário, integridade e registry
 ```
 
-A presença deste documento não exige a criação imediata desses arquivos.
+`identifiers.py` e `provenance.py` não existem; só devem ser criados se surgir
+um contrato transversal real.
 
 `shared/__init__.py` deve seguir a mesma política de API pública das demais capabilities: exports explícitos e pequenos.
 

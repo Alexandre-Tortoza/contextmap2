@@ -74,7 +74,7 @@ flowchart TD
     P[PerceptionRunArtifact]
     T[StateEstimationRunArtifact]
     G[GeometricMapArtifact]
-    A[AssociationRunArtifact]
+    A[SensorAssociationRunArtifact]
     R[PointRepresentationRunArtifact]
     F[SemanticFusionRunArtifact]
     E[Semantic Entity Artifact]
@@ -128,8 +128,8 @@ flowchart LR
     AW --> ASA["SensorAssociationRunArtifact"]
     ASA --> AR["SensorAssociationRunReader"]
     MAP --> PTE["Point Representation"]
-    PTE --> PW["PointRepresentationRunWriter"]
-    PW --> PTA["PointRepresentationRunArtifact"]
+    PTE --> PTW["PointRepresentationRunWriter"]
+    PTW --> PTA["PointRepresentationRunArtifact"]
     PTA --> PTR["PointRepresentationRunReader"]
     ASA --> SFU["Semantic Fusion"]
     PTA -.-> SFU
@@ -475,7 +475,7 @@ Lineage não é uma descrição textual vaga. Ele deve apontar para identities/h
 Exemplo conceitual:
 
 ```text
-AssociationRunArtifact
+SensorAssociationRunArtifact
 ├── SequenceArtifact
 ├── PerceptionRunArtifact
 ├── StateEstimationRunArtifact
@@ -533,7 +533,7 @@ outputs/
 Cada linha contém um `PerceptionResult` completo com `regions`, `features`, `claims` e `scene_context`. Índices separados podem ser adicionados apenas quando houver um caso de uso medido que justifique a duplicação.
 
 ```text
-AssociationRunArtifact
+SensorAssociationRunArtifact
 outputs/
 ├── spatial-observations.*
 ├── projection-records.*
@@ -768,7 +768,7 @@ SequenceArtifact      reusable
 StateEstimationRunArtifact    reusable
 GeometricMapArtifact          reusable
 PerceptionRunArtifact         recompute
-AssociationRunArtifact        recompute
+SensorAssociationRunArtifact  recompute
 SemanticFusion+               recompute
 ```
 
@@ -778,7 +778,7 @@ Se a trajetória muda:
 PerceptionRunArtifact         potentially reusable
 StateEstimationRunArtifact    recompute
 GeometricMapArtifact          recompute
-AssociationRunArtifact        recompute
+SensorAssociationRunArtifact  recompute
 all geometry-dependent stages recompute
 ```
 
@@ -802,6 +802,10 @@ debug dependency
 ```
 
 ## Lineage de entidade
+
+Esta seção e as seções de lineage de relação e `ContextMapArtifact` abaixo
+descrevem artifacts **planejados**. As capabilities `semantic_mapping`,
+`entity_resolution`, `spatial_relations` e `artifact` ainda não existem.
 
 ```mermaid
 flowchart RL

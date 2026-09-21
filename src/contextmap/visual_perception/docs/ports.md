@@ -17,13 +17,13 @@ flowchart LR
     SAM2["SAM2"] -->|implementado| RD
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
-    F2 -. adapter planejado .-> SI
+    F2 -->|implementado| SI
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
     CLIP["CLIP"] -->|implementado| FE
-    CLIP -. adapter planejado .-> SS
+    CLIP -->|implementado| SS
     ACLIP["AlphaCLIP"] -->|implementado| FE
-    ACLIP -. adapter planejado .-> SS
+    ACLIP -->|implementado| SS
     QWEN["Qwen"] -->|adapter canônico implementado| SI
     GEMINI["Gemini"] -->|adapter canônico implementado| SI
     ENH["Backend aprendido"] -. futuro e opcional .-> FRE
@@ -68,11 +68,11 @@ seus modes/views/evidências suportados e devolve
 `SemanticInterpretationExecution`. A execução mantém separados request, prompt
 renderizado, resposta bruta, parsing canônico, configuração efetiva e métricas.
 Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
-`QwenSemanticInterpreter` e `GeminiSemanticInterpreter` implementam esse
-boundary hoje usando seams injetáveis (`QwenRuntime`/`GeminiClient`). Isso
+`QwenSemanticInterpreter`, `GeminiSemanticInterpreter` e
+`Florence2SemanticInterpreter` implementam esse boundary hoje usando seams
+injetáveis (`QwenRuntime`, `GeminiClient` e `Florence2SemanticRuntime`). Isso
 valida contratos, mapping, parsing, retries/diagnostics e provenance sem afirmar
-que a execução de referência com checkpoint/API real já foi concluída; essa
-evidência permanece em #77/#78.
+que execuções controladas com checkpoint/API real já foram concluídas.
 
 ## `SemanticScorer` nunca muta uma claim
 
@@ -93,7 +93,7 @@ Qualquer classe que implemente os métodos de um port satisfaz esse port (`Proto
 
 ## Estado no pipeline canônico
 
-Os quatro ports acima são contratos públicos implementados em `ports.py`, mas
+Os cinco ports acima são contratos públicos implementados em `ports.py`, mas
 isso não significa que todos pertençam ao preset canônico. Os adapters de
 capability `semantic_interpreter` e `semantic_scorer` podem ser selecionados por
 `StageSpec`; o scorer recebe os inputs nomeados `claims` e `features`.

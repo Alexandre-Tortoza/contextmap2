@@ -274,7 +274,7 @@ ConfigurationError
 ArtifactSelectionError
     runtime selection/composition
 
-AssociationError
+AssociationInputError
     sensor_association
 
 SemanticInterpretationError
@@ -410,7 +410,7 @@ O importante não é esse construtor específico; são os invariantes:
 A divisão arquitetural materializada na `dev` é:
 
 - **Ingestion**, produz e reabre `SequenceArtifact`;
-- **Visual Perception**, possui Region Discovery, Feature Extraction, Semantic Interpretation, contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`; os adapters Qwen/Gemini/Florence-2 existem, enquanto a execução real controlada de Qwen/Gemini e a promoção de `semantic_interpreter` ao preset canônico continuam explicitamente pendentes;
+- **Visual Perception**, possui Region Discovery, Feature Extraction, Semantic Interpretation e Semantic Scoring, contratos, ports, preset/DAG interno, executor, `PerceptionRunArtifact` e `PerceptionEvidenceSet`; os adapters Qwen/Gemini/Florence-2 e os scorers CLIP/AlphaCLIP existem, enquanto execuções controladas com checkpoints/serviços reais e a promoção de `semantic_interpreter` ao preset canônico continuam explicitamente pendentes;
 - **State Estimation**, publica `PoseEstimate`/`Trajectory`, lookup temporal, preflight, backends `ExternalPose` e FAST-LIO e `StateEstimationRunArtifact`;
 - **Geometric Mapping**, transforma e acumula geometria persistente, publica `GeometrySource` e persiste `GeometricMapArtifact`;
 - **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;

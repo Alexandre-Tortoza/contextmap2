@@ -2,7 +2,11 @@
 
 ## O port `StateEstimator`
 
-`StateEstimator` (`ports.py`) é o ponto de substituição de backends de estimação. Existem duas implementações reais previstas (ExternalPose e FAST-LIO), e os testes usam a primeira como fake leve da segunda, o que justifica o port.
+`StateEstimator` (`ports.py`) é o ponto de substituição de backends de estimação.
+Existem duas implementações concretas: `ExternalPoseEstimator` e
+`FastLioEstimator`. Os testes exercitam ExternalPose diretamente e isolam a
+integração de processo do FAST-LIO por um `FastLioRunner` injetável; nenhum dos
+dois backends é tratado como fake do outro.
 
 ```python
 class StateEstimator(Protocol):
@@ -18,7 +22,9 @@ class StateEstimator(Protocol):
 - `EstimationDiagnostic`: `severity` (`INFO`/`WARNING`), `code` estável no formato `<backend_id>.<condição>`, `message` e `observation_id` opcional.
 - Erros: `StateEstimationError` (base) e `MissingEstimatorInputError` (o request não traz uma entrada de que o backend depende).
 
-Não existe fallback implícito para outro backend quando o selecionado falha. A construção dos backends concretos pertence ao `runtime`.
+Não existe fallback implícito para outro backend quando o selecionado falha. A
+construção dos backends concretos pertencerá à composition root planejada;
+`contextmap.runtime` ainda não existe.
 
 ## Backend `ExternalPose`
 

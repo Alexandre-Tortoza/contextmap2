@@ -24,3 +24,12 @@ O report mantém blocos separados:
 `compare_semantic_backends()` rejeita reports que não cubram exatamente os
 mesmos pares request/evidence variant. Repetições sobre o mesmo frame continuam
 amostras de estabilidade, não novas evidências físicas.
+
+## Estado de validação e limitações
+
+A CI exercita o schema do relatório, a separação qualidade/custo, falhas e a
+comparação controlada com execuções determinísticas construídas em teste. Não há
+reference set real versionado nem execução comparativa real de Qwen, Gemini e
+Florence-2 registrada no repositório. Portanto, o harness está implementado,
+mas não sustenta conclusão sobre qual backend ou variante de evidência tem maior
+qualidade científica.

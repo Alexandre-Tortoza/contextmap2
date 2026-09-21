@@ -167,10 +167,12 @@ efetiva da execução.
 O seam de runtime mantém Transformers/Torch e objetos Qwen fora dos contratos.
 Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito.
 Métricas de tokens, latência, memória e warnings são registradas quando o
-runtime consegue medi-las. A cobertura CI usa runtime fake determinístico; uma
-execução de referência com pesos reais continua exigindo ambiente compatível e
-deve ser registrada pelo protocolo de avaliação, nunca simulada como evidência
-real.
+runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
+diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
+registrada para `scene_context` omitido (#340), mas não usou um reference set
+versionado nem o protocolo completo de avaliação. Uma execução de referência
+continua exigindo ambiente compatível e deve ser registrada pelo protocolo de
+avaliação.
 
 ## Adapter Gemini
 
@@ -220,7 +222,10 @@ O branch de integração materializa:
 - testes determinísticos cobrem parsing, abstention, retries, materialização no
   `PerceptionResult` e reabertura do run artifact.
 
-Execuções reais controladas ainda dependem de pesos/runtime local para Qwen e
-Florence-2 e de credenciais/acesso para Gemini. O ambiente de CI valida seams,
-contratos, parsing, provenance, falhas e report schema com doubles
-determinísticos; isso não é registrado como evidência experimental real.
+Uma execução diagnóstica real limitada de Qwen3-VL-4B já ocorreu para o fix
+#340: três respostas REGION omitiram a chave nula, duas passaram a ser aceitas
+após a normalização e a terceira permaneceu corretamente rejeitada por atributo
+não escalar. Ainda não existe execução controlada sobre reference set versionado
+para Qwen, Gemini ou Florence-2. O ambiente de CI valida seams, contratos,
+parsing, provenance, falhas e report schema com doubles determinísticos; isso não
+é registrado como comparação científica dos backends.

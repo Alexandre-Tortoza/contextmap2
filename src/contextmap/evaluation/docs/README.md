@@ -35,10 +35,16 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 - `SemanticEvaluationContext` — reference-set, seleção, run, artifact,
   pipeline digest e versão do evaluator.
-- `SemanticEvaluationReport` — qualidade, custo e falhas em blocos separados.
+- `SemanticAnnotation`, `SemanticEvaluationInput` e
+  `SemanticEvaluationFailure` — referência open-vocabulary, variante de
+  evidência e falha `parser`/`backend` explicitamente classificadas.
+- `SemanticEvaluationReport`, `SemanticSampleReport`,
+  `SemanticQualityReport` e `SemanticCostReport` — amostras, qualidade, custo e
+  falhas em blocos separados.
 - `evaluate_semantic_interpretation()` — avaliação por request/evidence variant
   com matching policy versionada.
-- `compare_semantic_backends()` — exige exatamente os mesmos requests e
+- `MATCHING_POLICY`, `SemanticBackendComparison` e
+  `compare_semantic_backends()` — exigem exatamente os mesmos requests e
   variants para Qwen, Gemini e Florence-2.
 
 ### State Estimation
@@ -93,7 +99,9 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 
 ## Módulos que consomem este
 
-Experimentos, benchmarks e gates de regressão. `runtime` não precisa importar `evaluation` para executar o pipeline principal.
+Experimentos, benchmarks e gates de regressão. A composition root planejada em
+`contextmap.runtime` não precisará importar `evaluation` para executar o
+pipeline principal.
 
 ## Onde estão os documentos detalhados
 

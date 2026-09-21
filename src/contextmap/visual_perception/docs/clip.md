@@ -33,7 +33,12 @@ A proveniência de cada `VisualFeature` combina o fingerprint do modelo/configur
 
 O espaço canônico registra `family="clip"`, checkpoint+revision, `layer="image_projection"`, dimensão real e normalização (`l2` por default). Global e região produzidos pelo mesmo checkpoint/projeção/normalização pertencem ao mesmo `EmbeddingSpace`: crop/contexto muda a evidência visual, não a definição matemática do espaço.
 
-O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. A identidade preservada é suficiente para um futuro `SemanticScorer` verificar compatibilidade com text embeddings produzidos pelo mesmo modelo, mas este adapter não codifica texto, não calcula similaridade e não escolhe labels.
+O espaço é distinto de DINO, AlphaCLIP e checkpoints CLIP diferentes. Essa
+identidade permite que o `ClipSemanticScorer` implementado verifique
+compatibilidade com text embeddings produzidos pelo mesmo modelo. O
+`ClipVisualFeatureBackend` continua estritamente visual: não codifica texto,
+não calcula similaridade e não escolhe labels; scoring é responsabilidade do
+adapter separado em `backends/semantic_scoring.py`.
 
 ## Runtime Hugging Face
 
@@ -46,7 +51,10 @@ normalização L2 ou enfileirar o payload.
 
 ## Diagnósticos
 
-`ClipDiagnostics` preserva tempo de decode/preprocess/inferência, quantidade de views e warnings de runtime/crop. A persistência geral de evidência/diagnóstico será integrada pela issue #72; nenhum arquivo de debug é dependência downstream.
+`ClipDiagnostics` preserva tempo de decode/preprocess/inferência, quantidade de
+views e warnings de runtime/crop. A persistência comum de métricas e previews já
+existe via `FeatureExtractionDiagnostic` e `PerceptionRunWriter`; nenhum arquivo
+de debug é dependência downstream.
 
 ## Validação desta implementação
 
@@ -55,6 +63,8 @@ Os testes com runtime fake cobrem modos global/região, crops com contexto e bor
 Execução controlada com pesos reais (issue #70, 2026-09-20; RTX 3060, torch 2.14, transformers 5.17, frames reais de `corridor-02`): `openai/clip-vit-large-patch14` no escopo global produz `(1, 768)` com norma L2 1,0 e repetição idêntica. O vetor está no espaço conjunto imagem-texto: para um frame de corredor, "a photo of an indoor corridor" pontua 0,229 contra 0,137 (cat), 0,118 (forest) e 0,109 (beach). No escopo de região com crops `context_box`, há um vetor por região com `feature_id` único e `region_id` preservado, e uma região não aceita é rejeitada com `ClipInferenceError`. fp16 contra fp32 tem cosseno 0,999994.
 
 Antes da correção do pré-processamento (issue #339) o adapter tinha cosseno 0,99995 (diferença máxima 1,2e-3) contra uma referência independente; depois dela a diferença máxima é 3,6e-7 e os backends torchvision e PIL do processor coincidem.
+
+Esses resultados validam o carregamento, os contratos e a estabilidade numérica dessa configuração; não constituem benchmark científico comparativo da qualidade semântica do embedding.
 
 ## O que este backend não faz
 

@@ -24,7 +24,20 @@ Geometria é **onde** algo está. Evidência visual, semântica e identidade de 
 
 ## Estado implementado
 
-Existem os **contratos**, a fronteira de leitura `GeometrySource`, o **estado explícito de correção de movimento** com a política de scans não corrigidos (ver [`motion-correction.md`](motion-correction.md)) a **montagem dos inputs de geometria** (ver [`inputs.md`](inputs.md)) a **transformação fonte→mapa** com traces auditáveis (ver [`transformation.md`](transformation.md)) a **acumulação do mapa** com referências estáveis e índice de origem (ver [`accumulation.md`](accumulation.md)) o **acesso espacial** com índice derivado e verificável (ver [`spatial-access.md`](spatial-access.md)) e o **`GeometricMapArtifact`** persistido, imutável e com linhagem (ver [`artifact.md`](artifact.md)). A **validação** do mapa (numérica, concordância entre scans, referência declarada e reprodutibilidade) vive em `evaluation` e está documentada em [`evaluation/docs/geometric_mapping.md`](../../evaluation/docs/geometric_mapping.md).
+Estão implementados os **contratos**, a fronteira de leitura
+`GeometrySource`, o **estado explícito de correção de movimento** com a política
+de scans não corrigidos (ver
+[`motion-correction.md`](motion-correction.md)), a **montagem dos inputs de
+geometria** (ver [`inputs.md`](inputs.md)), a **transformação fonte→mapa** com
+traces auditáveis (ver [`transformation.md`](transformation.md)), a
+**acumulação do mapa** com referências estáveis e índice de origem (ver
+[`accumulation.md`](accumulation.md)), o **acesso espacial** com índice derivado
+e verificável (ver [`spatial-access.md`](spatial-access.md)) e o
+**`GeometricMapArtifact`** persistido, imutável e com linhagem (ver
+[`artifact.md`](artifact.md)). A **validação** do mapa (numérica, concordância
+entre scans, referência declarada e reprodutibilidade) vive em `evaluation` e
+está documentada em
+[`evaluation/docs/geometric_mapping.md`](../../evaluation/docs/geometric_mapping.md).
 
 ## Contratos públicos
 
@@ -51,7 +64,10 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 ## Módulos que consomem este
 
-`sensor_association`, `point_representation`, `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations` e `artifact`, sempre através de `contextmap.geometric_mapping`.
+Hoje, `sensor_association`, `point_representation`, `semantic_fusion` e
+`evaluation`, sempre através de `contextmap.geometric_mapping`. Os módulos
+planejados `semantic_mapping`, `entity_resolution`, `spatial_relations` e
+`artifact` também deverão consumir essa API pública quando forem materializados.
 
 ## Onde estão os documentos detalhados
 
