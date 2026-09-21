@@ -590,6 +590,28 @@ class TestProvenanceTraversal:
         ]
         assert reachable and all(pair in claims for pair in reachable)
 
+    def test_the_trace_exposes_the_scorer_references_of_each_view(self, run: FusionRun) -> None:
+        entity = _entities(run)[0]
+        (ref,) = entity.evidence.fused_evidence
+        fused = run.reader.fused_evidence(ref.fusion_support_id)
+
+        trace = trace_entity_evidence(entity, fusion_runs={RUN_ID: run.reader})
+
+        traced = {
+            (item.contribution_id, score)
+            for item in trace.contributions
+            for score in item.score_refs
+        }
+        carried = {
+            (item.contribution_id, score)
+            for item in fused.contributions
+            for score in item.score_refs
+        }
+        assert carried, "the fixture must score at least one claim"
+        assert traced == carried
+        for item in trace.contributions:
+            assert {score.claim_id for score in item.score_refs} <= set(item.claim_ids)
+
     def test_a_trace_needs_the_run_and_the_evidence(self, run: FusionRun) -> None:
         entity = _entities(run)[0]
         gone = _entity_with_ref(entity, fusion_support_id=FusionSupportId("support-9999"))

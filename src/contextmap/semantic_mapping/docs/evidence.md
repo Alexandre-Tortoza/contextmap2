@@ -75,7 +75,7 @@ A fonte é a porta estrutural `FusedEvidenceSource` (`manifest`, `fused_evidence
 
 ## Travessia
 
-- `trace_entity_evidence(entity, fusion_runs=...)` percorre a entidade até as vistas: cada `ContributionTrace` traz a observação espacial, o run e o resultado de percepção, a região, as claims e o frame físico. `EntityEvidenceTrace.physical_observation_ids` lista os frames distintos. Levanta `EvidenceTraceError` se o run ou a evidência não podem ser lidos.
+- `trace_entity_evidence(entity, fusion_runs=...)` percorre a entidade até as vistas: cada `ContributionTrace` traz a observação espacial, o run e o resultado de percepção, a região, as claims, as referências dos scorers (`score_refs`: a claim pontuada e o scorer, sem o valor do score) e o frame físico. `EntityEvidenceTrace.physical_observation_ids` lista os frames distintos. Levanta `EvidenceTraceError` se o run ou a evidência não podem ser lidos.
 - `trace_geometry_sources(geometry, source=...)` percorre a geometria até as observações LiDAR de origem: uma `GeometrySourceTrace` por observação, com a contagem de pontos e o intervalo de aquisição.
 
 ## Sobrevive à reabertura

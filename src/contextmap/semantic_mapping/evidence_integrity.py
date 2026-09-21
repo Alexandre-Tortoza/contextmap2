@@ -34,6 +34,7 @@ from contextmap.semantic_fusion import (
     FusedEvidenceId,
     FusionRunArtifactError,
     FusionSupportId,
+    ScoreReference,
     SemanticFusionRunId,
     SemanticFusionRunManifest,
 )
@@ -382,6 +383,8 @@ class ContributionTrace:
         perception_result_id: The perception result that holds the claims.
         region_id: The observed region.
         claim_ids: The claims the view made about the region, sorted.
+        score_refs: The scorer outputs for those claims, sorted: each names the scored claim and
+            the scorer, so the score of a claim is reachable without loading the fusion payload.
         physical_observation_id: The physical frame: the end of the chain.
     """
 
@@ -392,6 +395,7 @@ class ContributionTrace:
     perception_result_id: PerceptionResultId
     region_id: RegionId
     claim_ids: tuple[ClaimId, ...]
+    score_refs: tuple[ScoreReference, ...]
     physical_observation_id: SourceObservationId
 
 
@@ -427,7 +431,7 @@ def trace_entity_evidence(
 
     Returns:
         The contributing views, each with its spatial observation, perception result, region,
-        claims and physical frame.
+        claims, scorer references and physical frame.
 
     Raises:
         EvidenceTraceError: If a referenced run was not offered or its evidence cannot be read.
@@ -452,6 +456,7 @@ def trace_entity_evidence(
                 perception_result_id=item.perception_result_id,
                 region_id=item.region_id,
                 claim_ids=tuple(claim.claim_id for claim in item.claim_refs),
+                score_refs=item.score_refs,
                 physical_observation_id=item.physical_observation_id,
             )
             for item in fused.contributions
