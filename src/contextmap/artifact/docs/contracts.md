@@ -1,6 +1,6 @@
 # Contratos do ContextMap
 
-Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `versioning.py` e `records.py`.
+Este documento descreve `src/contextmap/artifact/models.py`, `metadata.py`, `frame.py`, `versioning.py` e `records.py`.
 
 ## `ContextMap`
 
@@ -31,10 +31,16 @@ Um mapa é imutável (`frozen`), comparável por valor e não carrega objeto de 
 | --- | --- |
 | `creation` | `MapCreation`: como o mapa foi montado |
 | `source_sequences` | as sequências e seleções (`SourceSequence`) usadas, ordenadas e únicas; pelo menos uma |
+| `frame` | `MapFrame`: frame, unidade, lateralidade, direção "para cima" e âncora da origem |
+| `bounds` | `Bounds3D` da extensão espacial, no frame do mapa |
+| `time_bounds` | `ObservationWindow` das observações usadas, em um único relógio |
+| `capabilities` | `DeclaredCapabilities`: o conteúdo opcional que o mapa declara |
 
 `MapCreation` registra a `assembly_policy` (`PolicyRef`, regra versionada que compôs o mapa), a `code_version` e o `configuration_fingerprint`. Os dois últimos são `None` **explícito** quando desconhecidos, nunca omitidos e nunca vazios. Não há data de criação: ela tornaria equivalentes não idênticos e pertence ao diário do run, não ao schema.
 
 `SourceSequence` é `(sequence_artifact_id, selection_id)`: a sequência canônica imutável e a identidade determinística da parte dela que foi usada. A mesma sequência pode aparecer com seleções distintas.
+
+Frame, unidades, âncora, extensão e capacidades estão em [`metadata.md`](metadata.md).
 
 ## `GeometricMapLink`
 

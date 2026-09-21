@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, is_dataclass
 
 import pytest
 from context_map_builders import (
@@ -18,6 +18,7 @@ from context_map_builders import (
     source_sequence,
 )
 
+from contextmap import artifact
 from contextmap.artifact import (
     CONTEXT_MAP_SCHEMA_VERSION,
     ContextMap,
@@ -173,10 +174,14 @@ def test_the_schema_imports_without_robotics_or_model_stacks(module: str) -> Non
     assert completed.returncode == 0, completed.stderr
 
 
-def test_metadata_is_independent_of_filesystem_layout() -> None:
+def test_the_schema_is_independent_of_filesystem_layout() -> None:
+    # Nenhum campo do schema pode ser caminho, arquivo ou URI: o layout é do serializador.
     forbidden = {"path", "directory", "filename", "uri", "url"}
     fields: set[str] = set()
-    for cls in (ContextMap, ContextMapMetadata, MapCreation, SourceSequence, GeometricMapLink):
-        fields |= set(cls.__dataclass_fields__)
+    for name in artifact.__all__:
+        member = getattr(artifact, name)
+        if isinstance(member, type) and is_dataclass(member):
+            fields |= set(member.__dataclass_fields__)
 
+    assert fields
     assert not {name for name in fields if any(word in name for word in forbidden)}

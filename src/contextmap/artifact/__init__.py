@@ -8,7 +8,16 @@ of ROS and of model stacks. See ``src/contextmap/artifact/docs/README.md`` for t
 capability documentation.
 """
 
-from contextmap.artifact.metadata import ContextMapMetadata, MapCreation, PolicyRef, SourceSequence
+from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
+from contextmap.artifact.metadata import (
+    ContextMapMetadata,
+    DeclaredCapabilities,
+    MapCapability,
+    MapCreation,
+    ObservationWindow,
+    PolicyRef,
+    SourceSequence,
+)
 from contextmap.artifact.models import ContextMap, ContextMapId, GeometricMapLink
 from contextmap.artifact.records import (
     ContextMapRecordError,
@@ -24,12 +33,20 @@ from contextmap.artifact.versioning import (
 
 __all__ = [
     "CONTEXT_MAP_SCHEMA_VERSION",
+    "AnchorKind",
     "ContextMap",
     "ContextMapId",
     "ContextMapMetadata",
     "ContextMapRecordError",
+    "DeclaredCapabilities",
     "GeometricMapLink",
+    "Handedness",
+    "LengthUnit",
+    "MapAnchor",
+    "MapCapability",
     "MapCreation",
+    "MapFrame",
+    "ObservationWindow",
     "PolicyRef",
     "SchemaVersion",
     "SourceSequence",
