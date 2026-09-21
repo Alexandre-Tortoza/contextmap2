@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais).
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais). Além dos harnesses por capability, o módulo possui o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
 
 ## O que este módulo explicitamente não possui
 
@@ -93,6 +93,13 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
 - `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
 
+### Reference set
+
+- `ReferenceSetManifest`/`ReferenceSetIdentity` — manifesto versionado e hasheado do reference set: fontes, calibrações, amostras ligadas a `SourceObservationId`, estratos, anotações, proveniência e splits.
+- `ReferenceTrust` — trust declarado por arquivo de anotação (`trusted_ground_truth`, `approximate_annotation`, `derived_measurement`, `diagnostic_only`); nunca inferido do nome do arquivo. Anotações de origem `model_inference` só podem ser `diagnostic_only`.
+- `encode_reference_set()`/`decode_reference_set()`/`write_reference_set()`/`read_reference_set()` — persistência imutável com digest verificado na leitura.
+- `verify_annotation_files()` e `require_version_bump_on_change()` — hashes dos arquivos de anotação e regra de que a versão muda quando o conteúdo muda.
+
 ## Módulos consumidos
 
 `contextmap.ingestion` para a identidade da observação física, `contextmap.visual_perception`, `contextmap.state_estimation`, `contextmap.geometric_mapping`, `contextmap.sensor_association`, `contextmap.point_representation` e `contextmap.semantic_fusion`, exclusivamente por suas APIs públicas.
@@ -113,6 +120,7 @@ pipeline principal.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
+- [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
