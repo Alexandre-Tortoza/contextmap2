@@ -55,17 +55,22 @@ O suporte 3D persistente e seus resumos derivados; detalhes em [`geometry.md`](g
 
 Suporte vazio não pode se passar por geometria válida: a construção é recusada (`EmptyGeometrySupportError`). O contrato também recusa resumos em outro frame, centroide fora dos limites, extensão que não é o tamanho da caixa, estatísticas ou digest que não correspondem às referências e diagnósticos que contradizem as estatísticas.
 
-## `EntitySemanticState` e `EntityHypothesis`
+## `EntitySemanticState` e seus tipos
 
-`EntitySemanticState.hypotheses` são todos os candidatos, ordenados por evidência fundida e hipótese; vazio quando nenhuma vista produziu uma claim.
+O estado semântico, sem colapso; detalhes em [`semantic-state.md`](semantic-state.md).
 
-| Campo de `EntityHypothesis` | Significado |
+| Campo | Significado |
 | --- | --- |
-| `fused_evidence_id`, `hypothesis_id` | A evidência fundida de origem e a hipótese, local a ela. |
-| `label` | O texto da hipótese, verbatim; equivalência entre labels é decisão de política, nunca suposta. |
-| `evidence` | `HypothesisEvidence` de Semantic Fusion: claim, stance (suporta, conflita, ambígua, abstém), papel e sinais tipados; ordenadas e únicas. |
+| `hypotheses` | `EntityHypothesis` ordenadas por evidência fundida e hipótese; vazio quando nenhuma vista produziu uma claim. |
+| `ambiguity_state` | `AmbiguityState` (`unambiguous`, `ambiguous`, `conflicting`, `insufficient_evidence`), sempre o que `derive_ambiguity_state` calcula: o contrato recusa outro valor. |
+| `provenance` | `SemanticStateProvenance`: regra de mapeamento e política do primário. |
+| `primary_hypothesis` | `EntityHypothesisRef` ou `None`; só existe quando o estado é `unambiguous`. |
+| `attributes` | `EntityAttribute` (`name`, `value`, `origin`, `derivation_id`, `evidence`, `support`). |
+| `uncertainty` | `EntityUncertainty`: cada registro de incerteza da fusão com a evidência fundida que o reportou. |
 
-Uma hipótese exige ao menos uma evidência que a suporte. Um label não se repete dentro da mesma evidência fundida.
+`EntityHypothesis` guarda `fused_evidence_id`, `hypothesis_id`, o `label` verbatim (equivalência entre labels é decisão de política, nunca suposta) e a `evidence` (`HypothesisEvidence` de Semantic Fusion: claim, stance, papel e sinais tipados). Uma hipótese exige ao menos uma evidência que a suporte, e um label não se repete dentro da mesma evidência fundida.
+
+Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado e exige uma derivação documentada. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
 
 ## `EntityEvidenceLinks` e `FusedEvidenceRef`
 

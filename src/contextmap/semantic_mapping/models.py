@@ -118,8 +118,8 @@ class Entity:
         """Validate the identity and that the semantic state can be traced to the evidence.
 
         Raises:
-            ValueError: If an identity is empty or a hypothesis comes from a fused evidence the
-                entity does not link to.
+            ValueError: If an identity is empty or a hypothesis or an uncertainty record comes
+                from a fused evidence the entity does not link to.
         """
         require_present(self, "entity_id", "semantic_map_id")
         linked = {ref.fused_evidence_id for ref in self.evidence.fused_evidence}
@@ -128,6 +128,12 @@ class Entity:
                 raise ValueError(
                     f"hypothesis {hypothesis.label!r} comes from fused evidence "
                     f"{hypothesis.fused_evidence_id!r}, which the entity does not link to"
+                )
+        for item in self.semantic_state.uncertainty:
+            if item.fused_evidence_id not in linked:
+                raise ValueError(
+                    f"uncertainty comes from fused evidence {item.fused_evidence_id!r}, which "
+                    f"the entity does not link to"
                 )
 
     @property
