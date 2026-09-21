@@ -106,6 +106,8 @@ Calculada por `compare_geometry` ([`geometry-comparison.md`](geometry-comparison
 
 ### Aparência (`AppearanceEvidence`)
 
+Calculada por `AppearanceComparator` ([detalhes](appearance-comparison.md)).
+
 `AppearanceMeasurement` guarda o espaço de embedding (fingerprint) em que todas as features vivem, a métrica, a política de agregação, a similaridade e a faixa das similaridades entre pares de observações, e as `FeatureContribution` de cada lado: as features agrupadas **por observação física**. Várias features do mesmo frame (inferência repetida) ficam juntas e contam como uma observação. Uma feature de outro espaço é recusada.
 
 ### Temporal (`TemporalEvidence`)

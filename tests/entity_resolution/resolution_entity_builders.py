@@ -25,11 +25,16 @@ from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import SourceObservationId
-from contextmap.semantic_fusion import EvidenceContributionId, EvidenceReference
+from contextmap.semantic_fusion import (
+    EvidenceContributionId,
+    EvidenceReference,
+    PointRepresentationRef,
+)
 from contextmap.semantic_mapping import (
     AttributeOrigin,
     Entity,
     EntityAttribute,
+    EntityFeatureRef,
     EntityGeometry,
     EntityHypothesis,
     EntityId,
@@ -124,6 +129,8 @@ def entity_at(
     hypotheses: tuple[EntityHypothesis, ...] | None = None,
     attributes: tuple[EntityAttribute, ...] = (),
     inference_results: int = 1,
+    features: tuple[EntityFeatureRef, ...] = (),
+    representations: tuple[PointRepresentationRef, ...] = (),
 ) -> Entity:
     """A real entity whose support is a box at ``center`` and which was seen at ``seconds``."""
     base = stable_index_base(entity_id) if first_index is None else first_index
@@ -145,7 +152,9 @@ def entity_at(
             attributes=attributes,
         ),
         evidence=make_evidence_links(
-            physical=tuple(f"frame-{second:04d}" for second in sorted(seconds))
+            physical=tuple(f"frame-{second:04d}" for second in sorted(seconds)),
+            features=features,
+            representations=representations,
         ),
         temporal_state=temporal_state_at(
             seconds, clock_id=clock_id, inference_results=inference_results
