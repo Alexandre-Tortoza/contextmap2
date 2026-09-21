@@ -1,0 +1,33 @@
+{
+  "annotations": [
+    {
+      "attributes": [
+        {
+          "name": "environment",
+          "value": "indoor corridor"
+        },
+        {
+          "name": "lighting",
+          "value": "uniform"
+        }
+      ],
+      "observation_id": null,
+      "sample_id": "sample-0000"
+    },
+    {
+      "attributes": [
+        {
+          "name": "lighting",
+          "value": "dim"
+        }
+      ],
+      "observation_id": "frame-0001",
+      "sample_id": "sample-0001"
+    }
+  ],
+  "normalization": {
+    "aliases": [],
+    "policy_id": "casefold-exact/1"
+  },
+  "schema": "contextmap.reference.scene_context/v1"
+}

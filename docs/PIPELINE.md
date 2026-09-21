@@ -977,6 +977,7 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 | Sensor Association | `SensorAssociationRunArtifact` | implementado | semantic fusion, evaluation |
 | Point Representation | `PointRepresentationRunArtifact` | implementado e opcional | semantic fusion opcional, evaluation |
 | Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping, evaluation |
+| Evaluation (transversal) | reference set, relatórios, run de experimento e comparação, evidência e decisão | implementado, sem execução real | decisões de configuração e aceite E2E |
 | Semantic Mapping | `SemanticMappingRunArtifact` | implementado | entity resolution planejado, evaluation |
 | Entity Resolution | `EntityResolutionRunArtifact` | planejado | spatial relations, final map |
 | Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |

@@ -112,7 +112,7 @@ As setas principais representam fluxo/dependência conceitual de dados. Dependê
 
 ## Estado implementado e fronteira atual
 
-Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation`, `semantic_fusion` e `semantic_mapping` já materializam os oito primeiros boundaries de domínio da arquitetura; `evaluation` materializa os harnesses de qualidade, regressão e custo dessas capabilities. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação, além dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP, e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. `SemanticScorer` possui adapters CLIP/AlphaCLIP separados. Existem execuções reais registradas de parte desses adapters, com escopos documentados individualmente, mas não uma avaliação científica comparativa comum. Semantic Mapping possui as entidades persistentes, a materialização sem resolução entre suportes, o `SemanticMappingRunArtifact` e o harness de validação. Runtime global, Entity Resolution, Spatial Relations e o artifact final continuam sendo arquitetura alvo.
+Na `dev`, `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation`, `semantic_fusion` e `semantic_mapping` já materializam os oito primeiros boundaries de domínio da arquitetura; `evaluation` materializa os harnesses de qualidade, regressão e custo dessas capabilities, o reference set versionado com suas anotações, integridade e QA, o registro de métricas, os manifestos de experimento e a avaliação das técnicas opcionais. Dentro de Visual Perception, Region Discovery possui backends concretos, Feature Extraction possui o core de contratos, persistência, associação espacial, diagnostics e avaliação, além dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP, e Semantic Interpretation possui contratos de evidência e request, prompt/parser versionados, execução auditável e adapters canônicos Qwen/Gemini/Florence-2. `SemanticScorer` possui adapters CLIP/AlphaCLIP separados. Existem execuções reais registradas de parte desses adapters, com escopos documentados individualmente, mas não uma avaliação científica comparativa comum. Semantic Mapping possui as entidades persistentes, a materialização sem resolução entre suportes, o `SemanticMappingRunArtifact` e o harness de validação. Runtime global, Entity Resolution, Spatial Relations e o artifact final continuam sendo arquitetura alvo.
 
 ```mermaid
 flowchart LR
@@ -174,7 +174,7 @@ Uma capability possui o conceito que ela introduz semanticamente. O consumidor d
 | `spatial_relations` | Inferir relações entre entidades resolvidas | `Relation`, `RelationEvidence` | entity correction, planning |
 | `artifact` | Compor o produto público final | `ContextMap`, metadata, final artifact schema | domain inference |
 | `runtime` | Compor e executar implementations | execution plan, selection, composition lifecycle | lógica científica das capabilities |
-| `evaluation` | Medir qualidade e regressões | reference/evaluation schemas, reports | alterar resultados do pipeline |
+| `evaluation` | Medir qualidade e regressões | reference set, anotações, registro de métricas, relatórios, manifestos de experimento e evidência | alterar resultados do pipeline |
 
 ## Regra de ownership de contratos
 
