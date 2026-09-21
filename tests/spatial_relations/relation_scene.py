@@ -13,7 +13,12 @@ from itertools import product
 from pathlib import Path
 
 from contextmap.geometric_mapping import GeometryReference, GeometrySource, MapId, geometry_id_for
-from contextmap.semantic_mapping import EntityGeometry, GeometrySummaryPolicy, summarize_geometry
+from contextmap.semantic_mapping import (
+    EntityGeometry,
+    GeometrySummaryPolicy,
+    OrientationPolicy,
+    summarize_geometry,
+)
 from contextmap.shared import Vector3
 
 MAP_ID = MapId("map-0001")
@@ -23,6 +28,14 @@ FRAME = "map"
 # testes de suporte desconectado ou esparso pedem uma política diferente.
 CONNECTED_POLICY = GeometrySummaryPolicy(sparse_point_threshold=3, connectivity_radius_m=1000.0)
 STRICT_POLICY = GeometrySummaryPolicy(sparse_point_threshold=10, connectivity_radius_m=0.5)
+# Nuvens densas (malhas de 0,05 a 0,1 m) usam um raio pequeno: com um raio enorme a checagem de
+# conectividade de Semantic Mapping é quadrática e os testes ficam lentos sem ganho.
+LATTICE_POLICY = GeometrySummaryPolicy(sparse_point_threshold=3, connectivity_radius_m=0.15)
+ORIENTED_LATTICE_POLICY = GeometrySummaryPolicy(
+    sparse_point_threshold=3,
+    connectivity_radius_m=0.15,
+    orientation=OrientationPolicy(min_points=3, min_variance_ratio=2.0),
+)
 
 _MAPPING_TESTS = str(Path(__file__).resolve().parents[1] / "semantic_mapping")
 
@@ -70,6 +83,14 @@ class Scene:
         A flat axis collapses to a single layer, so a plane or a line is a valid support.
         """
         axes = [_lattice(low, high) for low, high in zip(minimum, maximum, strict=True)]
+        self.add_points(name, [(x, y, z) for x, y, z in product(*axes)])
+
+    def add_lattice(self, name: str, minimum: Vector3, maximum: Vector3, spacing: float) -> None:
+        """Add a named set filling a box with points every ``spacing`` meters, faces included."""
+        axes = []
+        for low, high in zip(minimum, maximum, strict=True):
+            steps = max(1, round((high - low) / spacing))
+            axes.append(tuple(low + (high - low) * step / steps for step in range(steps + 1)))
         self.add_points(name, [(x, y, z) for x, y, z in product(*axes)])
 
     def source(self) -> GeometrySource:
