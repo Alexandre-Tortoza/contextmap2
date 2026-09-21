@@ -29,6 +29,7 @@ from contextmap.semantic_mapping.evidence_integrity import (
     validate_evidence_of_entities,
 )
 from contextmap.semantic_mapping.geometry import (
+    DEFAULT_MAX_CONNECTIVITY_POINTS,
     GEOMETRY_SUMMARY_ALGORITHM_ID,
     EmptyGeometrySupportError,
     EntityGeometry,
@@ -116,6 +117,7 @@ from contextmap.semantic_mapping.temporal import (
 
 __all__ = [
     "CLASS_ATTRIBUTE_DERIVATION_ID",
+    "DEFAULT_MAX_CONNECTIVITY_POINTS",
     "ENTITY_ID_POLICY_ID",
     "ENTITY_MATERIALIZATION_POLICY_ID",
     "ENTITY_SCHEMA_VERSION",

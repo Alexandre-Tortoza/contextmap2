@@ -48,7 +48,7 @@ O suporte 3D persistente e seus resumos derivados; detalhes em [`geometry.md`](g
 | `geometry_refs` | `GeometryReference` ordenadas por `geometry_id`, únicas, de um só mapa e **nunca vazias**: é a autoridade. |
 | `map_frame` | Frame do mapa; todo resumo está expresso nele. |
 | `centroid_m`, `bounds`, `extent_m` | Centroide, `Bounds3D` justo e lados da caixa, derivados do suporte. |
-| `statistics` | `SupportStatistics`: pontos, volume, densidade (`None` se a caixa é plana), componentes conexos. |
+| `statistics` | `SupportStatistics`: pontos, volume, densidade (`None` se a caixa é plana), componentes conexos (`None` se o suporte excede `max_connectivity_points` e não foi ligado). |
 | `summary` | `SpatialSummaryProvenance`: algoritmo, frame, conjunto de entrada (contagem e digest), convenções numéricas, filtragem e fingerprint da política. |
 | `orientation` | `EntityOrientation` (eixos ortonormais destros e variâncias) ou `None`. |
 | `diagnostics` | `GeometryDiagnostic` (`sparse_support`, `disconnected_support`, `degenerate_extent`, `orientation_not_justified`). |
