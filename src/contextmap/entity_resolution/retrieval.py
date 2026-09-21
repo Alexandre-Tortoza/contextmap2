@@ -38,8 +38,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from contextmap.entity_resolution._checks import require_canonical, require_non_negative
+from contextmap.entity_resolution._spatial import bounds_gap
 from contextmap.entity_resolution.models import PolicyRef, reference_order
-from contextmap.geometric_mapping import Bounds3D
 from contextmap.semantic_mapping import Entity, EntityReference, UnknownEntityError
 
 CANDIDATE_RETRIEVAL_POLICY_ID = "entity-candidate-retrieval-v1"
@@ -203,7 +203,7 @@ def explain_candidacy(
             f"{other_geometry.map_frame!r} are not comparable without an alignment",
         )
     distance = math.dist(geometry.centroid_m, other_geometry.centroid_m)
-    gap = _bounds_gap(geometry.bounds, other_geometry.bounds)
+    gap = bounds_gap(geometry.bounds, other_geometry.bounds)
     time_gap = _time_gap_ns(entity, other)
     reasons = _spatial_reasons(distance, gap, policy)
     measured = f"centroid distance {distance:.3f} m, bounds gap {gap:.3f} m"
@@ -267,17 +267,6 @@ def _spatial_reasons(
     elif gap_m <= policy.bounds_margin_m:
         reasons.append(RetrievalReason.BOUNDS_WITHIN_MARGIN)
     return tuple(reasons)
-
-
-def _bounds_gap(first: Bounds3D, second: Bounds3D) -> float:
-    """Euclidean distance between two axis-aligned boxes; zero when they overlap or touch."""
-    separations = (
-        max(0.0, low_b - high_a, low_a - high_b)
-        for low_a, high_a, low_b, high_b in zip(
-            first.minimum_m, first.maximum_m, second.minimum_m, second.maximum_m, strict=True
-        )
-    )
-    return math.sqrt(sum(value * value for value in separations))
 
 
 def _time_gap_ns(entity: Entity, other: Entity) -> int | None:

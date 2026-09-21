@@ -96,6 +96,8 @@ Um canal é **medido ou indisponível, nunca os dois e nunca nenhum**. Um canal 
 
 ### Geometria (`GeometryEvidence`)
 
+Calculada por `compare_geometry` ([`geometry-comparison.md`](geometry-comparison.md)): as definições exatas das métricas, as regras versionadas e os casos tratados.
+
 `GeometryMeasurement` guarda, no frame comum do mapa: distância entre centroides, distância entre as caixas (`0` se sobrepõem), IoU e fração de sobreposição das caixas (`None` quando a caixa é plana, o que **não** é sobreposição zero), contagens de suporte, suporte compartilhado e Jaccard (coerentes entre si), razão de extensão, estatísticas de distância entre suportes (opcionais, quando a geometria foi resolvida), ângulo entre eixos principais (opcional) e as ressalvas dos resumos das entidades (`a:sparse_support`, ...).
 
 ### Semântica (`SemanticEvidence`)

@@ -35,6 +35,7 @@ from contextmap.semantic_mapping import (
     EntityId,
     EntityLifecycle,
     EntityTemporalState,
+    GeometrySummaryPolicy,
     ObservationRef,
     SemanticMapId,
     TemporalProvenance,
@@ -180,4 +181,49 @@ def attribute(
     )
     return EntityAttribute(
         name=name, value=value, origin=origin, derivation_id=derivation_id, evidence=evidence
+    )
+
+
+def lattice(center: Center, size: float | Vector3, *, steps: int = 3) -> list[Vector3]:
+    """``steps`` points per axis across a box, so subsets of the points are meaningful supports."""
+    sizes = (size, size, size) if isinstance(size, int | float) else size
+    axes = [
+        [c + (index / (steps - 1) - 0.5) * extent for index in range(steps)]
+        for c, extent in zip(center, sizes, strict=True)
+    ]
+    return [(x, y, z) for x in axes[0] for y in axes[1] for z in axes[2]]
+
+
+def scene_source(
+    points: dict[int, Vector3], *, map_id: MapId = MAP_ID, frame: str = "map"
+) -> InMemoryGeometrySource:
+    """One geometric map holding every point of a scene, keyed by geometry index."""
+    return InMemoryGeometrySource(map_id, points, frame=frame)
+
+
+def entity_over(
+    entity_id: str,
+    source: InMemoryGeometrySource,
+    indexes: Sequence[int],
+    *,
+    seconds: Sequence[int] = (10, 12),
+    semantic_map_id: SemanticMapId = SEMANTIC_MAP_ID,
+    policy: GeometrySummaryPolicy = SUMMARY_POLICY,
+) -> Entity:
+    """A real entity supported by the given points of a shared scene, so supports can overlap."""
+    map_id = source.geometric_map.map_id
+    references = tuple(
+        GeometryReference(map_id=map_id, geometry_id=geometry_id_for(map_id=map_id, index=index))
+        for index in indexes
+    )
+    return Entity(
+        entity_id=EntityId(entity_id),
+        semantic_map_id=semantic_map_id,
+        geometry=summarize_geometry(references, source=source, policy=policy),
+        semantic_state=make_semantic_state((make_hypothesis(),)),
+        evidence=make_evidence_links(
+            physical=tuple(f"frame-{second:04d}" for second in sorted(seconds))
+        ),
+        temporal_state=temporal_state_at(seconds),
+        provenance=make_provenance(),
     )
