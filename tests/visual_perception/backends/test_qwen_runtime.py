@@ -7,6 +7,8 @@ Qwen checkpoint. Real-model execution is recorded separately.
 
 from __future__ import annotations
 
+import hashlib
+import io
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +17,16 @@ from typing import Any
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    PerceptionResultId,
+    RegionId,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticRequestId,
+    SemanticVisualView,
+    VisualViewKind,
+)
 from contextmap.visual_perception.backends import qwen
 from contextmap.visual_perception.backends.qwen import (
     HuggingFaceQwenRuntime,
@@ -23,10 +35,12 @@ from contextmap.visual_perception.backends.qwen import (
     QwenInferenceError,
     QwenModelLoadError,
     QwenSemanticConfig,
+    QwenSemanticInterpreter,
 )
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 VIEW_REFERENCE = "outputs/semantic-views/region-0007.png"
+VIEW_PAYLOAD = b"png bytes are never decoded by the fake SDK"
 
 
 class FakeTokens:
@@ -121,7 +135,13 @@ class FakeTransformers(ModuleType):
         self.new_tokens = new_tokens
         self.processor_kwargs: dict[str, Any] = {}
         self.model_kwargs: dict[str, Any] = {}
+        self.opened_payloads: list[bytes] = []
         self.BitsAndBytesConfig = FakeBitsAndBytesConfig
+
+    def _open_image(self, source: io.BytesIO) -> FakeImage:
+        image = FakeImage(source)
+        self.opened_payloads.append(image.payload)
+        return image
 
     def _load_processor(self, model: str, **kwargs: Any) -> FakeProcessor:
         self.processor_kwargs = {"model": model, **kwargs}
@@ -175,8 +195,10 @@ class FakeTorch(ModuleType):
 
 
 class FakeImage:
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    """Records the exact bytes the runtime decoded, since the SDK is never really invoked."""
+
+    def __init__(self, source: io.BytesIO) -> None:
+        self.payload = source.read()
 
     def convert(self, mode: str) -> FakeImage:
         assert mode == "RGB"
@@ -214,7 +236,7 @@ def _install(
     sdks = {
         "torch": torch,
         "transformers": transformers,
-        "PIL.Image": SimpleNamespace(open=lambda path: FakeImage(Path(path))),
+        "PIL.Image": SimpleNamespace(open=transformers._open_image),
     }
 
     def import_module(name: str) -> object:
@@ -229,13 +251,27 @@ def _install(
 def _view(tmp_path: Path) -> Path:
     path = tmp_path / VIEW_REFERENCE
     path.parent.mkdir(parents=True)
-    path.write_bytes(b"png bytes are never decoded by the fake SDK")
+    path.write_bytes(VIEW_PAYLOAD)
     return path
+
+
+def _visual_view(
+    payload: bytes = VIEW_PAYLOAD, *, reference: str = VIEW_REFERENCE
+) -> SemanticVisualView:
+    """Describe a canonical view whose ``sha256`` identifies exactly ``payload``."""
+    return SemanticVisualView(
+        view_id="tight-crop",
+        kind=VisualViewKind.TIGHT_CROP,
+        payload_reference=reference,
+        source_observation_id=SourceObservationId("frame-0124"),
+        region_id=RegionId("region-0007"),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
 
 
 def _generate(runtime: HuggingFaceQwenRuntime, config: QwenSemanticConfig) -> Any:
     return runtime.generate(
-        visual_payload_references=(VIEW_REFERENCE,), prompt="canonical prompt", config=config
+        visual_views=(_visual_view(),), prompt="canonical prompt", config=config
     )
 
 
@@ -395,7 +431,7 @@ def test_generation_sends_every_view_then_the_canonical_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     transformers, _ = _install(monkeypatch)
-    path = _view(tmp_path)
+    _view(tmp_path)
     config = _config()
 
     response = _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
@@ -403,7 +439,8 @@ def test_generation_sends_every_view_then_the_canonical_prompt(
     (message,) = transformers.processor.messages
     assert message["role"] == "user"
     assert [part["type"] for part in message["content"]] == ["image", "text"]
-    assert message["content"][0]["image"].path == path
+    # A imagem é decodificada dos bytes verificados, não relida do caminho.
+    assert message["content"][0]["image"].payload == VIEW_PAYLOAD
     assert message["content"][1]["text"] == "canonical prompt"
     assert transformers.processor.template_kwargs == {
         "tokenize": True,
@@ -515,20 +552,19 @@ def test_generation_for_another_effective_configuration_is_rejected(
         _generate(runtime, _config(quantization="4bit"))
 
 
-def test_view_references_cannot_escape_the_view_root(
+def test_view_references_cannot_escape_the_view_root_through_a_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install(monkeypatch)
     root = tmp_path / "root"
-    root.mkdir()
+    (root / "outputs" / "semantic-views").mkdir(parents=True)
     (tmp_path / "secret.png").write_bytes(b"outside")
+    (root / VIEW_REFERENCE).symlink_to(tmp_path / "secret.png")
     config = _config()
     runtime = HuggingFaceQwenRuntime(config=config, view_root=root)
 
     with pytest.raises(QwenInferenceError, match="escapes"):
-        runtime.generate(
-            visual_payload_references=("../secret.png",), prompt="prompt", config=config
-        )
+        runtime.generate(visual_views=(_visual_view(b"outside"),), prompt="prompt", config=config)
 
 
 def test_missing_view_payload_is_an_inference_error(
@@ -540,3 +576,65 @@ def test_missing_view_payload_is_an_inference_error(
 
     with pytest.raises(QwenInferenceError, match="does not exist"):
         _generate(runtime, config)
+
+
+def test_a_view_whose_bytes_diverge_from_the_request_sha256_is_never_inferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    config = _config()
+    adapter = QwenSemanticInterpreter(
+        config=config, runtime=HuggingFaceQwenRuntime(config=config, view_root=tmp_path)
+    )
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("request-0007"),
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+        mode=SemanticInterpretationMode.REGION,
+        region_id=RegionId("region-0007"),
+        visual_views=(
+            SemanticVisualView(
+                view_id="tight-crop",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference=VIEW_REFERENCE,
+                source_observation_id=SourceObservationId("frame-0124"),
+                region_id=RegionId("region-0007"),
+                sha256=hashlib.sha256(b"the bytes the request identifies").hexdigest(),
+            ),
+        ),
+        prompt_template_id="region/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint=adapter.configuration_fingerprint,
+    )
+
+    with pytest.raises(QwenInferenceError, match="sha256"):
+        adapter.interpret(request)
+
+    assert transformers.opened_payloads == []
+    assert transformers.processor.messages == []
+    assert transformers.model is None or transformers.model.generate_kwargs == {}
+
+
+def test_one_diverging_view_among_several_prevents_the_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    second_reference = "outputs/semantic-views/region-0008.png"
+    (tmp_path / second_reference).write_bytes(b"changed after the request was built")
+    config = _config()
+    runtime = HuggingFaceQwenRuntime(config=config, view_root=tmp_path)
+    views = (
+        _visual_view(),
+        _visual_view(b"what the request recorded", reference=second_reference),
+    )
+
+    with pytest.raises(QwenInferenceError, match=r"region-0008.*sha256"):
+        runtime.generate(visual_views=views, prompt="prompt", config=config)
+
+    # A primeira view estava íntegra e foi aberta, mas nenhuma inferência aconteceu.
+    assert transformers.opened_payloads == [VIEW_PAYLOAD]
+    assert transformers.processor.messages == []
+    assert transformers.model is not None
+    assert transformers.model.generate_kwargs == {}

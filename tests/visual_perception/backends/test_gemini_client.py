@@ -6,24 +6,36 @@ maps configuration, views and provider failures, not the behavior of the Gemini 
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    PerceptionResultId,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticRequestId,
+    SemanticVisualView,
+    VisualViewKind,
+)
 from contextmap.visual_perception.backends import gemini
 from contextmap.visual_perception.backends.gemini import (
     GeminiCredentialError,
     GeminiDependencyError,
     GeminiSemanticConfig,
     GeminiSemanticError,
+    GeminiSemanticInterpreter,
     GeminiTransientError,
     GoogleGenAIGeminiClient,
 )
 
 KEY = "test-only-fake-credential-0123456789"
 REFERENCE = "outputs/semantic-views/full.png"
+IMAGE = b"image bytes"
 
 
 class FakeAPIError(Exception):
@@ -141,13 +153,24 @@ def _config(**overrides: Any) -> GeminiSemanticConfig:
 def _client(tmp_path: Path, *, image: str = REFERENCE, key: str | None = KEY) -> Any:
     path = tmp_path / image
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"image bytes")
+    path.write_bytes(IMAGE)
     return GoogleGenAIGeminiClient(view_root=tmp_path, api_key=key)
+
+
+def _visual_view(reference: str = REFERENCE, payload: bytes = IMAGE) -> SemanticVisualView:
+    """Describe a canonical view whose ``sha256`` identifies exactly ``payload``."""
+    return SemanticVisualView(
+        view_id="full",
+        kind=VisualViewKind.FULL_FRAME,
+        payload_reference=reference,
+        source_observation_id=SourceObservationId("frame-0001"),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
 
 
 def _generate(client: Any, config: GeminiSemanticConfig, reference: str = REFERENCE) -> Any:
     return client.generate(
-        visual_payload_references=(reference,), prompt="canonical prompt", config=config
+        visual_views=(_visual_view(reference),), prompt="canonical prompt", config=config
     )
 
 
@@ -248,7 +271,7 @@ def test_the_image_mime_type_follows_the_payload_suffix(
     assert sdk.models.calls[0]["contents"][0].mime_type == mime
 
 
-def test_an_unsupported_image_format_or_an_escaping_reference_is_rejected_before_sending(
+def test_an_unsupported_format_a_linked_escape_or_a_missing_payload_is_rejected_before_sending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sdk = FakeSdk()
@@ -256,8 +279,18 @@ def test_an_unsupported_image_format_or_an_escaping_reference_is_rejected_before
     reference = "outputs/semantic-views/a.bmp"
     with pytest.raises(GeminiSemanticError, match="format"):
         _generate(_client(tmp_path, image=reference), _config(), reference)
+
+    root = tmp_path / "root"
+    (root / "outputs" / "semantic-views").mkdir(parents=True)
+    (tmp_path / "secret.png").write_bytes(IMAGE)
+    (root / REFERENCE).symlink_to(tmp_path / "secret.png")
+    linked = GoogleGenAIGeminiClient(view_root=root, api_key=KEY)
     with pytest.raises(GeminiSemanticError, match="escapes"):
-        _generate(_client(tmp_path), _config(), "../outside.png")
+        _generate(linked, _config())
+
+    empty_root = GoogleGenAIGeminiClient(view_root=tmp_path / "empty", api_key=KEY)
+    with pytest.raises(GeminiSemanticError, match="does not exist"):
+        _generate(empty_root, _config())
 
     assert sdk.models.calls == []
 
@@ -385,3 +418,28 @@ def test_hitting_the_output_limit_returns_the_text_with_a_truncation_warning(
 
     assert response.text == '{"abstained"'
     assert any("MAX_TOKENS" in warning for warning in response.warnings)
+
+
+def test_a_view_whose_bytes_diverge_from_the_request_sha256_is_never_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdk = FakeSdk()
+    sdk.install(monkeypatch)
+    adapter = GeminiSemanticInterpreter(
+        config=_config(), client=_client(tmp_path), retry_wait=lambda retry: None
+    )
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("scene-0001"),
+        source_observation_id=SourceObservationId("frame-0001"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0001"),
+        mode=SemanticInterpretationMode.SCENE,
+        visual_views=(_visual_view(payload=b"the bytes the request identifies"),),
+        prompt_template_id="scene/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint=adapter.configuration_fingerprint,
+    )
+
+    with pytest.raises(GeminiSemanticError, match="sha256"):
+        adapter.interpret(request)
+
+    assert sdk.models.calls == []

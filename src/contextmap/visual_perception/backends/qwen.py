@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import json
 import time
 from collections.abc import Mapping
@@ -15,7 +16,7 @@ from typing import Any, Protocol, cast
 from contextmap.visual_perception.backends._huggingface import (
     validate_huggingface_commit_revision,
 )
-from contextmap.visual_perception.backends._semantic_views import resolve_view_payload
+from contextmap.visual_perception.backends._semantic_views import read_view_payload
 from contextmap.visual_perception.models import (
     BackendProvenance,
     SemanticInferenceProvenance,
@@ -35,6 +36,7 @@ from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreterCapabilities,
+    SemanticVisualView,
     VisualViewKind,
     validate_semantic_request,
 )
@@ -128,11 +130,16 @@ class QwenRuntime(Protocol):
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: QwenSemanticConfig,
     ) -> QwenGenerationResponse:
-        """Generate one structured response from canonical payload references."""
+        """Generate one structured response from the exact canonical views.
+
+        An implementation must obtain each view's bytes through ``read_view_payload`` (or
+        an equivalent check) and must not decode a payload whose SHA-256 differs from
+        ``SemanticVisualView.sha256``: the request identifies its evidence by that hash.
+        """
         ...
 
 
@@ -183,9 +190,7 @@ class QwenSemanticInterpreter:
         )
         started = time.monotonic()
         response = self._runtime.generate(
-            visual_payload_references=tuple(
-                view.payload_reference for view in request.visual_views
-            ),
+            visual_views=request.visual_views,
             prompt=rendered.text,
             config=self._config,
         )
@@ -265,15 +270,21 @@ class HuggingFaceQwenRuntime:
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: QwenSemanticConfig,
     ) -> QwenGenerationResponse:
         """Generate one response from the exact views followed by the canonical prompt.
 
+        Every view is decoded from bytes whose SHA-256 was verified against
+        ``SemanticVisualView.sha256`` first, so a payload that changed after the request was
+        built is rejected instead of being interpreted.
+
         Raises:
             ValueError: If ``config`` differs from the configuration the runtime is bound to.
-            QwenBackendError: For dependency, device, load, or inference failures.
+            QwenBackendError: For dependency, device, load, or inference failures, including
+                a view payload that is missing, escapes the view root, or does not match its
+                recorded SHA-256.
         """
         if config != self._config:
             raise ValueError("Qwen runtime was built for another configuration")
@@ -282,9 +293,9 @@ class HuggingFaceQwenRuntime:
         on_cuda = config.device.startswith("cuda")
         try:
             content: list[dict[str, Any]] = []
-            for reference in visual_payload_references:
-                path = resolve_view_payload(self._view_root, reference)
-                with self._image_module.open(path) as image:
+            for view in visual_views:
+                payload = read_view_payload(self._view_root, view)
+                with self._image_module.open(io.BytesIO(payload)) as image:
                     content.append({"type": "image", "image": image.convert("RGB")})
             content.append({"type": "text", "text": prompt})
             inputs = self._processor.apply_chat_template(
@@ -303,8 +314,9 @@ class HuggingFaceQwenRuntime:
             new_tokens = generated[:, prompt_tokens:]
             text = self._processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
         except Exception as error:
+            references = [view.payload_reference for view in visual_views]
             raise QwenInferenceError(
-                f"Qwen generation failed for views {list(visual_payload_references)}: {error}"
+                f"Qwen generation failed for views {references}: {error}"
             ) from error
         output_tokens = int(new_tokens.shape[1])
         warnings = (

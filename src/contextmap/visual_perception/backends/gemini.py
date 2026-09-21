@@ -10,11 +10,11 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Protocol, cast
 
-from contextmap.visual_perception.backends._semantic_views import resolve_view_payload
+from contextmap.visual_perception.backends._semantic_views import read_view_payload
 from contextmap.visual_perception.models import BackendProvenance, SemanticInferenceProvenance
 from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
@@ -31,6 +31,7 @@ from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreterCapabilities,
+    SemanticVisualView,
     VisualViewKind,
     validate_semantic_request,
 )
@@ -131,11 +132,17 @@ class GeminiClient(Protocol):
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: GeminiSemanticConfig,
     ) -> GeminiProviderResponse:
-        """Call Gemini or raise a typed retryable/terminal error."""
+        """Call Gemini or raise a typed retryable/terminal error.
+
+        An implementation must obtain each view's bytes through ``read_view_payload`` (or
+        an equivalent check) and must not send a payload whose SHA-256 differs from
+        ``SemanticVisualView.sha256``: the request identifies its evidence by that hash, and
+        bytes that reach a remote provider cannot be taken back.
+        """
         ...
 
 
@@ -204,9 +211,7 @@ class GeminiSemanticInterpreter:
         for attempt in range(self._config.max_retries + 1):
             try:
                 response = self._client.generate(
-                    visual_payload_references=tuple(
-                        view.payload_reference for view in request.visual_views
-                    ),
+                    visual_views=request.visual_views,
                     prompt=rendered.text,
                     config=self._config,
                 )
@@ -301,20 +306,26 @@ class GoogleGenAIGeminiClient:
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: GeminiSemanticConfig,
     ) -> GeminiProviderResponse:
         """Send the views and prompt to Gemini and return its text and usage.
 
+        Every view is read and verified against ``SemanticVisualView.sha256`` before the first
+        byte is handed to the SDK, so no request is made when any payload diverges from what
+        the request recorded.
+
         Raises:
             GeminiTransientError: For timeouts, transport failures, 408/429 and 5xx.
-            GeminiSemanticError: For any terminal failure: other HTTP errors, a blocked
-                prompt or response, no candidates, or empty text.
+            GeminiSemanticError: For any terminal failure: a view payload that is missing,
+                escapes the view root, has an unsupported format or does not match its
+                recorded SHA-256; other HTTP errors, a blocked prompt or response, no
+                candidates, or empty text.
             GeminiDependencyError: If ``google-genai`` is not installed.
         """
         sdk = self._load_sdk()
-        parts = [self._image_part(sdk, reference) for reference in visual_payload_references]
+        parts = [self._image_part(sdk, view) for view in visual_views]
         settings: dict[str, Any] = {
             "temperature": config.temperature,
             "http_options": sdk.types.HttpOptions(timeout=int(config.timeout_s * 1000)),
@@ -360,19 +371,20 @@ class GoogleGenAIGeminiClient:
             self._sdk_client = sdk.genai.Client(**options)
         return self._sdk_client
 
-    def _image_part(self, sdk: Any, reference: str) -> Any:
-        """Read one view payload and wrap it as an inline image part."""
-        try:
-            path = resolve_view_payload(self._view_root, reference)
-        except (ValueError, FileNotFoundError) as error:
-            raise GeminiSemanticError(f"Gemini view payload rejected: {error}") from None
-        mime_type = _MIME_BY_SUFFIX.get(path.suffix.casefold())
+    def _image_part(self, sdk: Any, view: SemanticVisualView) -> Any:
+        """Read one verified view payload and wrap it as an inline image part."""
+        suffix = PurePosixPath(view.payload_reference).suffix
+        mime_type = _MIME_BY_SUFFIX.get(suffix.casefold())
         if mime_type is None:
             raise GeminiSemanticError(
-                f"Gemini does not accept the image format {path.suffix!r}: "
+                f"Gemini does not accept the image format {suffix!r}: "
                 f"use one of {sorted(_MIME_BY_SUFFIX)}"
             )
-        return sdk.types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)
+        try:
+            payload = read_view_payload(self._view_root, view)
+        except (ValueError, FileNotFoundError) as error:
+            raise GeminiSemanticError(f"Gemini view payload rejected: {error}") from None
+        return sdk.types.Part.from_bytes(data=payload, mime_type=mime_type)
 
     def _redact(self, text: str) -> str:
         """Remove the API key from text that may reach logs or exceptions."""

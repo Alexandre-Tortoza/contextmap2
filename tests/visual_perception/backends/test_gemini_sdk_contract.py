@@ -8,6 +8,8 @@ complement ``test_gemini_client.py``, whose fake modules must keep matching this
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -104,9 +106,20 @@ def _config(**overrides: Any) -> GeminiSemanticConfig:
     return GeminiSemanticConfig(**values)
 
 
+def _visual_view(payload: bytes = PNG) -> SemanticVisualView:
+    """Describe a canonical view whose ``sha256`` identifies exactly ``payload``."""
+    return SemanticVisualView(
+        view_id="full",
+        kind=VisualViewKind.FULL_FRAME,
+        payload_reference=REFERENCE,
+        source_observation_id=SourceObservationId("frame-1"),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
 def _generate(client: GoogleGenAIGeminiClient, config: GeminiSemanticConfig | None = None) -> Any:
     return client.generate(
-        visual_payload_references=(REFERENCE,),
+        visual_views=(_visual_view(),),
         prompt="canonical prompt",
         config=config or _config(),
     )
@@ -131,6 +144,8 @@ def test_the_request_reaches_the_transport_with_the_key_only_in_the_header(
     payload = json.loads(body)
     parts = payload["contents"][0]["parts"]
     assert parts[0]["inlineData"]["mimeType"] == "image/png"
+    # Os bytes enviados são exatamente os verificados contra o sha256 da view.
+    assert base64.b64decode(parts[0]["inlineData"]["data"]) == PNG
     assert parts[1]["text"] == "canonical prompt"
     generation = payload["generationConfig"]
     assert generation["temperature"] == 0.0
@@ -199,15 +214,7 @@ def test_the_adapter_retries_a_real_429_then_succeeds_without_persisting_the_key
         source_observation_id=SourceObservationId("frame-1"),
         perception_result_id=PerceptionResultId("run--frame-1"),
         mode=SemanticInterpretationMode.SCENE,
-        visual_views=(
-            SemanticVisualView(
-                view_id="full",
-                kind=VisualViewKind.FULL_FRAME,
-                payload_reference=REFERENCE,
-                source_observation_id=SourceObservationId("frame-1"),
-                sha256="0" * 64,
-            ),
-        ),
+        visual_views=(_visual_view(),),
         prompt_template_id="scene/v1",
         requested_output_schema="semantic-response/1",
         configuration_fingerprint=adapter.configuration_fingerprint,
@@ -219,3 +226,32 @@ def test_the_adapter_retries_a_real_429_then_succeeds_without_persisting_the_key
     assert execution.parsed.scene_context is not None
     encoded = json.dumps(encode_semantic_execution(execution, raw_response_reference="raw.txt"))
     assert KEY not in encoded
+
+
+def test_a_view_whose_bytes_diverge_from_the_request_sha256_never_reaches_the_transport(
+    tmp_path: Path,
+) -> None:
+    seen: list[Any] = []
+
+    def handler(request: Any) -> Any:
+        seen.append(request)
+        return _ok()
+
+    adapter = GeminiSemanticInterpreter(
+        config=_config(), client=_client(tmp_path, handler), retry_wait=lambda attempt: None
+    )
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("scene-1"),
+        source_observation_id=SourceObservationId("frame-1"),
+        perception_result_id=PerceptionResultId("run--frame-1"),
+        mode=SemanticInterpretationMode.SCENE,
+        visual_views=(_visual_view(b"the bytes the request identifies"),),
+        prompt_template_id="scene/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint=adapter.configuration_fingerprint,
+    )
+
+    with pytest.raises(GeminiSemanticError, match="sha256"):
+        adapter.interpret(request)
+
+    assert seen == []

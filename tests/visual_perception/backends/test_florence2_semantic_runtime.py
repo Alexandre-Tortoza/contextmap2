@@ -6,6 +6,8 @@ task prompt onto the transformers calls, not the quality of the Florence-2 check
 
 from __future__ import annotations
 
+import hashlib
+import io
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -14,16 +16,27 @@ from typing import Any
 
 import pytest
 
-from contextmap.visual_perception import SemanticInterpretationMode
+from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception import (
+    PerceptionResultId,
+    RegionId,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
+    SemanticRequestId,
+    SemanticVisualView,
+    VisualViewKind,
+)
 from contextmap.visual_perception.backends import florence2_semantic
 from contextmap.visual_perception.backends.florence2_semantic import (
     Florence2SemanticConfig,
     Florence2SemanticError,
+    Florence2SemanticInterpreter,
     HuggingFaceFlorence2SemanticRuntime,
 )
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 VIEW_REFERENCE = "outputs/semantic-views/region-0007.png"
+VIEW_PAYLOAD = b"png bytes are never decoded by the fake SDK"
 TASK_PROMPT = "<REGION_TO_CATEGORY><loc_0><loc_0><loc_999><loc_999>"
 
 
@@ -102,6 +115,12 @@ class FakeTransformers(ModuleType):
         self.error = error
         self.processor_kwargs: dict[str, Any] = {}
         self.model_kwargs: dict[str, Any] = {}
+        self.opened_payloads: list[bytes] = []
+
+    def _open_image(self, source: io.BytesIO) -> FakeImage:
+        image = FakeImage(source)
+        self.opened_payloads.append(image.payload)
+        return image
 
     def _load_processor(self, model: str, **kwargs: Any) -> FakeProcessor:
         self.processor_kwargs = {"model": model, **kwargs}
@@ -152,10 +171,12 @@ class FakeTorch(ModuleType):
 
 
 class FakeImage:
+    """Records the exact bytes the runtime decoded, since the SDK is never really invoked."""
+
     size = (320, 200)
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, source: io.BytesIO) -> None:
+        self.payload = source.read()
 
     def convert(self, mode: str) -> FakeImage:
         assert mode == "RGB"
@@ -195,7 +216,7 @@ def _install(
     sdks = {
         "torch": torch,
         "transformers": transformers,
-        "PIL.Image": SimpleNamespace(open=lambda path: FakeImage(Path(path))),
+        "PIL.Image": SimpleNamespace(open=transformers._open_image),
     }
 
     def import_module(name: str) -> object:
@@ -212,14 +233,26 @@ def _install(
 def _view(tmp_path: Path) -> Path:
     path = tmp_path / VIEW_REFERENCE
     path.parent.mkdir(parents=True)
-    path.write_bytes(b"png bytes are never decoded by the fake SDK")
+    path.write_bytes(VIEW_PAYLOAD)
     return path
 
 
-def _generate(runtime: HuggingFaceFlorence2SemanticRuntime, config: Florence2SemanticConfig) -> Any:
-    return runtime.generate(
-        visual_payload_references=(VIEW_REFERENCE,), task_prompt=TASK_PROMPT, config=config
+def _visual_view(
+    payload: bytes = VIEW_PAYLOAD, *, reference: str = VIEW_REFERENCE
+) -> SemanticVisualView:
+    """Describe a canonical view whose ``sha256`` identifies exactly ``payload``."""
+    return SemanticVisualView(
+        view_id="tight-crop",
+        kind=VisualViewKind.TIGHT_CROP,
+        payload_reference=reference,
+        source_observation_id=SourceObservationId("frame-0124"),
+        region_id=RegionId("region-0007"),
+        sha256=hashlib.sha256(payload).hexdigest(),
     )
+
+
+def _generate(runtime: HuggingFaceFlorence2SemanticRuntime, config: Florence2SemanticConfig) -> Any:
+    return runtime.generate(visual_views=(_visual_view(),), task_prompt=TASK_PROMPT, config=config)
 
 
 def test_the_pinned_revision_is_loaded_locally_without_remote_code(
@@ -245,7 +278,7 @@ def test_generation_feeds_the_exact_view_and_the_task_prompt_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     transformers, torch = _install(monkeypatch)
-    path = _view(tmp_path)
+    _view(tmp_path)
     config = _config(max_new_tokens=48)
 
     response = _generate(
@@ -254,7 +287,8 @@ def test_generation_feeds_the_exact_view_and_the_task_prompt_only(
 
     processor = transformers.processor
     assert processor.call["text"] == TASK_PROMPT
-    assert processor.call["images"].path == path
+    # A imagem é decodificada dos bytes verificados, não relida do caminho.
+    assert processor.call["images"].payload == VIEW_PAYLOAD
     assert processor.call["return_tensors"] == "pt"
     assert processor.inputs is not None
     assert processor.inputs.moved == ("cuda", "torch.bfloat16")
@@ -358,19 +392,62 @@ def test_generation_for_another_configuration_is_rejected(
         _generate(runtime, _config(task="<REGION_TO_DESCRIPTION>"))
 
 
-def test_view_references_cannot_escape_the_view_root_or_be_missing(
+def test_view_references_cannot_escape_the_view_root_through_a_link_or_be_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install(monkeypatch)
     root = tmp_path / "root"
-    root.mkdir()
+    (root / "outputs" / "semantic-views").mkdir(parents=True)
     (tmp_path / "secret.png").write_bytes(b"outside")
+    linked_reference = "outputs/semantic-views/linked.png"
+    (root / linked_reference).symlink_to(tmp_path / "secret.png")
     config = _config()
     runtime = HuggingFaceFlorence2SemanticRuntime(config=config, view_root=root)
 
     with pytest.raises(Florence2SemanticError, match="escapes"):
         runtime.generate(
-            visual_payload_references=("../secret.png",), task_prompt=TASK_PROMPT, config=config
+            visual_views=(_visual_view(b"outside", reference=linked_reference),),
+            task_prompt=TASK_PROMPT,
+            config=config,
         )
     with pytest.raises(Florence2SemanticError, match="does not exist"):
         _generate(runtime, config)
+
+
+def test_a_view_whose_bytes_diverge_from_the_request_sha256_is_never_inferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    config = _config()
+    adapter = Florence2SemanticInterpreter(
+        config=config,
+        runtime=HuggingFaceFlorence2SemanticRuntime(config=config, view_root=tmp_path),
+    )
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("florence-region-0007"),
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+        mode=SemanticInterpretationMode.REGION,
+        region_id=RegionId("region-0007"),
+        visual_views=(
+            SemanticVisualView(
+                view_id="tight-crop",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference=VIEW_REFERENCE,
+                source_observation_id=SourceObservationId("frame-0124"),
+                region_id=RegionId("region-0007"),
+                sha256=hashlib.sha256(b"the bytes the request identifies").hexdigest(),
+            ),
+        ),
+        prompt_template_id="region/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint=adapter.configuration_fingerprint,
+    )
+
+    with pytest.raises(Florence2SemanticError, match="sha256"):
+        adapter.interpret(request)
+
+    assert transformers.opened_payloads == []
+    assert transformers.processor.call == {}
+    assert transformers.model.generate_kwargs == {}

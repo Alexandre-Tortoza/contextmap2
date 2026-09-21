@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import importlib
+import io
 import json
 import math
 import re
@@ -25,7 +26,7 @@ from typing import Any, Protocol
 from contextmap.visual_perception.backends._huggingface import (
     validate_huggingface_commit_revision,
 )
-from contextmap.visual_perception.backends._semantic_views import resolve_view_payload
+from contextmap.visual_perception.backends._semantic_views import read_view_payload
 from contextmap.visual_perception.models import BackendProvenance, SemanticInferenceProvenance
 from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
@@ -43,6 +44,7 @@ from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreterCapabilities,
+    SemanticVisualView,
     VisualViewKind,
     validate_semantic_request,
 )
@@ -216,11 +218,16 @@ class Florence2SemanticRuntime(Protocol):
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         task_prompt: str,
         config: Florence2SemanticConfig,
     ) -> Florence2SemanticResponse:
-        """Run ``task_prompt`` (task token plus task input) and return the task-native text."""
+        """Run ``task_prompt`` (task token plus task input) and return the task-native text.
+
+        An implementation must obtain each view's bytes through ``read_view_payload`` (or
+        an equivalent check) and must not decode a payload whose SHA-256 differs from
+        ``SemanticVisualView.sha256``: the request identifies its evidence by that hash.
+        """
         ...
 
 
@@ -274,7 +281,7 @@ class Florence2SemanticInterpreter:
         )
         started = time.monotonic()
         response = self._runtime.generate(
-            visual_payload_references=(request.visual_views[0].payload_reference,),
+            visual_views=request.visual_views,
             task_prompt=f"{self._config.task}{self._task.task_input}",
             config=self._config,
         )
@@ -395,26 +402,32 @@ class HuggingFaceFlorence2SemanticRuntime:
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         task_prompt: str,
         config: Florence2SemanticConfig,
     ) -> Florence2SemanticResponse:
         """Run one Florence-2 task on the single view and return its parsed text.
 
+        The view is decoded from bytes whose SHA-256 was verified against
+        ``SemanticVisualView.sha256`` first, so a payload that changed after the request was
+        built is rejected instead of being interpreted.
+
         Raises:
             ValueError: If ``config`` differs from the configuration the runtime is bound to.
-            Florence2SemanticError: For dependency, device, load, or inference failures.
+            Florence2SemanticError: For dependency, device, load, or inference failures,
+                including a view payload that is missing, escapes the view root, or does not
+                match its recorded SHA-256.
         """
         if config != self._config:
             raise ValueError("Florence-2 runtime was built for another configuration")
-        if len(visual_payload_references) != 1:
+        if len(visual_views) != 1:
             raise Florence2InferenceError("Florence-2 tasks consume exactly one visual view")
         self.load()
         torch = self._torch
         on_cuda = config.device.startswith("cuda")
         try:
-            path = resolve_view_payload(self._view_root, visual_payload_references[0])
-            with self._image_module.open(path) as image:
+            payload = read_view_payload(self._view_root, visual_views[0])
+            with self._image_module.open(io.BytesIO(payload)) as image:
                 rgb = image.convert("RGB")
             inputs = self._processor(text=task_prompt, images=rgb, return_tensors="pt").to(
                 config.device, self._dtype
@@ -443,9 +456,9 @@ class HuggingFaceFlorence2SemanticRuntime:
         except Florence2SemanticError:
             raise
         except Exception as error:
+            references = [view.payload_reference for view in visual_views]
             raise Florence2InferenceError(
-                f"Florence-2 {config.task} failed for views {list(visual_payload_references)}: "
-                f"{error}"
+                f"Florence-2 {config.task} failed for views {references}: {error}"
             ) from error
         return Florence2SemanticResponse(
             text=_LOCATION_TOKEN.sub("", task_text).strip(),

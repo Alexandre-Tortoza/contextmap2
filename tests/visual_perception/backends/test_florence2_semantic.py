@@ -39,16 +39,16 @@ class _Runtime:
 
     def __init__(self, text: str = "fire extinguisher") -> None:
         self.text = text
-        self.calls: list[tuple[tuple[str, ...], str]] = []
+        self.calls: list[tuple[tuple[SemanticVisualView, ...], str]] = []
 
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         task_prompt: str,
         config: Florence2SemanticConfig,
     ) -> Florence2SemanticResponse:
-        self.calls.append((visual_payload_references, task_prompt))
+        self.calls.append((visual_views, task_prompt))
         return Florence2SemanticResponse(
             text=self.text,
             input_tokens=9,
@@ -130,8 +130,9 @@ def _scene_request(adapter: Florence2SemanticInterpreter) -> SemanticInterpretat
 
 def test_region_task_text_becomes_exactly_one_verbatim_primary_claim() -> None:
     adapter, runtime = _adapter("<REGION_TO_CATEGORY>", "fire extinguisher")
+    request = _region_request(adapter)
 
-    execution = adapter.interpret(_region_request(adapter))
+    execution = adapter.interpret(request)
 
     assert isinstance(adapter, SemanticInterpreter)
     (claim,) = execution.parsed.claims
@@ -144,9 +145,8 @@ def test_region_task_text_becomes_exactly_one_verbatim_primary_claim() -> None:
     assert claim.provenance.task_identity == "florence2-<REGION_TO_CATEGORY>-region"
     assert claim.provenance.backend.backend_id == "florence2_semantic"
     assert execution.parsed.scene_context is None
-    assert runtime.calls == [
-        (("outputs/semantic-views/region-0001.jpg",), f"<REGION_TO_CATEGORY>{WHOLE_VIEW_BOX}")
-    ]
+    # O runtime recebe a identidade completa da view (incluindo o sha256), não só o caminho.
+    assert runtime.calls == [(request.visual_views, f"<REGION_TO_CATEGORY>{WHOLE_VIEW_BOX}")]
 
 
 def test_raw_response_is_the_native_task_text_and_its_hash_is_recorded() -> None:

@@ -56,6 +56,47 @@ o backend aceita features/contexto e quais views são obrigatórias.
 qualquer chamada local ou remota. Evidência não suportada causa erro explícito;
 ela não é descartada silenciosamente.
 
+## Integridade das views na inferência
+
+O `sha256` de cada `SemanticVisualView` identifica os bytes exatos que o request
+declara ter fornecido ao modelo. Validar só a forma do request não basta: se o
+arquivo mudar depois que o request foi construído, o backend inferiria sobre
+bytes diferentes dos registrados. A verificação por `add_semantic_view_payload()`
+acontece na persistência do run, depois da inferência, e continua existindo como
+segunda barreira do artifact; ela não substitui a verificação abaixo.
+
+Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime` e
+`GeminiClient`) recebem a **identidade completa das views**
+(`visual_views: tuple[SemanticVisualView, ...]`) em vez de apenas
+`payload_reference`. A leitura e a validação dos bytes são centralizadas em
+`read_view_payload(view_root, view)` (`backends/_semantic_views.py`, interno à
+capability, fora da API pública):
+
+1. resolve a referência dentro de `view_root`, seguindo links simbólicos, e
+   rejeita o que escapa dele (`ValueError`) ou não existe (`FileNotFoundError`);
+2. lê o arquivo **uma única vez** e calcula o SHA-256 dos bytes lidos;
+3. rejeita, com `ValueError` que mostra o hash esperado e o encontrado, um payload
+   cujo hash difere de `SemanticVisualView.sha256`;
+4. devolve os próprios bytes verificados.
+
+Cada runtime decodifica ou transmite **somente esses bytes**: Qwen e Florence-2
+abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
+parte inline. Assim, o que foi verificado é exatamente o que é consumido, sem
+janela entre a checagem e o uso, e a verificação precede a abertura da imagem e
+o envio ao provider. No Gemini, todas as views são verificadas antes da primeira
+chamada de rede, então um payload divergente nunca sai da máquina.
+
+Um payload divergente é uma falha explícita e terminal (`QwenInferenceError`,
+`Florence2InferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
+inferência parcial. Quem implementa esses seams com outro runtime, gateway ou
+fake precisa usar `read_view_payload` (ou uma checagem equivalente); o contrato
+está registrado nas docstrings dos protocolos.
+
+A troca de `visual_payload_references` por `visual_views` altera apenas esses
+seams internos, que não são exportados por `contextmap.visual_perception`; os
+contratos públicos (`SemanticVisualView`, request, execution) não mudam. Em
+`v0.x` não há consumidor externo dos seams, então não há camada de compatibilidade.
+
 ## Rastreabilidade
 
 `evidence_references()` deriva referências canônicas para cada view, feature e
@@ -198,7 +239,9 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
 - **Evidência e prompt.** As views chegam como imagens, na ordem do request,
   seguidas do prompt canônico renderizado (`region/v1` ou `scene/v1`). O runtime
   não acrescenta instrução própria. As referências são resolvidas dentro de
-  `view_root` e não podem escapar dele.
+  `view_root` e não podem escapar dele, e cada imagem é decodificada dos bytes
+  cujo SHA-256 foi verificado contra `SemanticVisualView.sha256`
+  ([Integridade das views](#integridade-das-views-na-inferência)).
 - **Diagnóstico.** Cada resposta traz tokens de entrada/saída e
   `peak_memory_bytes`, o pico de memória alocada na GPU pelo processo (pesos
   mais ativações, não a memória de outras sessões). Atingir `max_new_tokens`
@@ -247,6 +290,12 @@ podem sair da máquina.
   `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
   `thinking_budget`, `structured_output` e o timeout por tentativa
   (`timeout_s`, em milissegundos no SDK) vêm da configuração.
+- **Views verificadas antes do envio.** O cliente lê e confere o SHA-256 de todas
+  as views contra `SemanticVisualView.sha256` antes de entregar o primeiro byte
+  ao SDK. Um payload divergente, ausente, fora de `view_root` ou de formato não
+  aceito é `GeminiSemanticError` terminal e nenhuma requisição é feita: bytes
+  enviados a um serviço remoto não podem ser recolhidos
+  ([Integridade das views](#integridade-das-views-na-inferência)).
 - **Falhas.** Timeout, falha de transporte, HTTP 408/429 e 5xx são
   `GeminiTransientError` e entram nos retries do adapter. Demais erros HTTP
   (400/401/403/404), exceções inesperadas, prompt bloqueado, resposta sem
@@ -340,8 +389,11 @@ revisão fixada, com `Florence2ForConditionalGeneration` e `AutoProcessor`, sem
 `post_process_generation` da task e remove os tokens `<loc_*>` que ecoam a caixa
 de entrada nas tasks de região, pois repetem o input e não fazem parte da
 resposta. Registra tokens, pico de memória de GPU e o mesmo `load()` explícito
-do runtime Qwen. Sem SDK, device ou checkpoint disponível, falha com erro
-explícito.
+do runtime Qwen. A imagem é decodificada dos bytes cujo SHA-256 foi verificado
+contra `SemanticVisualView.sha256`, e um payload divergente é
+`Florence2InferenceError` antes da inferência
+([Integridade das views](#integridade-das-views-na-inferência)). Sem SDK, device
+ou checkpoint disponível, falha com erro explícito.
 
 ## Avaliação
 
@@ -366,6 +418,8 @@ O branch de integração materializa:
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
 - Florence-2 implementa o mesmo boundary por adapter separado de Region
   Discovery;
+- os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
+  SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
 - o harness de avaliação compara qualidade e custo sem Semantic Fusion;
 - testes determinísticos cobrem parsing, abstention, retries, materialização no

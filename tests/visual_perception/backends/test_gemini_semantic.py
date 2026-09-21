@@ -62,9 +62,11 @@ class _Client:
         self.terminal = terminal
         self.text = text
         self.calls = 0
+        self.received_views: list[object] = []
 
     def generate(self, **kwargs: object) -> GeminiProviderResponse:
         self.calls += 1
+        self.received_views.append(kwargs["visual_views"])
         if self.terminal is not None:
             raise self.terminal
         if self.calls <= self.failures:
@@ -139,6 +141,17 @@ def test_gemini_retries_transient_failure_and_preserves_usage() -> None:
         "structured_output",
         "retry_backoff_s",
     }
+
+
+def test_gemini_hands_the_full_view_identity_to_the_client_on_every_attempt() -> None:
+    client = _Client(failures=1)
+    adapter = _adapter(client)
+    request = _request(adapter)
+
+    adapter.interpret(request)
+
+    # O cliente verifica o sha256 antes de enviar bytes, então recebe as views inteiras.
+    assert client.received_views == [request.visual_views, request.visual_views]
 
 
 def test_gemini_exhausted_retries_are_explicit_without_fallback() -> None:

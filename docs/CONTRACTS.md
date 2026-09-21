@@ -234,7 +234,10 @@ configuration_fingerprint
 
 Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
 `outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
-quando aplicável. Features opcionais preservam `feature_id`,
+quando aplicável. O SHA-256 identifica os bytes exatos entregues ao modelo: os
+runtimes o verificam antes de abrir a imagem ou enviar bytes a um provider, e um
+payload divergente é falha explícita, não inferência sobre outra evidência.
+Features opcionais preservam `feature_id`,
 `embedding_space_id`, scope e região. Evidência não suportada por um backend é
 rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
 descartada silenciosamente.
