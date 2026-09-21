@@ -1,0 +1,605 @@
+{
+  "cases": [
+    {
+      "capability": "ingestion",
+      "content_hash": "sha256:89eb53fc641958239795ea2031479cb733c01418cee67513f65ba4bc90e090a9",
+      "description": "The synthetic RGB/LiDAR/pose sequence round-trips through a sequence artifact with the same identities, timestamps and payload bytes.",
+      "edge_cases": [
+        "shared-clock-domain",
+        "float32-xyz-point-layout",
+        "rgb8-payload"
+      ],
+      "expected": {
+        "observation_counts": {
+          "external_pose": 3,
+          "image": 3,
+          "lidar": 3
+        },
+        "observation_ids": [
+          "frame-0000",
+          "scan-0000",
+          "odom-0000",
+          "frame-0001",
+          "scan-0001",
+          "odom-0001",
+          "frame-0002",
+          "scan-0002",
+          "odom-0002"
+        ],
+        "payload_hashes": {
+          "frame-0000": "sha256:ee3fe826df62bcaba2bcda9ce968576f3bb06249ae6aa4cdecec516dba5f9823",
+          "frame-0001": "sha256:2627907f47bf120a6994fe958d08889cfa8125909cd041c29a54dc316dbd0d2a",
+          "frame-0002": "sha256:885f8c8b40156a56065fdb1480209045f2750487494d43e117be72a2a042b574",
+          "odom-0000": "sha256:a43480268e834c5f11c501e80303587ea7b2336e525986a6e29c4bf179996059",
+          "odom-0001": "sha256:268ab6bee7b42b2b129924f3d879bf1c5dca19d7c7cedb63a570af4f3a427035",
+          "odom-0002": "sha256:fe1aa14f8563af6e3871dce55af0df12886646de06035c55dd2beef100186247",
+          "scan-0000": "sha256:9643040d831f01b5847cd69caf005c145a29a9f4e193a702cce093cfcd554731",
+          "scan-0001": "sha256:229e85aa0bb146e30daff16ca8587064e45d2e2f11a8ec6cedcaaeb521403d12",
+          "scan-0002": "sha256:ec792281fecb379b26b35230e3f0d8775866976a20abb2bc185d4f801d21acab"
+        }
+      },
+      "fixture_id": "ingestion-canonical-sequence",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "frame_times_s": [
+          0,
+          1,
+          2
+        ],
+        "image_size": [
+          16,
+          12
+        ],
+        "landmark_count": 4,
+        "sequence": "contextmap-ci-subset"
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {}
+    },
+    {
+      "capability": "sensor_association",
+      "content_hash": "sha256:7c1b06a1ac23a7167bed0f787d50f9d8077b01b3a7f9cf16efdbcc37682b0fa8",
+      "description": "Known 3D landmarks project to analytically known pixels through the calibrated pinhole model; one landmark starts behind the camera and one falls outside.",
+      "edge_cases": [
+        "behind-camera",
+        "outside-image",
+        "pose-dependent-projection"
+      ],
+      "expected": {
+        "projections": {
+          "behind-start@0": {
+            "pixel": null,
+            "status": "behind_camera"
+          },
+          "behind-start@1": {
+            "pixel": null,
+            "status": "behind_camera"
+          },
+          "behind-start@2": {
+            "pixel": null,
+            "status": "behind_camera"
+          },
+          "far-left@0": {
+            "pixel": [
+              -1.7959183673469372,
+              6.0
+            ],
+            "status": "outside_image"
+          },
+          "far-left@1": {
+            "pixel": [
+              -4.307692307692308,
+              6.0
+            ],
+            "status": "outside_image"
+          },
+          "far-left@2": {
+            "pixel": [
+              -8.551724137931036,
+              6.0
+            ],
+            "status": "outside_image"
+          },
+          "pallet-corner@0": {
+            "pixel": [
+              6.775510204081633,
+              5.755102040816326
+            ],
+            "status": "visible"
+          },
+          "pallet-corner@1": {
+            "pixel": [
+              6.461538461538462,
+              5.6923076923076925
+            ],
+            "status": "visible"
+          },
+          "pallet-corner@2": {
+            "pixel": [
+              5.931034482758621,
+              5.586206896551724
+            ],
+            "status": "visible"
+          },
+          "shelf-post@0": {
+            "pixel": [
+              8.813559322033898,
+              6.203389830508475
+            ],
+            "status": "visible"
+          },
+          "shelf-post@1": {
+            "pixel": [
+              8.979591836734693,
+              6.244897959183674
+            ],
+            "status": "visible"
+          },
+          "shelf-post@2": {
+            "pixel": [
+              9.230769230769232,
+              6.3076923076923075
+            ],
+            "status": "visible"
+          }
+        }
+      },
+      "fixture_id": "projection-known-landmarks",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "camera": {
+          "camera_optical_rotation_xyzw": [
+            -0.5,
+            0.5,
+            -0.5,
+            0.5
+          ],
+          "camera_translation_m": [
+            0.1,
+            0.0,
+            0.2
+          ],
+          "focal_px": 12.0,
+          "height": 12,
+          "principal_point_px": [
+            8.0,
+            6.0
+          ],
+          "width": 16
+        },
+        "frame_times_s": [
+          0,
+          1,
+          2
+        ],
+        "landmarks": {
+          "behind-start": [
+            -2.0,
+            0.0,
+            0.2
+          ],
+          "far-left": [
+            5.0,
+            4.0,
+            0.2
+          ],
+          "pallet-corner": [
+            5.0,
+            0.5,
+            0.3
+          ],
+          "shelf-post": [
+            6.0,
+            -0.4,
+            0.1
+          ]
+        }
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {
+        "pixel_abs": 1e-06
+      }
+    },
+    {
+      "capability": "state_estimation",
+      "content_hash": "sha256:1b1a62c5ae809cc524262127ea6eb6c1e2f58b39651f7d73cf014b656bd7051c",
+      "description": "External pose measurements become a canonical trajectory with the recorded translations and identity orientation.",
+      "edge_cases": [
+        "identity-orientation",
+        "constant-velocity"
+      ],
+      "expected": {
+        "pose_observation_ids": [
+          "odom-0000",
+          "odom-0001",
+          "odom-0002"
+        ],
+        "translations_m": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            2.0,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "fixture_id": "trajectory-external-pose",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "frame_times_s": [
+          0,
+          1,
+          2
+        ]
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {
+        "translation_abs_m": 1e-09
+      }
+    },
+    {
+      "capability": "visual_perception",
+      "content_hash": "sha256:5b3b1d29c66b65b3be8afb773e7ab8914679edd8fa068f85ffcdc3d55131258c",
+      "description": "Two annotated regions overlap; their areas, intersection and IoU are known.",
+      "edge_cases": [
+        "overlapping-regions",
+        "exclusion-area",
+        "valid-area",
+        "partial-coverage"
+      ],
+      "expected": {
+        "area_a": 42,
+        "area_b": 42,
+        "intersection": 12,
+        "iou": 0.16666666666666666,
+        "union": 72
+      },
+      "fixture_id": "regions-overlapping-masks",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "frame": "frame-0000",
+        "regions": [
+          "region-a",
+          "region-b"
+        ]
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {
+        "iou_abs": 1e-12
+      }
+    },
+    {
+      "capability": "visual_perception",
+      "content_hash": "sha256:20143d40ebf2336452068e91fd18e100e2e137a2c2442890affee0dd57f0c74a",
+      "description": "Canned model responses parse into canonical claims: a primary with an alternative, an abstention, an unscored claim and a measured one; a repeated inference over one physical observation stays one observation.",
+      "edge_cases": [
+        "semantic-alternative",
+        "abstention",
+        "unscored-claim",
+        "measured-claim",
+        "repeated-inference-one-observation"
+      ],
+      "expected": {
+        "abstention": {
+          "abstained": true,
+          "confidences": [],
+          "roles": []
+        },
+        "inference_count": 2,
+        "measured": {
+          "abstained": false,
+          "confidences": [
+            0.62
+          ],
+          "roles": [
+            "primary"
+          ]
+        },
+        "physical_observation_count": 1,
+        "primary_with_alternative": {
+          "abstained": false,
+          "confidences": [
+            null,
+            null
+          ],
+          "roles": [
+            "primary",
+            "alternative"
+          ]
+        },
+        "repeated_inference": {
+          "abstained": false,
+          "confidences": [
+            null
+          ],
+          "roles": [
+            "primary"
+          ]
+        }
+      },
+      "fixture_id": "semantic-claims-variants",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "observation_id": "frame-0000",
+        "responses": {
+          "abstention": {
+            "abstained": true,
+            "claims": [],
+            "scene_context": null
+          },
+          "measured": {
+            "abstained": false,
+            "claims": [
+              {
+                "attributes": {},
+                "category": null,
+                "confidence": 0.62,
+                "hypothesis": "wooden pallet",
+                "region_kind": "thing",
+                "role": "primary"
+              }
+            ],
+            "scene_context": null
+          },
+          "primary_with_alternative": {
+            "abstained": false,
+            "claims": [
+              {
+                "attributes": {},
+                "category": null,
+                "confidence": null,
+                "hypothesis": "wooden pallet",
+                "region_kind": "thing",
+                "role": "primary"
+              },
+              {
+                "attributes": {},
+                "category": null,
+                "confidence": null,
+                "hypothesis": "wooden crate",
+                "region_kind": "thing",
+                "role": "alternative"
+              }
+            ],
+            "scene_context": null
+          },
+          "repeated_inference": {
+            "abstained": false,
+            "claims": [
+              {
+                "attributes": {},
+                "category": null,
+                "confidence": null,
+                "hypothesis": "pallet",
+                "region_kind": "thing",
+                "role": "primary"
+              }
+            ],
+            "scene_context": null
+          }
+        }
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {
+        "confidence_abs": 1e-12
+      }
+    },
+    {
+      "capability": "entity_resolution",
+      "content_hash": "sha256:95f9aa4d61bd82acb81afdddb677c0a0b60969c61f7b5cf51309f6e7d739627d",
+      "description": "Two objects with the same concept are distinct identities, while one object seen in several frames is a single identity (annotation level).",
+      "edge_cases": [
+        "same-label-distinct-objects",
+        "one-object-many-observations"
+      ],
+      "expected": {
+        "distinct_pairs": [
+          [
+            "pallet-1",
+            "pallet-2"
+          ]
+        ],
+        "exhaustive_observations": [
+          "frame-0000",
+          "frame-0001"
+        ],
+        "identities": {
+          "pallet-1": 3,
+          "pallet-2": 2
+        },
+        "partial_observations": [
+          "frame-0002"
+        ]
+      },
+      "fixture_id": "identity-duplicate-and-distinct",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "annotation": "identity"
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {}
+    },
+    {
+      "capability": "spatial_relations",
+      "content_hash": "sha256:2a34a83873606c057db270ee146b1c4fce1d6637391da391af528662ffe762a3",
+      "description": "A symmetric relation, an explicit negative and an ambiguous relation with declared inverse predicates (annotation level).",
+      "edge_cases": [
+        "symmetric-predicate",
+        "explicit-negative",
+        "ambiguous-relation"
+      ],
+      "expected": {
+        "inverses": {
+          "on top of": "supports",
+          "supports": "on top of"
+        },
+        "statuses": {
+          "rel-next-to": "holds",
+          "rel-not-on-top": "does_not_hold",
+          "rel-supports-ambiguous": "ambiguous"
+        },
+        "symmetric": [
+          "next to"
+        ]
+      },
+      "fixture_id": "relations-symmetry-and-negatives",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "annotation": "relations"
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {}
+    },
+    {
+      "capability": "evaluation",
+      "content_hash": "sha256:e1574aa37c67fba000a8402b4c927a6f493d5351ec28370656dd00636c688e5b",
+      "description": "Visibility levels, including unknown, and scene attributes used to stratify results.",
+      "edge_cases": [
+        "visibility-unknown",
+        "occluded-fraction",
+        "sample-level-context"
+      ],
+      "expected": {
+        "levels": [
+          "fully_visible",
+          "partially_occluded",
+          "unknown"
+        ],
+        "occluded_fractions": [
+          0.0,
+          0.3,
+          null
+        ]
+      },
+      "fixture_id": "visibility-and-context-strata",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "annotation": [
+          "visibility",
+          "scene_context"
+        ]
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {}
+    },
+    {
+      "capability": "evaluation",
+      "content_hash": "sha256:e6b151586ae1f67c97d0e6093448e08c533bb9d80c8e506d793a1a4c3ff9c8e8",
+      "description": "The subset's own reference set passes the integrity validation with no finding.",
+      "edge_cases": [
+        "synthetic-provenance",
+        "single-held-out-split"
+      ],
+      "expected": {
+        "blockers": 0,
+        "valid": true,
+        "warnings": 0
+      },
+      "fixture_id": "reference-set-integrity",
+      "generator": "contextmap.evaluation.ci_fixtures",
+      "inputs": {
+        "reference_set": "contextmap-ci-subset"
+      },
+      "license": "AGPL-3.0 (repository LICENSE)",
+      "redistributable": true,
+      "tolerances": {}
+    }
+  ],
+  "catalogue_id": "contextmap-ci-subset",
+  "coverage": [
+    {
+      "fixture_ids": [
+        "ingestion-canonical-sequence",
+        "trajectory-external-pose"
+      ],
+      "note": "",
+      "requirement": "canonical RGB/LiDAR/pose/calibration ingestion",
+      "status": "covered"
+    },
+    {
+      "fixture_ids": [
+        "projection-known-landmarks"
+      ],
+      "note": "camera model and extrinsic composition; the full frame projector is not run",
+      "requirement": "known 3D transforms/projections",
+      "status": "covered"
+    },
+    {
+      "fixture_ids": [
+        "regions-overlapping-masks"
+      ],
+      "note": "",
+      "requirement": "2D masks/regions and overlapping regions",
+      "status": "covered"
+    },
+    {
+      "fixture_ids": [
+        "semantic-claims-variants"
+      ],
+      "note": "canned responses through the public parser, no model",
+      "requirement": "semantic alternatives/abstention/unscored claims",
+      "status": "covered"
+    },
+    {
+      "fixture_ids": [
+        "semantic-claims-variants"
+      ],
+      "note": "one physical observation, two inferences",
+      "requirement": "repeated inference over one physical observation",
+      "status": "covered"
+    },
+    {
+      "fixture_ids": [],
+      "note": "needs synthetic Sensor Association outputs (spatial observations with geometry references); Semantic Fusion is covered by its own capability tests",
+      "requirement": "multi-view fusion",
+      "status": "not_yet_available"
+    },
+    {
+      "fixture_ids": [
+        "identity-duplicate-and-distinct"
+      ],
+      "note": "Entity and EntityResolution contracts do not exist yet",
+      "requirement": "entity duplicate/distinct cases",
+      "status": "annotation_level"
+    },
+    {
+      "fixture_ids": [
+        "relations-symmetry-and-negatives"
+      ],
+      "note": "Relation contracts do not exist yet",
+      "requirement": "spatial relation fixtures",
+      "status": "annotation_level"
+    },
+    {
+      "fixture_ids": [],
+      "note": "the ContextMapArtifact schema and serialization do not exist yet",
+      "requirement": "final ContextMapArtifact round-trip",
+      "status": "not_yet_available"
+    }
+  ],
+  "digest": "sha256:f1ecc8dca689060ff58ad1da89746921cc4ce0ebada60a89acf105ad395f0538",
+  "reference_set": {
+    "digest": "sha256:007a3d0f89b6ec38bb9a7dae65c971f2aa43a7ac57fb29effc5455fd3fa41b30",
+    "reference_set_id": "contextmap-ci-subset",
+    "version": "1.0.0"
+  },
+  "schema": "contextmap.ci-fixtures/v1",
+  "version": "1.0.0"
+}

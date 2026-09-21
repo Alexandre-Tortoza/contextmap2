@@ -1,0 +1,69 @@
+{
+  "normalization": {
+    "aliases": [],
+    "policy_id": "casefold-exact/1"
+  },
+  "predicate_rules": [
+    {
+      "inverse": null,
+      "predicate": "next to",
+      "symmetric": true
+    },
+    {
+      "inverse": "supports",
+      "predicate": "on top of",
+      "symmetric": false
+    },
+    {
+      "inverse": "on top of",
+      "predicate": "supports",
+      "symmetric": false
+    }
+  ],
+  "relations": [
+    {
+      "anchors": [
+        {
+          "observation_id": "frame-0000",
+          "sample_id": "sample-0000"
+        },
+        {
+          "observation_id": "frame-0001",
+          "sample_id": "sample-0001"
+        }
+      ],
+      "object_identity_id": "pallet-2",
+      "predicate": "next to",
+      "relation_id": "rel-next-to",
+      "status": "holds",
+      "subject_identity_id": "pallet-1"
+    },
+    {
+      "anchors": [
+        {
+          "observation_id": "frame-0000",
+          "sample_id": "sample-0000"
+        }
+      ],
+      "object_identity_id": "pallet-2",
+      "predicate": "on top of",
+      "relation_id": "rel-not-on-top",
+      "status": "does_not_hold",
+      "subject_identity_id": "pallet-1"
+    },
+    {
+      "anchors": [
+        {
+          "observation_id": "frame-0002",
+          "sample_id": "sample-0002"
+        }
+      ],
+      "object_identity_id": "pallet-1",
+      "predicate": "supports",
+      "relation_id": "rel-supports-ambiguous",
+      "status": "ambiguous",
+      "subject_identity_id": "pallet-2"
+    }
+  ],
+  "schema": "contextmap.reference.relations/v1"
+}
