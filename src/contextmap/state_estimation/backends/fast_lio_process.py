@@ -22,11 +22,12 @@ own configuration keys:
   (``{"status": "ok" | "initialization_failed" | "diverged", "message": ...,
   "fast_lio_ref": ..., "warnings": [...]}``).
 
-Nothing here has been run against a real FAST-LIO installation. The bag, the
-job description, the process handling and the trajectory parsing are tested
-with a stand-in process; a reference execution with FAST-LIO installed is still
-required to validate the wrapper contract. See
-``src/contextmap/state_estimation/docs/backends.md``.
+The deployment side of this contract is
+:mod:`contextmap.state_estimation.backends.fast_lio_wrapper`, run inside the
+FAST-LIO container. The bag, the job description, the process handling and the
+trajectory parsing are tested with a stand-in process, and the whole chain has
+been run against the real FAST-LIO in a container (see
+``src/contextmap/state_estimation/docs/backends.md``).
 """
 
 from __future__ import annotations
