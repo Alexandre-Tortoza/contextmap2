@@ -507,6 +507,22 @@ def test_a_comparison_rejects_anything_but_the_fusion_configuration_changing(
         compare_semantic_fusion_reports([baseline, other_map])
 
 
+def test_an_arm_that_lists_no_point_representation_run_is_not_comparable_with_one_that_does(
+    fixture: EvalFixture,
+) -> None:
+    # A linhagem registra a seleção de runs, não o uso: numa ablação de canais todo braço lista as
+    # mesmas runs de Point Representation. A execução real montou os sete braços assim.
+    baseline = _report(fixture, "baseline")
+    unlisted = dataclasses.replace(
+        _report(fixture, "with_visual_and_3d"),
+        lineage=dataclasses.replace(baseline.lineage, point_representation_run_ids=()),
+    )
+
+    assert baseline.lineage.point_representation_run_ids
+    with pytest.raises(SemanticFusionEvaluationError, match="point_representation_run_ids"):
+        compare_semantic_fusion_reports([baseline, unlisted])
+
+
 def test_the_stratification_profile_has_no_defaults_and_rejects_impossible_edges() -> None:
     with pytest.raises(TypeError):
         FusionStratificationProfile()  # type: ignore[call-arg]

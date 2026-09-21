@@ -53,7 +53,7 @@ O writer recusa, com `FusionRunArtifactError` e sem deixar run visível, quando:
 
 ## Linhagem (manifest)
 
-`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se usadas, as de Point Representation. Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
+`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se selecionadas, as de Point Representation (a seleção, não o uso: numa ablação de canais todo braço lista as mesmas). Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
 
 - as políticas: agrupamento por observação física, construção de suporte (com fingerprint) e fusão (com fingerprint);
 - as identidades que alimentaram cada canal (interpretadores, scorers, espaços de embedding, versão das definições de qualidade, espaços de representação, mapa);

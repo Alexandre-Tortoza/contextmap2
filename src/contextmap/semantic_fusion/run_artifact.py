@@ -120,8 +120,10 @@ class FusionRunLineage:
         association_run_ids: The selected Sensor Association runs, sorted and unique.
         perception_run_ids: The selected perception runs whose claims were fused, sorted and
             unique.
-        point_representation_run_ids: The Point Representation runs whose structure was
-            referenced, sorted and unique; empty when none was used.
+        point_representation_run_ids: The Point Representation runs selected for the run, whose
+            structure a declared channel may reference, sorted and unique; empty when none was
+            selected. It records the selection, not the use: in a channel ablation every arm
+            lists the same runs, so that the arms see identical upstream artifacts.
     """
 
     sequence_artifact_id: str
