@@ -141,6 +141,60 @@ def test_importing_the_runtime_loads_no_backend_no_sdk_and_only_the_ingestion_ro
     assert not [m for m in loaded if ".adapters" in m or ".backends" in m], loaded
 
 
+def test_the_public_api_module_depends_only_on_the_standard_library_and_the_runtime() -> None:
+    tree = ast.parse((RUNTIME / "api.py").read_text(encoding="utf-8"))
+
+    foreign = sorted(
+        {
+            module
+            for _, module in _all_imports(tree)
+            if module.split(".")[0] not in sys.stdlib_module_names
+            and module != "contextmap"
+            and not module.startswith("contextmap.runtime")
+        }
+    )
+
+    # Nenhuma capability, backend, adaptador ou biblioteca de terceiros entra na API pública.
+    assert not foreign, foreign
+
+
+def test_no_runtime_module_depends_on_a_ui_framework() -> None:
+    frameworks = {
+        "textual",
+        "typer",
+        "click",
+        "rich",
+        "prompt_toolkit",
+        "urwid",
+        "curses",
+        "tkinter",
+    }
+    violations = [
+        f"{path.name}:{line} imports {module}"
+        for path in _runtime_modules()
+        for line, module in _all_imports(ast.parse(path.read_text(encoding="utf-8")))
+        if module.split(".")[0] in frameworks or module.split(".")[0].startswith(("PyQt", "PySide"))
+    ]
+
+    assert not violations, "\n".join(violations)
+
+
+def test_the_public_api_exposes_no_ros_native_type_and_no_backend_class() -> None:
+    import contextmap.runtime as runtime
+    from contextmap.runtime import api
+
+    contracts = [getattr(api, name) for name in api.__all__ if isinstance(getattr(api, name), type)]
+    foreign = {
+        f"{contract.__name__}.{annotation}"
+        for contract in contracts
+        for annotation in getattr(contract, "__annotations__", {}).values()
+        if any(token in str(annotation) for token in ("rosbags", "rclpy", "rospy", "torch", "PIL"))
+    }
+
+    assert foreign == set()
+    assert set(api.__all__) <= set(runtime.__all__)
+
+
 def test_the_runtime_public_api_hides_the_concrete_backend_classes() -> None:
     import contextmap.runtime as runtime
 
