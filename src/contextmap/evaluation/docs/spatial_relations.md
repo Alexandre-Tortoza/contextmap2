@@ -6,7 +6,7 @@ Relações erradas podem tornar enganoso um mapa contextual que está certo. Ela
 report = evaluate_spatial_relations(
     SpatialRelationsRunReader(run_dir),
     reference=relation_annotation_set,  # RelationAnnotationSet do reference set
-    identity_of_entity=matching,  # entidade resolvida -> identidade anotada
+    identity=identity_evaluation,  # IdentityEvaluation da avaliação de Entity Resolution
     code_version="...",
 )
 envelope = spatial_relations_evaluation_report(report, registry=..., reference_set=...)
@@ -16,7 +16,7 @@ envelope = spatial_relations_evaluation_report(report, registry=..., reference_s
 
 - O **run persistido** de Spatial Relations (`SpatialRelationsRunReader`): relações, candidatos, exclusões e a linhagem.
 - Um **`RelationAnnotationSet`** do reference set: relações entre identidades físicas anotadas, com predicados no vocabulário do próprio documento e estados `holds`, `does_not_hold`, `ambiguous` e `unknown`.
-- Um **mapeamento explícito entidade resolvida → identidade** (`identity_of_entity`), que é o resultado de uma avaliação de Entity Resolution. É a única ponte entre as duas coisas: uma referência cuja identidade não tem entidade correspondente é contada à parte (`reference_without_entity`, atribuída a Entity Resolution) e **não** vira erro de relação; uma identidade casada com **mais de uma** entidade é pulada e listada (`identities_with_several_entities`), porque uma entidade duplicada torna a comparação injusta.
+- O **`IdentityEvaluation` da avaliação de Entity Resolution** (`identity`), do **mesmo run de resolução** em que as relações foram construídas: seu `identity_of_resolved_entity` diz qual identidade anotada cada entidade resolvida tem, e `resolved_entities_spanning_identities` lista as entidades resolvidas que misturam identidades (fusões falsas), que ele deixa de fora do mapeamento e o avaliador **nunca adivinha** (`entities_spanning_identities`). Uma avaliação de identidade de outro run de resolução é recusada com `SpatialRelationsEvaluationError`. É a única ponte entre as duas coisas: uma referência cuja identidade não tem entidade correspondente é contada à parte (`reference_without_entity`, atribuída a Entity Resolution) e **não** vira erro de relação; uma identidade casada com **mais de uma** entidade é pulada e listada (`identities_with_several_entities`), porque uma entidade duplicada torna a comparação injusta.
 
 ## Predicados e a referência
 
@@ -67,6 +67,6 @@ O relatório (`SpatialRelationsEvaluationReport`, `to_dict()` em JSON) traz: o r
 ## Limites conhecidos
 
 - **Só fixtures sintéticos.** Não há relatório sobre dado real nem reference set real de relações; a referência de CI só cobre três predicados livres.
-- O **mapeamento entidade → identidade** é uma entrada: esta milestone não o produz. A avaliação de Entity Resolution (issue #140 daquela milestone) é quem o define.
+- O mapeamento entidade → identidade **vem da avaliação de Entity Resolution** (`IdentityEvaluation`), e não é produzido nem corrigido aqui: uma identidade duplicada ou uma entidade que mistura identidades é uma falha daquela avaliação, reportada e não pontuada como erro de relação.
 - A anotação é de mundo aberto e só cobre alguns pares: a precisão é medida contra os negativos **explícitos**, e as previsões sem anotação ficam contadas à parte.
 - Uma relação cujo par de identidades não foi anotado em nenhuma direção não entra em nenhuma taxa.
