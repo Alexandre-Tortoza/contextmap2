@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from contextmap.evaluation import (
     encode_reference_profile,
     evaluate_state_estimation,
 )
+from contextmap.state_estimation import Trajectory
 
 _REPOSITORY = Path(__file__).resolve().parents[2]
 _PROFILE_FILE = (
@@ -48,11 +50,31 @@ def _record(**overrides: Any) -> dict[str, Any]:
 
 
 def _write_source(tmp_path: Path, content: bytes = b"0 0 0 0 0 0 0 1\n") -> tuple[Path, str]:
-    import hashlib
-
     path = tmp_path / "poses.txt"
     path.write_bytes(content)
     return path, "sha256:" + hashlib.sha256(content).hexdigest()
+
+
+def _tum_line(trajectory: Trajectory, index: int) -> str:
+    pose = trajectory.poses[index]
+    seconds, nanoseconds = pose.timestamp.seconds, pose.timestamp.nanoseconds
+    values = (*pose.translation_m, *pose.orientation)
+    return f"{seconds}.{nanoseconds:09d} " + " ".join(repr(value) for value in values)
+
+
+def _write_reference_file(tmp_path: Path, trajectory: Trajectory) -> tuple[Path, str]:
+    """Write the poses of ``trajectory`` as the TUM file a reference would be read from."""
+    lines = [_tum_line(trajectory, index) for index in range(len(trajectory.poses))]
+    return _write_source(tmp_path, ("\n".join(lines) + "\n").encode())
+
+
+def _window(trajectory: Trajectory, start: int, stop: int) -> Trajectory:
+    return trajectory_from(
+        [
+            (pose.timestamp.total_nanoseconds(), pose.translation_m, pose.orientation)
+            for pose in trajectory.poses[start:stop]
+        ]
+    )
 
 
 def test_a_profile_declares_the_thresholds_protocol_and_role_of_its_reference() -> None:
@@ -79,15 +101,17 @@ def test_a_profile_round_trips_through_its_encoding() -> None:
 def test_a_profile_declares_a_reference_only_for_the_file_whose_hash_it_names(
     tmp_path: Path,
 ) -> None:
-    source, digest = _write_source(tmp_path)
+    trajectory = straight_line(4)
+    source, digest = _write_reference_file(tmp_path, trajectory)
     profile = decode_reference_profile(_record(reference_source_sha256=digest))
 
-    reference = profile.declare_reference(straight_line(4), source_file=source)
+    reference = profile.declare_reference(trajectory, source_file=source)
 
     assert reference.role is ReferenceRole.EVALUATION_REFERENCE
     assert reference.reference_id == "reference-profile:fixture@1"
     assert reference.source == "datasets/fixture/poses.txt"
     assert reference.source_sha256 == digest
+    assert reference.trajectory is trajectory
 
 
 def test_a_file_with_the_expected_name_but_other_content_is_not_the_reference(
@@ -100,10 +124,97 @@ def test_a_file_with_the_expected_name_but_other_content_is_not_the_reference(
         profile.declare_reference(straight_line(4), source_file=source)
 
 
-def test_a_declared_reference_is_what_the_evaluation_compares_against(tmp_path: Path) -> None:
-    source, digest = _write_source(tmp_path)
+def test_a_trajectory_the_verified_file_does_not_hold_is_not_declared_its_reference(
+    tmp_path: Path,
+) -> None:
+    # Regressão da revisão da PR #419: o hash do arquivo era validado, mas qualquer trajetória
+    # era aceita, então o relatório afirmava o hash de uma fonte e calculava ATE/RPE contra outra.
+    source, digest = _write_reference_file(tmp_path, straight_line(4))
     profile = decode_reference_profile(_record(reference_source_sha256=digest))
-    reference = profile.declare_reference(straight_line(12), source_file=source)
+    moved = straight_line(4, offset=(0.0, 0.01, 0.0))
+
+    with pytest.raises(StateEstimationEvaluationError, match="differs from the file"):
+        profile.declare_reference(moved, source_file=source)
+
+
+def test_a_pose_at_a_time_the_verified_file_has_no_sample_for_is_refused(tmp_path: Path) -> None:
+    source, digest = _write_reference_file(tmp_path, straight_line(4))
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+    shifted = straight_line(4, time_offset_ns=MS)
+
+    with pytest.raises(StateEstimationEvaluationError, match="no sample at that time"):
+        profile.declare_reference(shifted, source_file=source)
+
+
+def test_a_trajectory_that_is_only_a_window_of_the_file_is_still_its_reference(
+    tmp_path: Path,
+) -> None:
+    full = straight_line(8)
+    source, digest = _write_reference_file(tmp_path, full)
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+
+    reference = profile.declare_reference(_window(full, 2, 6), source_file=source)
+
+    assert len(reference.trajectory.poses) == 4
+
+
+def test_an_orientation_the_source_renormalized_still_matches_the_file(tmp_path: Path) -> None:
+    # O backend renormaliza um quaternion dentro da tolerância; a rotação é a mesma.
+    source, digest = _write_source(tmp_path, b"1.000000000 0 0 0 0 0 0 1.0004\n")
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+    trajectory = trajectory_from([(1_000_000_000, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))])
+
+    profile.declare_reference(trajectory, source_file=source)
+
+
+def test_comments_and_blank_lines_of_the_reference_file_are_skipped(tmp_path: Path) -> None:
+    source, digest = _write_source(
+        tmp_path, b"# t x y z qx qy qz qw\n\n1.000000000 0 0 0 0 0 0 1\n"
+    )
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+    trajectory = trajectory_from([(1_000_000_000, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))])
+
+    profile.declare_reference(trajectory, source_file=source)
+
+
+@pytest.mark.parametrize(
+    "bad_line",
+    [
+        "2.0 0 0 0 0 0 0",
+        "2.0 0 0 0 0 0 0 1 9",
+        "two 0 0 0 0 0 0 1",
+        "2.0 0 0 x 0 0 0 1",
+        "2.0 nan 0 0 0 0 0 1",
+        "inf 0 0 0 0 0 0 1",
+        "2.0 0 0 0 0 0 0 0",
+        "2.0000000001 0 0 0 0 0 0 1",
+    ],
+)
+def test_a_reference_file_line_that_is_not_a_pose_is_refused_with_its_number(
+    tmp_path: Path, bad_line: str
+) -> None:
+    content = f"1.000000000 0 0 0 0 0 0 1\n{bad_line}\n".encode()
+    source, digest = _write_source(tmp_path, content)
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+    trajectory = trajectory_from([(1_000_000_000, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))])
+
+    with pytest.raises(StateEstimationEvaluationError, match="line 2"):
+        profile.declare_reference(trajectory, source_file=source)
+
+
+def test_a_reference_file_that_is_not_text_is_refused(tmp_path: Path) -> None:
+    source, digest = _write_source(tmp_path, b"\xff\xfe\x00")
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+
+    with pytest.raises(StateEstimationEvaluationError, match="not UTF-8"):
+        profile.declare_reference(straight_line(2), source_file=source)
+
+
+def test_a_declared_reference_is_what_the_evaluation_compares_against(tmp_path: Path) -> None:
+    trajectory = straight_line(12)
+    source, digest = _write_reference_file(tmp_path, trajectory)
+    profile = decode_reference_profile(_record(reference_source_sha256=digest))
+    reference = profile.declare_reference(trajectory, source_file=source)
 
     report = evaluate_state_estimation(
         trajectory=straight_line(12, offset=(0.0, 0.05, 0.0)),
@@ -191,3 +302,9 @@ def test_the_real_corridor_02_reference_matches_its_profile_and_shows_no_motion_
 
     assert reference.source_sha256 == profile.reference_source_sha256
     assert report.motion.anomalies == ()
+
+    # Uma única pose deslocada em 1 mm deixa de ser uma amostra do arquivo verificado.
+    moved_time, position, orientation = samples[100]
+    samples[100] = (moved_time, (position[0] + 0.001, position[1], position[2]), orientation)
+    with pytest.raises(StateEstimationEvaluationError, match="differs from the file"):
+        profile.declare_reference(trajectory_from(samples), source_file=source)  # type: ignore[arg-type]

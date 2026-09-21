@@ -26,6 +26,7 @@ import re
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from contextmap.shared import (
     Vector3,
     compose_rigid,
     invert_rigid,
+    normalize_quaternion,
     quaternion_angle_between,
     quaternion_multiply,
     quaternion_norm,
@@ -99,7 +101,9 @@ class ReferenceTrajectory:
         role: The declared role; only ``EVALUATION_REFERENCE`` can be compared against.
         source: Where the reference poses came from (e.g. a repository-relative
             file path), so a report traces back to the data.
-        source_sha256: Content hash of that source, ``"sha256:<hex>"``.
+        source_sha256: Content hash of that source, ``"sha256:<hex>"``. Only
+            :meth:`StateEstimationReferenceProfile.declare_reference` proves the
+            poses come from it; a reference built directly carries an unverified claim.
     """
 
     trajectory: Trajectory
@@ -219,6 +223,13 @@ PROFILE_SCHEMA = "contextmap.state_estimation_reference_profile/1"
 """Schema identifier of an encoded :class:`StateEstimationReferenceProfile`."""
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+# Uma trajetória publica os números do arquivo como foram lidos (no máximo renormalizados),
+# então só pode diferir deles por arredondamento de ponto flutuante. Uma tolerância maior
+# esconderia uma pose editada.
+_REFERENCE_MATCH_TOLERANCE_M = 1e-9
+_REFERENCE_MATCH_TOLERANCE_RAD = 1e-9
+_NANOSECONDS_PER_SECOND = 1_000_000_000
+_ReferenceSamples = dict[int, list[tuple[Vector3, Quaternion]]]
 _THRESHOLD_FIELDS = (
     "max_translation_delta_m",
     "max_orientation_delta_rad",
@@ -272,7 +283,16 @@ class StateEstimationReferenceProfile:
     def declare_reference(
         self, trajectory: Trajectory, *, source_file: Path
     ) -> ReferenceTrajectory:
-        """Declare a trajectory read from ``source_file`` as this profile's reference.
+        """Declare a trajectory as this profile's reference, proving it comes from ``source_file``.
+
+        The file is read once and the same bytes are hashed against the profile and
+        parsed as TUM text (``t x y z qx qy qz qw``: seconds as a decimal, meters, unit
+        quaternion ``(x, y, z, w)``; blank and ``#`` lines are skipped). Every pose of
+        ``trajectory`` must then be a sample of that file: the same timestamp, and a
+        position and rotation equal up to floating-point rounding. So the hash a report
+        records is the hash of the poses it was measured against, and a trajectory built
+        from anything else is refused. The trajectory may cover only part of the file
+        (a selection window), never a pose the file does not have.
 
         Args:
             trajectory: The poses read from ``source_file``.
@@ -283,24 +303,88 @@ class StateEstimationReferenceProfile:
 
         Raises:
             StateEstimationEvaluationError: If the file's content does not match the
-                hash the profile declares.
+                hash the profile declares, the file is not valid TUM text, or a pose
+                of the trajectory is not a sample of the file.
         """
-        digest = hashlib.sha256()
-        with source_file.open("rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
-        actual = f"sha256:{digest.hexdigest()}"
+        data = source_file.read_bytes()
+        actual = f"sha256:{hashlib.sha256(data).hexdigest()}"
         if actual != self.reference_source_sha256:
             raise StateEstimationEvaluationError(
                 f"{source_file} has sha256 {actual}, but {self.profile_id!r} declares "
                 f"{self.reference_source_sha256}: a file is not the reference by its name"
             )
+        samples = _read_reference_samples(data, source_file)
+        for pose in trajectory.poses:
+            _require_reference_sample(pose, samples, source_file)
         return ReferenceTrajectory(
             trajectory=trajectory,
             reference_id=self.profile_id,
             role=self.reference_role,
             source=self.reference_source,
             source_sha256=actual,
+        )
+
+
+def _read_reference_samples(data: bytes, source_file: Path) -> _ReferenceSamples:
+    """Parse TUM text into the samples of the file, keyed by timestamp in nanoseconds."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise StateEstimationEvaluationError(f"{source_file} is not UTF-8 text") from error
+    samples: _ReferenceSamples = {}
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        content = line.strip()
+        if not content or content.startswith("#"):
+            continue
+        try:
+            when_ns, position, orientation = _parse_reference_sample(content)
+        except ValueError as error:
+            raise StateEstimationEvaluationError(
+                f"{source_file} line {line_number} is not a pose: {error}"
+            ) from error
+        samples.setdefault(when_ns, []).append((position, orientation))
+    return samples
+
+
+def _parse_reference_sample(line: str) -> tuple[int, Vector3, Quaternion]:
+    """Parse one ``t x y z qx qy qz qw`` line; the orientation is returned normalized."""
+    fields = line.split()
+    if len(fields) != 8:
+        raise ValueError(f"expected 't x y z qx qy qz qw' (8 fields), got {len(fields)}")
+    # Decimal, não float: o timestamp em segundos precisa virar nanossegundos sem arredondar.
+    try:
+        nanoseconds = Decimal(fields[0]) * _NANOSECONDS_PER_SECOND
+    except ArithmeticError as error:
+        raise ValueError(f"timestamp {fields[0]!r} is not a finite number") from error
+    if not nanoseconds.is_finite() or nanoseconds != nanoseconds.to_integral_value():
+        raise ValueError(f"timestamp {fields[0]!r} is not a whole number of nanoseconds")
+    x, y, z, qx, qy, qz, qw = (float(field) for field in fields[1:])
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        raise ValueError("the position must be finite")
+    return int(nanoseconds), (x, y, z), normalize_quaternion((qx, qy, qz, qw))
+
+
+def _require_reference_sample(
+    pose: PoseEstimate, samples: _ReferenceSamples, source_file: Path
+) -> None:
+    """Require ``pose`` to be a sample of the reference file, up to float rounding."""
+    when_ns = pose.timestamp.total_nanoseconds()
+    candidates = samples.get(when_ns)
+    if candidates is None:
+        raise StateEstimationEvaluationError(
+            f"pose {pose.estimate_id!r} at {when_ns} ns is not from {source_file}: "
+            "no sample at that time"
+        )
+    orientation = normalize_quaternion(pose.orientation)
+    if not any(
+        math.dist(pose.translation_m, position) <= _REFERENCE_MATCH_TOLERANCE_M
+        and quaternion_angle_between(orientation, sample_orientation)
+        <= _REFERENCE_MATCH_TOLERANCE_RAD
+        for position, sample_orientation in candidates
+    ):
+        raise StateEstimationEvaluationError(
+            f"pose {pose.estimate_id!r} at {when_ns} ns differs from the file's sample at "
+            f"that time: it was not read from {source_file}"
         )
 
 

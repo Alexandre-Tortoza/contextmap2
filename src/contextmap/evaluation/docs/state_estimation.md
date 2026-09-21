@@ -36,7 +36,14 @@ Qualidade e custo ficam em seções separadas: um backend mais rápido não é a
 
 Tudo o que é específico de um dataset vive em um **perfil de referência**, nunca no harness. `StateEstimationReferenceProfile` reúne a identidade do perfil, o papel declarado do arquivo de referência, o **hash do conteúdo** desse arquivo, os limiares de movimento e o protocolo de comparação, e é lido de um JSON (`decode_reference_profile()`, esquema `contextmap.state_estimation_reference_profile/1`).
 
-`declare_reference(trajectory, source_file=...)` só devolve uma `ReferenceTrajectory` quando o SHA-256 do arquivo é o que o perfil declara: um arquivo não é a referência pelo nome, e uma cópia editada é recusada. A identidade do perfil, o caminho e o hash da fonte entram no relatório (`reference`), e `compare_state_estimation_reports` recusa comparar relatórios medidos contra arquivos de referência diferentes.
+`declare_reference(trajectory, source_file=...)` só devolve uma `ReferenceTrajectory` quando duas coisas valem sobre **os mesmos bytes**, lidos uma única vez:
+
+1. o SHA-256 do arquivo é o que o perfil declara: um arquivo não é a referência pelo nome, e uma cópia editada é recusada;
+2. **cada pose da trajetória é uma amostra desse arquivo**: o mesmo timestamp (em nanossegundos exatos) e posição e rotação iguais a menos de 1e-9 m e 1e-9 rad, ou seja, só o arredondamento de ponto flutuante (um quaternion que o backend renormalizou continua a mesma rotação). O arquivo é lido como texto TUM (`t x y z qx qy qz qw`: segundos decimais, metros, quaternion `(x, y, z, w)`; linhas em branco e `#` são ignoradas); uma linha que não é uma pose, ou o texto que não é UTF-8, é recusado com o número da linha.
+
+Sem a segunda condição o relatório poderia afirmar o hash de uma fonte enquanto ATE e RPE eram calculados contra outra trajetória (achado da revisão da PR #419). Uma trajetória que cobre só uma **janela** do arquivo (a seleção da sequência) é aceita; uma pose que o arquivo não tem, ou que difere dele, não é. A identidade do perfil, o caminho e o hash da fonte entram no relatório (`reference`), e `compare_state_estimation_reports` recusa comparar relatórios medidos contra arquivos de referência diferentes.
+
+Uma `ReferenceTrajectory` construída diretamente (sem o perfil) não passa por essa prova: o hash que ela carrega é uma afirmação de quem a construiu. Só a declaração pelo perfil vincula a fonte às poses; a comparação de sensibilidade com a referência deslocada no tempo, por exemplo, constrói a referência à mão justamente porque essas poses deixaram de ser amostras do arquivo.
 
 ### Limiares vêm do perfil, nunca do código
 
@@ -95,7 +102,7 @@ O relatório registra: versão do avaliador (`evaluator_version`, incrementada q
 
 ## Testes e execução real
 
-A suíte determinística (`tests/evaluation/test_state_estimation_evaluation.py` e `test_state_estimation_reference_profile.py`, `tests/state_estimation/test_state_estimation_backend_evaluation.py`, que avalia e compara os backends reais `ExternalPose` e FAST-LIO com um processo substituto, mais os testes de contrato, lookup, preflight e artifact de `state_estimation`) roda em CI sem dados nem rede, com trajetórias sintéticas de resposta conhecida: offset constante que vira o ATE exato sem alinhamento, offset rígido removido pelo `SE3`, deriva de escala visível no RPE (ancorado no tempo, com poses de referência ausentes), cadeias de transform com valores calculados à mão, o hash do arquivo de referência e a comparação de um backend sem calibração com um que a consome. Um teste com dados reais é executado somente quando o dataset existe (variável `CONTEXTMAP_CORRIDOR02_DIR` ou `datasets/corridor-02`), porque o dataset não é versionado.
+A suíte determinística (`tests/evaluation/test_state_estimation_evaluation.py` e `test_state_estimation_reference_profile.py`, `tests/state_estimation/test_state_estimation_backend_evaluation.py`, que avalia e compara os backends reais `ExternalPose` e FAST-LIO com um processo substituto, mais os testes de contrato, lookup, preflight e artifact de `state_estimation`) roda em CI sem dados nem rede, com trajetórias sintéticas de resposta conhecida: offset constante que vira o ATE exato sem alinhamento, offset rígido removido pelo `SE3`, deriva de escala visível no RPE (ancorado no tempo, com poses de referência ausentes), cadeias de transform com valores calculados à mão, o hash do arquivo de referência, o vínculo entre esse arquivo e as poses da referência (uma pose deslocada, uma sem amostra no arquivo, uma janela válida, linhas inválidas) e a comparação de um backend sem calibração com um que a consome. Um teste com dados reais é executado somente quando o dataset existe (variável `CONTEXTMAP_CORRIDOR02_DIR` ou `datasets/corridor-02`), porque o dataset não é versionado; ele declara a trajetória de todas as 5522 poses de `corridor-02-gt.txt` e recusa a mesma trajetória com uma única pose deslocada em 1 mm.
 
 ## Relatório-baseline `ExternalPose` (`corridor-02`)
 
@@ -109,7 +116,7 @@ Esse baseline foi medido antes do perfil de referência existir, por isso não d
 
 ## Relatório FAST-LIO (`corridor-02`, execução real)
 
-**Real**, não de contrato: a trajetória do FAST-LIO da execução descrita em [backends de State Estimation](../../state_estimation/docs/backends.md) (imagem `sha256:670973462caa…`, FAST-LIO `7cc4175d…`, 888 poses), avaliada contra o `corridor-02-gt.txt` sob o perfil `reference-profile:corridor-02@1`, sobre a janela de 90 s da seleção `sha256:dc641b34…` (85,2 m de percurso, 573° de guinada acumulada). Os relatórios ficam em `workspace/corridor-02/validation-state-estimation-20260921/evaluation/`.
+**Real**, não de contrato: a trajetória do FAST-LIO da execução descrita em [backends de State Estimation](../../state_estimation/docs/backends.md) (imagem local `sha256:670973462caa…`, base `osrf/ros@sha256:7dbfb957…`, FAST-LIO `7cc4175d…`, `fastlio_mapping` `sha256:2bfa3f97…`, 888 poses; a equivalência da imagem com a receita fixada e o que continua não fixado estão em [backends](../../state_estimation/docs/backends.md)), avaliada contra o `corridor-02-gt.txt` sob o perfil `reference-profile:corridor-02@1`, sobre a janela de 90 s da seleção `sha256:dc641b34…` (85,2 m de percurso, 573° de guinada acumulada). Os relatórios ficam em `workspace/corridor-02/validation-state-estimation-20260921/evaluation/`.
 
 | Medida | Resultado |
 | --- | --- |

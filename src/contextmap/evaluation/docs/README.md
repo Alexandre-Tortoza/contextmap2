@@ -52,7 +52,7 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
 - `MotionThresholds` — limiares de movimento fornecidos pelo perfil de referência; não há valores padrão.
 - `ReferenceTrajectory`/`ReferenceRole`/`ReferenceComparisonConfig`/`AlignmentMethod` — referência com papel declarado e protocolo de comparação explícito (associação, alinhamento, ATE, RPE).
-- `StateEstimationReferenceProfile`/`decode_reference_profile()`/`encode_reference_profile()` — perfil de referência de um dataset: papel declarado da referência, amarrado ao hash do arquivo, limiares de movimento e protocolo de comparação. O perfil do `corridor-02` está em `profiles/`.
+- `StateEstimationReferenceProfile`/`decode_reference_profile()`/`encode_reference_profile()` — perfil de referência de um dataset: papel declarado da referência, amarrado ao hash do arquivo (e `declare_reference()` só aceita uma trajetória cujas poses são amostras desse arquivo), limiares de movimento e protocolo de comparação. O perfil do `corridor-02` está em `profiles/`.
 - `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
 - `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, referência ou protocolo, ou duas calibrações diferentes (um backend que não consome calibração não conflita com um que consome).
 - `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
