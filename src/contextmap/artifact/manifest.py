@@ -367,7 +367,7 @@ class ContextMapArtifactManifest:
         _require_digest(self.content_identity, "content_identity")
         _require_optional_text(self.code_version, "code_version")
         if self.configuration_fingerprint is not None:
-            _require_digest(self.configuration_fingerprint, "configuration_fingerprint")
+            _require_text(self.configuration_fingerprint, "configuration_fingerprint")
         _require_count(self.entity_count, "entity_count")
         _require_count(self.relation_count, "relation_count")
         _require_write_time(self.written_at)
