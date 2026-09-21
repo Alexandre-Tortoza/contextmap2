@@ -89,7 +89,7 @@ Há dois padrões, ambos declarativos e validados por contrato:
 
 `run_plan(execution, executors, ...)` roda o preflight e bloqueia tudo se houver problema. Cada estágio recebe um `StageRequest` com os artifacts exatos que o alimentam (reutilizados ou recém-produzidos) e a configuração de seus componentes, e devolve um `ArtifactRef`. A primeira falha, ou uma saída que contradiz o contrato declarado, levanta `StageExecutionError` com os estágios já concluídos: nada posterior roda e nada é substituído.
 
-O `ExecutionRecord` guarda a ordem, as entradas e saídas exatas de cada estágio e os artifacts reutilizados.
+O `ExecutionRecord` guarda a ordem, as entradas e saídas exatas de cada estágio, a decisão de reuso de cada um (quando há uma `ReusePolicy`) e os artifacts reutilizados.
 
 ## Persistência
 
@@ -103,4 +103,4 @@ O DAG roda em CI com executores leves (sem modelo nem GPU): a ordem, as entradas
 
 - **Não há executores reais das capabilities.** A milestone entrega o runner, o contrato do executor e a topologia; a execução real ponta a ponta exige as políticas de Geometric Mapping e Sensor Association e o vínculo de cada artifact, e pertence à validação end-to-end (#177). O canônico completo resolve e é validado, mas o preflight o bloqueia enquanto as capabilities de #12–#15 não existirem: o caminho suportado é um subgrafo (`targets=[...]`).
 - **`FeatureResolutionEnhancement` não é um estágio de topo.** No canônico ele é interno ao preset de Visual Perception; o padrão de inserção acima é o mecanismo, exercitado com estágios de teste.
-- **Reuse por identidade** (hash de conteúdo, config, versões), **seleção de runs e lineage** e **lifecycle de falha/retomada** são as issues seguintes da milestone; aqui o reuso é o artifact fornecido explicitamente.
+- **Seleção de runs e lineage** e **lifecycle de falha/retomada** são as issues seguintes da milestone. O reuso por identidade está em [`reuse.md`](reuse.md); sem uma `ReusePolicy`, o reuso é apenas o artifact fornecido explicitamente.

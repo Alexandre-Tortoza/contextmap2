@@ -6,6 +6,7 @@ domain rule stay inside their capabilities. See ``docs/runtime-composition.md`` 
 ``src/contextmap/runtime/docs/README.md``.
 """
 
+from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
     CANONICAL_PROFILE_ID,
     BackendSpec,
@@ -53,11 +54,11 @@ from contextmap.runtime.errors import (
     PipelineError,
     PlanDocumentError,
     PreflightError,
+    ReuseError,
     StageExecutionError,
     StageUnavailableError,
 )
 from contextmap.runtime.pipeline import (
-    ArtifactRef,
     ExecutionPlan,
     ExecutionRecord,
     PipelinePlan,
@@ -67,12 +68,21 @@ from contextmap.runtime.pipeline import (
     StageExecutor,
     StageRecord,
     StageRequest,
+    predict_reuse,
     preflight,
     read_plan_document,
     resolve_plan,
     run_plan,
     write_execution_record,
     write_plan,
+)
+from contextmap.runtime.reuse import (
+    ArtifactStore,
+    FileArtifactStore,
+    ReuseDecision,
+    ReuseKey,
+    ReusePolicy,
+    StoreLookup,
 )
 
 __all__ = [
@@ -81,6 +91,7 @@ __all__ = [
     "DEBUG_LEVELS",
     "EFFECTIVE_CONFIG_FILENAME",
     "ArtifactRef",
+    "ArtifactStore",
     "BackendConfigurationError",
     "BackendRuntimeMissingError",
     "BackendSpec",
@@ -96,6 +107,7 @@ __all__ = [
     "ExecutionPlan",
     "ExecutionRecord",
     "FeatureBuildScope",
+    "FileArtifactStore",
     "InputsConfig",
     "Interception",
     "PipelineConfig",
@@ -109,6 +121,10 @@ __all__ = [
     "PreflightReport",
     "ResolvedSecrets",
     "ResourcesConfig",
+    "ReuseDecision",
+    "ReuseError",
+    "ReuseKey",
+    "ReusePolicy",
     "RuntimeConfig",
     "RuntimePreset",
     "RuntimeProvider",
@@ -119,11 +135,13 @@ __all__ = [
     "StageRecord",
     "StageRequest",
     "StageUnavailableError",
+    "StoreLookup",
     "check_availability",
     "check_component_availability",
     "check_selection",
     "compose",
     "parse_override",
+    "predict_reuse",
     "preflight",
     "read_effective_config",
     "read_plan_document",

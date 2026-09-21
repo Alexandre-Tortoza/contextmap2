@@ -33,7 +33,9 @@ Existe também a **composition root** (issue #162): `compose()` constrói, a par
 
 Existe ainda o **DAG de estágios** (issue #163): `resolve_plan()` deriva da configuração uma topologia determinística e inspecionável, `plan.scope()` escolhe um pipeline completo ou um subgrafo que reutiliza artifacts fornecidos, `preflight()` valida tudo sem carregar modelo, e `run_plan()` executa em ordem de dependência com executores intercambiáveis (incluindo estágios falsos em CI). Detalhes em [`pipeline.md`](pipeline.md).
 
-O reuso por identidade, a seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
+Existe também o **reuso por identidade** (issue #164): a chave de reuso combina a configuração própria do estágio, o hash de conteúdo das entradas, a identidade do código e identidades extras; o índice guarda só artifacts concluídos e re-validados; e cada estágio registra se foi reutilizado (com o artifact exato) ou recomputado (com o motivo). Detalhes em [`reuse.md`](reuse.md).
+
+A seleção de runs, a CLI e o lifecycle são as demais issues da milestone #17 e ainda não existem. Configuração em [`configuration.md`](configuration.md).
 
 ## Contratos públicos
 
@@ -53,7 +55,8 @@ O reuso por identidade, a seleção de runs, a CLI e o lifecycle são as demais 
 - `ExecutionPlan`, `preflight()`, `PreflightReport` — o escopo de uma execução e a validação antes dela.
 - `run_plan()`, `StageExecutor`, `StageRequest`, `ArtifactRef`, `ExecutionRecord`, `StageRecord` — a execução e o registro exato de entradas e saídas.
 - `write_plan()`, `write_execution_record()`, `read_plan_document()` — a persistência da topologia e da execução.
-- `PipelineError`, `PreflightError`, `PlanDocumentError`, `StageExecutionError` — falhas do DAG, todas explícitas.
+- `ReusePolicy`, `ReuseKey`, `ReuseDecision`, `ArtifactStore`, `FileArtifactStore`, `StoreLookup`, `predict_reuse()` — o reuso por identidade e a previsão do que seria reutilizado.
+- `PipelineError`, `PreflightError`, `PlanDocumentError`, `StageExecutionError`, `ReuseError` — falhas do DAG, todas explícitas.
 
 ## Módulos consumidos
 
