@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,13 +9,22 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    CANONICAL_PRESET_V1,
     BackendProvenance,
     BoundingBox2D,
+    DenseFeatureDiagnostic,
+    DenseFeatureMap,
+    DenseFeatureSampling,
+    FeatureDebugLevel,
+    FeatureEventStatus,
+    FeatureExtractionDiagnostic,
     FeatureExtractor,
     FeatureScope,
     PerceptionResult,
     PerceptionResultId,
     PerceptionRunId,
+    PerceptionRunReader,
+    PerceptionRunWriter,
     PreparedImage,
     Region2D,
     RegionId,
@@ -84,6 +94,7 @@ def _backend(
     output: DinoV3NativeOutput | None = None,
     l2_normalize: bool = False,
     feature_stage_id: str = "dense_feature_extraction",
+    source_artifact_id: str = "perception-run-0001",
 ) -> tuple[DinoV3DenseFeatureBackend, FakeDinoV3Runtime, RecordingPayloadSink]:
     runtime = FakeDinoV3Runtime(output or _native_output())
     sink = RecordingPayloadSink()
@@ -100,7 +111,7 @@ def _backend(
         ),
         run_id=PerceptionRunId("run-0001"),
         feature_stage_id=feature_stage_id,
-        source_artifact_id="perception-run-0001",
+        source_artifact_id=source_artifact_id,
         payload_sink=sink,
         runtime=runtime,
     )
@@ -338,3 +349,109 @@ def test_missing_sdk_dependencies_are_explicit(
 
     with pytest.raises(DinoV3DependencyError, match="torch, transformers, and Pillow"):
         runtime.infer(_image())
+
+
+def test_persisted_required_metrics_rebuild_the_dense_map_and_reproduce_pooling(
+    tmp_path: Path,
+) -> None:
+    """Regression from the real DINOv3 run: the mapping must not depend on debug or assumptions."""
+    # O dono da feature é o run que a persiste: o writer exige source_artifact_id == run_id.
+    backend, _, sink = _backend(source_artifact_id="run-0001")
+    extraction = backend.extract_dense(_image())
+    feature = extraction.dense_map.feature
+    sampling = extraction.dense_map.sampling
+    writer = PerceptionRunWriter(
+        workspace_root=tmp_path,
+        sequence_name="corridor",
+        run_id=PerceptionRunId("run-0001"),
+        run_index=1,
+        sequence_artifact_id="corridor-artifact",
+        selection_id="selection-0001",
+        enabled_capabilities=frozenset({"feature_extractor"}),
+        pipeline_preset=CANONICAL_PRESET_V1,
+        configuration_digest="sha256:pipeline",
+        selection_label="frame-0001",
+        profile_label="dinov3",
+        feature_debug_level=FeatureDebugLevel.NONE,
+    )
+    writer.add_feature_payload(feature, _image().source_observation_id, extraction.array)
+    writer.add_result(
+        PerceptionResult(
+            result_id=PerceptionResultId("run-0001--frame-0001"),
+            source_observation_id=_image().source_observation_id,
+            run_id=PerceptionRunId("run-0001"),
+            sequence_artifact_id="corridor-artifact",
+            created_at="2026-01-01T00:00:00+00:00",
+            features=(feature,),
+        )
+    )
+    writer.add_feature_diagnostic(
+        FeatureExtractionDiagnostic(
+            event_id="dense-frame-0001",
+            source_observation_id=_image().source_observation_id,
+            source_prepared_image_reference=_image().payload_reference,
+            source_image_width=sampling.source_image_width,
+            source_image_height=sampling.source_image_height,
+            stage_id="dense_feature_extraction",
+            status=FeatureEventStatus.SUCCEEDED,
+            backend=feature.provenance,
+            feature_id=feature.feature_id,
+            scope=FeatureScope.DENSE,
+            embedding_space=extraction.embedding_space,
+            output_shape=feature.shape,
+            dtype=feature.dtype,
+            normalization=feature.normalization,
+            payload_reference=feature.payload_reference,
+            dense=DenseFeatureDiagnostic(
+                source_artifact_id=extraction.dense_map.source_artifact_id,
+                grid_width=sampling.grid_width,
+                grid_height=sampling.grid_height,
+                origin_x=sampling.origin_x,
+                origin_y=sampling.origin_y,
+                stride_x=sampling.stride_x,
+                stride_y=sampling.stride_y,
+                support_width=sampling.support_width,
+                support_height=sampling.support_height,
+                coordinate_transform_id=sampling.coordinate_transform_id,
+            ),
+        )
+    )
+    writer.finalize()
+
+    run_dir = tmp_path / "runs" / "visual-perception" / "corridor" / "run-0001__frame-0001__dinov3"
+    assert not (run_dir / "debug").exists()
+    record = json.loads(
+        (run_dir / "metrics" / "feature-extraction.jsonl").read_text(encoding="utf-8")
+    )
+    persisted = record["dense"]
+    rebuilt_sampling = DenseFeatureSampling(
+        **{key: persisted[key] for key in DenseFeatureSampling.__dataclass_fields__}
+    )
+    reader = PerceptionRunReader(run_dir)
+    stored = reader.list_results()[0].features[0]
+    rebuilt_map = DenseFeatureMap(
+        feature=stored,
+        sampling=rebuilt_sampling,
+        source_artifact_id=persisted["source_artifact_id"],
+    )
+    region = Region2D(
+        region_id=RegionId("region-0001"),
+        bounding_box=BoundingBox2D(x=2, y=1, width=8, height=6),
+        provenance=BackendProvenance(
+            backend_id="fake-region",
+            capability="region_discovery",
+            provider="fake",
+            model="fake",
+            version="1",
+        ),
+    )
+
+    loaded = reader.feature_store().load(_image().source_observation_id, stored.feature_id)
+    from_artifact = pool_region_feature(loaded, dense_map=rebuilt_map, region=region)
+    from_memory = pool_region_feature(
+        extraction.array, dense_map=extraction.dense_map, region=region
+    )
+
+    assert rebuilt_sampling == sampling
+    np.testing.assert_array_equal(from_artifact.vector, from_memory.vector)
+    assert sink.calls[0][0] == feature

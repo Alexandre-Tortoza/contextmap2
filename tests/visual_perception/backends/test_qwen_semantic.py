@@ -38,17 +38,17 @@ from contextmap.visual_perception.backends.qwen import (
 
 class _FakeQwenRuntime:
     def __init__(self, confidence: float | None = None) -> None:
-        self.calls: list[tuple[tuple[str, ...], str, QwenSemanticConfig]] = []
+        self.calls: list[tuple[tuple[SemanticVisualView, ...], str, QwenSemanticConfig]] = []
         self.confidence = confidence
 
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: QwenSemanticConfig,
     ) -> QwenGenerationResponse:
-        self.calls.append((visual_payload_references, prompt, config))
+        self.calls.append((visual_views, prompt, config))
         return QwenGenerationResponse(
             text=json.dumps(
                 {
@@ -110,15 +110,18 @@ def test_qwen_maps_request_and_returns_canonical_unscored_claim() -> None:
         temperature=0.0,
     )
     adapter = QwenSemanticInterpreter(config=config, runtime=runtime)
+    request = _request(adapter)
 
-    execution = adapter.interpret(_request(adapter))
+    execution = adapter.interpret(request)
 
     assert isinstance(adapter, SemanticInterpreter)
     assert execution.parsed.claims[0].hypothesis == "wooden pallet"
     assert execution.parsed.claims[0].confidence is None
     assert execution.diagnostics.input_tokens == 120
     assert execution.effective_configuration["quantization"] == "4bit"
-    assert runtime.calls[0][0] == ("outputs/semantic-views/region-0007.jpg",)
+    # O runtime recebe a identidade completa da view (incluindo o sha256), não só o caminho.
+    assert runtime.calls[0][0] == request.visual_views
+    assert runtime.calls[0][0][0].sha256 == hashlib.sha256(_VIEW_PAYLOAD).hexdigest()
     assert "region/v1" in runtime.calls[0][1]
     assert (
         adapter.backend_provenance().configuration_fingerprint == adapter.configuration_fingerprint

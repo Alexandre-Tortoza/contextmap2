@@ -24,16 +24,18 @@ Uma entidade **não é** um `Region2D` cru, uma `SpatialObservation`, um `Fusion
 
 ## Estado implementado
 
+Este boundary já está integrado na `dev` após Semantic Fusion. A implementação cobre contratos, materialização, persistência e validação determinística; a validação atual ainda usa fixtures sintéticos e não deve ser interpretada como evidência de qualidade semântica em dados reais.
+
 Existem os **contratos** do envelope: `Entity`, `EntityReference`, `EntitySet` e `EntityProvenance`, as regras de **escopo de identidade** e a serialização JSON com revalidação (`serialization.py`). Os quatro componentes de uma entidade:
 
 - `EntityGeometry`: o suporte 3D como `GeometryReference` (a autoridade) e os resumos derivados, no frame do mapa: centroide, limites, extensão, estatísticas, orientação opcional e diagnósticos, com a proveniência de como foram calculados. `summarize_geometry`, `resolve_geometry` e `verify_geometry_summary` constroem, resolvem e reverificam esses resumos ([`geometry.md`](geometry.md));
 - `EntitySemanticState`: todas as hipóteses (`EntityHypothesis`) com a evidência exata e os sinais tipados de cada claim, atributos com evidência e derivação, os registros de incerteza, o estado de ambiguidade e, só quando justificada, uma hipótese primária. `semantic_state_from_fused_evidence` mapeia `FusedEvidence` para esse estado sem descartar nada ([`semantic-state.md`](semantic-state.md));
-- `EntityEvidenceLinks`: a evidência fundida de origem (com identidade, versão e digest do artifact), as observações espaciais e físicas que contribuíram, as features visuais e as representações 3D, só por referência. `validate_entity_evidence` checa a integridade das referências e `trace_entity_evidence` / `trace_geometry_sources` percorrem a proveniência ([`evidence.md`](evidence.md));
+- `EntityEvidenceLinks`: a evidência fundida de origem (com identidade, versão, digest e sequência canônica do artifact), as observações espaciais e físicas que contribuíram, as features visuais e as representações 3D, só por referência. Uma feature visual é identificada pela tripla `(perception_run_id, perception_result_id, feature_id)`, evitando colisão entre runs que reutilizam ids locais. `validate_entity_evidence` checa a integridade das referências e `trace_entity_evidence` / `trace_geometry_sources` percorrem a proveniência ([`evidence.md`](evidence.md));
 - `EntityTemporalState`: `first_seen`, `last_seen`, as contagens de frames físicos e de resultados de inferência (sempre distintas), o histórico de observações e um ciclo de vida conservador. `summarize_temporal_state` deriva o estado da evidência fundida sem fabricar nenhum instante ([`temporal-state.md`](temporal-state.md)).
 
 A **materialização** converte a evidência fundida selecionada em entidades sob uma política baseline versionada, um suporte, uma entidade (`one-support-one-entity-v1`), com identidade determinística local ao artifact e rejeição explícita de candidatos inválidos, **sem nenhuma resolução entre suportes** ([`materialization.md`](materialization.md)).
 
-O **`SemanticMappingRunArtifact`** persiste as entidades, os índices, a linhagem, as métricas e os candidatos rejeitados de forma imutável e atômica, e reabre sem runtimes de percepção, fusão ou modelo ([`artifact.md`](artifact.md)). A validação das invariantes, da preservação de evidência e da reprodutibilidade é feita por `evaluate_semantic_mapping` em `contextmap.evaluation` ([validação](../../evaluation/docs/semantic_mapping.md)).
+O **`SemanticMappingRunArtifact`** persiste as entidades, os índices, a linhagem, as métricas e os candidatos rejeitados de forma imutável e atômica, e reabre sem runtimes de percepção, fusão ou modelo ([`artifact.md`](artifact.md)). O manifest separa `schema_version` de `entity_schema_version`, registra `code_version`/`code_digest` e preserva a sequência na lineage. A validação das invariantes, da preservação de evidência e da reprodutibilidade é feita por `evaluate_semantic_mapping` em `contextmap.evaluation` ([validação](../../evaluation/docs/semantic_mapping.md)).
 
 ## Escopo de identidade
 
@@ -43,11 +45,11 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 
 - `Entity`, `EntityId`, `SemanticMapId`, `EntityProvenance` — o registro persistente e sua identidade local ao mapa.
 - `EntityReference` — o handle estável `(semantic_map_id, entity_id)`.
-- `encode_entity`, `decode_entity`, `encode_entity_reference`, `decode_entity_reference` — o codec JSON canônico, que revalida todas as invariantes na decodificação.
+- `encode_entity`, `decode_entity`, `encode_entity_reference`, `decode_entity_reference` — o codec JSON canônico, que revalida todas as invariantes na decodificação; `ENTITY_SCHEMA_VERSION`, a versão do registro canônico da entidade (distinta da versão do schema do artifact).
 - `EntitySet`, `UnknownEntityError`, `ForeignEntityReferenceError` — as entidades de um mapa, com resolução de referência que distingue "outro mapa" de "entidade inexistente".
 - `EntityGeometry`, `SupportStatistics`, `SpatialSummaryProvenance`, `EntityOrientation`, `GeometryDiagnostic`, `GeometryDiagnosticKind` — o suporte 3D e seus resumos derivados.
-- `GeometrySummaryPolicy`, `OrientationPolicy`, `summarize_geometry`, `resolve_geometry`, `verify_geometry_summary`, `geometry_set_digest`, `GEOMETRY_SUMMARY_ALGORITHM_ID`, `EmptyGeometrySupportError`, `GeometryResolutionError` — construção, resolução e verificação da geometria.
-- `EntitySemanticState`, `EntityHypothesis`, `EntityHypothesisRef`, `EntityAttribute`, `EntityUncertainty`, `AmbiguityState`, `AttributeOrigin`, `SemanticStateProvenance` — o estado semântico.
+- `GeometrySummaryPolicy`, `OrientationPolicy`, `summarize_geometry`, `resolve_geometry`, `verify_geometry_summary`, `geometry_set_digest`, `GEOMETRY_SUMMARY_ALGORITHM_ID`, `DEFAULT_MAX_CONNECTIVITY_POINTS`, `EmptyGeometrySupportError`, `GeometryResolutionError` — construção, resolução e verificação da geometria.
+- `EntitySemanticState`, `EntityHypothesis`, `EntityHypothesisRef`, `EntityAttribute`, `EntityUncertainty`, `AmbiguityState`, `AttributeOrigin`, `ExternalKnowledgeSource`, `SemanticStateProvenance` — o estado semântico.
 - `semantic_state_from_fused_evidence`, `derive_ambiguity_state`, `SEMANTIC_STATE_MAPPING_RULE_ID`, `PRIMARY_HYPOTHESIS_POLICY_ID`, `CLASS_ATTRIBUTE_DERIVATION_ID` — o mapeamento de `FusedEvidence` e suas regras versionadas.
 - `EntityEvidenceLinks`, `FusedEvidenceRef`, `EntityFeatureRef`, `evidence_links_from_fused_evidence`, `feature_refs_of`, `fusion_artifact_digest` — os vínculos de evidência.
 - `validate_entity_evidence`, `EvidenceIntegrityIssue`, `EvidenceIntegrityKind`, `FusedEvidenceSource`, `trace_entity_evidence`, `EntityEvidenceTrace`, `ContributionTrace`, `EvidenceTraceError`, `trace_geometry_sources`, `GeometrySourceTrace` — integridade de referências e travessia da proveniência.

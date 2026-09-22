@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from contextmap.evaluation._persistence import write_immutable_json
-from contextmap.evaluation._validation import require_text, require_unique
+from contextmap.evaluation._validation import require_sha256, require_text, require_unique
 from contextmap.evaluation.metrics import (
     EvaluationStage,
     MetricDefinition,
@@ -137,16 +137,27 @@ class EvaluatorIdentity:
 
 @dataclass(frozen=True, kw_only=True)
 class ArtifactIdentity:
-    """An artifact the evaluation read: a run, a map, a sequence, a reference."""
+    """An artifact the evaluation read: a run, a map, a sequence, a reference.
+
+    Attributes:
+        kind: What the artifact is (run, map, sequence, reference...).
+        artifact_id: Identity of the artifact.
+        digest: ``sha256:<64 hex digits>`` of the immutable artifact, or ``None``
+            when the artifact was not pinned by content. A present digest is
+            taken as proof of identity by the topology and the experiment
+            runner, so it is validated here rather than accepted as free text.
+    """
 
     kind: str
     artifact_id: str
     digest: str | None
 
     def __post_init__(self) -> None:
-        """Require what identifies the artifact."""
+        """Require what identifies the artifact, and a well-formed digest if present."""
         require_text("artifact kind", self.kind)
         require_text("artifact_id", self.artifact_id)
+        if self.digest is not None:
+            require_sha256("artifact digest", self.digest)
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
