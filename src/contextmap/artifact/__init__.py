@@ -51,6 +51,7 @@ from contextmap.artifact.references import (
     UpstreamRecordRef,
 )
 from contextmap.artifact.schema_identity import describe_schema, schema_fingerprint
+from contextmap.artifact.serialization.assembly import assemble_context_map
 from contextmap.artifact.serialization.bundle import (
     BundleManifest,
     ClosurePolicy,
@@ -171,6 +172,7 @@ __all__ = [
     "ValidationReport",
     "ValidationStatus",
     "artifact_digest",
+    "assemble_context_map",
     "context_map_from_record",
     "context_map_to_record",
     "describe_schema",
