@@ -38,7 +38,6 @@ from contextmap.visual_perception.models import (
 )
 from contextmap.visual_perception.region_models import (
     CoordinateConvention,
-    InlineMask,
     RegionProvenance,
 )
 
@@ -71,7 +70,20 @@ def decode_bounding_box(record: dict[str, Any]) -> BoundingBox2D:
 
 
 def encode_region(region: Region2D) -> dict[str, Any]:
-    """Encode a :class:`Region2D` into a JSON-serializable dict."""
+    """Encode a :class:`Region2D` into a JSON-serializable dict.
+
+    A region's mask pixels, when it has one, are never inlined here —
+    only ``mask_reference`` is encoded (#378). A full-frame mask used to
+    cost about 0.92 MB of JSON per region regardless of how small the
+    region's own bounding box was; a run's actual pixel payload, when
+    persisted, lives in a compact, lazily-loaded store instead (see
+    :mod:`contextmap.visual_perception.mask_store` and
+    :meth:`~contextmap.visual_perception.run_artifact.PerceptionRunWriter.finalize`).
+    A ``Region2D`` built and encoded directly (no writer involved, as in
+    this module's own tests) simply keeps whatever ``mask_reference`` it
+    was given, which is ``None`` unless something else persisted the
+    mask and attached its reference.
+    """
     return {
         "region_id": str(region.region_id),
         "bounding_box": encode_bounding_box(region.bounding_box),
@@ -88,15 +100,20 @@ def encode_region(region: Region2D) -> dict[str, Any]:
         "area_pixels": region.area_pixels,
         "contributor_candidate_ids": list(region.contributor_candidate_ids),
         "discovery_provenance": [item.to_dict() for item in region.discovery_provenance],
-        "mask": None if region.mask is None else region.mask.to_dict(),
         "coordinate_convention": region.coordinate_convention.value,
     }
 
 
 def decode_region(record: dict[str, Any]) -> Region2D:
-    """Decode a :class:`Region2D` from :func:`encode_region`'s output."""
+    """Decode a :class:`Region2D` from :func:`encode_region`'s output.
+
+    The decoded region's ``mask`` is always ``None``: pixel data is
+    never inlined in the encoded record (#378). A caller that needs the
+    actual pixels for a region whose ``mask_reference`` is set loads
+    them lazily and hash-verified through
+    :class:`~contextmap.visual_perception.mask_store.MaskStoreReader`.
+    """
     source_observation_id = record.get("source_observation_id")
-    raw_mask = record.get("mask")
     return Region2D(
         region_id=RegionId(record["region_id"]),
         bounding_box=decode_bounding_box(record["bounding_box"]),
@@ -115,7 +132,6 @@ def decode_region(record: dict[str, Any]) -> Region2D:
         discovery_provenance=tuple(
             RegionProvenance.from_dict(item) for item in record.get("discovery_provenance", ())
         ),
-        mask=None if raw_mask is None else InlineMask.from_dict(raw_mask),
         coordinate_convention=CoordinateConvention(
             record.get("coordinate_convention", CoordinateConvention.PIXEL_XY_TOP_LEFT.value)
         ),

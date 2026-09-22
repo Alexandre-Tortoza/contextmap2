@@ -48,6 +48,7 @@ from contextmap.visual_perception import (
     render_semantic_prompt,
     write_semantic_audit,
 )
+from contextmap.visual_perception.region_models import InlineMask
 
 _PROVENANCE = BackendProvenance(
     backend_id="fake", capability="region_discovery", provider="fake", model="fake", version="0.1"
@@ -412,7 +413,7 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
     )
     manifest = writer.finalize()
 
-    assert manifest.schema_version == "0.4.0"
+    assert manifest.schema_version == "0.5.0"
     run_dir = _run_dir(tmp_path)
     assert provenance.raw_response_reference is not None
     raw_path = run_dir / provenance.raw_response_reference
@@ -785,3 +786,61 @@ def test_a_run_with_no_feature_payloads_has_an_empty_feature_store(tmp_path: Pat
 
     reader = PerceptionRunReader(_run_dir(tmp_path))
     assert reader.feature_store().feature_keys() == ()
+
+
+def _full_frame_mask(width: int = 640, height: int = 480) -> InlineMask:
+    data = tuple((x // 40 + y // 40) % 2 == 0 for y in range(height) for x in range(width))
+    return InlineMask(width=width, height=height, data=data)
+
+
+def test_full_frame_mask_is_persisted_compactly_and_lazily_loadable(tmp_path: Path) -> None:
+    """Regression test for #378: masks move out of results.jsonl into a compact lazy store."""
+    mask = _full_frame_mask()
+    region = Region2D(
+        region_id=RegionId("region-0001"),
+        bounding_box=BoundingBox2D(x=0, y=0, width=640, height=480),
+        provenance=_PROVENANCE,
+        source_observation_id=SourceObservationId("frame-0001"),
+        image_width=640,
+        image_height=480,
+        area_pixels=float(sum(mask.data)),
+        mask=mask,
+    )
+    result = PerceptionResult(
+        result_id=PerceptionResultId("run-0001--frame-0001"),
+        source_observation_id=SourceObservationId("frame-0001"),
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="corridor-02-a1b2c3",
+        created_at="2026-01-01T00:00:00+00:00",
+        regions=(region,),
+    )
+
+    writer = _write_run(tmp_path)
+    writer.add_result(result)
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    results_path = run_dir / "outputs" / "results.jsonl"
+    # Was ~923 KB for a single full-frame mask before the fix (#378).
+    assert results_path.stat().st_size < 5_000
+
+    reader = PerceptionRunReader(run_dir)
+    assert reader.verify_integrity() == []
+    reopened_region = reader.list_results()[0].regions[0]
+    assert reopened_region.mask is None
+    assert reopened_region.mask_reference is not None
+    assert reopened_region.mask_reference.startswith("outputs/masks/")
+
+    loaded_mask = reader.mask_store().load(
+        SourceObservationId("frame-0001"), RegionId("region-0001")
+    )
+    assert loaded_mask == mask
+
+
+def test_a_run_with_no_masks_has_an_empty_mask_store(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.mask_store().region_keys() == ()

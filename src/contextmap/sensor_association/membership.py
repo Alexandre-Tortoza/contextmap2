@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from contextmap.ingestion import SequenceArtifactId
+from contextmap.ingestion import SequenceArtifactId, SourceObservationId
 from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.frame_projection import FrameProjection
 from contextmap.sensor_association.models import (
@@ -36,7 +36,7 @@ from contextmap.sensor_association.models import (
     spatial_observation_id_for,
 )
 from contextmap.sensor_association.visibility import VisibilityResolution
-from contextmap.visual_perception import FeatureScope, PerceptionResult, RegionId
+from contextmap.visual_perception import FeatureScope, InlineMask, PerceptionResult, RegionId
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -57,12 +57,33 @@ class SkipReason(Enum):
     Attributes:
         REJECTED: The candidate was rejected by normalization, so it is not part of the
             frozen canonical region set.
-        NO_INLINE_MASK: The region has no inline mask (box-only, or a mask kept by
-            reference), so mask membership cannot be evaluated.
+        NO_INLINE_MASK: The region has no mask at all: a box-only region, or a region
+            whose mask was persisted by reference (#378) without a ``mask_loader``
+            supplied to :func:`associate_regions` to resolve it.
     """
 
     REJECTED = "rejected"
     NO_INLINE_MASK = "no_inline_mask"
+
+
+class RegionMaskLoader(Protocol):
+    """Adapter boundary for resolving a frozen region's mask kept by reference.
+
+    A region's mask is no longer always inlined in its
+    :class:`~contextmap.visual_perception.models.Region2D.mask` field
+    once a run is persisted and reopened (#378): it may instead be a
+    ``mask_reference`` pointing into a lazily-loaded store. Mask
+    membership only needs *some* way to resolve that reference back into
+    pixels for the owning observation — never a particular storage
+    backend — so this is a minimal, sensor-association-local Protocol.
+    :meth:`~contextmap.visual_perception.mask_store.MaskStoreReader.load`
+    already satisfies this shape and is the composition root's usual
+    choice.
+    """
+
+    def load(self, source_observation_id: SourceObservationId, region_id: RegionId) -> InlineMask:
+        """Load and hash-verify one region's full-image mask."""
+        ...
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -252,13 +273,22 @@ class FrameMembership:
 
 
 def associate_regions(
-    resolution: VisibilityResolution, perception_result: PerceptionResult
+    resolution: VisibilityResolution,
+    perception_result: PerceptionResult,
+    *,
+    mask_loader: RegionMaskLoader | None = None,
 ) -> FrameMembership:
     """Find which frozen region masks contain each visible projected point.
 
     Args:
         resolution: The visibility of the frame's points.
         perception_result: The perception result of the same observation.
+        mask_loader: Resolves a region's mask when it was persisted by
+            reference instead of being inlined on ``Region2D.mask``
+            (#378), for example a reopened run's
+            ``PerceptionRunReader.mask_store()``. ``None`` (the default)
+            keeps the previous behavior: a region without an inline mask
+            is skipped with :attr:`SkipReason.NO_INLINE_MASK`.
 
     Returns:
         The region-to-geometry and geometry-to-region indexes, the support statistics and
@@ -293,18 +323,23 @@ def associate_regions(
         if not region.is_accepted:
             skipped.append(SkippedRegion(region_id=region.region_id, reason=SkipReason.REJECTED))
             continue
-        if region.mask is None:
+        region_mask = region.mask
+        if region_mask is None and region.mask_reference is not None and mask_loader is not None:
+            region_mask = mask_loader.load(
+                perception_result.source_observation_id, region.region_id
+            )
+        if region_mask is None:
             skipped.append(
                 SkippedRegion(region_id=region.region_id, reason=SkipReason.NO_INLINE_MASK)
             )
             continue
-        if (region.mask.width, region.mask.height) != (width, height):
+        if (region_mask.width, region_mask.height) != (width, height):
             raise AssociationInputError(
-                f"the mask of region {region.region_id!r} is {region.mask.width}x"
-                f"{region.mask.height} but the prepared image is {width}x{height}: regions must be "
+                f"the mask of region {region.region_id!r} is {region_mask.width}x"
+                f"{region_mask.height} but the prepared image is {width}x{height}: regions must be "
                 f"expressed in the prepared image the geometry was projected into"
             )
-        mask = np.array(region.mask.data, dtype=bool).reshape(height, width)
+        mask = np.array(region_mask.data, dtype=bool).reshape(height, width)
         inside = mask[rows, columns]
         associated = inside & visible
         associated_indices = in_image[associated]
