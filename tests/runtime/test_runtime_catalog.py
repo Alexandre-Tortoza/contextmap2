@@ -38,6 +38,78 @@ class TestCatalogAgainstCapabilities:
     def test_the_channel_that_needs_the_point_representation_stage_still_exists(self) -> None:
         assert EvidenceChannel.POINT_REPRESENTATION.value == "point_representation"
 
+    def test_entity_resolution_policy_identities_are_the_ones_the_capability_versions(
+        self,
+    ) -> None:
+        from contextmap.entity_resolution import (
+            APPEARANCE_COMPARISON_POLICY_ID,
+            CANDIDATE_RETRIEVAL_POLICY_ID,
+            CONSERVATIVE_RESOLUTION_POLICY_ID,
+            GEOMETRY_COMPARISON_POLICY_ID,
+            REPRESENTATION_COMPARISON_POLICY_ID,
+            SEMANTIC_COMPATIBILITY_POLICY_ID,
+            TEMPORAL_COMPATIBILITY_POLICY_ID,
+        )
+
+        assert set(COMPONENTS["entity_resolution.retrieval"].backends) == {
+            CANDIDATE_RETRIEVAL_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.resolution"].backends) == {
+            CONSERVATIVE_RESOLUTION_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.geometry_comparison"].backends) == {
+            GEOMETRY_COMPARISON_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.semantic_compatibility"].backends) == {
+            SEMANTIC_COMPATIBILITY_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.temporal_compatibility"].backends) == {
+            TEMPORAL_COMPATIBILITY_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.appearance"].backends) == {
+            APPEARANCE_COMPARISON_POLICY_ID
+        }
+        assert set(COMPONENTS["entity_resolution.representation"].backends) == {
+            REPRESENTATION_COMPARISON_POLICY_ID
+        }
+
+    def test_spatial_relations_policy_identities_are_the_ones_the_capability_versions(
+        self,
+    ) -> None:
+        from contextmap.semantic_mapping import GEOMETRY_SUMMARY_ALGORITHM_ID
+        from contextmap.spatial_relations import (
+            CANDIDATE_POLICY_ID,
+            CONTACT_POLICY_ID,
+            FRAME_CONVENTIONS_POLICY_ID,
+            GEOMETRIC_POLICY_ID,
+        )
+
+        assert set(COMPONENTS["spatial_relations.frame_conventions"].backends) == {
+            FRAME_CONVENTIONS_POLICY_ID
+        }
+        assert set(COMPONENTS["spatial_relations.candidate"].backends) == {CANDIDATE_POLICY_ID}
+        assert set(COMPONENTS["spatial_relations.geometry_summary"].backends) == {
+            GEOMETRY_SUMMARY_ALGORITHM_ID
+        }
+        assert set(COMPONENTS["spatial_relations.geometric_predicate"].backends) == {
+            GEOMETRIC_POLICY_ID
+        }
+        assert set(COMPONENTS["spatial_relations.contact_predicate"].backends) == {
+            CONTACT_POLICY_ID
+        }
+
+    def test_only_the_genuinely_optional_evidence_channels_are_marked_optional(self) -> None:
+        optional = {component_id for component_id, spec in COMPONENTS.items() if spec.optional}
+
+        assert optional == {
+            "entity_resolution.semantic_compatibility",
+            "entity_resolution.temporal_compatibility",
+            "entity_resolution.appearance",
+            "entity_resolution.representation",
+            "spatial_relations.geometric_predicate",
+            "spatial_relations.contact_predicate",
+        }
+
     def test_every_available_stage_names_an_implemented_capability(self) -> None:
         for stage in CANONICAL_PRESET.stages:
             if stage.available:

@@ -108,14 +108,18 @@ Pontos de variação:
 | `point_representation.encoder` | `geometric_descriptor`, `ptv3` |
 | `semantic_fusion.support` | `geometry-jaccard-support-v1` |
 | `semantic_fusion.accumulation` | `baseline-evidence-accumulation-v1`, `quality-aware-evidence-accumulation-v1` |
+| `entity_resolution.retrieval`, `.resolution`, `.geometry_comparison` | políticas versionadas, obrigatórias |
+| `entity_resolution.semantic_compatibility`, `.temporal_compatibility`, `.appearance`, `.representation` | políticas versionadas, **opcionais**: sem backend selecionado, o canal é `None`, nunca um padrão |
+| `spatial_relations.frame_conventions`, `.candidate`, `.geometry_summary` | políticas versionadas, obrigatórias |
+| `spatial_relations.geometric_predicate`, `.contact_predicate` | políticas versionadas, **opcionais**: sem backend selecionado, o avaliador é `None` |
 
 Para uma política, o identificador de backend é a identidade que a própria capability já versiona.
 
-Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`. O preset termina aí: `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` não fazem parte de `canonical/1` e entram em um preset versionado posterior, quando as capabilities existirem.
+Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations`. O preset termina em `spatial_relations`; `semantic_mapping` participa da topologia mas não tem componente nem executor automático (seu artifact precisa ser suprido). Só `context_map` (a montagem do `ContextMapArtifact`) continua fora e entra em um preset versionado posterior, quando a capability existir.
 
 ## Lacunas conhecidas
 
 - **Perfil sem backends.** Escolher SAM3, DINOv3, Qwen/Gemini ou FAST-LIO como canônicos é uma decisão científica que pertence à validação end-to-end (milestone #19), não ao runtime. Até lá, um experimento fornece um arquivo de configuração que seleciona os backends.
 - **Parâmetros por capability.** A validação dos parâmetros de cada backend (obrigatórios, tipos, faixas) acontece em `compose()`, instanciando a configuração da própria capability (`build_config()`); a resolução da configuração só garante valores JSON finitos e sem aparência de segredo. Políticas que hoje são apenas parâmetros (sincronização, voxelização, oclusão) ganham ponto de variação quando um executor de estágio as consumir.
 - **Dois `canonical/1`.** O `canonical/1` do runtime é o preset de topologia global. O `CANONICAL_PRESET_V1` de Visual Perception é o preset **interno** da percepção, com identidade própria, e continua conservando temporariamente os estágios legados de cena/região até a política de construção de `SemanticInterpretationRequest` ser promovida para a topologia default. O runtime não altera esse preset: a composition root entrega os backends atrás dos ports e não monta o preset interno; a lacuna segue registrada em [`composition.md`](composition.md) e em [`docs/runtime-composition.md`](../../../../docs/runtime-composition.md).
-- **Estágios posteriores à fusão.** `pipeline.stages.semantic_mapping` (e os seguintes) é recusado como estágio desconhecido: `canonical/1` não os declara.
+- **`context_map`.** `pipeline.stages.context_map` é recusado como estágio desconhecido: `canonical/1` não o declara ainda; é trabalho de outro milestone (End-to-End Validation).

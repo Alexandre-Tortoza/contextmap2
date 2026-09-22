@@ -15,6 +15,9 @@ flowchart TD
     SA["sensor_association<br/>SensorAssociationRunArtifact"]
     PR["point_representation<br/>(opcional)<br/>PointRepresentationRunArtifact"]
     SF["semantic_fusion<br/>SemanticFusionRunArtifact"]
+    SM["semantic_mapping<br/>SemanticEntityArtifact"]
+    ER["entity_resolution<br/>EntityResolutionRunArtifact"]
+    SR["spatial_relations<br/>SpatialRelationsRunArtifact"]
 
     ING --> VP
     ING --> ST
@@ -30,6 +33,11 @@ flowchart TD
     VP --> SF
     GM --> SF
     PR -.-> SF
+    SF --> SM
+    GM --> SM
+    SM --> ER
+    ER --> SR
+    GM --> SR
 ```
 
 Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente quando o estágio de origem participa.
@@ -43,8 +51,11 @@ Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente qu
 | `sensor_association` | `sequence`, `perception`, `trajectory`, `geometry` | `SensorAssociationRunArtifact` |
 | `point_representation` (opcional) | `geometry` ← `geometric_mapping`, `association` ← `sensor_association` (opcional) | `PointRepresentationRunArtifact` |
 | `semantic_fusion` | `association`, `perception`, `geometry`, `representation` ← `point_representation` (opcional) | `SemanticFusionRunArtifact` |
+| `semantic_mapping` | `fusion` ← `semantic_fusion`, `geometry` ← `geometric_mapping` | `SemanticEntityArtifact` |
+| `entity_resolution` | `entities` ← `semantic_mapping` | `EntityResolutionRunArtifact` |
+| `spatial_relations` | `entities` ← `entity_resolution`, `geometry` ← `geometric_mapping` | `SpatialRelationsRunArtifact` |
 
-`canonical/1` termina em `semantic_fusion`: é o pipeline executável hoje, e passa no preflight. Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` não fazem parte dele; um preset versionado posterior os declara quando as capabilities existirem, sem mudar a topologia de `canonical/1`. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
+`canonical/1` termina em `spatial_relations`: é a topologia executável hoje, e passa no preflight. `semantic_mapping` faz parte dela mas não tem executor automático (ver [`executors.md`](executors.md)): seu artifact precisa ser suprido para que `entity_resolution` rode no mesmo run. Só a montagem do `ContextMapArtifact` (`context_map`) continua fora, tratada por outro milestone; um preset versionado posterior a declara, sem mudar a topologia de `canonical/1`. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
 
 ## Estágios opcionais
 
@@ -92,6 +103,6 @@ O DAG roda em CI com executores leves (sem modelo nem GPU): a ordem, as entradas
 
 ## Lacunas conhecidas
 
-- **`visual_perception` e `point_representation` sem executor real.** `contextmap.runtime.executors` tem executores reais para `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` (ver [`executors.md`](executors.md)), e a [composition root](composition.md) os monta automaticamente da configuração (`compose_executors`). `visual_perception` e `point_representation` dependem de backend com modelo/GPU e ainda não têm um; um `targets=[...]` que os inclua precisa de um executor injetado ou fica bloqueado no preflight, explicitamente — nunca simulado.
+- **`visual_perception`, `point_representation` e `semantic_mapping` sem executor real.** `contextmap.runtime.executors` tem executores reais para `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `entity_resolution` e `spatial_relations` (ver [`executors.md`](executors.md)), e a [composition root](composition.md) os monta automaticamente da configuração (`compose_executors`). `visual_perception` e `point_representation` dependem de backend com modelo/GPU e ainda não têm um; `semantic_mapping` não tem componente de catálogo nem executor automático, então seu artifact precisa ser suprido. Um `targets=[...]` que inclua qualquer um deles sem o artifact suprido precisa de um executor injetado ou fica bloqueado no preflight, explicitamente — nunca simulado.
 - **`FeatureResolutionEnhancement` não é um estágio de topo.** No canônico ele é interno ao preset de Visual Perception; o padrão de inserção acima é o mecanismo, exercitado com estágios de teste.
 - O reuso por identidade está em [`reuse.md`](reuse.md), a seleção de runs com linhagem em [`selection.md`](selection.md) e o ciclo de vida, os eventos e a retomada em [`lifecycle.md`](lifecycle.md); sem uma `ReusePolicy`, o reuso é apenas o artifact fornecido ou selecionado explicitamente.

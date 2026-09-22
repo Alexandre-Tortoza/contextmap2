@@ -29,6 +29,9 @@ GEOMETRY = "GeometricMapArtifact"
 ASSOCIATION = "SensorAssociationRunArtifact"
 REPRESENTATION = "PointRepresentationRunArtifact"
 FUSION = "SemanticFusionRunArtifact"
+ENTITIES = "SemanticEntityArtifact"
+RESOLUTION = "EntityResolutionRunArtifact"
+RELATIONS = "SpatialRelationsRunArtifact"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -65,11 +68,17 @@ class ComponentSpec:
         capability: Owner capability package name.
         slot: Name of the variation point inside the capability.
         backends: Selectable backends keyed by ``backend_id``.
+        optional: Whether a stage that owns this component still composes with no backend
+            selected for it. It marks a genuinely optional variation point (for example one
+            evidence channel of a decision that evaluates several independently): its absence
+            is a valid, explicit configuration, never a default standing in for the missing
+            choice. ``False`` for every variation point a stage always needs to run.
     """
 
     capability: str
     slot: str
     backends: Mapping[str, BackendSpec]
+    optional: bool = False
 
     @property
     def component_id(self) -> str:
@@ -185,11 +194,14 @@ class RuntimePreset:
         raise KeyError(stage_id)
 
 
-def _component(capability: str, slot: str, *backends: BackendSpec) -> ComponentSpec:
+def _component(
+    capability: str, slot: str, *backends: BackendSpec, optional: bool = False
+) -> ComponentSpec:
     return ComponentSpec(
         capability=capability,
         slot=slot,
         backends={backend.backend_id: backend for backend in backends},
+        optional=optional,
     )
 
 
@@ -290,6 +302,72 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="baseline-evidence-accumulation-v1"),
         BackendSpec(backend_id="quality-aware-evidence-accumulation-v1"),
     ),
+    _component(
+        "entity_resolution",
+        "retrieval",
+        BackendSpec(backend_id="entity-candidate-retrieval-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "resolution",
+        BackendSpec(backend_id="conservative-staged-resolution-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "geometry_comparison",
+        BackendSpec(backend_id="entity-geometry-comparison-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "semantic_compatibility",
+        BackendSpec(backend_id="entity-semantic-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "temporal_compatibility",
+        BackendSpec(backend_id="entity-temporal-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "appearance",
+        BackendSpec(backend_id="entity-appearance-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "representation",
+        BackendSpec(backend_id="entity-representation-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "spatial_relations",
+        "frame_conventions",
+        BackendSpec(backend_id="map-frame-conventions-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "candidate",
+        BackendSpec(backend_id="bounds-neighborhood-candidates-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometry_summary",
+        BackendSpec(backend_id="entity-geometry-summary-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometric_predicate",
+        BackendSpec(backend_id="bounds-geometric-predicates-v1"),
+        optional=True,
+    ),
+    _component(
+        "spatial_relations",
+        "contact_predicate",
+        BackendSpec(backend_id="point-contact-predicates-v1"),
+        optional=True,
+    ),
 )
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
@@ -301,9 +379,11 @@ CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
         "The Solution 1 topology that is executable today, from a recorded source to "
-        "semantic fusion. Semantic mapping, entity resolution, spatial relations and the "
-        "ContextMapArtifact are not part of it: a later versioned preset declares them once "
-        "their capabilities exist, and this identity never changes topology."
+        "spatial relations. Semantic mapping has no automatic executor of its own yet: its "
+        "artifact must be supplied for entity resolution to consume, never computed by this "
+        "composition root. The ContextMapArtifact is not part of it: a later versioned preset "
+        "declares it once the artifact-assembly capability composes automatically, and this "
+        "identity never changes topology."
     ),
     stages=(
         StageDeclaration(
@@ -406,6 +486,46 @@ CANONICAL_PRESET = RuntimePreset(
                 ),
             ),
             output=FUSION,
+        ),
+        StageDeclaration(
+            stage_id="semantic_mapping",
+            capability="semantic_mapping",
+            inputs=(
+                StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
+            output=ENTITIES,
+        ),
+        StageDeclaration(
+            stage_id="entity_resolution",
+            capability="entity_resolution",
+            components=(
+                "entity_resolution.retrieval",
+                "entity_resolution.resolution",
+                "entity_resolution.geometry_comparison",
+                "entity_resolution.semantic_compatibility",
+                "entity_resolution.temporal_compatibility",
+                "entity_resolution.appearance",
+                "entity_resolution.representation",
+            ),
+            inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
+            output=RESOLUTION,
+        ),
+        StageDeclaration(
+            stage_id="spatial_relations",
+            capability="spatial_relations",
+            components=(
+                "spatial_relations.frame_conventions",
+                "spatial_relations.candidate",
+                "spatial_relations.geometry_summary",
+                "spatial_relations.geometric_predicate",
+                "spatial_relations.contact_predicate",
+            ),
+            inputs=(
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
+            output=RELATIONS,
         ),
     ),
 )

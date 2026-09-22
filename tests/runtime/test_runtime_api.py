@@ -41,6 +41,7 @@ from contextmap.runtime import (
 SRC = Path(__file__).resolve().parents[2] / "src"
 SECRET = "s3cr3t-value-123"
 TARGET = ["semantic_fusion"]
+# Toda a topologia real de `canonical/1`, na ordem em que `resolve_plan` a resolve.
 PLAN_ORDER = (
     "ingestion",
     "visual_perception",
@@ -49,8 +50,21 @@ PLAN_ORDER = (
     "sensor_association",
     "point_representation",
     "semantic_fusion",
+    "semantic_mapping",
+    "entity_resolution",
+    "spatial_relations",
 )
-RUN_ORDER = PLAN_ORDER
+# Só o que um alvo em `semantic_fusion` precisa: os estágios seguintes (semantic_mapping em
+# diante) não são dependência dele, então nunca entram no escopo de uma execução por esse alvo.
+RUN_ORDER = (
+    "ingestion",
+    "visual_perception",
+    "state_estimation",
+    "geometric_mapping",
+    "sensor_association",
+    "point_representation",
+    "semantic_fusion",
+)
 # Com o estágio futuro que a fixture `unavailable_context_map` acrescenta ao preset.
 PLAN_ORDER_WITH_LATER_STAGE = (*PLAN_ORDER, "context_map")
 
