@@ -1,0 +1,53 @@
+name: Create perception experiment milestone
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - .github/workflows/create-perception-experiment-milestone.yml
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  create-and-assign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create milestone if needed and move experiment issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="Perception Backend & Evidence Ablation Experiment"
+
+          milestone_number="$(
+            gh api --paginate "repos/$REPO/milestones?state=all&per_page=100" \
+              --jq ".[] | select(.title == \"$title\") | .number" \
+              | head -n1
+          )"
+
+          if [[ -z "$milestone_number" ]]; then
+            milestone_number="$(
+              gh api --method POST "repos/$REPO/milestones" \
+                -f title="$title" \
+                -f description="Factorized experiments for perception backends, native tasks, prompts, VLM evidence views, scene context, semantic scoring, and visual-token/VRAM budgets." \
+                --jq '.number'
+            )"
+          fi
+
+          echo "milestone_number=$milestone_number"
+
+          for issue in {521..530}; do
+            gh api --method PATCH "repos/$REPO/issues/$issue" \
+              -F milestone="$milestone_number" >/dev/null
+            echo "moved #$issue -> milestone #$milestone_number"
+          done
+
+          if [[ "$milestone_number" != "22" ]]; then
+            echo "::warning::Created/resolved milestone is #$milestone_number, not #22."
+          fi
