@@ -18,6 +18,7 @@ from contextmap.runtime.composition import (
     RuntimeProvider,
     composable_backends,
     compose,
+    compose_executors,
     composed_stages,
 )
 from contextmap.runtime.errors import (
@@ -505,6 +506,150 @@ class TestCatalogAgreement:
         available = {stage.stage_id for stage in CANONICAL_PRESET.stages if stage.available}
 
         assert composed_stages() == available
+
+
+class TestComposeExecutors:
+    """Blocker #1/#2 of the PR #387 review: real ``StageExecutor``s from configuration alone.
+
+    ``compose_executors`` is the automatic counterpart of ``compose``: it is what lets the
+    installed ``contextmap`` binary run ``state_estimation``, ``geometric_mapping``,
+    ``sensor_association`` and ``semantic_fusion`` with no Python caller building an
+    executor by hand.
+    """
+
+    def test_composes_a_real_executor_for_every_stage_it_can_build_from_configuration(
+        self, tmp_path: Path
+    ) -> None:
+        from contextmap.runtime.executors import (
+            GeometricMappingExecutor,
+            SemanticFusionExecutor,
+            SensorAssociationExecutor,
+            StateEstimationExecutor,
+        )
+
+        executors = compose_executors(
+            effective_from(tmp_path), module_available=lambda _name: True, environ={}
+        )
+
+        assert set(executors) == {
+            "state_estimation",
+            "geometric_mapping",
+            "sensor_association",
+            "semantic_fusion",
+        }
+        assert isinstance(executors["state_estimation"], StateEstimationExecutor)
+        assert isinstance(executors["geometric_mapping"], GeometricMappingExecutor)
+        assert isinstance(executors["sensor_association"], SensorAssociationExecutor)
+        assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
+        # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
+        assert "ingestion" not in executors
+        assert "visual_perception" not in executors
+        assert "point_representation" not in executors
+
+    def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        del document["components"]["geometric_mapping"]
+        del document["components"]["sensor_association"]
+
+        executors = compose_executors(
+            effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
+        )
+
+        assert set(executors) == {"state_estimation", "semantic_fusion"}
+
+    def test_a_broken_backend_in_one_stage_never_costs_another_stage_its_executor(
+        self, tmp_path: Path
+    ) -> None:
+        """A rejected parameter is isolated to its own stage, one at a time.
+
+        ``sensor_association.tolerances`` rejects ``max_reprojection_invalid_rate`` above 1
+        (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
+        other three stages, whose own configuration is unrelated, still compose normally.
+        """
+        document = selected_document()
+        document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
+            "max_reprojection_invalid_rate"
+        ] = 2.0
+
+        executors = compose_executors(
+            effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
+        )
+
+        assert set(executors) == {"state_estimation", "geometric_mapping", "semantic_fusion"}
+
+    def test_a_composed_executor_is_the_real_thing_and_runs_against_a_real_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``StateEstimationExecutor`` is not a type-compatible stub.
+
+        It reads a real ``SequenceArtifact`` through ``StageRequest.directory_of`` and
+        writes a real ``StateEstimationRunArtifact`` where the request tells it to,
+        exactly as the runtime's own DAG runner would call it.
+        """
+        from contextmap.ingestion import (
+            ExternalPoseMeasurement,
+            FrameId,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            for index in range(3):
+                writer.add_observation(
+                    ExternalPoseMeasurement(
+                        observation_id=SourceObservationId(f"pose-{index:04d}"),
+                        sensor_id=SensorId("external_pose_source"),
+                        frame_id=FrameId("base"),
+                        timestamp=SourceTimestamp(
+                            seconds=index, nanoseconds=0, clock_id="fixture:header"
+                        ),
+                        provenance=SourceProvenance(
+                            source_type="fixture", source_path="fixtures/poses"
+                        ),
+                        parent_frame=FrameId("map"),
+                        translation=(float(index), 0.0, 0.0),
+                        orientation=(0.0, 0.0, 0.0, 1.0),
+                    )
+                )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        effective = effective_from(tmp_path)
+        executors = compose_executors(effective, module_available=lambda _name: True, environ={})
+        output_dir = workspace / "corridor-02" / "run-0001" / "state_estimation"
+        request = StageRequest(
+            stage_id="state_estimation",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executors["state_estimation"].execute(request)
+
+        assert ref.contract == "StateEstimationRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:

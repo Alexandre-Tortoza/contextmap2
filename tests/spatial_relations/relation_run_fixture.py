@@ -73,7 +73,7 @@ RUN = EntityResolutionRunId("resolution-run-0001")
 LINEAGE = RelationsRunLineage(
     entity_resolution_run_id=RUN,
     entity_resolution_schema_version="0.1.0",
-    entity_resolution_artifact_digest="sha256:resolution",
+    entity_resolution_artifact_digest="sha256:" + "e5" * 32,
     geometric_map_id=MapId("map-0001"),
 )
 POLICIES = RelationsRunPolicies(

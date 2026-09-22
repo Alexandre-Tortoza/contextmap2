@@ -29,11 +29,17 @@ Um estágio produz **exatamente um** artifact, e um executor consome **exatament
 
 Para que os executores tenham o que precisam, o DAG `canonical/1` dá `sequence` à fusão (os instantes de aquisição das observações físicas vêm da sequência) e `geometry` ao mapeamento semântico e às relações espaciais (o suporte 3D das entidades vem do mapa).
 
+## Como um executor chega a existir
+
+Construir um destes executores manualmente (juntar backend, políticas e classe do executor) é trabalho da [composition root](composition.md). `compose_executors(effective, ...)`, em `contextmap.runtime.composition`, faz exatamente isso a partir de uma `EffectiveConfig`: monta `StateEstimationExecutor`, `GeometricMappingExecutor`, `SensorAssociationExecutor` e `SemanticFusionExecutor` (nessa ordem de dependência) e devolve um `dict[str, StageExecutor]` indexado por `stage_id`, sem fabricar nada para o que não pode compor de verdade. `IngestionStageExecutor` fica de fora dessa composição automática: ele precisa de um `IngestionRequest` concreto, que é entrada de uma execução (os flags de `contextmap ingest`), não parte de uma configuração — continua sendo construído e injetado explicitamente por quem chama (`main(executors=...)` ou `Runtime(executors=...)`), que é como o comando `ingest` e os testes deste módulo já o exercitam. `SemanticMappingExecutor`, `EntityResolutionExecutor` e `SpatialRelationsExecutor` seguem a mesma regra hoje: `compose_executors` ainda não os monta, então quem chama constrói e injeta os três, exatamente como faz com a Ingestion.
+
 ## Quem carrega as políticas
 
 Os executores de Entity Resolution e de Spatial Relations recebem os pacotes de política na construção, como os demais: nenhum limiar é decidido pela runtime, e **nenhuma configuração do runtime os carrega hoje** (o perfil canônico só declara as capabilities e os componentes). Quem monta o executor (o teste, o script de validação ou um perfil futuro) escolhe as políticas, e elas entram no fingerprint do artifact. As convenções de frame de Spatial Relations precisam nomear o referencial em que o mapa geométrico está expresso; se divergirem, o estágio falha com a mensagem do frame, sem converter em silêncio (o mapa sintético do CI está em `odom`).
 
 ## O que ainda não existe
 
-- **`visual_perception`** não tem executor: a percepção usa modelos e GPU e entra por **referência** a um run existente (`provided`). Um executor real de percepção é um trabalho à parte.
+- **`visual_perception`** não tem executor: a percepção usa modelos e GPU e entra por **referência** a um run existente (`provided` ou `inputs.selections`). Um executor real de percepção é um trabalho à parte.
+- **`point_representation`** também não tem executor, pelo mesmo motivo (backend dependente de modelo); é o único estágio opcional do canônico, então um run que não o habilita nunca sente essa lacuna.
+- **`semantic_mapping`, `entity_resolution` e `spatial_relations`** já têm executor real e já são estágios declarados no preset canônico, mas `compose_executors` ainda não os constrói automaticamente: quem chama continua montando e injetando os três (ver "Como um executor chega a existir").
 - **`context_map`**: o schema, o writer e o leitor do `ContextMapArtifact` existem, mas **não existe o passo de montagem** que transforma os runs de resolução e de relações em um `ContextMap` (só o builder de teste `assemble_from_runs`, que fixa à mão o estado semântico de cada entidade). Sem esse passo não há executor.

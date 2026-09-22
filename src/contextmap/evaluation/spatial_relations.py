@@ -10,7 +10,13 @@ It reads a persisted ``SpatialRelationsRunArtifact`` and a ``RelationAnnotationS
 meet through the ``IdentityEvaluation`` of Entity Resolution's own evaluation, which says which
 annotated identity every resolved entity has and which resolved entities span several identities
 (false merges): a reference relation whose identity has no matched entity is counted as an
-unmatched reference, attributed to entity resolution, and is not scored as a relation error.
+unmatched reference, attributed to entity resolution, and is not scored as a relation error. That
+identity evaluation is trusted only once its own reproducibility metadata names this exact
+resolution run and artifact digest, and every resolved-entity reference it names is itself checked
+to scope to that same run: nothing about which run it is about is ever inferred from the identity
+mapping (an empty mapping is a valid outcome and proves nothing), but correct metadata does not
+excuse a foreign reference either, since ``Relation`` keys use the full reference and a foreign one
+would otherwise just fail to match and quietly turn into unmatched-entity noise.
 
 Everything is reported **per canonical predicate**; there is no overall score. For each predicate
 the counts are kept separate:
@@ -49,7 +55,7 @@ from contextmap.evaluation.annotations import (
     RelationAnnotationSet,
     RelationStatus,
 )
-from contextmap.evaluation.entity_resolution import IdentityEvaluation
+from contextmap.evaluation.entity_resolution import EvaluationReproducibility, IdentityEvaluation
 from contextmap.evaluation.metrics import EvaluationStage, MetricRegistry
 from contextmap.evaluation.reference_set import ReferenceSetIdentity
 from contextmap.evaluation.report_schema import (
@@ -75,8 +81,16 @@ from contextmap.spatial_relations import (
 SPATIAL_RELATIONS_EVALUATOR_ID = "spatial-relations-evaluator"
 """Identity of the evaluator, as the metric registry names it."""
 
-SPATIAL_RELATIONS_EVALUATOR_VERSION = "1"
-"""Version of the evaluation rules described in this module."""
+SPATIAL_RELATIONS_EVALUATOR_VERSION = "2"
+"""Version of the evaluation rules described in this module.
+
+Version 2 requires the identity evaluation's own reproducibility metadata
+(``identity_reproducibility``) and validates its run id and artifact digest against this run's
+lineage before scoring, and also requires every resolved-entity reference the identity evaluation
+itself names to already scope to that same run; version 1 inferred the run id only from those
+references, which an empty mapping (a valid outcome) left unchecked, and correct metadata alone
+would not have caught a foreign reference either.
+"""
 
 _Key = tuple[ResolvedEntityReference, RelationPredicate, ResolvedEntityReference]
 
@@ -302,6 +316,7 @@ def evaluate_spatial_relations(
     *,
     reference: RelationAnnotationSet,
     identity: IdentityEvaluation,
+    identity_reproducibility: EvaluationReproducibility,
     code_version: str | None = None,
 ) -> SpatialRelationsEvaluationReport:
     """Evaluate the relations of a persisted run against an annotated reference.
@@ -312,23 +327,36 @@ def evaluate_spatial_relations(
         identity: The identity evaluation of Entity Resolution's own evaluator, for the same
             resolution run the relations are about. Its ``identity_of_resolved_entity`` says which
             annotated identity every resolved entity has; an entity that is absent from it has no
-            identity, and a relation is never evaluated by repairing that.
+            identity, and a relation is never evaluated by repairing that. Every resolved-entity
+            reference it names (in ``identity_of_resolved_entity`` and
+            ``resolved_entities_spanning_identities``) must itself scope to this run.
+        identity_reproducibility: The reproducibility metadata of that same identity evaluation
+            (``EntityResolutionEvaluationReport.reproducibility``, or built the same way). Its
+            ``run_id`` and ``resolution_artifact_digest`` are the only proof of which resolution
+            run and which exact artifact the identity evaluation is about; an empty
+            ``identity_of_resolved_entity`` is a valid outcome (no annotated identity) and proves
+            nothing by itself, so provenance is never inferred from it.
         code_version: Code revision of the evaluator run, when known.
 
     Returns:
-        The report, per canonical predicate, with no aggregate score.
+        The report, per canonical predicate, with no aggregate score. Its
+        ``entity_resolution_run_id`` and ``entity_resolution_artifact_digest`` come from
+        ``identity_reproducibility``, the identity evaluation actually supplied, once it is
+        confirmed to match the run these relations are built on.
 
     Raises:
-        SpatialRelationsEvaluationError: If the identity evaluation is about another resolution
-            run than the one the relations are built on, or the reference declares a predicate's
-            symmetry or inverse differently from the taxonomy.
+        SpatialRelationsEvaluationError: If the identity evaluation's reproducibility names a
+            different resolution run or a different artifact digest than the one the relations
+            are built on, if the identity evaluation names a resolved entity of another resolution
+            run, or if the reference declares a predicate's symmetry or inverse differently from
+            the taxonomy.
     """
     relations = {
         (item.subject_entity_ref, item.predicate, item.object_entity_ref): item
         for item in reader.iter_relations()
     }
+    _require_same_resolution(reader, identity, identity_reproducibility)
     identity_of_entity = dict(identity.identity_of_resolved_entity)
-    _require_same_resolution(reader, identity, identity_of_entity)
     entity_of_identity, shared = _invert(identity_of_entity)
     truth, unmapped, ambiguous, unknown, conflicting = _expand_reference(reference)
     exclusions = _exclusion_reasons(reader.candidate_set())
@@ -363,8 +391,8 @@ def evaluate_spatial_relations(
         evaluator_version=SPATIAL_RELATIONS_EVALUATOR_VERSION,
         spatial_relations_run_id=str(manifest.run_id),
         artifact_schema_version=manifest.schema_version,
-        entity_resolution_run_id=str(manifest.lineage.entity_resolution_run_id),
-        entity_resolution_artifact_digest=manifest.lineage.entity_resolution_artifact_digest,
+        entity_resolution_run_id=identity_reproducibility.run_id,
+        entity_resolution_artifact_digest=identity_reproducibility.resolution_artifact_digest,
         geometric_map_id=str(manifest.lineage.geometric_map_id),
         taxonomy_version=manifest.taxonomy_version,
         policies=_policy_identities(manifest.policies),
@@ -482,17 +510,47 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 def _require_same_resolution(
     reader: SpatialRelationsRunReader,
     identity: IdentityEvaluation,
-    identity_of_entity: Mapping[ResolvedEntityReference, str],
+    identity_reproducibility: EvaluationReproducibility,
 ) -> None:
-    """Refuse an identity evaluation that is not about the resolution the relations are built on."""
-    expected = reader.manifest.lineage.entity_resolution_run_id
-    runs = {reference.resolution_run_id for reference in identity_of_entity} | {
-        reference.resolution_run_id for reference in identity.resolved_entities_spanning_identities
-    }
-    if runs - {expected}:
+    """Refuse an identity evaluation that is not about this run's resolution artifact.
+
+    Two independent checks, both required: the metadata (``identity_reproducibility``'s own
+    ``run_id`` and ``resolution_artifact_digest``, never inferred from which resolved-entity
+    references happen to appear in the identity mapping, since an empty mapping -- no annotated
+    identity -- is a valid outcome) and the structure (every reference the identity evaluation
+    itself names must already scope to that same run). Correct metadata does not excuse foreign
+    references: ``Relation`` keys use the full reference, so a foreign one would not raise, it
+    would just fail to match any entity and quietly turn into unmatched-entity noise instead of
+    the contract violation it actually is.
+    """
+    lineage = reader.manifest.lineage
+    expected_run_id = str(lineage.entity_resolution_run_id)
+    if identity_reproducibility.run_id != expected_run_id:
         raise SpatialRelationsEvaluationError(
-            f"the identity evaluation is about resolution run(s) {sorted(runs - {expected})!r}, "
-            f"but the relations are built on resolution run {expected!r}"
+            f"the identity evaluation is about resolution run {identity_reproducibility.run_id!r}, "
+            f"but the relations are built on resolution run {expected_run_id!r}"
+        )
+    expected_digest = lineage.entity_resolution_artifact_digest
+    if identity_reproducibility.resolution_artifact_digest != expected_digest:
+        raise SpatialRelationsEvaluationError(
+            f"the identity evaluation is about resolution run {expected_run_id!r} at artifact "
+            f"digest {identity_reproducibility.resolution_artifact_digest!r}, but the relations "
+            f"are built on artifact digest {expected_digest!r} of that same run"
+        )
+    foreign = {
+        str(reference.resolution_run_id)
+        for reference, _ in identity.identity_of_resolved_entity
+        if str(reference.resolution_run_id) != expected_run_id
+    } | {
+        str(reference.resolution_run_id)
+        for reference in identity.resolved_entities_spanning_identities
+        if str(reference.resolution_run_id) != expected_run_id
+    }
+    if foreign:
+        raise SpatialRelationsEvaluationError(
+            f"the identity evaluation names resolved entities of resolution run(s) "
+            f"{sorted(foreign)!r}, but the relations are built on resolution run "
+            f"{expected_run_id!r}"
         )
 
 

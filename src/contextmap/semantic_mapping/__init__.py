@@ -29,6 +29,7 @@ from contextmap.semantic_mapping.evidence_integrity import (
     validate_evidence_of_entities,
 )
 from contextmap.semantic_mapping.geometry import (
+    DEFAULT_MAX_CONNECTIVITY_POINTS,
     GEOMETRY_SUMMARY_ALGORITHM_ID,
     EmptyGeometrySupportError,
     EntityGeometry,
@@ -85,10 +86,12 @@ from contextmap.semantic_mapping.semantic_state import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticStateProvenance,
     derive_ambiguity_state,
 )
 from contextmap.semantic_mapping.serialization import (
+    ENTITY_SCHEMA_VERSION,
     decode_entity,
     decode_entity_reference,
     encode_entity,
@@ -112,8 +115,10 @@ from contextmap.semantic_mapping.temporal import (
 
 __all__ = [
     "CLASS_ATTRIBUTE_DERIVATION_ID",
+    "DEFAULT_MAX_CONNECTIVITY_POINTS",
     "ENTITY_ID_POLICY_ID",
     "ENTITY_MATERIALIZATION_POLICY_ID",
+    "ENTITY_SCHEMA_VERSION",
     "GEOMETRY_SUMMARY_ALGORITHM_ID",
     "PRIMARY_HYPOTHESIS_POLICY_ID",
     "SEMANTIC_STATE_MAPPING_RULE_ID",
@@ -145,6 +150,7 @@ __all__ = [
     "EvidenceIntegrityIssue",
     "EvidenceIntegrityKind",
     "EvidenceTraceError",
+    "ExternalKnowledgeSource",
     "ForeignEntityReferenceError",
     "FusedEvidenceRef",
     "FusedEvidenceSource",

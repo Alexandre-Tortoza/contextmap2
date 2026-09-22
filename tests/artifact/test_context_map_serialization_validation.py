@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ import pytest
 from context_map_builders import (
     ENTITY_RESOLUTION_ARTIFACT_ID,
     FUSION_ARTIFACT_ID,
+    SEMANTIC_MAP_ARTIFACT_ID,
     SPATIAL_RELATIONS_ARTIFACT_ID,
     entity_capabilities,
     metadata,
@@ -33,10 +35,12 @@ from context_map_serialization_builders import (
     tree_snapshot,
     write_artifact,
 )
+from context_map_serialization_upstream import write_relations_run, write_resolution_run
 
 from contextmap.artifact import (
     VALIDATOR_VERSION,
     CheckOutcome,
+    ContextMap,
     FileStatus,
     Severity,
     ValidationLevel,
@@ -44,12 +48,16 @@ from contextmap.artifact import (
     ValidationStatus,
     validate_context_map_artifact,
 )
+from contextmap.artifact.serialization.decoding import entity_lines, relation_lines
+from contextmap.artifact.serialization.dependencies import artifact_digest
 from contextmap.artifact.serialization.manifest import (
     create_manifest,
     decode_manifest,
     encode_manifest,
 )
+from contextmap.artifact.serialization.tables import encode_record_table
 from contextmap.shared import file_entry
+from contextmap.spatial_relations import RelationState
 
 FULL = ValidationLevel.FULL
 STRUCTURAL = ValidationLevel.STRUCTURAL
@@ -299,6 +307,222 @@ def test_a_record_that_the_schema_refuses_is_found_by_full_verification_only(
     assert full.status is ValidationStatus.INVALID
     assert "map.invalid" in _errors(full)
     assert _outcomes(full)["schema_invariants"] is CheckOutcome.FAILED
+
+
+# --- structural dependencies must be exactly what the map's own records need ------------------
+#
+# Pinning an upstream artifact by the digest of its manifest proves the bytes found are the
+# artifact the digest was computed from; it does not prove that artifact is the one the map's own
+# entities and relations need. These regressions reproduce the three ways that gap was exploitable
+# before the fix, all at the FULL level only (opening the real upstream artifacts is what full
+# verification is for): a resolved entity or relation id that does not exist upstream, an
+# artifact_id declared independently of the (matching) digest it is pinned by, and a Spatial
+# Relations run genuinely built over a different Entity Resolution run than the one the map cites.
+
+
+def _flip_last_char(value: str) -> str:
+    return value[:-1] + ("0" if value[-1] != "0" else "1")
+
+
+def test_a_dangling_resolved_entity_id_is_found_only_by_full_verification(
+    world: World, artifact: Path
+) -> None:
+    written = make_context_map(world)
+    real_id = str(written.entities[0].source.resolved_entity_id)
+    fake_id = _flip_last_char(real_id)
+    _replace_in(artifact, "entities/entities.jsonl", real_id.encode(), fake_id.encode())
+    _reseal(artifact)
+
+    structural = validate_context_map_artifact(artifact, level=STRUCTURAL)
+    full = validate_context_map_artifact(artifact, level=FULL)
+
+    assert structural.status is ValidationStatus.STRUCTURALLY_VALID
+    assert full.status is ValidationStatus.INVALID
+    messages = [
+        item.message
+        for item in full.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(fake_id in message for message in messages)
+
+
+def test_a_dangling_source_relation_id_is_found_only_by_full_verification(
+    world: World, artifact: Path
+) -> None:
+    written = make_context_map(world)
+    real_id = str(written.relations[0].source_relation_id)
+    fake_id = _flip_last_char(real_id)
+    _replace_in(artifact, "relations/relations.jsonl", real_id.encode(), fake_id.encode())
+    _reseal(artifact)
+
+    structural = validate_context_map_artifact(artifact, level=STRUCTURAL)
+    full = validate_context_map_artifact(artifact, level=FULL)
+
+    assert structural.status is ValidationStatus.STRUCTURALLY_VALID
+    assert full.status is ValidationStatus.INVALID
+    messages = [
+        item.message
+        for item in full.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(fake_id in message for message in messages)
+
+
+def test_a_swapped_entity_resolution_artifact_id_with_a_matching_digest_is_detected(
+    artifact: Path,
+) -> None:
+    real_id = ENTITY_RESOLUTION_ARTIFACT_ID
+    fake_id = real_id.replace("0001", "9999")
+    assert fake_id != real_id and len(fake_id) == len(real_id)
+    _replace_in(artifact, "entities/entities.jsonl", real_id.encode(), fake_id.encode())
+
+    def swap_lineage(record: Any) -> None:
+        for item in record["upstream_artifacts"]:
+            if item["kind"] == "entity_resolution_run":
+                item["artifact_id"] = fake_id
+
+    def swap_manifest(record: Any) -> None:
+        for item in record["dependencies"]:
+            if item["artifact_type"] == "entity_resolution_run":
+                item["artifact_id"] = fake_id
+
+    _edit_json(artifact, "lineage/lineage.json", swap_lineage)
+    _edit_json(artifact, "manifest.json", swap_manifest)
+    _reseal(artifact)
+
+    report = validate_context_map_artifact(artifact)
+
+    assert report.status is ValidationStatus.INVALID
+    # A prova de que o digest sozinho não bastava: a dependência ainda é encontrada.
+    dependency = next(item for item in report.dependencies if item.artifact_id == fake_id)
+    assert dependency.status == "found"
+    messages = [
+        item.message
+        for item in report.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(fake_id in message for message in messages)
+
+
+def test_a_spatial_relations_run_linked_to_a_different_entity_resolution_run_is_detected(
+    tmp_path: Path, world: World, artifact: Path
+) -> None:
+    other_resolution_dir = tmp_path / "other-entity-resolution"
+    other_relations_dir = tmp_path / "other-spatial-relations"
+    other_er_run_id = "entity-resolution--run-9999"
+    write_resolution_run(
+        other_resolution_dir,
+        run_id=other_er_run_id,
+        geometric_map_id=MAP_ID,
+        semantic_map_id=SEMANTIC_MAP_ARTIFACT_ID,
+    )
+    write_relations_run(
+        other_relations_dir,
+        run_id=SPATIAL_RELATIONS_ARTIFACT_ID,
+        resolution_dir=other_resolution_dir,
+    )
+    new_digest = artifact_digest(other_relations_dir)
+
+    def relink(record: Any) -> None:
+        for item in record["upstream_artifacts"]:
+            if item["kind"] == "spatial_relations_run":
+                item["content_identity"] = new_digest
+
+    def relink_manifest(record: Any) -> None:
+        for item in record["dependencies"]:
+            if item["artifact_type"] == "spatial_relations_run":
+                item["content_identity"] = new_digest
+
+    _edit_json(artifact, "lineage/lineage.json", relink)
+    _edit_json(artifact, "manifest.json", relink_manifest)
+    _reseal(artifact)
+
+    report = validate_context_map_artifact(
+        artifact, dependency_paths={SPATIAL_RELATIONS_ARTIFACT_ID: other_relations_dir}
+    )
+
+    assert report.status is ValidationStatus.INVALID
+    messages = [
+        item.message
+        for item in report.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(other_er_run_id in message for message in messages)
+
+
+# Proving the upstream record *exists* is not proving the map's own copy still describes it: the
+# tables are rewritten straight from a tampered ContextMap with the writer's own encoder, so the
+# artifact stays internally self-consistent (index, offsets, counts) and only the one field under
+# test disagrees with the real upstream record the reader independently opens.
+
+
+def _rewrite_entities(artifact: Path, context_map: ContextMap) -> None:
+    table = encode_record_table(entity_lines(context_map))
+    (artifact / "entities" / "entities.jsonl").write_bytes(table.payload)
+    (artifact / "indexes" / "entity-index.jsonl").write_bytes(table.index)
+
+
+def _rewrite_relations(artifact: Path, context_map: ContextMap) -> None:
+    table = encode_record_table(relation_lines(context_map))
+    (artifact / "relations" / "relations.jsonl").write_bytes(table.payload)
+    (artifact / "indexes" / "relation-index.jsonl").write_bytes(table.index)
+
+
+def test_a_relation_whose_state_no_longer_matches_its_upstream_relation_is_detected(
+    world: World, artifact: Path
+) -> None:
+    written = make_context_map(world)
+    real = next(item for item in written.relations if item.state is RelationState.SUPPORTED)
+    tampered = replace(
+        written,
+        relations=tuple(
+            replace(item, state=RelationState.REJECTED)
+            if item.relation_id == real.relation_id
+            else item
+            for item in written.relations
+        ),
+    )
+    _rewrite_relations(artifact, tampered)
+    _reseal(artifact)
+
+    report = validate_context_map_artifact(artifact)
+
+    assert report.status is ValidationStatus.INVALID
+    messages = [
+        item.message
+        for item in report.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(str(real.source_relation_id) in message for message in messages)
+
+
+def test_an_entity_whose_geometry_refs_no_longer_match_its_resolved_entity_is_detected(
+    world: World, artifact: Path
+) -> None:
+    written = make_context_map(world)
+    first, second = written.entities[0], written.entities[1]
+    assert first.geometry_refs != second.geometry_refs
+    tampered = replace(
+        written,
+        entities=tuple(
+            replace(item, geometry_refs=second.geometry_refs)
+            if item.entity_id == first.entity_id
+            else item
+            for item in written.entities
+        ),
+    )
+    _rewrite_entities(artifact, tampered)
+    _reseal(artifact)
+
+    report = validate_context_map_artifact(artifact)
+
+    assert report.status is ValidationStatus.INVALID
+    messages = [
+        item.message
+        for item in report.findings
+        if item.code == "dependency.structural_reference_invalid"
+    ]
+    assert any(str(first.entity_id) in message for message in messages)
 
 
 def test_a_lineage_that_disagrees_with_the_manifest_is_an_incompatible_lineage(

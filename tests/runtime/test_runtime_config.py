@@ -409,6 +409,15 @@ def _all_selected() -> dict[str, object]:
                 "semantic_interpretation": {"backend": "qwen"},
             },
             "state_estimation": {"estimator": {"backend": "external_pose"}},
+            "geometric_mapping": {
+                "pose_lookup": {"backend": "lookup-policy-v1"},
+                "motion_correction": {"backend": "motion-correction-v1"},
+            },
+            "sensor_association": {
+                "occlusion": {"backend": "conservative-depth-support-v1"},
+                "tolerances": {"backend": "diagnostic-tolerances-v1"},
+                "pose_policy": {"backend": "lookup-policy-v1"},
+            },
             "semantic_fusion": {
                 "support": {"backend": "geometry-jaccard-support-v1"},
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},

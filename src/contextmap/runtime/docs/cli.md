@@ -67,12 +67,15 @@ A CLI não faz rede, não abre dashboard e não usa "todos os runs". Importar `c
 
 ## Executores
 
-Os executores dos estágios reais **não** estão empacotados: `main(argv, executors=...)` os recebe de quem chama (os testes usam estágios falsos). Sem um executor, o preflight de uma execução real bloqueia com `no executor is registered for it` e nada roda; um dry-run não precisa de executores e informa quais faltam.
+Para `run`, `stage` e seus dry runs, a CLI monta automaticamente os executores que [`compose_executors`](composition.md) consegue construir só a partir da configuração resolvida — hoje `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` — e mescla o resultado com o que `main(argv, executors=...)` recebeu de quem chama; o que vem de `main()` sempre vence (um teste, um estágio que a composição não sabe montar como `ingestion`, ou uma substituição explícita). Isso é o que deixa o binário `contextmap` instalado rodar essas quatro capabilities sem nenhum wrapper Python.
+
+`ingestion` continua sem ser composto automaticamente: o `IngestionStageExecutor` precisa de um `IngestionRequest` concreto (fonte, tópicos, sincronização) que não é parte de nenhuma configuração — é exatamente o que os flags do comando `ingest` constroem. O caminho canônico sem wrapper é `contextmap ingest` seguido de `contextmap run --select ingestion=<artifact-id> --catalog ...`, que trata a saída da ingestion como entrada fornecida em vez de reexecutá-la. `visual_perception` e `point_representation` continuam sem executor real (dependem de GPU/modelo); sem uma injeção, o preflight de uma execução real bloqueia com `no executor is registered for it` para esses estágios, e nada roda; um dry-run não precisa de executores e informa quais faltam.
 
 ## Lacunas conhecidas
 
-- **Execução real do canônico.** O comando existe e é testado de ponta a ponta com executores falsos, mas os executores das capabilities reais (que precisam das políticas de Geometric Mapping e Sensor Association e dos hashes de conteúdo dos manifests) acompanham a validação end-to-end (#177). Além disso, o pipeline completo continua bloqueado pelos estágios das milestones #12–#15; hoje o caminho executável é um subgrafo (`--stage`).
+- **`ingestion` dentro de `run`/`stage`.** Não é composto automaticamente (ver acima); precisa de injeção explícita ou de rodar como um `contextmap ingest` separado e ser fornecido/selecionado.
+- **`visual_perception` e `point_representation`.** Sem executor real ainda; um run que os inclua precisa de um executor injetado (por exemplo um teste) ou fica bloqueado no preflight, explicitamente.
 - **Calibração externa em `ingest`.** A CLI ainda não carrega um arquivo de calibração (o decoder não é API pública de `contextmap.ingestion`); fontes com `camera_info` trazem a calibração pelo adapter.
-- **`export`.** Não há artifact a exportar antes das milestones #15/#16 (`ContextMapArtifact`).
-- **Verificador de artifacts.** As flags de reuso e retomada existem, mas o `verify` do índice vem do dono dos executores reais (#177); a CLI recusa `--reuse-index` sem ele.
-- **API pública.** A CLI chama as funções do runtime diretamente; a fachada pública frontend-neutra (#264) passa a ser o que ela consome.
+- **`export`.** Não há artifact a exportar antes da etapa de montagem do `ContextMapArtifact`; o parser não declara esse comando até que exista algo real para exportar.
+- **Verificador de artifacts.** As flags de reuso e retomada existem, mas o `verify` do índice vem do dono dos executores reais; a CLI recusa `--reuse-index` sem ele.
+- **API pública.** A CLI chama as funções do runtime diretamente; a fachada pública frontend-neutra (`Runtime`, em `api.py`) passa a ser o que ela consome.

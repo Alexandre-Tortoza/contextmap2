@@ -97,8 +97,8 @@ def build_geometry_artifact(
     """Write a real GeometricMapArtifact under ``workspace_root`` and return it.
 
     Args:
-        workspace_root: Where the artifact is written; the run directory is derived from it, as
-            the geometric-mapping writer does.
+        workspace_root: Where the artifact is written; this helper, not the writer, chooses the
+            final run directory under it.
 
     Returns:
         The run directory and its manifest. The map is ``corridor-02--map-run-0001`` with

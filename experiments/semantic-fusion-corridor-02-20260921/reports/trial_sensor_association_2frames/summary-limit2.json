@@ -1,0 +1,28 @@
+{
+ "policies": {
+  "occlusion": {
+   "cell_size_px": 4,
+   "depth_margin_m": 0.1,
+   "depth_margin_ratio": 0.02,
+   "neighborhood_radius_cells": 2,
+   "policy_id": "conservative-depth-support-v1"
+  },
+  "pose": "interpolated max_gap 450 ms"
+ },
+ "runs": {
+  "run-0001__frames-08026-10078__sam2-dinov2-clip": {
+   "artifact_mb": 0.3,
+   "association_seconds": 66.2,
+   "frames_associated": 2,
+   "frames_rejected": 0,
+   "integrity_problems": [],
+   "observations": 47,
+   "peak_rss_mb": 4287,
+   "perception_run": "run-0001__frames-08026-10078__sam2-dinov2-clip",
+   "perception_run_id": "vp-sam2-sel",
+   "regions_skipped": 0,
+   "run_dir": "<VALIDATION_DIR>/sensor_association/runs/sensor-association/corridor-02/run-0001__ts-w336-20frames__sam2-dinov2-clip",
+   "run_id": "sa-vp-sam2-sel"
+  }
+ }
+}

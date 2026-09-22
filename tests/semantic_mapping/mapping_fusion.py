@@ -9,7 +9,7 @@ from pathlib import Path
 from evidence_builders import ClaimSpec, View, build_scenario, build_scenario_parts
 from fusion_builders import MAP_ID
 from fusion_run_fixtures import LINEAGE, make_run_fixture
-from mapping_builders import SEMANTIC_MAP_ID, SUMMARY_POLICY
+from mapping_builders import CODE_DIGEST, SEMANTIC_MAP_ID, SUMMARY_POLICY
 from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.semantic_fusion import (
@@ -165,5 +165,6 @@ def write_mapping_run(
         semantic_map_id=SEMANTIC_MAP_ID,
         lineage=lineage_from_fusion_manifest(run.manifest),
         code_version="test",
+        code_digest=CODE_DIGEST,
     ).write(entities, rejections=rejections)
     return run_dir

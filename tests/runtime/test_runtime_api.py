@@ -435,6 +435,33 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
 # --- preflight --------------------------------------------------------------------------
 
 
+def test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration(
+    tmp_path: Path,
+) -> None:
+    """Blocker #2 of the PR #387 review: ``Runtime(executors={})`` is no longer a dead end.
+
+    A frontend that never builds an executor by hand can still preflight (and run) the
+    stages ``compose_executors`` can build from the configuration alone; only ``ingestion``
+    (needs a request no configuration carries) and ``visual_perception`` (no real executor
+    yet) remain genuinely blocked.
+    """
+    runtime = Runtime(
+        workspace=tmp_path / "ws", module_available=_ready, environ={}
+    )  # executors=None: nada injetado
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert not report.ok  # capabilities sem executor real continuam honestamente ausentes
+    assert set(report.missing_executors) == {
+        "ingestion",
+        "visual_perception",
+        "point_representation",
+    }
+    for stage in ("state_estimation", "geometric_mapping", "sensor_association", "semantic_fusion"):
+        assert stage not in report.missing_executors
+
+
 def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
     config = _config(runtime, tmp_path)

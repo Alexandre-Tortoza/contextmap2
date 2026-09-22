@@ -11,7 +11,6 @@ population becomes ``NOT_APPLICABLE``, never zero. See
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict
 from statistics import fmean
 from typing import Any
 
@@ -28,7 +27,10 @@ from contextmap.evaluation.report_schema import (
     ReproducibilityMetadata,
     assemble_evaluation_report,
 )
-from contextmap.evaluation.semantic_interpretation import SemanticEvaluationReport
+from contextmap.evaluation.semantic_interpretation import (
+    SemanticEvaluationReport,
+    encode_semantic_evaluation_report,
+)
 
 _BYTES_PER_MB = 1_000_000
 
@@ -150,20 +152,30 @@ def semantic_interpretation_evaluation_report(
 ) -> EvaluationReport:
     """Lift a Semantic Interpretation report into the envelope.
 
-    Rates are over claims; the ambiguity-preservation rate is ``NOT_APPLICABLE``
-    when no request had an ambiguous annotation.
+    Rates are over the *assessed* claims (``quality.assessed_claim_count``), never
+    the raw claim count: a run can have real claims and no human annotation, so
+    those claims are unassessed, not wrong, and the rate is ``NOT_APPLICABLE``
+    rather than a fabricated value. The ambiguity-preservation rate's population
+    is the primary-run (``repeat_index == 0``) requests with an ambiguous
+    annotation; repeats measure stability, not additional physical evidence, and
+    must not inflate it. The full semantic report (samples, failures, quality,
+    cost, outcomes, consistency and per-stratum quality) travels in the stage
+    report through the capability's own encoder, so an ``Enum`` field it
+    introduces (for example ``SemanticStratum.source``) stays JSON-safe.
     """
     quality = report.quality
     context = report.context
-    if quality.claim_count > 0:
+    if quality.acceptable_claim_rate is not None and quality.unsupported_claim_rate is not None:
         quality_metrics = [
             _value(
-                "semantic.acceptable_claim_rate", quality.acceptable_claim_rate, quality.claim_count
+                "semantic.acceptable_claim_rate",
+                quality.acceptable_claim_rate,
+                quality.assessed_claim_count,
             ),
             _value(
                 "semantic.unsupported_claim_rate",
                 quality.unsupported_claim_rate,
-                quality.claim_count,
+                quality.assessed_claim_count,
             ),
         ]
     else:
@@ -172,8 +184,14 @@ def semantic_interpretation_evaluation_report(
             _unavailable("semantic.unsupported_claim_rate", MetricStatus.NOT_APPLICABLE),
         ]
     ambiguity = quality.ambiguity_preservation_rate
+    # A população é só a dos requests primários (repeat_index == 0) cujo alvo tem registro
+    # ambíguo: repeats medem estabilidade, não evidência física adicional, e não podem
+    # inflar a população usada para calcular a taxa (ver o registro de métricas).
+    ambiguous_request_count = sum(
+        item.ambiguity_preserved is not None for item in report.samples if item.repeat_index == 0
+    )
     quality_metrics.append(
-        _value("semantic.ambiguity_preservation_rate", ambiguity, report.cost.request_count)
+        _value("semantic.ambiguity_preservation_rate", ambiguity, ambiguous_request_count)
         if ambiguity is not None
         else _unavailable("semantic.ambiguity_preservation_rate", MetricStatus.NOT_APPLICABLE)
     )
@@ -206,11 +224,5 @@ def semantic_interpretation_evaluation_report(
         ),
         quality_metrics=tuple(quality_metrics),
         performance_metrics=tuple(performance),
-        stage_report={
-            "matching_policy": report.matching_policy,
-            "context": asdict(context),
-            "quality": asdict(quality),
-            "cost": asdict(cost),
-            "failures": [asdict(item) for item in report.failures],
-        },
+        stage_report=encode_semantic_evaluation_report(report),
     )

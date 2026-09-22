@@ -15,10 +15,6 @@ flowchart TD
     SA["sensor_association<br/>SensorAssociationRunArtifact"]
     PR["point_representation<br/>(opcional)<br/>PointRepresentationRunArtifact"]
     SF["semantic_fusion<br/>SemanticFusionRunArtifact"]
-    SM["semantic_mapping<br/>(indisponível)"]
-    ER["entity_resolution<br/>(indisponível)"]
-    SR["spatial_relations<br/>(indisponível)"]
-    CM["context_map<br/>(indisponível)"]
 
     ING --> VP
     ING --> ST
@@ -34,10 +30,6 @@ flowchart TD
     VP --> SF
     GM --> SF
     PR -.-> SF
-    SF --> SM --> ER --> SR
-    GM --> CM
-    ER --> CM
-    SR --> CM
 ```
 
 Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente quando o estágio de origem participa.
@@ -51,9 +43,8 @@ Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente qu
 | `sensor_association` | `sequence`, `perception`, `trajectory`, `geometry` | `SensorAssociationRunArtifact` |
 | `point_representation` (opcional) | `geometry` ← `geometric_mapping`, `association` ← `sensor_association` (opcional) | `PointRepresentationRunArtifact` |
 | `semantic_fusion` | `association`, `perception`, `geometry`, `representation` ← `point_representation` (opcional) | `SemanticFusionRunArtifact` |
-| `semantic_mapping` … `context_map` | indisponíveis (milestones #12–#15) | — |
 
-Os estágios indisponíveis continuam na topologia, com o motivo; o preflight os reporta se o escopo os incluir.
+`canonical/1` termina em `semantic_fusion`: é o pipeline executável hoje, e passa no preflight. Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` não fazem parte dele; um preset versionado posterior os declara quando as capabilities existirem, sem mudar a topologia de `canonical/1`. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
 
 ## Estágios opcionais
 
@@ -101,6 +92,6 @@ O DAG roda em CI com executores leves (sem modelo nem GPU): a ordem, as entradas
 
 ## Lacunas conhecidas
 
-- **Não há executores reais das capabilities.** A milestone entrega o runner, o contrato do executor e a topologia; a execução real ponta a ponta exige as políticas de Geometric Mapping e Sensor Association e o vínculo de cada artifact, e pertence à validação end-to-end (#177). O canônico completo resolve e é validado, mas o preflight o bloqueia enquanto as capabilities de #12–#15 não existirem: o caminho suportado é um subgrafo (`targets=[...]`).
+- **`visual_perception` e `point_representation` sem executor real.** `contextmap.runtime.executors` tem executores reais para `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` (ver [`executors.md`](executors.md)), e a [composition root](composition.md) os monta automaticamente da configuração (`compose_executors`). `visual_perception` e `point_representation` dependem de backend com modelo/GPU e ainda não têm um; um `targets=[...]` que os inclua precisa de um executor injetado ou fica bloqueado no preflight, explicitamente — nunca simulado.
 - **`FeatureResolutionEnhancement` não é um estágio de topo.** No canônico ele é interno ao preset de Visual Perception; o padrão de inserção acima é o mecanismo, exercitado com estágios de teste.
 - O reuso por identidade está em [`reuse.md`](reuse.md), a seleção de runs com linhagem em [`selection.md`](selection.md) e o ciclo de vida, os eventos e a retomada em [`lifecycle.md`](lifecycle.md); sem uma `ReusePolicy`, o reuso é apenas o artifact fornecido ou selecionado explicitamente.

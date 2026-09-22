@@ -253,6 +253,31 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="fast_lio", requires=("rosbags",), install_hint=_ROSBAGS_HINT),
     ),
     _component(
+        "geometric_mapping",
+        "pose_lookup",
+        BackendSpec(backend_id="lookup-policy-v1"),
+    ),
+    _component(
+        "geometric_mapping",
+        "motion_correction",
+        BackendSpec(backend_id="motion-correction-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "occlusion",
+        BackendSpec(backend_id="conservative-depth-support-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "tolerances",
+        BackendSpec(backend_id="diagnostic-tolerances-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "pose_policy",
+        BackendSpec(backend_id="lookup-policy-v1"),
+    ),
+    _component(
         "point_representation",
         "encoder",
         BackendSpec(backend_id="geometric_descriptor"),
@@ -275,7 +300,6 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
     component.component_id: component for component in _COMPONENT_LIST
 }
 """Every selectable variation point, keyed by ``"<capability>.<slot>"``."""
-
 
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
@@ -313,6 +337,7 @@ CANONICAL_PRESET = RuntimePreset(
         StageDeclaration(
             stage_id="geometric_mapping",
             capability="geometric_mapping",
+            components=("geometric_mapping.pose_lookup", "geometric_mapping.motion_correction"),
             inputs=(
                 StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(name="trajectory", contract=TRAJECTORY, source="state_estimation"),
@@ -322,6 +347,11 @@ CANONICAL_PRESET = RuntimePreset(
         StageDeclaration(
             stage_id="sensor_association",
             capability="sensor_association",
+            components=(
+                "sensor_association.occlusion",
+                "sensor_association.tolerances",
+                "sensor_association.pose_policy",
+            ),
             inputs=(
                 StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(

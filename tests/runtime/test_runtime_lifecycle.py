@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
+from runtime_fixtures import unavailable_context_map  # noqa: F401
 from runtime_worlds import World
 
 from contextmap.runtime import (
@@ -379,6 +380,7 @@ class TestBlockedRun:
         assert world.runs == []
         assert not (journal.directory / "run.lock").exists()
 
+    @pytest.mark.usefixtures("unavailable_context_map")
     def test_a_plan_with_structural_problems_is_recorded_without_a_plan_file(
         self, tmp_path: Path
     ) -> None:

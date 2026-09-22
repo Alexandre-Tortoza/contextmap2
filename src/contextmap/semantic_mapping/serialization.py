@@ -68,6 +68,7 @@ from contextmap.semantic_mapping.semantic_state import (
     EntityHypothesisRef,
     EntitySemanticState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticStateProvenance,
 )
 from contextmap.semantic_mapping.temporal import (
@@ -88,6 +89,15 @@ from contextmap.visual_perception import (
     PerceptionRunId,
     RegionId,
 )
+
+ENTITY_SCHEMA_VERSION = "0.1.0"
+"""Version of the canonical entity record that :func:`encode_entity` writes and
+:func:`decode_entity` reads.
+
+It versions the *entity* contract, not the run artifact that stores entities (which has its own
+``SCHEMA_VERSION``), so a change to how a run is laid out does not pretend to change what an
+entity is, and vice versa. Every run manifest records it and a reader refuses another value.
+"""
 
 
 def encode_entity_reference(reference: EntityReference) -> dict[str, Any]:
@@ -363,6 +373,15 @@ def _encode_attribute(attribute: EntityAttribute) -> dict[str, Any]:
         "derivation_id": attribute.derivation_id,
         "evidence": [_encode_reference(ref) for ref in attribute.evidence],
         "support": _encode_signals(attribute.support),
+        "external_source": (
+            None
+            if attribute.external_source is None
+            else {
+                "source_id": attribute.external_source.source_id,
+                "source_version": attribute.external_source.source_version,
+                "entry_id": attribute.external_source.entry_id,
+            }
+        ),
     }
 
 
@@ -374,6 +393,15 @@ def _decode_attribute(record: Mapping[str, Any]) -> EntityAttribute:
         derivation_id=record["derivation_id"],
         evidence=tuple(_decode_reference(ref) for ref in record["evidence"]),
         support=_decode_signals(record["support"]),
+        external_source=(
+            None
+            if record["external_source"] is None
+            else ExternalKnowledgeSource(
+                source_id=record["external_source"]["source_id"],
+                source_version=record["external_source"]["source_version"],
+                entry_id=record["external_source"]["entry_id"],
+            )
+        ),
     )
 
 
@@ -466,6 +494,7 @@ def _encode_evidence(evidence: EntityEvidenceLinks) -> dict[str, Any]:
                 "fusion_run_id": str(ref.fusion_run_id),
                 "fusion_schema_version": ref.fusion_schema_version,
                 "fusion_artifact_digest": ref.fusion_artifact_digest,
+                "sequence_artifact_id": ref.sequence_artifact_id,
                 "fused_evidence_id": str(ref.fused_evidence_id),
                 "fusion_support_id": str(ref.fusion_support_id),
             }
@@ -503,6 +532,7 @@ def _decode_evidence(record: Mapping[str, Any]) -> EntityEvidenceLinks:
                 fusion_run_id=SemanticFusionRunId(item["fusion_run_id"]),
                 fusion_schema_version=item["fusion_schema_version"],
                 fusion_artifact_digest=item["fusion_artifact_digest"],
+                sequence_artifact_id=item["sequence_artifact_id"],
                 fused_evidence_id=FusedEvidenceId(item["fused_evidence_id"]),
                 fusion_support_id=FusionSupportId(item["fusion_support_id"]),
             )

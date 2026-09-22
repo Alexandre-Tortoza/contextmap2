@@ -19,6 +19,7 @@ from contextmap.semantic_fusion import (
     QualityAwareAccumulationPolicy,
     QualityInput,
     QualityRamp,
+    accumulate_baseline_evidence,
     accumulate_quality_aware_evidence,
 )
 from contextmap.visual_perception import HypothesisRole, PerceptionRunId
@@ -125,4 +126,65 @@ def make_run_fixture() -> RunFixture:
     return RunFixture(outcomes=outcomes, excluded=parts.excluded)
 
 
-__all__ = ["LINEAGE", "POLICY", "RunFixture", "make_perception_run", "make_run_fixture"]
+def make_multi_region_run_fixture() -> RunFixture:
+    """One frame, two runs, two regions each over disjoint geometry.
+
+    It is the shape of every real perception result (several regions per result), which the
+    fixtures above never had: one physical observation, two inference results, two supports,
+    and each result reaches both supports.
+    """
+    views = [
+        View(
+            "run-a",
+            "frame-0120",
+            (ClaimSpec("door"),),
+            region="region-0001",
+            geometry=range(0, 20),
+        ),
+        View(
+            "run-a",
+            "frame-0120",
+            (ClaimSpec("cabinet", claim_id="run-a--frame-0120--claim-0002"),),
+            region="region-0002",
+            geometry=range(100, 120),
+        ),
+        View(
+            "run-b",
+            "frame-0120",
+            (ClaimSpec("door"),),
+            region="region-0001",
+            geometry=range(0, 20),
+        ),
+        View(
+            "run-b",
+            "frame-0120",
+            (ClaimSpec("cabinet", claim_id="run-b--frame-0120--claim-0002"),),
+            region="region-0002",
+            geometry=range(100, 120),
+        ),
+    ]
+    parts = build_scenario_parts(views, geometry_points=1_000)
+    outcomes = tuple(
+        FusionOutcome(
+            support=support,
+            evidence=accumulate_baseline_evidence(
+                support,
+                observations=parts.observations,
+                grouping=parts.grouping,
+                perception_results=parts.results,
+                code_version="test",
+            ),
+        )
+        for support in parts.supports
+    )
+    return RunFixture(outcomes=outcomes, excluded=parts.excluded)
+
+
+__all__ = [
+    "LINEAGE",
+    "POLICY",
+    "RunFixture",
+    "make_multi_region_run_fixture",
+    "make_perception_run",
+    "make_run_fixture",
+]

@@ -5,7 +5,7 @@ Duas técnicas são opcionais e só podem influenciar o perfil canônico com evi
 1. **Resolução de features** entre a extração densa (DINO) e Sensor Association: features nativas × o mesmo artifact de extração passado por `FeatureResolutionEnhancement`.
 2. **Fusão semântica ciente de qualidade**: fusão uniforme × fusão ponderada pelo `ObservationQuality` canônico, sobre exatamente o mesmo artifact de Sensor Association.
 
-Esta avaliação **não altera o perfil canônico/default**. Ela produz evidência que pode sustentar uma decisão de configuração explícita e posterior, e a re-validação pelo fluxo de aceite E2E.
+Esta avaliação **não altera o perfil canônico/default**. Executada sobre dados reais, ela produz evidência que pode sustentar uma decisão de configuração explícita e posterior, e a re-validação pelo fluxo de aceite E2E. **Hoje só existe o protocolo e o harness**: nenhuma execução real foi feita, então não há evidência nem decisão.
 
 Os módulos são `contextmap.evaluation.technique_protocols` (definição dos experimentos) e `contextmap.evaluation.technique_evidence` (evidência e registro de decisão). Eles se apoiam nos manifestos e na execução controlada de [`experiments.md`](experiments.md), no registro de métricas de [`metrics.md`](metrics.md) e no reference set de [`reference-set.md`](reference-set.md).
 
@@ -91,5 +91,6 @@ Uma decisão `change_default` é só uma **proposta**: `requires_e2e_revalidatio
 ## Limitações e lacunas
 
 - **Sem runtime nem executores reais.** Como em #174, as topologias resolvidas e o executor de arms são fornecidos; a conexão com o runtime e com o pipeline real virá com a milestone 17. Nenhuma execução real (GPU, backend de enhancement, cenários reais) está registrada: o harness está pronto, mas a evidência científica ainda não existe.
+- **Escopo de #197.** Este módulo entrega o protocolo e o harness. Os resultados de ganhos e regressões sobre o reference set real e a evidência que sustente manter, adiar ou mudar o default dependem da execução real e continuam em aberto: a issue #197 não está concluída.
 - Os estratos de qualidade dependem de o reference set versionado declará-los e de os avaliadores por estágio os produzirem; hoje há definições e validação, não dados reais.
 - Entity Resolution e Spatial Relations aguardam as milestones 12–14.

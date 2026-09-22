@@ -44,18 +44,22 @@ from contextmap.runtime.errors import (
     BackendConfigurationError,
     BackendRuntimeMissingError,
     BackendUnavailableError,
+    CompositionError,
     StageUnavailableError,
 )
 
 if TYPE_CHECKING:
+    from contextmap.geometric_mapping import MotionCorrectionPolicy
     from contextmap.ingestion import SourceAdapter, SourceAdapterConfig
     from contextmap.point_representation import PointEncoder
+    from contextmap.runtime.pipeline import StageExecutor
     from contextmap.semantic_fusion import (
         BaselineAccumulationPolicy,
         GeometryOverlapSupportPolicy,
         QualityAwareAccumulationPolicy,
     )
-    from contextmap.state_estimation import StateEstimator
+    from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
+    from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
         FeatureExtractor,
         PerceptionRunId,
@@ -121,9 +125,15 @@ class ComposedRuntime:
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
         state_estimator: State estimation backend.
+        geometric_mapping_pose_lookup: Pose lookup rule Geometric Mapping uses to place
+            each scan.
+        motion_correction: Disposition of scans that are not known to be corrected.
         point_encoder: Point encoder, only when the optional stage is selected.
         support_policy: Semantic Fusion support policy.
         accumulation_policy: Semantic Fusion accumulation policy.
+        occlusion_policy: Sensor Association visibility rule.
+        association_tolerances: Sensor Association diagnostic tolerances.
+        association_pose_policy: Pose lookup rule Sensor Association uses per frame.
     """
 
     effective: EffectiveConfig
@@ -135,9 +145,14 @@ class ComposedRuntime:
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
     state_estimator: StateEstimator | None = None
+    geometric_mapping_pose_lookup: LookupPolicy | None = None
+    motion_correction: MotionCorrectionPolicy | None = None
     point_encoder: PointEncoder | None = None
     support_policy: GeometryOverlapSupportPolicy | None = None
     accumulation_policy: BaselineAccumulationPolicy | QualityAwareAccumulationPolicy | None = None
+    occlusion_policy: OcclusionPolicy | None = None
+    association_tolerances: DiagnosticTolerances | None = None
+    association_pose_policy: LookupPolicy | None = None
 
 
 def compose(
@@ -601,6 +616,40 @@ def _fast_lio(context: _Context, component_id: str) -> StateEstimator:
     return FastLioEstimator(config, runner)
 
 
+# --- geometric mapping ---------------------------------------------------------------
+
+
+def _lookup_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.state_estimation import LookupPolicy
+
+    policy, _ = context.build(component_id, LookupPolicy)
+    return policy
+
+
+def _motion_correction(context: _Context, component_id: str) -> Any:
+    from contextmap.geometric_mapping import MotionCorrectionPolicy
+
+    policy, _ = context.build(component_id, MotionCorrectionPolicy)
+    return policy
+
+
+# --- sensor association --------------------------------------------------------------
+
+
+def _occlusion_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.sensor_association import OcclusionPolicy
+
+    policy, _ = context.build(component_id, OcclusionPolicy)
+    return policy
+
+
+def _diagnostic_tolerances(context: _Context, component_id: str) -> Any:
+    from contextmap.sensor_association import DiagnosticTolerances
+
+    policy, _ = context.build(component_id, DiagnosticTolerances)
+    return policy
+
+
 # --- point representation ----------------------------------------------------------
 
 
@@ -686,6 +735,11 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "florence2": _florence2_semantic,
     },
     "state_estimation.estimator": {"external_pose": _external_pose, "fast_lio": _fast_lio},
+    "geometric_mapping.pose_lookup": {"lookup-policy-v1": _lookup_policy},
+    "geometric_mapping.motion_correction": {"motion-correction-v1": _motion_correction},
+    "sensor_association.occlusion": {"conservative-depth-support-v1": _occlusion_policy},
+    "sensor_association.tolerances": {"diagnostic-tolerances-v1": _diagnostic_tolerances},
+    "sensor_association.pose_policy": {"lookup-policy-v1": _lookup_policy},
     "point_representation.encoder": {"geometric_descriptor": _geometric_descriptor, "ptv3": _ptv3},
     "semantic_fusion.support": {"geometry-jaccard-support-v1": _geometry_overlap_support},
     "semantic_fusion.accumulation": {
@@ -722,6 +776,21 @@ def _compose_state_estimation(context: _Context) -> dict[str, object]:
     return {"state_estimator": _construct(context, "state_estimation.estimator")}
 
 
+def _compose_geometric_mapping(context: _Context) -> dict[str, object]:
+    return {
+        "geometric_mapping_pose_lookup": _construct(context, "geometric_mapping.pose_lookup"),
+        "motion_correction": _construct(context, "geometric_mapping.motion_correction"),
+    }
+
+
+def _compose_sensor_association(context: _Context) -> dict[str, object]:
+    return {
+        "occlusion_policy": _construct(context, "sensor_association.occlusion"),
+        "association_tolerances": _construct(context, "sensor_association.tolerances"),
+        "association_pose_policy": _construct(context, "sensor_association.pose_policy"),
+    }
+
+
 def _compose_point_representation(context: _Context) -> dict[str, object]:
     return {"point_encoder": _construct(context, "point_representation.encoder")}
 
@@ -742,8 +811,8 @@ _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "ingestion": _compose_ingestion,
     "visual_perception": _compose_visual_perception,
     "state_estimation": _compose_state_estimation,
-    "geometric_mapping": _compose_nothing,
-    "sensor_association": _compose_nothing,
+    "geometric_mapping": _compose_geometric_mapping,
+    "sensor_association": _compose_sensor_association,
     "point_representation": _compose_point_representation,
     "semantic_fusion": _compose_semantic_fusion,
     "semantic_mapping": _compose_nothing,
@@ -760,3 +829,117 @@ def composed_stages() -> frozenset[str]:
         Stage identities with a composer. Every available stage of the catalog must be here.
     """
     return frozenset(_STAGE_COMPOSERS)
+
+
+def compose_executors(
+    effective: EffectiveConfig,
+    *,
+    providers: Mapping[str, RuntimeProvider] | None = None,
+    environ: Mapping[str, str] | None = None,
+    module_available: Callable[[str], bool] | None = None,
+) -> dict[str, StageExecutor]:
+    """Compose the real :class:`~contextmap.runtime.pipeline.StageExecutor` a DAG run needs.
+
+    This is the automatic counterpart of :func:`compose`: instead of handing back the
+    composed backends and policies, it wraps each one into the concrete executor class of
+    ``contextmap.runtime.executors`` its stage needs, keyed by ``stage_id``, exactly as a
+    caller previously had to build them by hand. A stage whose variation points are not
+    (yet) fully selected in ``effective``, whose selected backend rejects its own
+    configured parameters, or whose capability the executor does not support, is left out
+    -- never filled with a placeholder or allowed to abort composing the other stages. The
+    existing ``missing_executors``/"no executor is registered" preflight reporting already
+    explains why such a stage will not run; this function never hides that behind a guess.
+
+    Only ``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
+    ``semantic_fusion`` can be composed this way: each needs only the effective
+    configuration and the upstream artifacts the DAG already carries.
+
+    - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
+      IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
+      synchronization tolerance) that is per-invocation input, never part of a resolved
+      configuration -- it is what the ``ingest`` command's own flags build. A caller that
+      wants ``ingestion`` to run inside :func:`~contextmap.runtime.pipeline.run_plan`
+      still injects an :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`
+      explicitly; the ordinary canonical path is to run ``contextmap ingest`` first and
+      feed its published artifact to ``run``/``stage`` as a provided or selected input.
+    - ``visual_perception`` and ``point_representation`` have no real executor yet (their
+      backends are GPU/model dependent): they stay absent, exactly as before.
+    - ``semantic_fusion`` is composed only when the selected accumulation backend is the
+      one :class:`~contextmap.runtime.executors.SemanticFusionExecutor` actually runs
+      (``baseline-evidence-accumulation-v1``); the quality-aware accumulation backend has
+      no executor yet, so it is left out rather than run through the wrong policy.
+
+    Args:
+        effective: The resolved configuration.
+        providers: Model runtimes or clients for backends without a bundled loader; see
+            :func:`compose`.
+        environ: Environment to read secrets from; defaults to ``os.environ``.
+        module_available: Predicate telling whether an optional module is installed.
+
+    Returns:
+        One executor per stage that could genuinely be composed from ``effective``. Never
+        raises: a stage this cannot build for any reason (incomplete selection, a rejected
+        parameter, a missing module or secret) is simply absent from the result, one stage
+        at a time, so one broken stage never costs the others their real executor.
+    """
+    from contextmap.runtime.executors import (
+        GeometricMappingExecutor,
+        SemanticFusionExecutor,
+        SensorAssociationExecutor,
+        StateEstimationExecutor,
+    )
+    from contextmap.semantic_fusion import BaselineAccumulationPolicy
+
+    def _compose_stage(stage_id: str) -> ComposedRuntime | None:
+        try:
+            return compose(
+                effective,
+                stages=[stage_id],
+                providers=providers,
+                environ=environ,
+                module_available=module_available,
+            )
+        except (ConfigurationError, CompositionError):
+            # Seleção incompleta, estágio desabilitado, ou backend selecionado que rejeita seus
+            # próprios parâmetros ou módulo/segredo ausente: ausência honesta, nunca um erro que
+            # aborte a composição dos outros estágios. O preflight já relata "sem executor".
+            return None
+
+    executors: dict[str, StageExecutor] = {}
+
+    state_estimation = _compose_stage("state_estimation")
+    if state_estimation is not None:
+        assert state_estimation.state_estimator is not None
+        executors["state_estimation"] = StateEstimationExecutor(state_estimation.state_estimator)
+
+    geometric_mapping = _compose_stage("geometric_mapping")
+    if geometric_mapping is not None:
+        assert geometric_mapping.geometric_mapping_pose_lookup is not None
+        assert geometric_mapping.motion_correction is not None
+        executors["geometric_mapping"] = GeometricMappingExecutor(
+            pose_lookup=geometric_mapping.geometric_mapping_pose_lookup,
+            motion_correction=geometric_mapping.motion_correction,
+        )
+
+    sensor_association = _compose_stage("sensor_association")
+    if sensor_association is not None:
+        assert sensor_association.occlusion_policy is not None
+        assert sensor_association.association_tolerances is not None
+        assert sensor_association.association_pose_policy is not None
+        executors["sensor_association"] = SensorAssociationExecutor(
+            occlusion=sensor_association.occlusion_policy,
+            tolerances=sensor_association.association_tolerances,
+            pose_policy=sensor_association.association_pose_policy,
+        )
+
+    semantic_fusion = _compose_stage("semantic_fusion")
+    if semantic_fusion is not None:
+        assert semantic_fusion.support_policy is not None
+        assert semantic_fusion.accumulation_policy is not None
+        if isinstance(semantic_fusion.accumulation_policy, BaselineAccumulationPolicy):
+            executors["semantic_fusion"] = SemanticFusionExecutor(
+                support_policy=semantic_fusion.support_policy,
+                accumulation_policy=semantic_fusion.accumulation_policy,
+            )
+
+    return executors

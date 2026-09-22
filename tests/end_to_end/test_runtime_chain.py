@@ -252,6 +252,7 @@ def _executors() -> dict[str, Any]:
                 geometry=GeometrySummaryPolicy(sparse_point_threshold=3, connectivity_radius_m=0.5)
             ),
             semantic_map_id=SemanticMapId("semantic-map-ci"),
+            code_digest="sha256:" + "cd" * 32,
         ),
         "entity_resolution": EntityResolutionExecutor(
             retrieval=CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1),
@@ -312,6 +313,21 @@ def _scope(tmp_path: Path) -> tuple[Any, ExecutionPlan]:
     # O perfil canônico do cenário, expresso como configuração do runtime, com o dataset do run.
     document = scenario_runtime_document(canonical_real_scenario())
     document["inputs"] = {"sequence": CI_FIXTURE_ID}
+    # O cenário congelado ainda não escolhe backend para estes componentes: eles só passaram a
+    # existir no catálogo depois que o cenário foi congelado. A escolha é só deste teste, nunca
+    # do cenário: mudar o cenário mudaria seu digest e invalidaria o relatório real registrado.
+    components = document["components"]
+    components.setdefault("geometric_mapping", {})["pose_lookup"] = {"backend": "lookup-policy-v1"}
+    components.setdefault("geometric_mapping", {})["motion_correction"] = {
+        "backend": "motion-correction-v1"
+    }
+    components.setdefault("sensor_association", {})["occlusion"] = {
+        "backend": "conservative-depth-support-v1"
+    }
+    components.setdefault("sensor_association", {})["tolerances"] = {
+        "backend": "diagnostic-tolerances-v1"
+    }
+    components.setdefault("sensor_association", {})["pose_policy"] = {"backend": "lookup-policy-v1"}
     path = tmp_path / "canonical.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     effective = resolve_effective_config(files=[path])

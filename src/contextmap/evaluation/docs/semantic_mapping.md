@@ -29,8 +29,8 @@ Cada `SemanticMappingValidationCheck` traz a camada, um `check_id` estável, qua
 - o `SemanticFusionRunArtifact` (identidade, versão do schema e digest do inventário);
 - o `GeometricMapArtifact` (identidade do mapa);
 - a política de materialização e sua versão, a política de identidade e o fingerprint da configuração;
-- a versão do schema das entidades (do artifact);
-- a versão do código;
+- a versão do schema da entidade (`entity_schema_version`, a do registro canônico da entidade, **distinta** da versão do schema do artifact);
+- a versão e o digest do código (`code_version` e `code_digest`, como o manifest do run os registrou);
 - a versão do avaliador (`EVALUATOR_VERSION`, incrementada sempre que a definição de uma checagem muda).
 
 ## Camadas
@@ -42,7 +42,7 @@ Cada `SemanticMappingValidationCheck` traz a camada, um `check_id` estável, qua
 - `entity_references_resolve`: cada `EntityReference` resolve para a mesma entidade, e uma referência de outro mapa é recusada.
 - `geometry_valid_and_authoritative`: geometria não vazia, no frame do mapa, que resolve no mapa geométrico e cujos resumos são os que a política produz (`verify_geometry_summary`).
 - `semantic_state_invariants`: o estado de ambiguidade é o que os registros implicam, nenhuma primária esconde alternativas, atributos citam evidência.
-- `provenance_complete`: política, fingerprint, versão de código e referências ao run de fusão da linhagem.
+- `provenance_complete`: política, fingerprint, versão de código e referências ao run de fusão da linhagem (identidade, versão, digest e sequência).
 
 ### Preservação semântica (`semantic_preservation`)
 
@@ -71,3 +71,8 @@ Uma evidência fundida que não pode ser lida, um payload de fusão corrompido o
 ## Validação
 
 `tests/semantic_mapping/test_semantic_mapping_evaluation.py` valida um run limpo (todas as checagens de todas as camadas passam, determinismo e codificação sem score composto) e, sobretudo, que cada camada **detecta defeitos reais**: estado semântico que perdeu alternativas e forçou um label, evidência sem score perdida, estado temporal incompleto, vínculos com um observador estranho, um suporte que virou duas entidades ou identidade renomeada, resumo geométrico adulterado, política diferente da usada, evidência fundida ilegível, corrupção do run persistido e upstream errado.
+
+## Limites conhecidos
+
+- **A validação é inteiramente sintética.** Os testes usam evidência fundida real, mas construída por fixtures sintéticas de observações, de percepção e de geometria: nenhuma checagem foi executada sobre dados reais de robô. Enquanto não houver ao menos um smoke ou run de avaliação sobre dados reais, nada aqui é evidência de qualidade semântica ou de custo em suportes reais (o custo da conectividade de geometria, por exemplo, só foi medido sinteticamente).
+- **Não existe um schema comum de relatórios de validação.** Cada capability serializa o próprio relatório (`encode_semantic_mapping_report` aqui) e nenhum contrato genérico une esses formatos. Esse schema comum foi deslocado para a issue #173 (registro de métricas por estágio e envelope comum dos relatórios de avaliação), que é a dona da harmonização entre capabilities; este relatório não o antecipa.

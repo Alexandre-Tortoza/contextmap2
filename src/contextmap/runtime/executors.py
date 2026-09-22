@@ -447,11 +447,21 @@ class SemanticMappingExecutor:
         *,
         policy: EntityMaterializationPolicy,
         semantic_map_id: SemanticMapId,
+        code_digest: str,
         code_version: str | None = None,
     ) -> None:
-        """Bind the executor to the materialization policy and the semantic map it fills."""
+        """Bind the executor to the materialization policy and the semantic map it fills.
+
+        Args:
+            policy: The materialization policy.
+            semantic_map_id: The semantic map the run fills.
+            code_digest: Digest of the code producing the run; ``SemanticMappingRunWriter``
+                refuses an empty one, so unlike ``code_version`` it has no silent default.
+            code_version: Code revision that produced the run.
+        """
         self._policy = policy
         self._semantic_map_id = semantic_map_id
+        self._code_digest = code_digest
         self._code_version = code_version
 
     def execute(self, request: StageRequest) -> ArtifactRef:
@@ -475,6 +485,7 @@ class SemanticMappingExecutor:
             semantic_map_id=self._semantic_map_id,
             lineage=lineage_from_fusion_manifest(fusion.manifest),
             code_version=self._code_version or "",
+            code_digest=self._code_digest,
         ).write(materialization.entities, rejections=materialization.rejections)
         return _reference(request, ENTITIES, str(manifest.run_id), manifest.file_inventory)
 

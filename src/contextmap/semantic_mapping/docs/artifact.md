@@ -53,11 +53,11 @@ O writer recusa, com `MappingRunArtifactError` e sem deixar run visível, quando
 - uma entidade é sobre outro mapa geométrico que o da linhagem, ou referencia um run de fusão, uma run de percepção ou uma run de Point Representation que a linhagem não lista;
 - entidades usam política ou configuração de materialização diferentes: **um run guarda uma política**;
 - um candidato é ao mesmo tempo entidade e rejeição, ou as rejeições não estão ordenadas por suporte;
-- já existe um run no caminho (um run finalizado nunca é sobrescrito; reexecutar cria outro índice).
+- já existe um run em `output_dir` (um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, então rodar de novo grava em outro diretório).
 
 ## Linhagem (manifest)
 
-`MappingRunLineage` é a seleção **explícita** do run de fusão de origem, com a sua identidade, versão do schema e digest, o mapa geométrico, a sequência e, pela linhagem do run de fusão, as runs de Sensor Association, de percepção e de Point Representation. `lineage_from_fusion_manifest(manifest)` a deriva do manifest de fusão. O manifest também registra a política e o id de alocação (com o fingerprint da configuração), as contagens, os avisos, o código, o nível de debug e o inventário com hash de cada arquivo contratual. Um run sem entidades é válido e explícito (as políticas ficam `null`).
+`MappingRunLineage` é a seleção **explícita** do run de fusão de origem, com a sua identidade, versão do schema e digest, o mapa geométrico, a sequência e, pela linhagem do run de fusão, as runs de Sensor Association, de percepção e de Point Representation. `lineage_from_fusion_manifest(manifest)` a deriva do manifest de fusão. O manifest também registra a política e o id de alocação (com o fingerprint da configuração), as contagens, os avisos, o nível de debug e o inventário com hash de cada arquivo contratual. Registra o código por `code_version` (a revisão legível) e por `code_digest`, um digest **informado pelo chamador e gravado como veio**: a capability não inventa um esquema de hash da árvore de fontes, só recusa um digest vazio. Registra também duas versões de schema que não se confundem: `schema_version`, a do layout do artifact, e `entity_schema_version` (`ENTITY_SCHEMA_VERSION`), a do registro canônico da entidade. O leitor recusa qualquer uma que não entenda. Um run sem entidades é válido e explícito (as políticas ficam `null`).
 
 ## Métricas
 
@@ -92,4 +92,4 @@ Separadas, sem um escalar único:
 
 ## Validação
 
-`tests/semantic_mapping/test_semantic_mapping_run_artifact.py` escreve e reabre runs reais a partir de um run de fusão real: round-trip de referência para entidade, sobrevivência de geometria, alternativas, conflitos, evidência e tempo, leitura de uma entidade sem carregar as outras, abertura em um processo sem runtimes pesados, layout e manifest, índices, referências de outro mapa, corrupção (conteúdo, arquivo ausente, truncamento, tabela e registro malformados, schema não suportado), debug, métricas, recusas do writer, atomicidade e índices de run.
+`tests/semantic_mapping/test_semantic_mapping_run_artifact.py` escreve e reabre runs reais a partir de um run de fusão real: round-trip de referência para entidade, sobrevivência de geometria, alternativas, conflitos, evidência e tempo, leitura de uma entidade sem carregar as outras, abertura em um processo sem runtimes pesados, layout e manifest, índices, referências de outro mapa, corrupção (conteúdo, arquivo ausente, truncamento, tabela e registro malformados, schema não suportado), debug, métricas, recusas do writer, atomicidade e identidade do run.

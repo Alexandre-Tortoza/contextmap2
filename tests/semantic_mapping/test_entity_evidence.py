@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fusion_builders import make_region_feature
 from mapping_builders import (
     MAP_ID,
     SUMMARY_POLICY,
@@ -11,12 +12,14 @@ from mapping_builders import (
     make_evidence_links,
     make_fused_evidence_ref,
 )
-from mapping_fusion import FusionRun, entity_from_outcome, write_fusion_run
+from mapping_fusion import ClaimSpec, FusionRun, View, entity_from_outcome, fuse, write_fusion_run
 from mapping_geometry_fake import InMemoryGeometrySource
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_fusion import (
+    BaselineAccumulationPolicy,
+    EvidenceChannel,
     EvidenceStance,
     FusedEvidence,
     FusedEvidenceId,
@@ -35,6 +38,7 @@ from contextmap.semantic_mapping import (
     FusedEvidenceRef,
     FusedEvidenceSource,
     ObservationRef,
+    feature_refs_of,
     fusion_artifact_digest,
     summarize_geometry,
     trace_entity_evidence,
@@ -159,6 +163,79 @@ class TestLinksFromFusedEvidence:
         assert fusion_artifact_digest(run.manifest) == fusion_artifact_digest(run.manifest)
 
 
+class TestFeatureIdentityAcrossPerceptionRuns:
+    """``PerceptionResultId`` is local to a run and ``FeatureId`` to a result: only the run
+    tells two features that reuse those identities apart."""
+
+    @staticmethod
+    def _feature(run: str, result: str = "result-0001") -> EntityFeatureRef:
+        return EntityFeatureRef(
+            perception_run_id=PerceptionRunId(run),
+            perception_result_id=PerceptionResultId(result),
+            feature_id=FeatureId("feature-0001"),
+            embedding_space_id="dinov3-vit-b16",
+            scope=FeatureScope.GLOBAL,
+            region_id=None,
+        )
+
+    @staticmethod
+    def _evidence_where_two_runs_reuse_the_same_ids() -> FusedEvidence:
+        features = (make_region_feature(),)
+        _, evidence = fuse(
+            [
+                View("run-a", "frame-0120", (ClaimSpec("door"),), features=features),
+                View("run-b", "frame-0120", (ClaimSpec("door"),), features=features),
+            ],
+            policy=BaselineAccumulationPolicy(
+                channels=frozenset(
+                    {EvidenceChannel.SEMANTIC_CLAIMS, EvidenceChannel.VISUAL_FEATURES}
+                )
+            ),
+        )
+        shared = PerceptionResultId("result-0001")
+        return dataclasses.replace(
+            evidence,
+            contributions=tuple(
+                dataclasses.replace(item, perception_result_id=shared)
+                for item in evidence.contributions
+            ),
+            physical_observation_groups=tuple(
+                dataclasses.replace(group, perception_result_ids=(shared,))
+                for group in evidence.physical_observation_groups
+            ),
+        )
+
+    def test_features_of_two_runs_that_reuse_result_and_feature_ids_both_survive(self) -> None:
+        evidence = self._evidence_where_two_runs_reuse_the_same_ids()
+
+        refs = feature_refs_of(evidence)
+
+        assert [
+            (ref.perception_run_id, ref.perception_result_id, ref.feature_id) for ref in refs
+        ] == [
+            ("run-a", "result-0001", "feature-0001"),
+            ("run-b", "result-0001", "feature-0001"),
+        ]
+
+    def test_the_links_accept_them_and_order_them_by_run_first(self) -> None:
+        both = make_evidence_links(
+            features=(self._feature("run-a", "result-0002"), self._feature("run-b", "result-0001"))
+        )
+
+        assert [ref.perception_run_id for ref in both.visual_feature_refs] == ["run-a", "run-b"]
+        with pytest.raises(ValueError, match="visual_feature_refs must be sorted and unique"):
+            make_evidence_links(
+                features=(
+                    self._feature("run-b", "result-0001"),
+                    self._feature("run-a", "result-0002"),
+                )
+            )
+
+    def test_a_feature_repeated_within_one_run_is_still_refused(self) -> None:
+        with pytest.raises(ValueError, match="visual_feature_refs must be sorted and unique"):
+            make_evidence_links(features=(self._feature("run-a"), self._feature("run-a")))
+
+
 class TestLinksContract:
     def test_an_entity_needs_evidence_behind_it(self) -> None:
         with pytest.raises(ValueError, match="fused_evidence must not be empty"):
@@ -213,15 +290,20 @@ class TestLinksContract:
                 region_id=region,
             )
 
-    def test_a_reference_needs_every_identity(self) -> None:
-        with pytest.raises(ValueError, match="fusion_artifact_digest"):
-            FusedEvidenceRef(
-                fusion_run_id=RUN_ID,
-                fusion_schema_version="0.1.0",
-                fusion_artifact_digest=" ",
-                fused_evidence_id=FusedEvidenceId("fused"),
-                fusion_support_id=FusionSupportId("support"),
-            )
+    @pytest.mark.parametrize("missing", ["fusion_artifact_digest", "sequence_artifact_id"])
+    def test_a_reference_needs_every_identity(self, missing: str) -> None:
+        identities = {
+            "fusion_run_id": RUN_ID,
+            "fusion_schema_version": "0.1.0",
+            "fusion_artifact_digest": "sha256:artifact",
+            "sequence_artifact_id": "sequence-0001",
+            "fused_evidence_id": FusedEvidenceId("fused"),
+            "fusion_support_id": FusionSupportId("support"),
+        }
+        identities[missing] = " "
+
+        with pytest.raises(ValueError, match=missing):
+            FusedEvidenceRef(**identities)  # type: ignore[arg-type]
 
     def test_a_3d_representation_anchored_outside_the_entity_support_is_refused(
         self, run: FusionRun
@@ -338,6 +420,51 @@ class TestReferenceIntegrity:
         assert EvidenceIntegrityKind.INCOMPATIBLE_LINEAGE in _kinds(
             validate_entity_evidence(moved, fusion_runs={RUN_ID: run.reader})
         )
+
+    def test_a_reference_carries_the_sequence_the_fusion_run_was_built_over(
+        self, run: FusionRun
+    ) -> None:
+        ref = _entities(run)[0].evidence.fused_evidence[0]
+
+        assert ref.sequence_artifact_id == run.manifest.lineage.sequence_artifact_id
+
+    def test_a_run_built_over_another_sequence_is_an_incompatible_lineage(
+        self, run: FusionRun
+    ) -> None:
+        class OtherSequence:
+            """The same run, map and inventory, whose manifest names another sequence."""
+
+            manifest = dataclasses.replace(
+                run.manifest,
+                lineage=dataclasses.replace(
+                    run.manifest.lineage, sequence_artifact_id="sequence-9999"
+                ),
+            )
+
+            def fused_evidence(self, support_id: FusionSupportId) -> FusedEvidence:
+                return run.reader.fused_evidence(support_id)
+
+            def verify_integrity(self) -> list[str]:
+                return []
+
+        # A troca só da sequência não muda o digest: a detecção é uma comparação explícita.
+        assert fusion_artifact_digest(OtherSequence.manifest) == fusion_artifact_digest(
+            run.manifest
+        )
+
+        issues = validate_entity_evidence(_entities(run)[0], fusion_runs={RUN_ID: OtherSequence()})
+
+        assert _kinds(issues) == {EvidenceIntegrityKind.INCOMPATIBLE_LINEAGE}
+        assert "sequence" in issues[0].detail
+
+    def test_an_entity_that_expects_another_sequence_is_an_incompatible_lineage(
+        self, run: FusionRun
+    ) -> None:
+        elsewhere = _entity_with_ref(_entities(run)[0], sequence_artifact_id="sequence-9999")
+
+        issues = validate_entity_evidence(elsewhere, fusion_runs={RUN_ID: run.reader})
+
+        assert _kinds(issues) == {EvidenceIntegrityKind.INCOMPATIBLE_LINEAGE}
 
     def test_listed_observations_must_be_the_ones_the_evidence_carries(
         self, run: FusionRun
@@ -462,6 +589,28 @@ class TestProvenanceTraversal:
             if evidence.stance is not EvidenceStance.ABSTAINING
         ]
         assert reachable and all(pair in claims for pair in reachable)
+
+    def test_the_trace_exposes_the_scorer_references_of_each_view(self, run: FusionRun) -> None:
+        entity = _entities(run)[0]
+        (ref,) = entity.evidence.fused_evidence
+        fused = run.reader.fused_evidence(ref.fusion_support_id)
+
+        trace = trace_entity_evidence(entity, fusion_runs={RUN_ID: run.reader})
+
+        traced = {
+            (item.contribution_id, score)
+            for item in trace.contributions
+            for score in item.score_refs
+        }
+        carried = {
+            (item.contribution_id, score)
+            for item in fused.contributions
+            for score in item.score_refs
+        }
+        assert carried, "the fixture must score at least one claim"
+        assert traced == carried
+        for item in trace.contributions:
+            assert {score.claim_id for score in item.score_refs} <= set(item.claim_ids)
 
     def test_a_trace_needs_the_run_and_the_evidence(self, run: FusionRun) -> None:
         entity = _entities(run)[0]

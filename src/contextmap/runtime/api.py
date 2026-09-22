@@ -37,7 +37,7 @@ from contextmap.runtime.catalog import (
     PRESETS,
     StageDeclaration,
 )
-from contextmap.runtime.composition import compose
+from contextmap.runtime.composition import compose, compose_executors
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
     DEBUG_LEVELS,
@@ -195,7 +195,12 @@ class RuntimeStatus:
         schemas: Versions of the persisted document schemas this runtime reads and writes.
         profiles: Known profile and preset identities.
         workspace: The workspace runs are persisted under, when one is set.
-        executors: Stages this runtime has an executor for.
+        executors: Stages this runtime was explicitly given an executor for, at construction.
+            It does not include the stages :meth:`Runtime.preflight` and :meth:`Runtime.run`
+            compose automatically from a specific configuration (composing needs a resolved
+            ``EffectiveConfig``, which this discovery call does not take): call
+            :meth:`Runtime.preflight` with a configuration and read its ``missing_executors``
+            for the accurate, config-specific answer.
         verifier_configured: Whether reuse can verify indexed artifacts.
     """
 
@@ -650,8 +655,14 @@ class Runtime:
     Args:
         workspace: Where runs are persisted. It becomes ``resources.workspace`` of every
             configuration :meth:`resolve_config` resolves, exactly as the CLI's ``--workspace``.
-        executors: One executor per stage this runtime can execute. There is no default: a run
-            without them is blocked by preflight.
+        executors: Executors to use in addition to, and in preference over, the ones
+            :func:`~contextmap.runtime.composition.compose_executors` builds automatically from
+            each call's ``EffectiveConfig`` (today: ``state_estimation``, ``geometric_mapping``,
+            ``sensor_association`` and ``semantic_fusion``). Pass an entry here to override a
+            composed stage (a test double, for example) or to supply one composition cannot
+            build on its own, such as ``ingestion``'s ``IngestionStageExecutor`` (it needs a
+            concrete request that is never part of a configuration). A stage with neither a
+            composed nor a supplied executor is blocked by preflight.
         verifier: Tells whether an indexed artifact still exists and is intact. Reuse and resume
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
@@ -797,7 +808,10 @@ class Runtime:
         It runs the same checks :meth:`run` runs first (topology, contracts, selections,
         backend selection, optional modules, secrets, executors) and reports every problem at
         once. It looks up and imports nothing, so it is cheap enough for an interactive
-        frontend.
+        frontend. ``missing_executors`` accounts for both the executors this runtime was
+        constructed with and the ones :func:`~contextmap.runtime.composition.compose_executors`
+        can build from ``config`` alone; a composition failure (an invalid backend parameter, a
+        missing module or secret) is reported the same way, never raised.
 
         Args:
             config: The effective configuration.
@@ -814,9 +828,10 @@ class Runtime:
         """
         scoped = self._scope(config, targets, provided, catalog)
         execution = scoped.execution
+        executors = self._executors_for(config)
         report = preflight(
             execution,
-            executors=self._executors,
+            executors=executors,
             environ=self._environ,
             module_available=self._module_available,
             reuse=reuse,
@@ -839,7 +854,7 @@ class Runtime:
                 stage.stage_id
                 for stage in execution.stages
                 if stage.available
-                and stage.stage_id not in self._executors
+                and stage.stage_id not in executors
                 and (stage.stage_id not in predicted or predicted[stage.stage_id].kind != "reused")
             ),
         )
@@ -896,6 +911,7 @@ class Runtime:
         """
         workspace = self._workspace_for(config)
         scoped = self._scope(config, targets, provided, catalog)
+        executors = self._executors_for(config)
         previous: Path | None = None
         if resume is not None:
             if reuse is None:
@@ -914,7 +930,7 @@ class Runtime:
                 resume_plan(
                     previous,
                     scoped.execution,
-                    self._executors,
+                    executors,
                     reuse=reuse,
                     environ=self._environ,
                     module_available=self._module_available,
@@ -927,7 +943,7 @@ class Runtime:
             else:
                 run_plan(
                     scoped.execution,
-                    self._executors,
+                    executors,
                     environ=self._environ,
                     module_available=self._module_available,
                     reuse=reuse,
@@ -1188,6 +1204,21 @@ class Runtime:
                     if run.origin == "latest"
                 )
         return tuple(warnings)
+
+    def _executors_for(self, config: EffectiveConfig) -> Mapping[str, StageExecutor]:
+        """Merge the executors composed from ``config`` with the ones given at construction.
+
+        ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
+        ``geometric_mapping``, ``sensor_association`` and ``semantic_fusion``) from ``config``
+        alone; a stage it cannot build for any reason is simply absent, never raised (see its
+        own docstring). Whatever this runtime was constructed with in ``executors`` (a test
+        double, a stage composition cannot build such as ``ingestion``, or an explicit
+        override) is layered on top and always wins.
+        """
+        composed = compose_executors(
+            config, environ=self._environ, module_available=self._module_available
+        )
+        return {**composed, **self._executors}
 
     def _workspace_for(self, config: EffectiveConfig) -> Path:
         configured = config.config.resources.workspace

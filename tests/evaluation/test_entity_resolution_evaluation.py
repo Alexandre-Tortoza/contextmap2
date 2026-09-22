@@ -21,6 +21,7 @@ from resolution_run_fixtures import (
     LINEAGE,
     RUN,
     RunInputs,
+    build_contradicted_inputs,
     build_inputs,
     resolution_of,
     write_run,
@@ -432,6 +433,33 @@ def test_a_consistent_run_passes_every_check_and_the_report_is_reproducible(tmp_
     assert report.split is None
     again = evaluated(tmp_path / "again")
     assert again.identity == report.identity and again.reproducibility == report.reproducibility
+
+
+def test_a_component_with_several_contradictions_is_evaluated_and_each_one_counted(
+    tmp_path: Path,
+) -> None:
+    inputs = build_contradicted_inputs()
+    directory = tmp_path / "artifact"
+    write_run(directory, inputs)
+
+    report = evaluate_entity_resolution(
+        EntityResolutionRunReader(directory),
+        entities=inputs.entities.values(),
+        reference=reference_of({"I1": ["a", "b", "c", "d"]}),
+        links=links_of(inputs.entities, *"abcd"),
+        retrieval_policy=RETRIEVAL,
+        reference_set_id="synthetic",
+    )
+
+    assert report.passed
+    assert report.identity.transitivity_contradictions == 2
+    # Nada é fundido: os três MATCH ficam retidos e os dois DISTINCT viram falsos distintos.
+    assert outcomes(report.identity.same_pair_outcomes) == {
+        "false_distinct": 2,
+        "match_withheld_by_contradiction": 3,
+        "not_compared": 1,
+    }
+    assert report.identity.duplicated_identities == 1
 
 
 def test_the_report_encodes_to_json_with_every_layer_apart(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ Uma medição de pose vinda da fonte é apenas entrada. Ela só se torna `PoseEs
 
 ## Estado implementado
 
-Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, os backends `ExternalPose` e FAST-LIO (execução de referência com o FAST-LIO ainda pendente), o frame graph estático, o preflight de geometria, as métricas de movimento e o `StateEstimationRunArtifact`. A validação de qualidade (estrutura, movimento, transform trace, ATE/RPE contra referência e comparação entre backends) pertence a `evaluation`; ver [avaliação de State Estimation](../../evaluation/docs/state_estimation.md).
+Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup temporal com interpolação, o port `StateEstimator`, os backends `ExternalPose` e FAST-LIO (este com o wrapper de implantação em container e uma execução real de referência sobre o `corridor-02`, ver [`backends.md`](backends.md)), o frame graph estático, o preflight de geometria, as métricas de movimento e o `StateEstimationRunArtifact`. A validação de qualidade (estrutura, movimento, transform trace, ATE/RPE contra referência e comparação entre backends) pertence a `evaluation`; ver [avaliação de State Estimation](../../evaluation/docs/state_estimation.md).
 
 ## Contratos públicos
 
@@ -41,7 +41,7 @@ Existem os contratos canônicos (`PoseEstimate`, `Trajectory`), o lookup tempora
 - `summarize_motion()`, `motion_deltas()`, `MotionSummary`, `MotionDelta`, `DistributionSummary` — distribuições de deslocamento, rotação e velocidades por intervalo.
 - `StateEstimationRunWriter`, `StateEstimationRunReader`, `StateEstimationRunManifest`, `StateEstimationRunId`, `StateEstimationDebugLevel`, `RunArtifactError`, `IncompleteRunArtifactError` — persistência imutável e leitura de um run.
 
-Os backends `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) e `contextmap.state_estimation.backends.fast_lio` (`FastLioEstimator`, `FastLioConfig`, `FastLioRunner`) não são reexportados por `contextmap.state_estimation`; são importados pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend.
+Os backends `contextmap.state_estimation.backends.external_pose` (`ExternalPoseEstimator`, `ExternalPoseConfig`) e `contextmap.state_estimation.backends.fast_lio` (`FastLioEstimator`, `FastLioConfig`, `FastLioRunner`) não são reexportados por `contextmap.state_estimation`; são importados pelo caminho completo somente pelo composition root em `runtime`, como qualquer backend. O `SubprocessFastLioRunner` (`backends/fast_lio_process.py`) e o wrapper de implantação (`backends/fast_lio_wrapper.py`, um arquivo autônomo que roda dentro do container do FAST-LIO e não é importado por nenhum outro módulo) seguem a mesma regra.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, a convenção de
 transform e as invariantes, [`lookup.md`](lookup.md) para a semântica de lookup e
