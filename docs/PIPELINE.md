@@ -1228,6 +1228,8 @@ Relações inversas e simétricas precisam permanecer consistentes.
 
 Saída persistida: `SpatialRelationsRunArtifact`.
 
+Implementado em `contextmap.spatial_relations` ([documentação](../src/contextmap/spatial_relations/docs/README.md)): candidatos determinísticos com razões de exclusão, avaliadores geométricos (`NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE`, `INTERSECTS`) e de contato por pontos (`TOUCHING`, `ON_TOP_OF`, `LEANING_AGAINST`), evidência de observação corroborante e a política de decisão conservadora, que só decide com os canais medidos, prefere `UNRESOLVED` e gera inverso e simetria depois de checar a consistência. Os eixos vertical e de profundidade vêm de convenções declaradas pela execução, porque nada a montante os define. A linhagem vem do manifest de Entity Resolution e as afirmações upstream são vinculadas às entidades resolvidas pelas observações espaciais da evidência delas. A avaliação por predicado liga entidades resolvidas às identidades anotadas pelo `IdentityEvaluation` da avaliação de Entity Resolution.
+
 ## 11. Context Map Assembly
 
 A etapa final monta o produto público do repositório.
@@ -1306,7 +1308,7 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 | Evaluation (transversal) | reference set, relatórios, run de experimento e comparação, evidência e decisão | implementado, sem execução real | decisões de configuração e aceite E2E |
 | Semantic Mapping | `SemanticMappingRunArtifact` | implementado | entity resolution, evaluation |
 | Entity Resolution | `EntityResolutionRunArtifact` | implementado, só com dados sintéticos | spatial relations, final map, evaluation |
-| Spatial Relations | `SpatialRelationsRunArtifact` | planejado | final map |
+| Spatial Relations | `SpatialRelationsRunArtifact` | implementado | final map, evaluation |
 | Context Map Assembly | `ContextMapArtifact` | planejado | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.

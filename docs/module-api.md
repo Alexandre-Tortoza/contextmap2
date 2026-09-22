@@ -57,6 +57,9 @@ flowchart LR
     VP --> ER
     PR -. representação 3D opcional .-> ER
     SM --> ER
+    ER --> SR["contextmap.spatial_relations"]
+    SM --> SR
+    GM --> SR
 
     ING --> EV["contextmap.evaluation"]
     VP --> EV["contextmap.evaluation"]
@@ -67,6 +70,7 @@ flowchart LR
     SF --> EV
     SM --> EV
     ER --> EV
+    SR --> EV
 ```
 
 Exemplos concretos dessa integração:
@@ -77,6 +81,7 @@ Exemplos concretos dessa integração:
 - `semantic_fusion` consome `SpatialObservation`, evidência visual referenciada e `PointRepresentation` opcional pelas APIs públicas;
 - `semantic_mapping` consome `FusedEvidence`, o run de fusão e a geometria pelas APIs públicas e devolve `Entity` com a evidência referenciada por identidade;
 - `entity_resolution` consome as `Entity` de Semantic Mapping e devolve `ResolvedEntity`, `ResolutionDecision` e a evidência de cada comparação; `geometric_mapping` (referências e limites), `visual_perception` (features e compatibilidade de embedding) e `point_representation` (leitura dos runs, para o canal opcional) chegam pelas raízes públicas, e `ingestion` entra só como identidade (`SourceObservationId`) usada como tipo;
+- `spatial_relations` consome `ResolvedEntityReference`, o leitor do run e `ResolvedEntitySet` (Entity Resolution), `EntityGeometry` (Semantic Mapping) e `GeometrySource` (Geometric Mapping) pelas APIs públicas e devolve `Relation` e `RelationEvidence`;
 - `evaluation` mede as capabilities implementadas sem acessar seus backends ou mutar seus artifacts.
 
 A matriz mecanicamente verificável de dependências permitidas está em `tests/architecture/test_boundaries.py`. Ela é a referência executável para imports cross-capability; [architecture.md](architecture.md) continua sendo a referência conceitual de ownership e direção de dados.
