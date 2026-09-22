@@ -353,6 +353,28 @@ def test_an_identity_evaluation_of_a_different_resolution_artifact_is_refused(
         _evaluate(artifact, _reference(*CORE), reproducibility=wrong_digest)
 
 
+def test_an_identity_evaluation_naming_entities_of_another_run_is_refused(artifact: Path) -> None:
+    """Correct reproducibility metadata does not excuse foreign resolved-entity references.
+
+    Regressão: ao trocar a checagem por metadata (``identity_reproducibility``), a validação
+    estrutural sobre os ``ResolvedEntityReference`` da própria ``IdentityEvaluation`` foi perdida.
+    Com `identity_reproducibility` correto mas refs de outro `resolution_run_id`, a chamada passava
+    sem erro e as identidades estrangeiras só apareciam depois como ruído de entidade não casada
+    (``reference_without_entity``/``supported_on_unmatched_entities``), nunca como a violação de
+    contrato que de fato são. As duas checagens — metadata e estrutura — são independentes e as
+    duas são exigidas.
+    """
+    foreign = {
+        entity_ref(number, run="resolution-run-0002"): identity
+        for number, identity in enumerate((FLOOR, CRATE, PALLET, HOVER), start=1)
+    }
+    with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
+        _evaluate(artifact, _reference(*CORE), identities=foreign)
+    spanning = (entity_ref(1, run="resolution-run-0002"),)
+    with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
+        _evaluate(artifact, _reference(*CORE), spanning=spanning)
+
+
 def test_entities_that_span_identities_are_left_out_counted_and_never_guessed(
     artifact: Path,
 ) -> None:
