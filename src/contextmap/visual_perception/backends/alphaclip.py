@@ -529,8 +529,12 @@ class OfficialAlphaClipRuntime:
             alpha_clip = importlib.import_module("alpha_clip")
             image_module = importlib.import_module("PIL.Image")
         except ModuleNotFoundError as error:
+            # O pacote oficial importa loralib e pkg_resources ao ser importado: nomear o módulo
+            # ausente evita mandar instalar alpha_clip quando a causa é uma dependência dele.
             raise AlphaClipDependencyError(
-                "AlphaCLIP requires torch, alpha_clip, and Pillow in the runtime environment"
+                "AlphaCLIP requires torch, alpha_clip, and Pillow in the runtime environment "
+                f"(missing module: {error.name or 'unknown'!r}; the official alpha_clip package "
+                "also imports loralib and pkg_resources)"
             ) from error
 
         if self._config.device == "cuda" and not torch.cuda.is_available():

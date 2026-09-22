@@ -12,7 +12,7 @@ flowchart LR
     PR["PointRepresentation<br/>(opcional)"] -. referência .-> SF
     SF --> FE["FusedEvidence<br/>(hipóteses, conflitos, incerteza)"]
     FE --> EVAL["Evaluation<br/>(implementado)"]
-    FE -. próximo boundary .-> DOWN["Semantic Mapping<br/>(planejado)"]
+    FE --> DOWN["Semantic Mapping<br/>(implementado)"]
 ```
 
 Fusão não é identidade. Um `FusionSupport` afirma apenas que observações espaciais veem geometria compatível sob uma política; não afirma mesmo objeto, mesma classe nem identidade persistente entre versões do mapa.
@@ -65,9 +65,7 @@ A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe a
 
 ## Módulos que consomem este
 
-Hoje, `evaluation`, sempre através de `contextmap.semantic_fusion`.
-`semantic_mapping` será o consumidor downstream quando esse módulo planejado
-for materializado.
+Hoje, `semantic_mapping` e `evaluation` consomem esta capability, sempre através da API pública de `contextmap.semantic_fusion`.
 
 ## Onde estão os documentos detalhados
 

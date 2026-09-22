@@ -20,10 +20,15 @@ NumPy is imported only inside the rigid alignment, so importing
 
 from __future__ import annotations
 
+import hashlib
 import math
-from collections.abc import Sequence
+import re
+from bisect import bisect_left
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from contextmap.ingestion import FrameId, SequenceArtifactId
@@ -32,6 +37,7 @@ from contextmap.shared import (
     Vector3,
     compose_rigid,
     invert_rigid,
+    normalize_quaternion,
     quaternion_angle_between,
     quaternion_multiply,
     quaternion_norm,
@@ -93,11 +99,18 @@ class ReferenceTrajectory:
         reference_id: Identity of the reference profile that declares its role,
             e.g. ``"reference-profile:corridor@1"``.
         role: The declared role; only ``EVALUATION_REFERENCE`` can be compared against.
+        source: Where the reference poses came from (e.g. a repository-relative
+            file path), so a report traces back to the data.
+        source_sha256: Content hash of that source, ``"sha256:<hex>"``. Only
+            :meth:`StateEstimationReferenceProfile.declare_reference` proves the
+            poses come from it; a reference built directly carries an unverified claim.
     """
 
     trajectory: Trajectory
     reference_id: str
     role: ReferenceRole
+    source: str | None = None
+    source_sha256: str | None = None
 
     def __post_init__(self) -> None:
         """Require the profile identity.
@@ -131,24 +144,44 @@ class ReferenceComparisonConfig:
         alignment: How to align before measuring absolute error.
         max_time_difference_ns: Largest distance between an estimated pose and the
             reference pose associated with it; farther poses stay unmatched.
-        relative_pair_offset: When set, also measure relative pose error between
-            matched pairs ``i`` and ``i + relative_pair_offset``.
+        relative_interval_ns: When set, also measure relative pose error between
+            matched poses that are ``relative_interval_ns`` apart in time. The
+            interval is anchored on time, not on the position in the list of
+            matched poses, so missing reference poses do not stretch it.
+        relative_interval_tolerance_ns: How far from ``relative_interval_ns`` the
+            time between two poses of a pair may be; required with the interval.
     """
 
     alignment: AlignmentMethod
     max_time_difference_ns: int
-    relative_pair_offset: int | None = None
+    relative_interval_ns: int | None = None
+    relative_interval_tolerance_ns: int | None = None
 
     def __post_init__(self) -> None:
         """Validate the protocol.
 
         Raises:
-            ValueError: If a tolerance or offset is not positive.
+            ValueError: If a tolerance or interval is invalid, or the relative
+                interval and its tolerance are not given together.
         """
         if self.max_time_difference_ns < 0:
             raise ValueError("max_time_difference_ns must not be negative")
-        if self.relative_pair_offset is not None and self.relative_pair_offset < 1:
-            raise ValueError("relative_pair_offset must be at least 1 when set")
+        if self.relative_interval_ns is None:
+            if self.relative_interval_tolerance_ns is not None:
+                raise ValueError(
+                    "relative_interval_tolerance_ns was given without relative_interval_ns"
+                )
+        else:
+            if self.relative_interval_ns <= 0:
+                raise ValueError("relative_interval_ns must be positive when set")
+            if (
+                self.relative_interval_tolerance_ns is None
+                or self.relative_interval_tolerance_ns < 0
+            ):
+                raise ValueError(
+                    "relative_interval_ns needs an explicit, non-negative "
+                    "relative_interval_tolerance_ns"
+                )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -184,6 +217,264 @@ class MotionThresholds:
         ):
             if value is not None and not value > 0:
                 raise ValueError(f"{name} must be positive when set")
+
+
+PROFILE_SCHEMA = "contextmap.state_estimation_reference_profile/1"
+"""Schema identifier of an encoded :class:`StateEstimationReferenceProfile`."""
+
+_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+# Uma trajetória publica os números do arquivo como foram lidos (no máximo renormalizados),
+# então só pode diferir deles por arredondamento de ponto flutuante. Uma tolerância maior
+# esconderia uma pose editada.
+_REFERENCE_MATCH_TOLERANCE_M = 1e-9
+_REFERENCE_MATCH_TOLERANCE_RAD = 1e-9
+_NANOSECONDS_PER_SECOND = 1_000_000_000
+_ReferenceSamples = dict[int, list[tuple[Vector3, Quaternion]]]
+_THRESHOLD_FIELDS = (
+    "max_translation_delta_m",
+    "max_orientation_delta_rad",
+    "max_linear_speed_mps",
+    "max_angular_speed_radps",
+)
+_COMPARISON_FIELDS = (
+    "alignment",
+    "max_time_difference_ns",
+    "relative_interval_ns",
+    "relative_interval_tolerance_ns",
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class StateEstimationReferenceProfile:
+    """What a dataset declares for evaluating state estimation over it.
+
+    A profile binds the role of a reference pose file to the file's *content*, so
+    a file is never the reference because of its name, and carries the limits and
+    the comparison protocol that go with it. The evaluation stays dataset-agnostic:
+    every dataset-specific value lives in a profile, never in the harness.
+
+    Attributes:
+        profile_id: Identity of the profile, e.g. ``"reference-profile:corridor-02@1"``.
+        reference_role: The role it declares for the reference file.
+        reference_source: Where the reference file is (e.g. a repository-relative path).
+        reference_source_sha256: Content hash of that file, ``"sha256:<hex>"``.
+        thresholds: Motion limits for this dataset; unset ones are never applied.
+        comparison: Protocol of the comparison against the reference.
+    """
+
+    profile_id: str
+    reference_role: ReferenceRole
+    reference_source: str
+    reference_source_sha256: str
+    thresholds: MotionThresholds
+    comparison: ReferenceComparisonConfig
+
+    def __post_init__(self) -> None:
+        """Validate the identity fields.
+
+        Raises:
+            ValueError: If the id or source is empty or the hash is not ``sha256:<64 hex>``.
+        """
+        if not self.profile_id or not self.reference_source:
+            raise ValueError("profile_id and reference_source must not be empty")
+        if not _SHA256.fullmatch(self.reference_source_sha256):
+            raise ValueError("reference_source_sha256 must be 'sha256:' followed by 64 hex digits")
+
+    def declare_reference(
+        self, trajectory: Trajectory, *, source_file: Path
+    ) -> ReferenceTrajectory:
+        """Declare a trajectory as this profile's reference, proving it comes from ``source_file``.
+
+        The file is read once and the same bytes are hashed against the profile and
+        parsed as TUM text (``t x y z qx qy qz qw``: seconds as a decimal, meters, unit
+        quaternion ``(x, y, z, w)``; blank and ``#`` lines are skipped). Every pose of
+        ``trajectory`` must then be a sample of that file: the same timestamp, and a
+        position and rotation equal up to floating-point rounding. So the hash a report
+        records is the hash of the poses it was measured against, and a trajectory built
+        from anything else is refused. The trajectory may cover only part of the file
+        (a selection window), never a pose the file does not have.
+
+        Args:
+            trajectory: The poses read from ``source_file``.
+            source_file: The file they were read from.
+
+        Returns:
+            The reference, carrying the profile's identity, role and source.
+
+        Raises:
+            StateEstimationEvaluationError: If the file's content does not match the
+                hash the profile declares, the file is not valid TUM text, or a pose
+                of the trajectory is not a sample of the file.
+        """
+        data = source_file.read_bytes()
+        actual = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        if actual != self.reference_source_sha256:
+            raise StateEstimationEvaluationError(
+                f"{source_file} has sha256 {actual}, but {self.profile_id!r} declares "
+                f"{self.reference_source_sha256}: a file is not the reference by its name"
+            )
+        samples = _read_reference_samples(data, source_file)
+        for pose in trajectory.poses:
+            _require_reference_sample(pose, samples, source_file)
+        return ReferenceTrajectory(
+            trajectory=trajectory,
+            reference_id=self.profile_id,
+            role=self.reference_role,
+            source=self.reference_source,
+            source_sha256=actual,
+        )
+
+
+def _read_reference_samples(data: bytes, source_file: Path) -> _ReferenceSamples:
+    """Parse TUM text into the samples of the file, keyed by timestamp in nanoseconds."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise StateEstimationEvaluationError(f"{source_file} is not UTF-8 text") from error
+    samples: _ReferenceSamples = {}
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        content = line.strip()
+        if not content or content.startswith("#"):
+            continue
+        try:
+            when_ns, position, orientation = _parse_reference_sample(content)
+        except ValueError as error:
+            raise StateEstimationEvaluationError(
+                f"{source_file} line {line_number} is not a pose: {error}"
+            ) from error
+        samples.setdefault(when_ns, []).append((position, orientation))
+    return samples
+
+
+def _parse_reference_sample(line: str) -> tuple[int, Vector3, Quaternion]:
+    """Parse one ``t x y z qx qy qz qw`` line; the orientation is returned normalized."""
+    fields = line.split()
+    if len(fields) != 8:
+        raise ValueError(f"expected 't x y z qx qy qz qw' (8 fields), got {len(fields)}")
+    # Decimal, não float: o timestamp em segundos precisa virar nanossegundos sem arredondar.
+    try:
+        nanoseconds = Decimal(fields[0]) * _NANOSECONDS_PER_SECOND
+    except ArithmeticError as error:
+        raise ValueError(f"timestamp {fields[0]!r} is not a finite number") from error
+    if not nanoseconds.is_finite() or nanoseconds != nanoseconds.to_integral_value():
+        raise ValueError(f"timestamp {fields[0]!r} is not a whole number of nanoseconds")
+    x, y, z, qx, qy, qz, qw = (float(field) for field in fields[1:])
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        raise ValueError("the position must be finite")
+    return int(nanoseconds), (x, y, z), normalize_quaternion((qx, qy, qz, qw))
+
+
+def _require_reference_sample(
+    pose: PoseEstimate, samples: _ReferenceSamples, source_file: Path
+) -> None:
+    """Require ``pose`` to be a sample of the reference file, up to float rounding."""
+    when_ns = pose.timestamp.total_nanoseconds()
+    candidates = samples.get(when_ns)
+    if candidates is None:
+        raise StateEstimationEvaluationError(
+            f"pose {pose.estimate_id!r} at {when_ns} ns is not from {source_file}: "
+            "no sample at that time"
+        )
+    orientation = normalize_quaternion(pose.orientation)
+    if not any(
+        math.dist(pose.translation_m, position) <= _REFERENCE_MATCH_TOLERANCE_M
+        and quaternion_angle_between(orientation, sample_orientation)
+        <= _REFERENCE_MATCH_TOLERANCE_RAD
+        for position, sample_orientation in candidates
+    ):
+        raise StateEstimationEvaluationError(
+            f"pose {pose.estimate_id!r} at {when_ns} ns differs from the file's sample at "
+            f"that time: it was not read from {source_file}"
+        )
+
+
+def encode_reference_profile(profile: StateEstimationReferenceProfile) -> dict[str, Any]:
+    """Encode a profile as plain JSON-compatible data.
+
+    Args:
+        profile: The profile.
+
+    Returns:
+        A record :func:`decode_reference_profile` reads back; only the thresholds the
+        profile sets are present.
+    """
+    thresholds = profile.thresholds
+    comparison = profile.comparison
+    return {
+        "schema": PROFILE_SCHEMA,
+        "profile_id": profile.profile_id,
+        "reference_role": profile.reference_role.value,
+        "reference_source": profile.reference_source,
+        "reference_source_sha256": profile.reference_source_sha256,
+        "thresholds": {
+            name: getattr(thresholds, name)
+            for name in _THRESHOLD_FIELDS
+            if getattr(thresholds, name) is not None
+        },
+        "comparison": {
+            "alignment": comparison.alignment.value,
+            "max_time_difference_ns": comparison.max_time_difference_ns,
+            "relative_interval_ns": comparison.relative_interval_ns,
+            "relative_interval_tolerance_ns": comparison.relative_interval_tolerance_ns,
+        },
+    }
+
+
+def decode_reference_profile(record: Mapping[str, Any]) -> StateEstimationReferenceProfile:
+    """Decode and validate a profile written by :func:`encode_reference_profile`.
+
+    Args:
+        record: The decoded JSON record.
+
+    Returns:
+        The profile.
+
+    Raises:
+        StateEstimationEvaluationError: If the schema differs, a field is missing or
+            unknown, or the role or alignment is not one this evaluation knows.
+        ValueError: If a value is invalid (see the profile, thresholds and protocol).
+    """
+    if record.get("schema") != PROFILE_SCHEMA:
+        raise StateEstimationEvaluationError(
+            f"unsupported reference profile schema {record.get('schema')!r}: expected "
+            f"{PROFILE_SCHEMA}"
+        )
+    thresholds = _profile_field(record, "thresholds")
+    comparison = _profile_field(record, "comparison")
+    for name, allowed, values in (
+        ("thresholds", _THRESHOLD_FIELDS, thresholds),
+        ("comparison", _COMPARISON_FIELDS, comparison),
+    ):
+        unknown = sorted(set(values) - set(allowed))
+        if unknown:
+            raise StateEstimationEvaluationError(f"unknown {name} fields {unknown}")
+    try:
+        role = ReferenceRole(_profile_field(record, "reference_role"))
+        alignment = AlignmentMethod(_profile_field(comparison, "alignment", "comparison"))
+    except ValueError as error:
+        raise StateEstimationEvaluationError(f"invalid reference profile: {error}") from error
+    return StateEstimationReferenceProfile(
+        profile_id=_profile_field(record, "profile_id"),
+        reference_role=role,
+        reference_source=_profile_field(record, "reference_source"),
+        reference_source_sha256=_profile_field(record, "reference_source_sha256"),
+        thresholds=MotionThresholds(**thresholds),
+        comparison=ReferenceComparisonConfig(
+            alignment=alignment,
+            max_time_difference_ns=_profile_field(
+                comparison, "max_time_difference_ns", "comparison"
+            ),
+            relative_interval_ns=comparison.get("relative_interval_ns"),
+            relative_interval_tolerance_ns=comparison.get("relative_interval_tolerance_ns"),
+        ),
+    )
+
+
+def _profile_field(record: Mapping[str, Any], name: str, parent: str | None = None) -> Any:
+    if name not in record:
+        where = name if parent is None else f"{parent}.{name}"
+        raise StateEstimationEvaluationError(f"the reference profile is missing {where!r}")
+    return record[name]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -360,13 +651,13 @@ class RelativeErrorReport:
     """Relative pose error between matched pairs, which alignment does not affect.
 
     Attributes:
-        pair_offset: Index distance between the two poses of each pair.
+        interval_ns: Time between the two poses of each pair, within the protocol's tolerance.
         pair_count: Number of pairs measured.
         translation_m: Position error of the relative motion, in meters.
         rotation_rad: Rotation error of the relative motion, in radians.
     """
 
-    pair_offset: int
+    interval_ns: int
     pair_count: int
     translation_m: ErrorStatistics
     rotation_rad: ErrorStatistics
@@ -379,6 +670,8 @@ class AccuracyReport:
     Attributes:
         reference_id: Identity of the reference profile.
         reference_role: The role that profile declared.
+        reference_source: Where the reference poses came from, when declared.
+        reference_source_sha256: Content hash of that source, when declared.
         reference_frame: Reference frame of the reference trajectory.
         reference_body_frame: Body frame of the reference trajectory.
         config: The comparison protocol.
@@ -391,6 +684,8 @@ class AccuracyReport:
 
     reference_id: str
     reference_role: ReferenceRole
+    reference_source: str | None
+    reference_source_sha256: str | None
     reference_frame: FrameId
     reference_body_frame: FrameId
     config: ReferenceComparisonConfig
@@ -734,6 +1029,8 @@ def _compare_with_reference(
     return AccuracyReport(
         reference_id=reference.reference_id,
         reference_role=reference.role,
+        reference_source=reference.source,
+        reference_source_sha256=reference.source_sha256,
         reference_frame=reference.trajectory.reference_frame,
         reference_body_frame=reference.trajectory.body_frame,
         config=config,
@@ -750,19 +1047,35 @@ def _compare_with_reference(
         ate_translation_m=_error_statistics(translation_errors),
         rotation_error_rad=_error_statistics(rotation_errors),
         rpe=(
-            _relative_error(pairs, config.relative_pair_offset)
-            if config.relative_pair_offset is not None
+            _relative_error(
+                pairs, config.relative_interval_ns, config.relative_interval_tolerance_ns or 0
+            )
+            if config.relative_interval_ns is not None
             else None
         ),
     )
 
 
 def _relative_error(
-    pairs: list[tuple[PoseEstimate, PoseEstimate]], offset: int
+    pairs: list[tuple[PoseEstimate, PoseEstimate]], interval_ns: int, tolerance_ns: int
 ) -> RelativeErrorReport | None:
+    # Cada pose pareada é ligada à pose pareada mais próxima de ``t + intervalo``. Ligar por
+    # posição na lista faria as poses de referência ausentes esticarem o intervalo, e o erro
+    # relativo cresce com ele.
+    times = [estimated.timestamp.total_nanoseconds() for estimated, _ in pairs]
     translation_errors: list[float] = []
     rotation_errors: list[float] = []
-    for (first_e, first_r), (second_e, second_r) in zip(pairs, pairs[offset:], strict=False):
+    for index, (first_e, first_r) in enumerate(pairs):
+        target = times[index] + interval_ns
+        after = bisect_left(times, target, lo=index + 1)
+        candidates = [
+            other
+            for other in (after - 1, after)
+            if index < other < len(pairs) and abs(times[other] - target) <= tolerance_ns
+        ]
+        if not candidates:
+            continue
+        second_e, second_r = pairs[min(candidates, key=lambda other: abs(times[other] - target))]
         estimated_step = _relative_motion(first_e, second_e)
         reference_step = _relative_motion(first_r, second_r)
         inverse_translation, inverse_rotation = invert_rigid(
@@ -779,7 +1092,7 @@ def _relative_error(
     if not translation_errors:
         return None
     return RelativeErrorReport(
-        pair_offset=offset,
+        interval_ns=interval_ns,
         pair_count=len(translation_errors),
         translation_m=_error_statistics(translation_errors),
         rotation_rad=_error_statistics(rotation_errors),
@@ -856,6 +1169,8 @@ class StateEstimationComparisonEntry:
 
     Attributes:
         estimator: The backend's identity.
+        calibration_identity: The calibration the backend consumed, or ``None``
+            when it consumes none (e.g. an external-pose backend).
         configuration_fingerprint: The backend's configuration fingerprint.
         run_id: The run that persisted its trajectory, when there is one.
         pose_count: Poses produced.
@@ -867,6 +1182,7 @@ class StateEstimationComparisonEntry:
     """
 
     estimator: EstimatorProvenance
+    calibration_identity: str | None
     configuration_fingerprint: str | None
     run_id: StateEstimationRunId | None
     pose_count: int
@@ -884,7 +1200,8 @@ class StateEstimationComparison:
     Attributes:
         sequence_artifact_id: The shared sequence.
         selection_id: The shared selection.
-        calibration_identity: The shared calibration.
+        calibration_identity: The calibration the backends that consume one share,
+            or ``None`` when none of them does.
         reference_id: The shared reference profile.
         comparison_config: The shared comparison protocol.
         entries: One entry per backend, in the order given.
@@ -911,8 +1228,9 @@ def compare_state_estimation_reports(
 
     Raises:
         StateEstimationEvaluationError: If there are fewer than two reports, a report has
-            no reference comparison, or the sequence, selection, calibration, reference or
-            comparison protocol differs.
+            no reference comparison, or the sequence, selection, reference or comparison
+            protocol differs, or two backends consumed different calibrations. A backend
+            that consumes no calibration does not conflict with one that does.
     """
     if len(reports) < 2:
         raise StateEstimationEvaluationError("a comparison needs at least two reports")
@@ -924,26 +1242,29 @@ def compare_state_estimation_reports(
             raise StateEstimationEvaluationError("reports use different sequence artifacts")
         if report.selection_id != first.selection_id:
             raise StateEstimationEvaluationError("reports use different selections")
-        if report.calibration_identity != first.calibration_identity:
-            raise StateEstimationEvaluationError("reports use different calibration identities")
         if report.accuracy is None:
             raise StateEstimationEvaluationError(
                 "every compared report needs a reference comparison"
             )
         if (
             report.accuracy.reference_id != first.accuracy.reference_id
+            or report.accuracy.reference_source_sha256 != first.accuracy.reference_source_sha256
             or report.accuracy.config != first.accuracy.config
             or report.evaluator_version != first.evaluator_version
         ):
             raise StateEstimationEvaluationError(
                 "reports use a different reference, comparison protocol or evaluator version"
             )
+    calibrations = {r.calibration_identity for r in reports if r.calibration_identity is not None}
+    if len(calibrations) > 1:
+        raise StateEstimationEvaluationError("reports use different calibration identities")
     entries = []
     for report in reports:
         assert report.accuracy is not None
         entries.append(
             StateEstimationComparisonEntry(
                 estimator=report.estimator,
+                calibration_identity=report.calibration_identity,
                 configuration_fingerprint=report.estimator.configuration_fingerprint,
                 run_id=report.run_id,
                 pose_count=report.structural.pose_count,
@@ -959,7 +1280,7 @@ def compare_state_estimation_reports(
     return StateEstimationComparison(
         sequence_artifact_id=first.sequence_artifact_id,
         selection_id=first.selection_id,
-        calibration_identity=first.calibration_identity,
+        calibration_identity=next(iter(calibrations), None),
         reference_id=first.accuracy.reference_id,
         comparison_config=first.accuracy.config,
         entries=tuple(entries),
@@ -1101,12 +1422,15 @@ def _encode_reference(accuracy: AccuracyReport) -> dict[str, Any]:
     return {
         "reference_id": accuracy.reference_id,
         "role": accuracy.reference_role.value,
+        "source": accuracy.reference_source,
+        "source_sha256": accuracy.reference_source_sha256,
         "reference_frame": str(accuracy.reference_frame),
         "body_frame": str(accuracy.reference_body_frame),
         "config": {
             "alignment": accuracy.config.alignment.value,
             "max_time_difference_ns": accuracy.config.max_time_difference_ns,
-            "relative_pair_offset": accuracy.config.relative_pair_offset,
+            "relative_interval_ns": accuracy.config.relative_interval_ns,
+            "relative_interval_tolerance_ns": accuracy.config.relative_interval_tolerance_ns,
         },
         "alignment": {
             "method": alignment.method.value,
@@ -1130,7 +1454,7 @@ def _encode_accuracy(accuracy: AccuracyReport) -> dict[str, Any]:
         "rpe": None
         if accuracy.rpe is None
         else {
-            "pair_offset": accuracy.rpe.pair_offset,
+            "interval_ns": accuracy.rpe.interval_ns,
             "pair_count": accuracy.rpe.pair_count,
             "translation_m": _encode_errors(accuracy.rpe.translation_m),
             "rotation_rad": _encode_errors(accuracy.rpe.rotation_rad),
