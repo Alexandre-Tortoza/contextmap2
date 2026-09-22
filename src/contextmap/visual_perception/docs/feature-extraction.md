@@ -75,6 +75,8 @@ O tensor não fica inline no contrato. `payload_reference` aponta para o payload
 
 Uma feature `REGION` exige `region_id`. Features `DENSE` e `GLOBAL` não podem carregar `region_id`.
 
+Zero regiões aceitas é uma saída válida de Region Discovery (nenhum objeto saliente no frame), não uma falha: os adapters `REGION` (`ClipVisualFeatureBackend`, `AlphaClipRegionFeatureBackend`) devolvem `Sequence[VisualFeature]` vazia e o estágio permanece `SUCCEEDED` em `execute_stage_graph()`; nada é marcado `FAILED` só porque a entrada estava vazia (#380). Ver [`clip.md`](clip.md) e [`alphaclip.md`](alphaclip.md).
+
 ## Espaço de embedding e compatibilidade
 
 `EmbeddingSpace` identifica família, modelo, versão, checkpoint, layer/projeção, dimensão e normalização. `embedding_space_fingerprint()` gera o `embedding_space_id` determinístico.
