@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,14 @@ from contextmap.ingestion import (
     FrameId,
     ImageObservation,
     ImuObservation,
+    InvalidSourceWindowError,
     LidarObservation,
     MissingRequiredTopicError,
     RigidTransform,
     SensorId,
     SourceAdapterConfig,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
     synchronize,
 )
@@ -432,3 +435,174 @@ def test_provided_calibration_supplies_extrinsics_and_observation_reference(
     assert calibration.static_transforms == (transform,)
     assert image.calibration_id is not None
     assert lidar.calibration_id == lidar_calibration_id
+
+
+_WINDOW_TOPICS = SourceTopicMapping(rgb="/camera/image_raw")
+
+
+def _build_windowed_bag(path: Path, *, image_bag_timestamps_ns: list[int]) -> None:
+    """N image messages at distinct bag-recording timestamps.
+
+    Header stamps are assigned from a deliberately unrelated numbering
+    (seconds 1000, 1001, ...) so a header-time-based filter would select a
+    different subset than the bag-recording-time-based filter the window
+    actually uses -- proving which clock domain the window operates on.
+    """
+    types = _TS.types
+    with Writer(path) as writer:
+        image_conn = writer.add_connection(
+            "/camera/image_raw", types["sensor_msgs/msg/Image"].__msgtype__, typestore=_TS
+        )
+        for index, bag_ts in enumerate(image_bag_timestamps_ns):
+            msg = types["sensor_msgs/msg/Image"](
+                header=_header(1000 + index, "front_camera_optical"),
+                height=1,
+                width=1,
+                encoding="mono8",
+                is_bigendian=0,
+                step=1,
+                data=np.array([index], dtype=np.uint8),
+            )
+            _write(image_conn, writer, msg, bag_ts)
+
+
+def test_window_selects_only_messages_within_the_recording_time_range(tmp_path: Path) -> None:
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(
+        path,
+        image_bag_timestamps_ns=[
+            1_000_000_000,
+            2_000_000_000,
+            3_000_000_000,
+            4_000_000_000,
+        ],
+    )
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=2.0, end_seconds=4.0
+    )
+    adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+
+    observations = list(adapter.read_observations())
+
+    assert [obs.provenance.raw_metadata["bag_timestamp_nanoseconds"] for obs in observations] == [
+        2_000_000_000,
+        3_000_000_000,
+    ]
+
+
+def test_observation_id_counter_restarts_at_zero_relative_to_the_window(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(path, image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000, 3_000_000_000])
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=2.0, end_seconds=4.0
+    )
+    adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+
+    observations = list(adapter.read_observations())
+
+    assert [str(obs.observation_id) for obs in observations] == [
+        "camera_image_raw-000000",
+        "camera_image_raw-000001",
+    ]
+
+
+def test_windowed_and_full_ingestion_agree_on_content_for_a_prefix_window(
+    tmp_path: Path,
+) -> None:
+    """Contract test: a window covering the source's own start never changes content/ids."""
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(
+        path,
+        image_bag_timestamps_ns=[
+            1_000_000_000,
+            2_000_000_000,
+            3_000_000_000,
+            4_000_000_000,
+        ],
+    )
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+
+    full_adapter = Ros1BagSourceAdapter(base_config)
+    full_observations = list(full_adapter.read_observations())[:2]
+
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=0.5, end_seconds=2.5
+    )
+    windowed_adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+    windowed_observations = list(windowed_adapter.read_observations())
+
+    assert windowed_observations == full_observations
+
+
+def test_window_clock_id_mismatch_is_rejected_before_reading_anything(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(path, image_bag_timestamps_ns=[1_000_000_000])
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(clock_id="some-other-clock", start_seconds=0.0, end_seconds=5.0)
+    adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+
+    with pytest.raises(InvalidSourceWindowError, match="clock"):
+        list(adapter.read_observations())
+
+
+def test_window_with_no_overlap_is_rejected_explicitly(tmp_path: Path) -> None:
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(path, image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000])
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=10.0, end_seconds=20.0
+    )
+    adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+
+    with pytest.raises(InvalidSourceWindowError, match="does not overlap"):
+        list(adapter.read_observations())
+
+
+def test_content_hash_covers_only_the_window_not_the_whole_source(tmp_path: Path) -> None:
+    path = tmp_path / "windowed.bag"
+    _build_windowed_bag(
+        path,
+        image_bag_timestamps_ns=[
+            1_000_000_000,
+            2_000_000_000,
+            3_000_000_000,
+            4_000_000_000,
+        ],
+    )
+    base_config = SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_WINDOW_TOPICS)
+
+    full_adapter = Ros1BagSourceAdapter(base_config)
+    assert full_adapter.content_hash() is None
+    list(full_adapter.read_observations())
+    full_hash = full_adapter.content_hash()
+
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=1.0, end_seconds=3.0
+    )
+    windowed_config = replace(base_config, window=window)
+    windowed_adapter = Ros1BagSourceAdapter(windowed_config)
+    list(windowed_adapter.read_observations())
+    windowed_hash = windowed_adapter.content_hash()
+
+    assert windowed_hash is not None
+    assert windowed_hash != full_hash
+
+    repeat_adapter = Ros1BagSourceAdapter(windowed_config)
+    list(repeat_adapter.read_observations())
+    assert repeat_adapter.content_hash() == windowed_hash
+
+
+def test_no_window_configured_behaves_exactly_as_before(bag_path: Path) -> None:
+    config = SourceAdapterConfig(source_type="ros1_bag", path=str(bag_path), topics=_TOPICS)
+    adapter = Ros1BagSourceAdapter(config)
+
+    observations = list(adapter.read_observations())
+
+    assert len(observations) == 4
+    assert adapter.content_hash() is not None
