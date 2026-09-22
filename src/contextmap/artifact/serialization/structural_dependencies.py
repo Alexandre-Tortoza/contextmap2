@@ -21,6 +21,17 @@ publishing, and by the FULL validator, before a report may say ``VERIFIED``, so 
 swapped structural dependency is refused the same way in both places. It has no public consumer
 outside ``contextmap.artifact.serialization`` and is not exported at the package root.
 
+Proving that record *exists* is not proving the map's own copy still describes it, and
+:mod:`contextmap.artifact.composition` is explicit that the map does not own what an entity or a
+relation *is*: ``source``/``source_relation_id`` name the upstream record, and the local fields are
+only the part of that result a consumer reads without opening the upstream artifact. This module
+therefore also compares those fields against the very ``ResolvedEntity``/``Relation`` the readers
+already returned to answer the existence question: ``member_entities``, ``resolution_decisions``,
+``unresolved_neighbors`` and ``geometry_refs`` for an entity; the two endpoints (resolved through
+their own entities' ``source``), ``predicate``, ``state`` and ``uncertainty_kinds`` for a relation.
+``semantic_state`` and ``origin`` are deliberately excluded, since composition still derives them
+separately and this module has no way to recompute them from the upstream record alone.
+
 Both readers load their tables lazily, so a corrupted upstream file is not necessarily caught by
 opening the reader: it only surfaces once the table it damages is actually read. Every call that
 reaches into a run's own tables (``resolved_entity``, ``relation``, ``validate_resolution``) is
@@ -33,16 +44,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from contextmap.artifact.composition import ContextEntity, ContextRelation
 from contextmap.artifact.models import ContextMap
+from contextmap.artifact.references import ContextEntityId
 from contextmap.entity_resolution import (
     EntityResolutionRunReader,
     ForeignResolvedEntityReferenceError,
     IncompleteRunArtifactError,
+    ResolvedEntity,
     RunArtifactError,
     UnknownResolvedEntityError,
 )
 from contextmap.spatial_relations import (
     IncompleteRelationsRunArtifactError,
+    Relation,
     RelationsRunArtifactError,
     SpatialRelationsRunReader,
 )
@@ -74,7 +89,8 @@ def check_structural_dependencies(
     relations_readers = _open_relations_runs(
         context_map, spatial_relations_locations, resolution_readers, problems
     )
-    _check_relations(context_map, relations_readers, problems)
+    entities_by_id = {entity.entity_id: entity for entity in context_map.entities}
+    _check_relations(context_map, relations_readers, entities_by_id, problems)
     return tuple(problems)
 
 
@@ -119,13 +135,14 @@ def _check_entities(
         if reader is None:
             continue
         try:
-            reader.resolved_entity(entity.source)
+            resolved = reader.resolved_entity(entity.source)
         except (UnknownResolvedEntityError, ForeignResolvedEntityReferenceError) as error:
             problems.append(
                 f"entity {entity.entity_id!r} cites resolved entity "
                 f"{entity.source.resolved_entity_id!r} of run {entity.source.resolution_run_id!r}, "
                 f"which the run does not have: {error}"
             )
+            continue
         except (IncompleteRunArtifactError, RunArtifactError) as error:
             # A leitura é preguiçosa: abrir o reader não garante que a tabela que resolve esta
             # entidade específica ainda esteja íntegra, então a corrupção só aparece aqui.
@@ -134,6 +151,31 @@ def _check_entities(
                 f"{entity.source.resolved_entity_id!r} of run {entity.source.resolution_run_id!r}, "
                 f"which could not be read to check: {error}"
             )
+            continue
+        problems.extend(_entity_content_problems(entity, resolved))
+
+
+def _entity_content_problems(entity: ContextEntity, resolved: ResolvedEntity) -> list[str]:
+    """The map's own copy of one entity that no longer describes its resolved entity.
+
+    The map does not own what an entity *is*; it composes the part of the resolved entity a
+    consumer reads without opening Entity Resolution. Proving the id exists is not proving these
+    fields still describe it: they can be schema-valid and still have been silently rewritten
+    after resolution.
+    """
+    fields: tuple[tuple[str, object, object], ...] = (
+        ("member_entities", entity.member_entities, resolved.member_entity_refs),
+        ("resolution_decisions", entity.resolution_decisions, resolved.resolution_decision_refs),
+        ("unresolved_neighbors", entity.unresolved_neighbors, resolved.unresolved_neighbor_refs),
+        ("geometry_refs", entity.geometry_refs, resolved.geometry.geometry_refs),
+    )
+    return [
+        f"entity {entity.entity_id!r} has {name}={local!r}, which no longer matches resolved "
+        f"entity {entity.source.resolved_entity_id!r} of run {entity.source.resolution_run_id!r}: "
+        f"{upstream!r}"
+        for name, local, upstream in fields
+        if local != upstream
+    ]
 
 
 def _open_relations_runs(
@@ -199,6 +241,7 @@ def _open_relations_runs(
 def _check_relations(
     context_map: ContextMap,
     relations_readers: Mapping[str, SpatialRelationsRunReader],
+    entities_by_id: Mapping[ContextEntityId, ContextEntity],
     problems: list[str],
 ) -> None:
     for relation in context_map.relations:
@@ -206,19 +249,55 @@ def _check_relations(
         if reader is None:
             continue
         try:
-            reader.relation(relation.source_relation_id)
+            upstream = reader.relation(relation.source_relation_id)
         except KeyError:
             problems.append(
                 f"relation {relation.relation_id!r} cites relation "
                 f"{relation.source_relation_id!r} of run {relation.source_run_id!r}, which the "
                 "run does not have"
             )
+            continue
         except (IncompleteRelationsRunArtifactError, RelationsRunArtifactError) as error:
             problems.append(
                 f"relation {relation.relation_id!r} cites relation "
                 f"{relation.source_relation_id!r} of run {relation.source_run_id!r}, which could "
                 f"not be read to check: {error}"
             )
+            continue
+        problems.extend(_relation_content_problems(relation, upstream, entities_by_id))
+
+
+def _relation_content_problems(
+    relation: ContextRelation,
+    upstream: Relation,
+    entities_by_id: Mapping[ContextEntityId, ContextEntity],
+) -> list[str]:
+    """The map's own copy of one relation that no longer describes its upstream relation.
+
+    The map does not own what a relation *is*; ``subject``/``object`` name local entities, so
+    they are resolved to their own ``source`` (the resolved entity Spatial Relations reasons
+    about) before being compared to the upstream endpoints. ``semantic_state`` and ``origin`` are
+    deliberately excluded: composition still derives them separately from this record.
+    """
+    subject_source = entities_by_id[relation.subject.entity_id].source
+    object_source = entities_by_id[relation.object.entity_id].source
+    expected_uncertainty = tuple(
+        sorted({item.kind for item in upstream.uncertainty}, key=lambda kind: kind.value)
+    )
+    fields: tuple[tuple[str, object, object], ...] = (
+        ("subject", subject_source, upstream.subject_entity_ref),
+        ("object", object_source, upstream.object_entity_ref),
+        ("predicate", relation.predicate, upstream.predicate),
+        ("state", relation.state, upstream.state),
+        ("uncertainty_kinds", relation.uncertainty_kinds, expected_uncertainty),
+    )
+    return [
+        f"relation {relation.relation_id!r} has {name}={local!r}, which no longer matches "
+        f"relation {relation.source_relation_id!r} of run {relation.source_run_id!r}: "
+        f"{upstream_value!r}"
+        for name, local, upstream_value in fields
+        if local != upstream_value
+    ]
 
 
 __all__ = ["check_structural_dependencies"]

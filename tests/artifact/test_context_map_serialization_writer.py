@@ -66,7 +66,7 @@ from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.entity_resolution import EntityResolutionRunId, ResolvedEntityId
 from contextmap.ingestion import FrameId
 from contextmap.shared import check_file_inventory
-from contextmap.spatial_relations import RelationId, SpatialRelationsRunId
+from contextmap.spatial_relations import RelationId, RelationState, SpatialRelationsRunId
 
 
 @pytest.fixture
@@ -528,6 +528,49 @@ def test_a_spatial_relations_run_linked_to_a_different_entity_resolution_run_is_
 
     with pytest.raises(ContextMapArtifactError, match=other_er_run_id):
         write_artifact(world, context_map=relinked, locations=locations)
+    assert not (world.root / "out").exists()
+
+
+# Proving the upstream record *exists* is not proving the map's own copy still describes it: the
+# map does not own what an entity or a relation is (contextmap.artifact.composition), so its local
+# fields are checked against the very ResolvedEntity/Relation the readers already returned above.
+
+
+def test_a_relation_whose_state_no_longer_matches_its_upstream_relation_is_refused(
+    world: World,
+) -> None:
+    written = make_context_map(world)
+    real = next(item for item in written.relations if item.state is RelationState.SUPPORTED)
+    rewritten = replace(real, state=RelationState.REJECTED)
+    tampered = replace(
+        written,
+        relations=tuple(
+            rewritten if item.relation_id == real.relation_id else item
+            for item in written.relations
+        ),
+    )
+
+    with pytest.raises(ContextMapArtifactError, match=str(real.source_relation_id)):
+        write_artifact(world, context_map=tampered)
+    assert not (world.root / "out").exists()
+
+
+def test_an_entity_whose_geometry_refs_no_longer_match_its_resolved_entity_is_refused(
+    world: World,
+) -> None:
+    written = make_context_map(world)
+    first, second = written.entities[0], written.entities[1]
+    assert first.geometry_refs != second.geometry_refs
+    rewritten = replace(first, geometry_refs=second.geometry_refs)
+    tampered = replace(
+        written,
+        entities=tuple(
+            rewritten if item.entity_id == first.entity_id else item for item in written.entities
+        ),
+    )
+
+    with pytest.raises(ContextMapArtifactError, match=str(first.entity_id)):
+        write_artifact(world, context_map=tampered)
     assert not (world.root / "out").exists()
 
 
