@@ -85,9 +85,17 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
     Raises:
         PoseFileConfigError: If ``format`` is not a supported value, if
             ``parent_frame``/``body_frame`` is missing or not a non-empty
-            string, or if ``config.timestamp_clock_id`` is not declared.
-            Nothing is inferred from the file name or content.
+            string, if ``config.timestamp_clock_id`` is not declared, or if
+            ``config.window`` is set. Nothing is inferred from the file name
+            or content.
     """
+    if config.window is not None:
+        # Este adapter sempre lê o arquivo inteiro (ver docs/adapters.md); aceitar
+        # uma janela configurada silenciosamente faria o chamador acreditar que a
+        # leitura foi restringida quando na verdade não foi (#506).
+        raise PoseFileConfigError(
+            "pose_file adapter does not support a configured window; it always reads the whole file"
+        )
     extra = config.extra
     format_name = extra.get("format")
     if format_name not in _SUPPORTED_FORMATS:
@@ -150,6 +158,7 @@ class PoseFileSourceAdapter:
         self._config = config
         self._settings = _settings_from_config(config)
         self._warnings: list[SourceAdapterWarning] = []
+        self._content_hash: str | None = None
 
     def capabilities(self) -> SourceAdapterCapabilities:
         """Report that this adapter provides only external pose (plus configured calibration).
@@ -181,6 +190,7 @@ class PoseFileSourceAdapter:
         self._warnings = []
         path = Path(self._config.path)
         content_hash = compute_source_content_hash(path)
+        self._content_hash = content_hash
         clock_id = self._config.resolved_timestamp_clock_id()
 
         with path.open("r", encoding="utf-8") as handle:
@@ -220,6 +230,20 @@ class PoseFileSourceAdapter:
                     translation=translation,
                     orientation=orientation,
                 )
+
+    def content_hash(self) -> str | None:
+        """Return the content hash of the whole pose file, once it has been read.
+
+        This adapter never supports a configured window (see
+        :func:`_settings_from_config`), so unlike a windowed bag adapter
+        this always covers the whole file — the same hash already carried
+        in each observation's ``provenance.raw_metadata["source_content_hash"]``.
+
+        Returns:
+            ``"sha256:<hex digest>"``, or ``None`` if
+            :meth:`read_observations` has not been called yet.
+        """
+        return self._content_hash
 
     def read_calibration(self) -> CalibrationSet | None:
         """Return the configured calibration, when any (a pose file has none of its own).

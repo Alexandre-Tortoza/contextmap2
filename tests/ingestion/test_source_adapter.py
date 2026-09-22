@@ -77,6 +77,25 @@ class FakeSourceAdapter:
     def read_calibration(self) -> CalibrationSet | None:
         return self._config.calibration
 
+    def content_hash(self) -> str | None:
+        return None
+
+
+class _AdapterWithoutContentHash:
+    """Satisfies every SourceAdapter method except content_hash()."""
+
+    def capabilities(self) -> SourceAdapterCapabilities:
+        return SourceAdapterCapabilities()
+
+    def read_observations(self) -> Iterator[SourceObservation]:
+        return iter(())
+
+    def read_calibration(self) -> CalibrationSet | None:
+        return None
+
+    def warnings(self) -> Sequence[SourceAdapterWarning]:
+        return ()
+
 
 def _image_observation() -> ImageObservation:
     return ImageObservation(
@@ -119,6 +138,18 @@ def test_fake_adapter_satisfies_the_source_adapter_protocol() -> None:
     )
 
     assert isinstance(adapter, SourceAdapter)
+
+
+def test_content_hash_is_part_of_the_source_adapter_protocol() -> None:
+    """#506: o runtime precisa de um hash com escopo de janela de qualquer adapter.
+
+    ``content_hash()`` já existia em ``Ros1BagSourceAdapter``/``Ros2BagSourceAdapter``
+    mas fora do ``Protocol`` — o serviço de ingestion não tinha como obtê-lo
+    genericamente de um adapter arbitrário. Uma classe que implementa todo o
+    resto do boundary mas não ``content_hash()`` não deve satisfazer
+    ``SourceAdapter``.
+    """
+    assert not isinstance(_AdapterWithoutContentHash(), SourceAdapter)
 
 
 def test_downstream_code_consumes_any_adapter_without_branching() -> None:

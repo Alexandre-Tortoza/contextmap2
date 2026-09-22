@@ -289,3 +289,20 @@ class SourceAdapter(Protocol):
             Accumulated warnings, in the order they occurred.
         """
         ...
+
+    def content_hash(self) -> str | None:
+        """Return the content hash of exactly what :meth:`read_observations` actually read.
+
+        Unlike a separate full-source hash (O(source size), always), this
+        must cover only what was actually decoded: the whole source when no
+        window restricts the read, or only the configured window when one
+        does (issue #506) — an adapter that does not support windowing at
+        all still reports the whole source it read. The runtime uses this
+        so a request's declared content identity never costs more than the
+        read itself, e.g. for a small window of a large source.
+
+        Returns:
+            ``"sha256:<hex digest>"``, or ``None`` if
+            :meth:`read_observations` has not been called yet.
+        """
+        ...

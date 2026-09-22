@@ -11,6 +11,7 @@ from contextmap.ingestion import (
     SourceAdapterWarning,
     SourceObservationId,
     SourceTopicMapping,
+    SourceWindow,
 )
 from contextmap.ingestion.adapters.pose_file import PoseFileConfigError, PoseFileSourceAdapter
 from contextmap.ingestion.sequence_provenance import SequenceProvenance, compute_source_content_hash
@@ -121,6 +122,53 @@ def test_read_calibration_returns_none_when_not_configured(tmp_path: Path) -> No
     adapter = PoseFileSourceAdapter(_config(path))
 
     assert adapter.read_calibration() is None
+
+
+def test_content_hash_is_none_before_reading(tmp_path: Path) -> None:
+    path = _pose_file(tmp_path)
+    adapter = PoseFileSourceAdapter(_config(path))
+
+    assert adapter.content_hash() is None
+
+
+def test_content_hash_covers_the_whole_file_after_reading(tmp_path: Path) -> None:
+    """#506: content_hash() agora é parte do SourceAdapter Protocol.
+
+    ``PoseFileSourceAdapter`` não suporta janela (lê sempre o arquivo
+    inteiro — ver docs/adapters.md), então seu ``content_hash()`` cobre o
+    arquivo inteiro, igual ao hash já gravado em cada observação.
+    """
+    path = _pose_file(tmp_path)
+    expected_hash = compute_source_content_hash(path)
+    adapter = PoseFileSourceAdapter(_config(path))
+
+    list(adapter.read_observations())
+
+    assert adapter.content_hash() == expected_hash
+
+
+def test_configured_window_is_rejected(tmp_path: Path) -> None:
+    """#506: um pose file sempre lê o arquivo inteiro; uma janela nunca é aplicada.
+
+    Aceitar ``config.window`` silenciosamente faria o chamador acreditar
+    que a leitura foi restringida quando não foi — o mesmo tipo de
+    fallback silencioso que o #376 já proíbe para o clock.
+    """
+    path = _pose_file(tmp_path)
+    window = SourceWindow(
+        clock_id="pose_file:does-not-matter:recording_time", start_seconds=0.0, end_seconds=1.0
+    )
+    config = SourceAdapterConfig(
+        source_type="pose_file",
+        path=str(path),
+        topics=SourceTopicMapping(),
+        timestamp_clock_id="corridor-02-gt:tum-header-stamp",
+        window=window,
+        extra={"format": "tum", "parent_frame": "map", "body_frame": "epson"},
+    )
+
+    with pytest.raises(PoseFileConfigError, match="window"):
+        PoseFileSourceAdapter(config)
 
 
 def test_missing_format_raises_config_error_before_reading_the_file(tmp_path: Path) -> None:
