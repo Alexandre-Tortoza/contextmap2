@@ -128,6 +128,7 @@ flowchart TD
     M --> SF[src/contextmap/semantic_fusion/docs/README.md]
     M --> SM[src/contextmap/semantic_mapping/docs/README.md]
     M --> EV[src/contextmap/evaluation/docs/README.md]
+    M --> ART[src/contextmap/artifact/docs/README.md]
     ING --> ID[contracts / artifact / synchronization / calibration / adapters]
     VP --> VD[contracts / ports / pipeline / service / identity / run_artifact / evidence_set]
     VP --> RD[Region Discovery]
@@ -197,6 +198,7 @@ Módulos com documentação própria:
 - [`entity_resolution`](../src/contextmap/entity_resolution/docs/README.md) — identidade entre entidades de origem sem mutá-las: candidatos, evidência por canal sem score único, decisões `MATCH`/`DISTINCT`/`UNRESOLVED`, entidades resolvidas com linhagem, contradições de transitividade, detecção de divisão opcional e o `EntityResolutionRunArtifact`.
 - [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico, a fronteira PTv3 e o runtime real `PointceptPTv3Runtime`, já medido em geometria real.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline; [reference set](../src/contextmap/evaluation/docs/reference-set.md), [anotações](../src/contextmap/evaluation/docs/annotations.md), [integridade](../src/contextmap/evaluation/docs/reference-integrity.md), [QA](../src/contextmap/evaluation/docs/annotation-qa.md), [métricas](../src/contextmap/evaluation/docs/metrics.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md), [fixtures de CI](../src/contextmap/evaluation/docs/ci-fixtures.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
+- [`artifact`](../src/contextmap/artifact/docs/README.md) — o schema do produto final: `ContextMap` (metadados de frame, unidades, âncora e capacidades; geometria referenciada; entidades e relações por referência; linhagem e proveniência; versionamento). Somente schema: sem layout, serializador, ROS nem modelos.
 
 ## Integração da documentação
 

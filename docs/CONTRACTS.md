@@ -767,6 +767,8 @@ ContextMap
 
 O schema deve ser independente do filesystem layout.
 
+O **schema** já existe em `contextmap.artifact` ([contratos](../src/contextmap/artifact/docs/contracts.md)): `geometry_ref` referencia o `GeometricMapArtifact` por identidade e tamanho (nunca copia pontos); `entities` e `relations` são compostas por referência, com escopo de identidade próprio do mapa e mapeamento explícito para as identidades de origem; `lineage` lista todo artifact a montante citado, e cada resultado carrega uma `EvidenceOrigin` (`SENSOR_OBSERVED`, `MODEL_INFERRED`, `GEOMETRY_DERIVED`, `MULTIVIEW_FUSED`, `HUMAN_ANNOTATED`, `PRIOR_KNOWLEDGE`), que é proveniência e **nunca** confiança; `indexes` são derivados; `capabilities` ficam nos metadados junto com frame, unidades, âncora e extensão. Entidades e relações usam os contratos reais (`ResolvedEntityReference`, `EntityReference`, `RelationPredicate`, `RelationState`), sem registros de referência próprios. A montagem, o serializador e o artifact persistido continuam planejados. Ver também [versionamento do schema](../src/contextmap/artifact/docs/versioning.md).
+
 ## Escopos de identidade
 
 A tabela resume onde uma identidade é válida por padrão.
