@@ -70,9 +70,13 @@ renderizado, resposta bruta, parsing canônico, configuração efetiva e métric
 Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
 `QwenSemanticInterpreter`, `GeminiSemanticInterpreter` e
 `Florence2SemanticInterpreter` implementam esse boundary hoje usando seams
-injetáveis (`QwenRuntime`, `GeminiClient` e `Florence2SemanticRuntime`). Isso
-valida contratos, mapping, parsing, retries/diagnostics e provenance sem afirmar
-que execuções controladas com checkpoint/API real já foram concluídas.
+injetáveis (`QwenRuntime`, `GeminiClient` e `Florence2SemanticRuntime`). Esses
+seams recebem as `SemanticVisualView` completas e cada implementação precisa
+verificar o SHA-256 dos bytes da view antes de decodificá-los ou enviá-los a um
+provider (`read_view_payload`; ver
+[Integridade das views](semantic-interpretation.md#integridade-das-views-na-inferência)).
+Isso valida contratos, mapping, parsing, retries/diagnostics e provenance sem
+afirmar que execuções controladas com checkpoint/API real já foram concluídas.
 
 ## `SemanticScorer` nunca muta uma claim
 

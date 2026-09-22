@@ -60,6 +60,8 @@ Pode conter os produtos finais `ContextMapArtifact` ou bundles finais, conforme 
 
 Contém os manifests/reports que referenciam runs imutáveis usados em comparações e ablations: o run de um experimento (`experiment.json`, um run manifest e um relatório por arm e `comparison.json`) e a evidência/decisão sobre uma técnica opcional. Os formatos estão em [Artefatos de avaliação](#artefatos-de-avaliação).
 
+O registro **versionado** de uma execução real fica no repositório, em `experiments/<experimento>/` (diretório de topo, fora de `src/` e `tests/`): um bundle leve com o manifest do experimento (identidades e SHA-256 completos das runs de entrada), a seleção, a configuração, os drivers e os relatórios finais, **sem** o dataset nem os artifacts grandes, que continuam fora do Git e são regenerados localmente. Os drivers ficam fora de `src/` e de `tests/` porque são scripts de pesquisa, não código do pacote nem testes, e alterá-los para passar nos gates do pacote quebraria o hash do que foi executado. O teste `tests/evaluation/test_experiment_bundles.py` confere cada bundle contra o próprio manifest (hashes completos, todo arquivo listado, menos de 1 MB, sem caminhos pessoais nem segredos). Exemplo: [`experiments/semantic-fusion-corridor-02-20260921/`](../experiments/semantic-fusion-corridor-02-20260921/README.md).
+
 ### `tmp/`
 
 Conteúdo efêmero. Nada em `tmp/` pode ser dependência contratual de um artifact válido.
@@ -304,7 +306,7 @@ workspace/runs/semantic-fusion/<sequence-name>/
     └── debug/                                 # somente standard/full; nunca inventariado
 ```
 
-O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenções e evidência não pontuada (`None`, nunca zero), e mantém frames físicos e resultados de inferência distintos. Nada a montante é duplicado: claims, scores, features, qualidade e estrutura 3D são referenciados, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, mapa, runs de associação, percepção e Point Representation), as políticas com fingerprint e as identidades que alimentaram cada canal. Um run é escrito em fluxo e publicado de forma atômica, e o leitor abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo, lendo um suporte sem carregar os outros. Semantic Mapping não pode depender de `debug/`. Detalhes: [Semantic Fusion artifact](../src/contextmap/semantic_fusion/docs/artifact.md).
+O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenções e evidência não pontuada (`None`, nunca zero), e mantém frames físicos e resultados de inferência distintos. Nada a montante é duplicado: claims, scores, features, qualidade e estrutura 3D são referenciados, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, mapa, runs de associação, percepção e Point Representation), as políticas com fingerprint e as identidades que alimentaram cada canal. Um run é escrito em fluxo e publicado de forma atômica, e o leitor abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo, lendo um suporte sem carregar os outros. Semantic Mapping não pode depender de `debug/`. A `schema_version` atual é `0.2.0`: a `0.1.0` somava `inference_results` por suporte (o mesmo campo com outro denominador) e é recusada ao abrir. Detalhes: [Semantic Fusion artifact](../src/contextmap/semantic_fusion/docs/artifact.md).
 
 ### `SemanticMappingRunArtifact` atual
 
