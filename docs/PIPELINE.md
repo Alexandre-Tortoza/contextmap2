@@ -1266,7 +1266,7 @@ ContextMap
 └── provenance / lineage refs
 ```
 
-O **schema** deste contrato já existe em `contextmap.artifact` ([documentação](../src/contextmap/artifact/docs/README.md)): a capability é somente schema, sem layout em disco, serializador, ROS nem modelos. A **montagem** que produz um `ContextMap` a partir dos artifacts de geometria, resolução de entidades e relações, o serializador e o `ContextMapArtifact` persistido continuam planejados.
+O **schema** deste contrato já existe em `contextmap.artifact` ([documentação](../src/contextmap/artifact/docs/README.md)): a capability é somente schema, sem layout em disco, serializador, ROS nem modelos. A **montagem** que produz um `ContextMap` real a partir dos artifacts de geometria, resolução de entidades e relações também já existe (`assemble_context_map`, [documentação](../src/contextmap/artifact/docs/assembly.md)), assim como o serializador e o `ContextMapArtifact` persistido (`ContextMapArtifactWriter`/`ContextMapArtifactReader`, [documentação](../src/contextmap/artifact/docs/writer.md)). O que ainda falta é um estágio de runtime que invoque a montagem como parte de uma execução completa do pipeline (planejado, fora do escopo da issue que introduziu a montagem).
 
 ### Metadata espacial
 
@@ -1311,7 +1311,7 @@ Consumidores precisam apenas do schema, payloads e dependências contratuais exp
 | Semantic Mapping | `SemanticMappingRunArtifact` | implementado | entity resolution, evaluation |
 | Entity Resolution | `EntityResolutionRunArtifact` | implementado, só com dados sintéticos | spatial relations, final map, evaluation |
 | Spatial Relations | `SpatialRelationsRunArtifact` | implementado | final map, evaluation |
-| Context Map Assembly | `ContextMapArtifact` | schema `ContextMap` implementado; montagem e artifact persistido planejados | external consumers |
+| Context Map Assembly | `ContextMapArtifact` | schema, montagem (`assemble_context_map`) e artifact persistido implementados; wiring do estágio de runtime planejado | external consumers |
 
 Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
 
