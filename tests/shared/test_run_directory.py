@@ -9,8 +9,6 @@ from contextmap.shared import (
     RunDirectoryError,
     check_file_inventory,
     file_entry,
-    next_run_index,
-    write_run_registry,
 )
 
 
@@ -255,55 +253,3 @@ def test_a_streamed_path_follows_the_same_rules_as_a_written_one(tmp_path: Path)
             pass
         with pytest.raises(RunDirectoryError, match="relative path"), run.open_binary("../x"):
             pass
-
-
-def _index_of(run_dir: Path) -> int | None:
-    manifest = run_dir / "manifest.json"
-    if not manifest.is_file():
-        return None
-    index: int = json.loads(manifest.read_text())["run_index"]
-    return index
-
-
-def _make_run(sequence_dir: Path, name: str, index: int, *, complete: bool = True) -> None:
-    run_dir = sequence_dir / name
-    run_dir.mkdir(parents=True)
-    if complete:
-        (run_dir / "manifest.json").write_text(json.dumps({"run_index": index}))
-
-
-def test_run_indexes_start_at_one_and_increase_monotonically(tmp_path: Path) -> None:
-    sequence_dir = tmp_path / "corridor"
-
-    assert next_run_index(sequence_dir, index_of=_index_of) == 1
-
-    _make_run(sequence_dir, "run-0001__a__b", 1)
-    _make_run(sequence_dir, "run-0004__a__b", 4)
-    assert next_run_index(sequence_dir, index_of=_index_of) == 5
-
-
-def test_incomplete_and_temporary_runs_are_never_counted(tmp_path: Path) -> None:
-    sequence_dir = tmp_path / "corridor"
-    _make_run(sequence_dir, "run-0001__a__b", 1)
-    _make_run(sequence_dir, "run-0009__a__b", 9, complete=False)
-    _make_run(sequence_dir, ".tmp-run-0010__a__b-abc", 10)
-
-    assert next_run_index(sequence_dir, index_of=_index_of) == 2
-
-
-def test_the_registry_is_rebuilt_from_valid_runs_only(tmp_path: Path) -> None:
-    sequence_dir = tmp_path / "corridor"
-    _make_run(sequence_dir, "run-0001__a__b", 1)
-    _make_run(sequence_dir, "run-0002__a__b", 2, complete=False)
-
-    write_run_registry(
-        sequence_dir,
-        describe=lambda run_dir: (
-            {"run_index": _index_of(run_dir), "directory": run_dir.name}
-            if _index_of(run_dir) is not None
-            else None
-        ),
-    )
-
-    registry = json.loads((sequence_dir / "runs.json").read_text())
-    assert registry == {"runs": [{"directory": "run-0001__a__b", "run_index": 1}]}

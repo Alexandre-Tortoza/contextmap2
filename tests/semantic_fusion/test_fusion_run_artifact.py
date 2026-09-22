@@ -30,8 +30,6 @@ from contextmap.semantic_fusion import (
     SemanticFusionRunReader,
     SemanticFusionRunWriter,
     UncertaintyKind,
-    allocate_fusion_run_index,
-    rebuild_fusion_run_registry,
 )
 from contextmap.sensor_association import SpatialObservationId
 from contextmap.visual_perception import PerceptionRunId
@@ -42,6 +40,11 @@ def fixture() -> RunFixture:
     return make_run_fixture()
 
 
+def _run_dir(tmp_path: Path, run_index: int = 1) -> Path:
+    """Onde o writer grava: o chamador decide o diretório final, o writer não calcula caminho."""
+    return tmp_path / f"run-{run_index:04d}"
+
+
 def _writer(
     tmp_path: Path,
     *,
@@ -50,12 +53,10 @@ def _writer(
     lineage: FusionRunLineage = LINEAGE,
 ) -> SemanticFusionRunWriter:
     return SemanticFusionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=_run_dir(tmp_path, run_index),
         sequence_name="sequence-0001",
         run_id=SemanticFusionRunId(f"fusion-run-{run_index:04d}"),
         run_index=run_index,
-        selection_label="all-frames",
-        policy_label="quality-aware",
         lineage=lineage,
         code_version="test",
         debug_level=debug,
@@ -69,16 +70,10 @@ def _write(
     debug: SemanticFusionDebugLevel = SemanticFusionDebugLevel.NONE,
     run_index: int = 1,
 ) -> Path:
-    manifest = _writer(tmp_path, run_index=run_index, debug=debug).write(
+    _writer(tmp_path, run_index=run_index, debug=debug).write(
         fixture.outcomes, excluded=fixture.excluded, warnings=("one warning",)
     )
-    return (
-        tmp_path
-        / "runs"
-        / "semantic-fusion"
-        / "sequence-0001"
-        / (f"run-{manifest.run_index:04d}__all-frames__quality-aware")
-    )
+    return _run_dir(tmp_path, run_index)
 
 
 def _lines(path: Path) -> list[dict[str, object]]:
@@ -281,16 +276,10 @@ def test_metrics_report_each_quantity_on_its_own(tmp_path: Path, fixture: RunFix
 def test_runtime_is_recorded_apart_from_quality_and_only_when_measured(
     tmp_path: Path, fixture: RunFixture
 ) -> None:
-    manifest = _writer(tmp_path).write(
+    _writer(tmp_path).write(
         fixture.outcomes, runtime={"fusion_seconds": 1.5, "peak_memory_bytes": 1024}
     )
-    run_dir = (
-        tmp_path
-        / "runs"
-        / "semantic-fusion"
-        / "sequence-0001"
-        / (f"run-{manifest.run_index:04d}__all-frames__quality-aware")
-    )
+    run_dir = _run_dir(tmp_path)
 
     runtime = json.loads((run_dir / "metrics" / "runtime.json").read_text())
 
@@ -306,13 +295,7 @@ def test_skipped_evidence_and_warnings_are_persisted_explicitly(tmp_path: Path) 
         minimum_geometry_count=3,
     )
     manifest = _writer(tmp_path).write(fixture.outcomes, excluded=(skipped,), warnings=("w1", "w2"))
-    reader = SemanticFusionRunReader(
-        tmp_path
-        / "runs"
-        / "semantic-fusion"
-        / "sequence-0001"
-        / "run-0001__all-frames__quality-aware"
-    )
+    reader = SemanticFusionRunReader(_run_dir(tmp_path))
 
     assert manifest.excluded_count == 1
     assert reader.excluded_observations() == [skipped]
@@ -321,13 +304,7 @@ def test_skipped_evidence_and_warnings_are_persisted_explicitly(tmp_path: Path) 
 
 def test_a_run_without_supports_is_a_valid_explicit_run(tmp_path: Path) -> None:
     manifest = _writer(tmp_path).write((), excluded=())
-    reader = SemanticFusionRunReader(
-        tmp_path
-        / "runs"
-        / "semantic-fusion"
-        / "sequence-0001"
-        / "run-0001__all-frames__quality-aware"
-    )
+    reader = SemanticFusionRunReader(_run_dir(tmp_path))
 
     assert manifest.support_count == 0
     assert list(reader.iter_outcomes()) == []
@@ -351,21 +328,47 @@ def test_integrity_detects_a_missing_altered_or_truncated_file(
     assert any("missing" in problem for problem in reader.verify_integrity())
 
 
-def test_a_finished_run_is_immutable_and_a_rerun_gets_a_new_identity(
+def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+    tmp_path: Path, fixture: RunFixture
+) -> None:
+    target = tmp_path / "ws" / "corridor-02" / "run-0001" / "semantic_fusion"
+
+    SemanticFusionRunWriter(
+        output_dir=target,
+        sequence_name="sequence-0001",
+        run_id=SemanticFusionRunId("fusion-run"),
+        run_index=1,
+        lineage=LINEAGE,
+        code_version="test",
+    ).write(fixture.outcomes, excluded=fixture.excluded)
+
+    assert SemanticFusionRunReader(target).manifest.run_id == SemanticFusionRunId("fusion-run")
+    # Sem registro `runs.json` e sem `runs/<capability>/<sequência>/`: só o diretório do artifact.
+    assert sorted(path.name for path in target.parent.iterdir()) == ["semantic_fusion"]
+    assert sorted(path.name for path in (tmp_path / "ws").iterdir()) == ["corridor-02"]
+
+
+def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+    tmp_path: Path, fixture: RunFixture
+) -> None:
+    run_dir = _write(tmp_path, fixture, run_index=7)
+
+    manifest = SemanticFusionRunReader(run_dir).manifest
+    assert (manifest.run_id, manifest.run_index) == (SemanticFusionRunId("fusion-run-0007"), 7)
+    assert not _run_dir(tmp_path, 1).exists()
+
+
+def test_a_second_run_at_the_same_output_directory_is_refused_and_leaves_the_first_intact(
     tmp_path: Path, fixture: RunFixture
 ) -> None:
     first = _write(tmp_path, fixture)
+    before = (first / "manifest.json").read_bytes()
 
     with pytest.raises(FusionRunArtifactError, match="already exists"):
         _writer(tmp_path, run_index=1).write(fixture.outcomes)
-    assert allocate_fusion_run_index(workspace_root=tmp_path, sequence_name="sequence-0001") == 2
-    second = _write(tmp_path, fixture, run_index=2)
 
-    assert first != second
-    assert SemanticFusionRunReader(second).manifest.run_index == 2
-    rebuild_fusion_run_registry(workspace_root=tmp_path, sequence_name="sequence-0001")
-    registry = json.loads((first.parent / "runs.json").read_text())
-    assert [entry["run_index"] for entry in registry["runs"]] == [1, 2]
+    assert (first / "manifest.json").read_bytes() == before
+    assert SemanticFusionRunReader(first).verify_integrity() == []
 
 
 def test_an_interrupted_write_never_looks_like_a_finished_run(
@@ -378,10 +381,7 @@ def test_an_interrupted_write_never_looks_like_a_finished_run(
     with pytest.raises(RuntimeError, match="stopped"):
         _writer(tmp_path).write(failing())
 
-    sequence_dir = tmp_path / "runs" / "semantic-fusion" / "sequence-0001"
-    assert not any(path.name.startswith("run-") for path in sequence_dir.iterdir())
-    assert not any(path.name.startswith(".tmp-") for path in sequence_dir.iterdir())
-    assert allocate_fusion_run_index(workspace_root=tmp_path, sequence_name="sequence-0001") == 1
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_directory_without_a_manifest_is_incomplete(tmp_path: Path) -> None:
@@ -545,10 +545,7 @@ def test_inconsistent_inputs_are_refused_and_leave_no_run(
     with pytest.raises(FusionRunArtifactError):
         _writer(tmp_path, lineage=lineage).write(outcomes)
 
-    sequence_dir = tmp_path / "runs" / "semantic-fusion" / "sequence-0001"
-    assert not sequence_dir.exists() or not any(
-        path.name.startswith(("run-", ".tmp-")) for path in sequence_dir.iterdir()
-    )
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_an_outcome_must_pair_a_support_with_its_own_evidence(fixture: RunFixture) -> None:

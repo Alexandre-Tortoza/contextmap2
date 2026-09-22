@@ -53,6 +53,6 @@ Nenhum payload é copiado ou reescrito para construir essa view — `PerceptionE
 
 A seleção também é rejeitada quando dois diretórios declaram o mesmo `run_id`, pois a chave deixaria de identificar univocamente a origem da evidência. Para cada resultado lido, a view confirma ainda que `PerceptionResult.run_id` coincide com o `run_id` do manifest que o possui, evitando atribuição silenciosa a outro run.
 
-## Sem `runs.json`
+## Sem registro
 
-Cada run é aberto via `PerceptionRunReader` (issue #52), que nunca requer `runs.json` — a view multi-run funciona igual quando o registro de conveniência está ausente.
+Cada run é aberto via `PerceptionRunReader` (issue #52) direto no diretório em que foi gravado; não existe `runs.json` nem qualquer índice ao lado dos runs, então a view multi-run recebe os diretórios explicitamente.

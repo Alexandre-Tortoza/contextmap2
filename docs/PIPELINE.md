@@ -432,7 +432,7 @@ Exemplos:
 
 ## 0. Runtime e plano de execução
 
-Esta etapa permanece **planejada**: `contextmap.runtime` ainda não existe. Quando for materializado, antes de executar modelos ou transformações pesadas, o runtime deverá resolver a configuração do experimento.
+Esta etapa está **materializada** em `contextmap.runtime`: antes de executar modelos ou transformações pesadas, o runtime resolve a configuração do experimento (perfil `canonical/1`, arquivos e overrides, com digest determinístico), deriva a topologia, valida dependências, contratos, seleções de runs, backends, módulos opcionais, segredos e executores (`preflight`) e só então executa, registrando o plano, os eventos e as decisões de reuso de cada run. O preset `canonical/1` termina em `semantic_fusion`, o último estágio executável nesta milestone; Semantic Mapping, Entity Resolution, Spatial Relations e `ContextMapArtifact` ainda não são estágios do preset e entram como um preset versionado posterior, quando essas capabilities existirem em `dev`. `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` têm hoje um executor de estágio real, composto automaticamente da configuração; Visual Perception e Point Representation ainda não têm (backend com modelo/GPU), e a Ingestion tem um executor real que continua exigindo injeção explícita (precisa do `IngestionRequest` da execução, não da configuração) — por isso a execução end-to-end com dados reais dessas três capabilities ainda não foi validada. Detalhes em [runtime-composition.md](runtime-composition.md) e na [documentação do módulo](../src/contextmap/runtime/docs/README.md).
 
 ```mermaid
 flowchart LR
@@ -657,12 +657,12 @@ flowchart LR
 
 Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
 
-- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global; DINOv2/DINOv3/CLIP já foram validados com pesos reais, mas AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
+- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela composition root do runtime, por configuração explícita, nunca implícita; DINOv2/DINOv3/CLIP já foram validados com pesos reais, mas AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
 - promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; a execução real do Gemini (sem credencial nem consentimento para enviar frames) e a avaliação de Qwen/Gemini/Florence-2 com anotações semânticas humanas continuam pendentes;
 - integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
-- conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
+- execução end-to-end do DAG do runtime com executores reais de Visual Perception e Point Representation: o runtime já conecta os estágios (ordem, entradas exatas, reuso, lifecycle) e já compõe automaticamente executores reais de `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` a partir da configuração; Visual Perception e Point Representation dependem de backend com modelo/GPU e ainda não têm um, e a Ingestion tem um executor real que continua exigindo injeção explícita (precisa do `IngestionRequest` da execução).
 
 Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
 

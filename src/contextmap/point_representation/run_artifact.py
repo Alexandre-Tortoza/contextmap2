@@ -62,8 +62,6 @@ from contextmap.shared import (
     FileEntry,
     RunDirectoryError,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 
 SCHEMA_VERSION = "0.1.0"
@@ -114,8 +112,9 @@ class PointRepresentationRunManifest:
     """Authoritative metadata of a persisted Point Representation run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's point-representation runs.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this sequence, supplied by the
+            caller.
         sequence_name: Name of the processed sequence.
         geometric_map_id: The immutable geometric map the geometry came from.
         geometric_map_frame: Frame of that map.
@@ -174,10 +173,6 @@ class PointRepresentationRunManifest:
     file_inventory: tuple[FileEntry, ...]
 
 
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "point-representation" / sequence_name
-
-
 class PointRepresentationRunWriter:
     """Builds an immutable Point Representation run artifact on the local filesystem.
 
@@ -190,12 +185,10 @@ class PointRepresentationRunWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: PointRepresentationRunId,
         run_index: int,
-        selection_label: str,
-        backend_label: str,
         geometric_map: GeometricMap,
         space: RepresentationSpace,
         encoder_identity: EncoderIdentity,
@@ -206,15 +199,14 @@ class PointRepresentationRunWriter:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/point_representation``); the writer
+                computes no path, creates the directory atomically on finalization and
+                refuses to replace one that exists.
             sequence_name: Name of the sequence the run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's point-representation
-                runs (see :func:`allocate_run_index`).
-            selection_label: Short readable selection description for the
-                directory name, e.g. ``"voxel-5cm"``.
-            backend_label: Short readable backend description for the directory
-                name, e.g. ``"geometric-descriptor"``.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             geometric_map: The map the geometry came from; only its identity
                 and lineage are recorded, never its points.
             space: The run's representation space.
@@ -229,7 +221,6 @@ class PointRepresentationRunWriter:
         """
         if association_context_id is not None and not association_context_id:
             raise RunArtifactError("association_context_id must be None or a non-empty identity")
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
@@ -240,9 +231,7 @@ class PointRepresentationRunWriter:
         self._code_version = code_version
         self._association_context_id = association_context_id
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{backend_label}"
-        )
+        self._final_dir = output_dir
         code, self._item_size, suffix = _DTYPES[space.dtype]
         self._row = struct.Struct(f"<{space.dimension}{code}")
         self._payload_path = f"outputs/payloads/vectors.{suffix}"
@@ -313,7 +302,6 @@ class PointRepresentationRunWriter:
         except RunDirectoryError as error:
             raise RunArtifactError(str(error)) from error
         self._finalized = True
-        rebuild_run_registry(workspace_root=self._workspace_root, sequence_name=self._sequence_name)
         return _load_manifest(self._final_dir)
 
     def _require_open(self) -> None:
@@ -762,22 +750,6 @@ class PointRepresentationRunReader:
         return self._by_geometry
 
 
-def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's point-representation runs.
-
-    Scans the run directories, never the registry, so an interrupted or
-    corrupted run is not counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
 def center_selection_id(*, map_id: MapId, centers: Iterable[GeometryReference]) -> str:
     """Identity of a set of requested centers of one map, independent of request order.
 
@@ -793,33 +765,6 @@ def center_selection_id(*, map_id: MapId, centers: Iterable[GeometryReference]) 
     """
     text = "\n".join([str(map_id), *sorted(str(center.geometry_id) for center in centers)])
     return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
-
-
-def rebuild_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
-def _valid_run_index(run_dir: Path) -> int | None:
-    # Um diretório ilegível ou com manifest malformado simplesmente não é um run válido.
-    try:
-        reader = PointRepresentationRunReader(run_dir)
-    except (RunArtifactError, ValueError, KeyError, OSError):
-        return None
-    return None if reader.verify_integrity() else reader.manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = PointRepresentationRunReader(run_dir).manifest
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
 
 
 def _load_manifest(run_dir: Path) -> PointRepresentationRunManifest:

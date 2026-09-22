@@ -52,7 +52,7 @@ tempo, reprojeção e caminhos de features. Está implementada em
 - `VisualFeatureRef`, `SemanticClaimRef` — referências à evidência visual do mesmo resultado, nunca cópias.
 - `CalibrationRef`, `PoseRef`, `AssociationProvenance` — qual calibração, qual pose e qual execução produziram a observação.
 - `SensorAssociationService`, `SensorAssociationRequest`, `SensorAssociationOutcome`, `AssociationFrameInput`, `DenseChannel`, `FrameAssociation`, `OcclusionPolicy`, `DiagnosticTolerances`, `InterpolationPolicy`, `TrustedCorrespondences` — a execução da capability (entradas e resultado).
-- `SensorAssociationRunWriter`, `SensorAssociationRunReader`, `SensorAssociationRunManifest`, `SensorAssociationRunId`, `SensorAssociationDebugLevel`, `allocate_run_index()`, `rebuild_run_registry()` — o artifact de run.
+- `SensorAssociationRunWriter`, `SensorAssociationRunReader`, `SensorAssociationRunManifest`, `SensorAssociationRunId`, `SensorAssociationDebugLevel` — o artifact de run.
 - `ObservationQuality`, `ValueSummary`, `ReprojectionStatistics`, `QualityComponent` — medidas de qualidade da observação, separadas e tipadas, com ausência explícita; **não** são confiança semântica.
 - `CameraProjection`, `PixelProjection`, `CameraIdentity`, `camera_projection_for()` — projeção 3D → pixel e raio inverso, com domínio de visão explícito e a identidade da calibração em todo resultado.
 
@@ -72,8 +72,9 @@ A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPrepa
 Hoje, `semantic_fusion` e `evaluation`, sempre através de
 `contextmap.sensor_association`. `point_representation` não consome esta
 capability: extrai suporte diretamente de Geometric Mapping e só pode fornecer
-um canal opcional posterior a Semantic Fusion. A composition root em `runtime`
-e o módulo global `artifact` continuam planejados.
+um canal opcional posterior a Semantic Fusion. O runtime (`contextmap.runtime`)
+orquestra esta capability como um estágio do DAG; o módulo global `artifact`
+continua planejado.
 
 ## Onde estão os documentos detalhados
 

@@ -240,7 +240,7 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
         semantic_execution_stage_ids=("interpret",),
     )
     writer = PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "visual_perception",
         sequence_name="sequence",
         run_id=PerceptionRunId("run-0001"),
         run_index=1,
@@ -249,17 +249,13 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
         enabled_capabilities=frozenset({"semantic_interpreter"}),
         pipeline_preset=preset,
         configuration_digest=resolved.configuration_digest(),
-        selection_label="frame-0124",
-        profile_label="qwen",
     )
     writer.add_result(result)
     writer.add_semantic_view_payload(execution.request.visual_views[0], _VIEW_PAYLOAD)
     writer.add_stage_outcomes(outcomes)
     writer.finalize()
 
-    reader = PerceptionRunReader(
-        tmp_path / "runs" / "visual-perception" / "sequence" / "run-0001__frame-0124__qwen"
-    )
+    reader = PerceptionRunReader(tmp_path / "visual_perception")
     assert reader.list_results()[0].claims[0].hypothesis == "wooden pallet"
     assert reader.list_semantic_executions()[0].request == _request(adapter)
     assert reader.verify_integrity() == []

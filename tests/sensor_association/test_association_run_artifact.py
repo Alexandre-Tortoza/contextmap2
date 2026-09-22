@@ -21,7 +21,6 @@ from contextmap.sensor_association import (
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
     VisibilityDiagnostics,
-    allocate_run_index,
 )
 from contextmap.sensor_association.service import (
     SensorAssociationOutcome,
@@ -42,27 +41,19 @@ def _write(
     outcome: SensorAssociationOutcome,
     *,
     run_index: int = 1,
-    channel_label: str = "native-and-enhanced",
     debug_level: SensorAssociationDebugLevel = SensorAssociationDebugLevel.NONE,
     runtime_s: float | None = None,
 ) -> tuple[SensorAssociationRunReader, Path]:
+    """Grava em ``root/run-NNNN``: o chamador decide o diretório final, o writer não calcula."""
+    run_dir = root / f"run-{run_index:04d}"
     writer = SensorAssociationRunWriter(
-        workspace_root=root,
+        output_dir=run_dir,
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId(f"assoc-run-{run_index:04d}"),
         run_index=run_index,
-        selection_label="full-sequence",
-        channel_label=channel_label,
         debug_level=debug_level,
     )
     writer.finalize(outcome, runtime_s=runtime_s)
-    run_dir = (
-        root
-        / "runs"
-        / "sensor-association"
-        / SEQUENCE_NAME
-        / f"run-{run_index:04d}__full-sequence__{channel_label}"
-    )
     return SensorAssociationRunReader(run_dir), run_dir
 
 
@@ -93,11 +84,10 @@ def test_the_run_has_the_documented_layout(tmp_path: Path) -> None:
     ):
         assert (run_dir / relative).is_file(), relative
     assert not (run_dir / "debug").exists()
-    assert (run_dir.parent / "runs.json").is_file()
 
 
 def test_a_run_without_dense_channels_writes_no_dense_files(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome(), channel_label="geometry-only")
+    _, run_dir = _write(tmp_path, _outcome())
 
     assert not (run_dir / "outputs/dense-feature-associations.jsonl").exists()
     assert not (run_dir / "outputs/dense-feature-cells.bin").exists()
@@ -147,8 +137,8 @@ def test_the_manifest_reveals_exactly_which_feature_maps_the_run_consumed(tmp_pa
 def test_native_and_enhanced_runs_share_upstream_artifacts_yet_stay_identifiable(
     tmp_path: Path,
 ) -> None:
-    native, _ = _write(tmp_path, _outcome(NATIVE), run_index=1, channel_label="native")
-    enhanced, _ = _write(tmp_path, _outcome(ENHANCED), run_index=2, channel_label="enhanced")
+    native, _ = _write(tmp_path, _outcome(NATIVE), run_index=1)
+    enhanced, _ = _write(tmp_path, _outcome(ENHANCED), run_index=2)
 
     assert native.manifest.run_id != enhanced.manifest.run_id
     assert native.manifest.configuration_fingerprint != enhanced.manifest.configuration_fingerprint
@@ -211,18 +201,16 @@ def test_an_observation_that_disagrees_with_its_membership_is_never_persisted(
     forged_frame = dataclasses.replace(first, observations=(tampered, *first.observations[1:]))
     forged = dataclasses.replace(outcome, frames=(forged_frame, *outcome.frames[1:]))
     writer = SensorAssociationRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "run-0001",
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId("assoc-run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        channel_label="geometry-only",
     )
 
     with pytest.raises(RunArtifactError, match="geometry support"):
         writer.finalize(forged)
 
-    assert list((tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME).iterdir()) == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_the_geometry_to_region_index_keeps_every_overlapping_region(tmp_path: Path) -> None:
@@ -288,7 +276,7 @@ def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_pa
 def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: Path) -> None:
     request = make_request(frames=[frame_input(0), frame_input(1, time_ns=10_000_000_000)])
     outcome = SensorAssociationService().run(request)
-    reader, _ = _write(tmp_path, outcome, channel_label="one-rejected")
+    reader, _ = _write(tmp_path, outcome)
 
     summary = reader.read_record("metrics/summary.json")
     assert summary["frame_count"] == 1
@@ -306,39 +294,55 @@ def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: 
 def test_a_finalized_run_is_never_overwritten(tmp_path: Path) -> None:
     outcome = _outcome()
     writer = SensorAssociationRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "run-0001",
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId("assoc-run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        channel_label="geometry-only",
     )
     writer.finalize(outcome)
+    before = (tmp_path / "run-0001" / "manifest.json").read_bytes()
 
     with pytest.raises(RunArtifactError, match="finalized"):
         writer.finalize(outcome)
     again = SensorAssociationRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "run-0001",
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId("assoc-run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        channel_label="geometry-only",
     )
     with pytest.raises(RunArtifactError, match="exists"):
         again.finalize(outcome)
 
+    assert (tmp_path / "run-0001" / "manifest.json").read_bytes() == before
 
-def test_a_rerun_gets_a_new_index_and_identity(tmp_path: Path) -> None:
-    _write(tmp_path, _outcome(), run_index=1, channel_label="geometry-only")
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 2
-    _write(tmp_path, _outcome(), run_index=2, channel_label="geometry-only-again")
 
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 3
-    registry = json.loads(
-        (tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME / "runs.json").read_text()
-    )
-    assert [run["run_index"] for run in registry["runs"]] == [1, 2]
+def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "ws" / "corridor-02" / "run-0001" / "sensor_association"
+
+    SensorAssociationRunWriter(
+        output_dir=target,
+        sequence_name=SEQUENCE_NAME,
+        run_id=SensorAssociationRunId("association-run"),
+        run_index=1,
+    ).finalize(_outcome())
+
+    manifest = SensorAssociationRunReader(target).manifest
+    assert manifest.run_id == SensorAssociationRunId("association-run")
+    # Sem registro `runs.json` e sem `runs/<capability>/<sequência>/`: só o diretório do artifact.
+    assert sorted(path.name for path in target.parent.iterdir()) == ["sensor_association"]
+    assert sorted(path.name for path in (tmp_path / "ws").iterdir()) == ["corridor-02"]
+
+
+def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+    tmp_path: Path,
+) -> None:
+    reader, _ = _write(tmp_path, _outcome(), run_index=7)
+
+    manifest = reader.manifest
+    assert (manifest.run_id, manifest.run_index) == (SensorAssociationRunId("assoc-run-0007"), 7)
+    assert not (tmp_path / "run-0001").exists()
 
 
 def test_an_interrupted_write_never_looks_like_a_run(
@@ -351,20 +355,16 @@ def test_an_interrupted_write_never_looks_like_a_run(
         "contextmap.sensor_association.run_artifact.encode_observation_quality", explode
     )
     writer = SensorAssociationRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "run-0001",
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId("assoc-run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        channel_label="geometry-only",
     )
 
     with pytest.raises(RuntimeError, match="disk full"):
         writer.finalize(_outcome())
 
-    sequence_dir = tmp_path / "runs" / "sensor-association" / SEQUENCE_NAME
-    assert list(sequence_dir.iterdir()) == []
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE_NAME) == 1
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_integrity_detects_a_missing_a_resized_and_a_corrupted_file(tmp_path: Path) -> None:
@@ -508,9 +508,8 @@ def test_the_run_is_reachable_from_the_public_api() -> None:
         "SensorAssociationService",
         "SensorAssociationRequest",
         "SensorAssociationOutcome",
-        "allocate_run_index",
-        "rebuild_run_registry",
     } <= public
+    assert not {"allocate_run_index", "rebuild_run_registry"} & public
 
 
 def _decode_png(data: bytes) -> tuple[int, int, list[list[tuple[int, int, int]]]]:

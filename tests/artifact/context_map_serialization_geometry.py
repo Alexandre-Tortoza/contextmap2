@@ -97,8 +97,8 @@ def build_geometry_artifact(
     """Write a real GeometricMapArtifact under ``workspace_root`` and return it.
 
     Args:
-        workspace_root: Where the artifact is written; the run directory is derived from it, as
-            the geometric-mapping writer does.
+        workspace_root: Where the artifact is written; this helper, not the writer, chooses the
+            final run directory under it.
 
     Returns:
         The run directory and its manifest. The map is ``corridor-02--map-run-0001`` with
@@ -161,15 +161,11 @@ def build_geometry_artifact(
         motion_correction=None,
         state_estimation_run_id=None,
     )
+    run_dir = workspace_root / "run-0001"
     manifest = GeometricMapArtifactWriter(
-        workspace_root=workspace_root,
+        output_dir=run_dir,
         sequence_name=SEQUENCE_NAME,
         run_id=RUN_ID,
         run_index=1,
-        selection_label="full",
-        profile_label="baseline",
     ).finalize(plan=plan, aggregation=None, code_version="test")
-    run_dir = (
-        workspace_root / "runs" / "geometric-mapping" / SEQUENCE_NAME / "run-0001__full__baseline"
-    )
     return run_dir, manifest

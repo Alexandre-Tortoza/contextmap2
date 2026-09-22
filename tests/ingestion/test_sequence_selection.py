@@ -10,6 +10,7 @@ from contextmap.ingestion import (
     ImageEncoding,
     ImageObservation,
     SensorId,
+    SequenceArtifactId,
     SequenceArtifactReader,
     SequenceArtifactWriter,
     SequenceSelectionError,
@@ -42,11 +43,15 @@ def _image(observation_id: str, seconds: int, clock_id: str = "clock-a") -> Imag
 
 @pytest.fixture
 def reader(tmp_path: Path) -> SequenceArtifactReader:
-    writer = SequenceArtifactWriter(workspace_root=tmp_path, sequence_name="corridor-02")
+    writer = SequenceArtifactWriter(
+        output_dir=tmp_path / "ingestion",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-0001"),
+    )
     for index in range(5):
         writer.add_observation(_image(f"frame-{index:04d}", seconds=index))
-    manifest = writer.finalize()
-    return SequenceArtifactReader(tmp_path / "sequences" / "corridor-02" / manifest.artifact_id)
+    writer.finalize()
+    return SequenceArtifactReader(tmp_path / "ingestion")
 
 
 def test_full_selection_returns_every_observation_in_order(reader: SequenceArtifactReader) -> None:

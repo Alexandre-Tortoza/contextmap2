@@ -2,36 +2,31 @@
 
 Este documento descreve `src/contextmap/visual_perception/run_artifact.py` e `serialization.py`. Para as convenções globais de artifact/lineage/immutability, ver [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md).
 
-## Layout no workspace local
+## Layout do artefato
+
+O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/visual_perception/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
 
 ```text
-workspace/
-└── runs/
-    └── visual-perception/
-        └── <sequence-name>/
-            ├── runs.json                                              # registro reconstruível, não fonte de verdade
-            ├── run-0001__frames-0120-0260__sam3-dinov2-gemini/
-            │   ├── README.md                                          # gerado, legível por humano
-            │   ├── manifest.json                                      # ponto autoritativo
-            │   ├── outputs/
-            │   │   ├── results.jsonl                                   # um PerceptionResult por linha
-            │   │   ├── semantic-interpretations.jsonl                   # execução semântica auditável
-            │   │   ├── semantic-views/                                  # pixels exatos enviados ao backend
-            │   │   │   └── <view-payloads>
-            │   │   └── features/                                       # quando payloads são persistidos
-            │   │       ├── feature-index.jsonl
-            │   │       └── <observation-scope>/*.npy
-            │   ├── metrics/
-            │   │   ├── stage-timings.jsonl                             # um StageOutcome por linha
-            │   │   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
-            │   └── debug/
-            │       ├── 30-feature-extraction/                           # somente standard/full
-            │       └── 40-semantic-interpretation/<request-id>/
-            │           ├── request.json / prompt.txt / parsed-response.json
-            │           ├── diagnostics.json / semantic-claims.json
-            │           └── raw-response.txt                             # somente full
-            └── run-0002__frames-0120-0260__sam3-dinov2-qwen/
-                └── ...
+<output_dir>/
+├── README.md                                          # gerado, legível por humano
+├── manifest.json                                      # ponto autoritativo
+├── outputs/
+│   ├── results.jsonl                                   # um PerceptionResult por linha
+│   ├── semantic-interpretations.jsonl                   # execução semântica auditável
+│   ├── semantic-views/                                  # pixels exatos enviados ao backend
+│   │   └── <view-payloads>
+│   └── features/                                       # quando payloads são persistidos
+│       ├── feature-index.jsonl
+│       └── <observation-scope>/*.npy
+├── metrics/
+│   ├── stage-timings.jsonl                             # um StageOutcome por linha
+│   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
+└── debug/
+    ├── 30-feature-extraction/                           # somente standard/full
+    └── 40-semantic-interpretation/<request-id>/
+        ├── request.json / prompt.txt / parsed-response.json
+        ├── diagnostics.json / semantic-claims.json
+        └── raw-response.txt                             # somente full
 ```
 
 ## Fluxo de persistência e leitura
@@ -42,15 +37,14 @@ flowchart LR
     WRITER --> TMP["diretório temporário irmão"]
     TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>outputs/semantic-interpretations.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
     FILES --> CHECK["checagem interna de consistência<br/>tamanho + hash + ownership"]
-    CHECK -->|válido| FINAL["run-XXXX__selection__profile/"]
+    CHECK -->|válido| FINAL["output_dir"]
     FINAL --> READER["PerceptionRunReader"]
-    FINAL -. reconstrução .-> REG["runs.json<br/>registro de conveniência"]
     READER --> RESULT["result() / list_results()"]
 ```
 
-`manifest.json` e os arquivos inventariados no próprio run formam a fonte de verdade. `runs.json` serve apenas para descoberta e pode ser reconstruído; ele não participa da leitura de um run isolado.
+`manifest.json` e os arquivos inventariados no próprio run formam a fonte de verdade; não existe registro nem índice ao lado do run.
 
-Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestamp — o maior índice é o run mais recente nesse escopo sequência+capability. `allocate_run_index()` calcula o próximo índice escaneando os diretórios de run **íntegros** (nunca `runs.json`): além de carregar o manifest, confere presença, tamanho e hash dos arquivos inventariados. Um diretório interrompido ou adulterado não participa da alocação nem de `rebuild_run_registry()`.
+`run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível do chamador (a runtime usa o número de `run-NNNN`), nunca timestamp, e não substitui identidade nem hash.
 
 ## Decisões desta issue (v0)
 
@@ -68,7 +62,7 @@ Nomeação por índice monotônico (`run-0001`, `run-0002`, ...), nunca timestam
 
 ## Escrita atômica
 
-Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.finalize()` escreve em um diretório temporário irmão, roda uma checagem de consistência interna, e só então renomeia para o path final — um run interrompido nunca aparenta ser válido. Depois de renomear, `runs.json` é reconstruído a partir de todos os diretórios de run válidos (incluindo o recém-criado).
+Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.finalize()` escreve em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), roda uma checagem de consistência interna, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e uma falha remove o temporário e não deixa nada. O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
 
 `add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
 
@@ -83,9 +77,9 @@ deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
 `claim_count` soma tanto `PerceptionResult.claims` quanto as claims aninhadas em
 `SceneContext`.
 
-## Leitura isolada, sem `runs.json`
+## Leitura isolada
 
-`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados e registros de execução contratuais; `debug/` não é dependência de leitura. `runs.json` nunca é necessário para abrir ou entender um run individual e pode ser reconstruído do zero a qualquer momento a partir dos manifests.
+`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados e registros de execução contratuais; `debug/` não é dependência de leitura.
 
 ## `serialization.py`
 

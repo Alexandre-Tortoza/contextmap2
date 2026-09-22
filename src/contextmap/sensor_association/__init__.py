@@ -49,8 +49,6 @@ from contextmap.sensor_association.run_artifact import (
     SensorAssociationRunManifest,
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
-    allocate_run_index,
-    rebuild_run_registry,
 )
 from contextmap.sensor_association.service import (
     AssociationFrameInput,
@@ -101,8 +99,6 @@ __all__ = [
     "VisibilityDiagnostics",
     "VisibilityState",
     "VisualFeatureRef",
-    "allocate_run_index",
     "camera_projection_for",
-    "rebuild_run_registry",
     "spatial_observation_id_for",
 ]

@@ -588,7 +588,7 @@ def test_a_missing_required_dependency_is_an_error_and_an_optional_one_a_warning
     assert _codes(only_optional, Severity.WARNING) == {"dependency.optional_missing"}
     assert _errors(only_optional) == set()
 
-    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.geometry_dir)
     both = validate_context_map_artifact(artifact)
     assert both.status is ValidationStatus.INVALID
     assert _errors(both) == {"dependency.required_missing"}
@@ -632,7 +632,7 @@ def test_a_moved_artifact_needs_its_dependencies_told_where_they_are(
     for artifact_id, directory in world.structural_locations.items():
         moved[artifact_id] = tmp_path / "another-machine" / artifact_id
         shutil.copytree(directory, moved[artifact_id])
-    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.geometry_dir)
     shutil.rmtree(world.resolution_dir)
     shutil.rmtree(world.relations_dir)
 

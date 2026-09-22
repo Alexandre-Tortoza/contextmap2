@@ -258,6 +258,12 @@ from contextmap.visual_perception.models import SemanticClaim
 
 Mesmo que esse import funcione tecnicamente, ele acopla o consumidor ao layout interno. O contrato cross-module é a raiz da capability.
 
+## API pública do runtime
+
+O runtime segue a mesma regra da raiz pública. Um frontend (CLI, TUI) importa somente de `contextmap.runtime`, em particular `Runtime` e os contratos que ele devolve (`RuntimeStatus`, `RuntimeCapability`, `ResolvedPipelinePlan`, `RuntimePreflightReport`, `RuntimeExecutionResult`, `RuntimeRunRecord` e os demais), e nunca os módulos internos do runtime, um backend concreto ou uma capability.
+
+`runtime/api.py` depende apenas da biblioteca padrão e do próprio runtime, nenhum módulo do runtime depende de biblioteca de UI e os contratos públicos não expõem tipos ROS nem de backend (`tests/architecture/test_runtime_boundaries.py`). Um teste de consumidor exercita a API usando apenas imports públicos. Detalhes em [API pública do runtime](../src/contextmap/runtime/docs/api.md).
+
 ## Revisão e enforcement
 
 Em code review, todo novo import `contextmap.<outra_capability>.<submodule>` deve ser tratado como suspeito. As regras mecanicamente verificáveis são cobertas por `tests/architecture/test_boundaries.py`.

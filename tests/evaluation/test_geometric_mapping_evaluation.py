@@ -224,7 +224,8 @@ def test_an_expected_point_that_is_not_in_the_map_is_an_error(tmp_path: Path) ->
 
 
 def _run_dir(workspace: Path) -> Path:
-    return next((workspace / "runs" / "geometric-mapping" / SEQUENCE).glob("run-0001__*"))
+    """Diretório onde `write_run` grava o primeiro run: o chamador o escolhe, sem glob."""
+    return workspace / "run-0001"
 
 
 def test_a_tampered_chain_is_seen_by_the_trace_and_by_the_integrity_check(tmp_path: Path) -> None:
@@ -808,18 +809,14 @@ def test_a_real_segment_maps_persists_and_validates_end_to_end(tmp_path: Path) -
     )
     assert plan.inputs
 
+    run_dir = tmp_path / "geometric_mapping"
     GeometricMapArtifactWriter(
-        workspace_root=tmp_path,
+        output_dir=run_dir,
         sequence_name="corridor-02-segment",
         run_id=GeometricMapRunId("run-0001"),
         run_index=1,
-        selection_label="scans-30",
-        profile_label="external-pose",
     ).finalize(plan=plan, aggregation=None, code_version="test")
     protocol = dataclasses.replace(PROTOCOL, structure_point_stride=25, max_plausible_range_m=150.0)
-    run_dir = next(
-        (tmp_path / "runs" / "geometric-mapping" / "corridor-02-segment").glob("run-0001__*")
-    )
     with GeometricMapArtifactReader(run_dir) as reader:
         report = evaluate_geometric_mapping(reader=reader, protocol=protocol)
 

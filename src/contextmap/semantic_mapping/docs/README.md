@@ -54,7 +54,7 @@ Um `EntityId` é único **dentro de um** semantic map. A mesma string em dois ma
 - `EntityEvidenceLinks`, `FusedEvidenceRef`, `EntityFeatureRef`, `evidence_links_from_fused_evidence`, `feature_refs_of`, `fusion_artifact_digest` — os vínculos de evidência.
 - `validate_entity_evidence`, `EvidenceIntegrityIssue`, `EvidenceIntegrityKind`, `FusedEvidenceSource`, `trace_entity_evidence`, `EntityEvidenceTrace`, `ContributionTrace`, `EvidenceTraceError`, `trace_geometry_sources`, `GeometrySourceTrace` — integridade de referências e travessia da proveniência.
 - `materialize_entities`, `EntityMaterializationPolicy`, `EntityMaterialization`, `CandidateRejection`, `RejectionReason`, `MaterializationInputError`, `entity_id_for`, `ENTITY_MATERIALIZATION_POLICY_ID`, `ENTITY_ID_POLICY_ID` — a materialização a partir da evidência fundida, sem resolução entre suportes.
-- `SemanticMappingRunWriter`, `SemanticMappingRunReader`, `SemanticMappingRunManifest`, `MappingRunLineage`, `MappingDebugLevel`, `SemanticMappingRunId`, `MappingRunArtifactError`, `IncompleteMappingRunArtifactError`, `allocate_mapping_run_index`, `rebuild_mapping_run_registry`, `lineage_from_fusion_manifest` — o artifact persistido.
+- `SemanticMappingRunWriter`, `SemanticMappingRunReader`, `SemanticMappingRunManifest`, `MappingRunLineage`, `MappingDebugLevel`, `SemanticMappingRunId`, `MappingRunArtifactError`, `IncompleteMappingRunArtifactError`, `lineage_from_fusion_manifest` — o artifact persistido.
 - `validate_evidence_of_entities` — a validação de referências de muitas entidades, verificando cada run de fusão uma única vez.
 - `EntityTemporalState`, `ObservationRef`, `TemporalProvenance`, `EntityLifecycle`, `summarize_temporal_state`, `TemporalEvidenceError`, `TEMPORAL_SUMMARY_RULE_ID` — o estado temporal e seu histórico.
 
@@ -69,7 +69,7 @@ Ver [`contracts.md`](contracts.md) para a referência de campos e as invariantes
 - `contextmap.point_representation`: `PointRepresentationId`, `PointRepresentationRunId`.
 - `contextmap.state_estimation`: `TimeBounds`, o intervalo fechado de aquisição.
 - `contextmap.visual_perception`: `BackendProvenance`, `ClaimId`, `HypothesisRole`, `FeatureId`, `FeatureScope`, `PerceptionResultId`, `PerceptionRunId`, `RegionId`, presentes nos sinais, nas claims e nas features preservadas.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index`, `write_run_registry`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
 
 As dependências de `ingestion`, `visual_perception`, `sensor_association`, `point_representation` e `state_estimation` existem apenas para identidades e tipos que a evidência fundida já traz, sempre pela API pública, e estão declaradas em `tests/architecture/test_boundaries.py`.
 

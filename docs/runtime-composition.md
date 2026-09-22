@@ -2,7 +2,7 @@
 
 Este documento define o limite arquitetural de `contextmap.runtime`: onde configurações efetivas são resolvidas, implementações concretas são construídas e stages são coordenados sem mover lógica científica para o runtime.
 
-A arquitetura geral está em [architecture.md](architecture.md). O DAG configurável será materializado pelas issues de Runtime & Configuration, especialmente a orquestração end-to-end planejada para a milestone #17.
+A arquitetura geral está em [architecture.md](architecture.md). A implementação e o contrato de cada parte do runtime estão em [`src/contextmap/runtime/docs/README.md`](../src/contextmap/runtime/docs/README.md); este documento mantém a regra arquitetural e o que o runtime **não** pode possuir.
 
 ## Regra principal
 
@@ -54,9 +54,29 @@ runtime
 
 ## Estado atual
 
-`contextmap.runtime` ainda não existe na `dev`; este documento define seu boundary futuro. Isso não significa que o pipeline esteja limitado a Visual Perception: Ingestion, Visual Perception, State Estimation, Geometric Mapping, Sensor Association, Point Representation, Semantic Fusion, Semantic Mapping e Entity Resolution já possuem APIs públicas, serviços/policies próprios quando necessários e artifacts persistidos. O que permanece ausente é a **composition root global** que selecione e conecte essas capabilities em um DAG end-to-end, resolva configuração, reuse/recompute e lifecycle.
+`contextmap.runtime` existe e implementa este boundary. Cada parte tem documentação e testes próprios em [`src/contextmap/runtime/docs/`](../src/contextmap/runtime/docs/README.md):
 
-Visual Perception já possui um **DAG interno da própria capability**. Ele materializa apenas a topologia de percepção e não deve ser promovido implicitamente a runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Semantic Interpretation também possui o port executável `semantic_interpreter`, request/output auditáveis e adapters Qwen/Gemini/Florence-2 atrás de runtime/client injetáveis. Os runtimes reais (`HuggingFaceQwenRuntime`, `HuggingFaceFlorence2SemanticRuntime` e `GoogleGenAIGeminiClient`) são construídos pela composition root, que fornece o `view_root`, a revisão imutável do checkpoint e, no caso do Gemini, a credencial; nenhuma credencial entra na configuração efetiva. O preset `canonical/1` ainda conserva temporariamente os estágios semânticos legados porque a política de construção dos requests canônicos ainda não foi promovida para a topologia default. A futura composition root continua responsável por selecionar e construir esses adapters e por conectar os artifacts das demais capabilities explicitamente.
+- **configuração efetiva versionada** (schema `0.1.0`): precedência perfil < arquivos < overrides, digest determinístico, parâmetros escopados por backend e segredos lidos só do ambiente, nunca persistidos ([configuration.md](../src/contextmap/runtime/docs/configuration.md));
+- **catálogo estático** de stages, pontos de variação e backends, com o perfil/preset `canonical/1` (que hoje termina em `semantic_fusion`: Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` ainda não são estágios do preset, nem indisponíveis nem disponíveis — entram como um preset versionado posterior, quando as capabilities existirem);
+- **composition root** (`compose()`): constrói Ingestion, Visual Perception, State Estimation, Geometric Mapping, Sensor Association, Point Representation e Semantic Fusion atrás dos ports das capabilities, com import lazy dos backends, falha explícita e nenhum fallback; `compose_executors()` monta, a partir da mesma configuração, os `StageExecutor` reais que o DAG executa para `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` ([composition.md](../src/contextmap/runtime/docs/composition.md));
+- **DAG de estágios**: topologia determinística, escopo (pipeline completo ou subgrafo), preflight sem carregar modelo e execução em ordem de dependência ([pipeline.md](../src/contextmap/runtime/docs/pipeline.md));
+- **reuso por identidade de conteúdo**, com decisão registrada por estágio ([reuse.md](../src/contextmap/runtime/docs/reuse.md));
+- **seleção explícita de runs** e vínculo de linhagem ([selection.md](../src/contextmap/runtime/docs/selection.md));
+- **ciclo de vida do run**: estados, eventos append-only, falha categorizada, cancelamento cooperativo, retomada ([lifecycle.md](../src/contextmap/runtime/docs/lifecycle.md));
+- **CLI** fina (`contextmap`) ([cli.md](../src/contextmap/runtime/docs/cli.md));
+- **serviço público de ingestion** ([ingestion-service.md](../src/contextmap/runtime/docs/ingestion-service.md));
+- **API pública de aplicação** `Runtime`, para qualquer frontend ([api.md](../src/contextmap/runtime/docs/api.md)).
+
+Visual Perception já possui um **DAG interno da própria capability**. Ele materializa apenas a topologia de percepção e não deve ser promovido implicitamente a runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Semantic Interpretation também possui o port executável `semantic_interpreter`, request/output auditáveis e adapters Qwen/Gemini/Florence-2 atrás de runtime/client injetáveis. Os runtimes reais (`HuggingFaceQwenRuntime`, `HuggingFaceFlorence2SemanticRuntime` e `GoogleGenAIGeminiClient`) são construídos pela composition root, que fornece o `view_root`, a revisão imutável do checkpoint e, no caso do Gemini, a credencial; nenhuma credencial entra na configuração efetiva. O preset `canonical/1` ainda conserva temporariamente os estágios semânticos legados porque a política de construção dos requests canônicos ainda não foi promovida para a topologia default. A composition root do runtime seleciona e constrói esses adapters e conecta explicitamente os artifacts das demais capabilities.
+
+O que **ainda não existe**, e não deve ser presumido:
+
+- **Executores reais de Visual Perception e Point Representation.** `contextmap.runtime.executors` tem executores reais de `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion`, e a composition root os monta automaticamente da configuração (`compose_executors`, usado tanto pela CLI quanto por `Runtime`). Visual Perception e Point Representation dependem de backend com modelo/GPU e ainda não têm um; um run que os inclua precisa de um executor injetado (testes) ou fica bloqueado no preflight, explicitamente. A Ingestion tem seu próprio executor real (`IngestionStageExecutor`), mas ele não é composto automaticamente: precisa de um `IngestionRequest` que é entrada de uma execução (os flags de `contextmap ingest`), não parte de uma configuração.
+- **Estágios de capabilities inexistentes.** Semantic Mapping, Entity Resolution, Spatial Relations e o `ContextMapArtifact` não fazem parte do preset `canonical/1`: ele termina em `semantic_fusion`, o último estágio executável nesta milestone. Um preset versionado posterior os declara quando as capabilities existirem em `dev`.
+- **Catálogo de runs sobre os índices reais das capabilities.** A seleção usa um catálogo explícito (`StaticCatalog` ou um arquivo JSON).
+- **A CLI ainda não usa `Runtime`.** As duas chamam os mesmos serviços (inclusive `compose_executors`); não há uma segunda especificação do pipeline.
+
+Visual Perception já possui um **DAG interno da própria capability**. Ele materializa apenas a topologia de percepção e não deve ser promovido implicitamente a runtime global. Feature Extraction fornece os contracts e ports usados por esse DAG, o estágio opcional de resolution enhancement e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Semantic Interpretation também possui o port executável `semantic_interpreter`, request/output auditáveis e adapters Qwen/Gemini/Florence-2 atrás de runtime/client injetáveis. O preset `canonical/1` de Visual Perception ainda conserva temporariamente os estágios semânticos legados porque a política de construção dos requests canônicos ainda não foi promovida para a topologia default. A composition root do runtime seleciona e constrói esses adapters por configuração explícita e conecta os artifacts das demais capabilities.
 
 ```mermaid
 flowchart LR
@@ -68,10 +88,10 @@ flowchart LR
     BUILD --> EXEC["execute_stage_graph()"]
     EXEC --> RESULT["PerceptionResult"]
     RESULT --> ART["PerceptionRunArtifact"]
-    ART -. futuro .-> RUNTIME["contextmap.runtime<br/>DAG end-to-end"]
+    ART --> RUNTIME["contextmap.runtime<br/>DAG end-to-end"]
 ```
 
-Essa separação é importante: `visual_perception.pipeline` possui apenas a topologia interna da capability e seus backends. O runtime futuro deverá selecionar artifacts upstream, compor capabilities diferentes, decidir reuse/recompute e coordenar lifecycle end-to-end sem absorver a lógica interna do preset de percepção.
+Essa separação é importante: `visual_perception.pipeline` possui apenas a topologia interna da capability e seus backends. O runtime seleciona artifacts upstream, compõe capabilities diferentes, decide reuse/recompute e coordena o lifecycle end-to-end sem absorver a lógica interna do preset de percepção.
 
 ## Composition root
 
@@ -271,7 +291,7 @@ Exemplos:
 ConfigurationError
     runtime/configuration
 
-ArtifactSelectionError
+ConfigProblem (seleção incompatível, reportada por preflight)
     runtime selection/composition
 
 AssociationInputError
@@ -300,7 +320,7 @@ DenseFeatureMap artifact X
 
 Os dois braços podem reutilizar X. Alterar o downstream não deve recomputar stages upstream compatíveis.
 
-A implementação concreta de reuse/cache pertence à milestone #17, mas o boundary arquitetural é runtime.
+A implementação está em `runtime/reuse.py` ([reuse.md](../src/contextmap/runtime/docs/reuse.md)): a chave combina a configuração própria do estágio, o hash de conteúdo das entradas e a identidade do código, o índice guarda só artifacts concluídos e re-validados, e cada estágio registra se foi reutilizado (com o artifact exato) ou recomputado (com o motivo). Um artifact sem hash de conteúdo pode ser consumido, mas nunca é reutilizado.
 
 ## Provenance de execução
 
@@ -344,22 +364,43 @@ CLI não contém:
 - matemática de projeção;
 - regras de fusion/entity/relation.
 
-Isso permite que testes e futuros entrypoints chamem runtime sem simular CLI.
+Isso permite que testes e outros entrypoints chamem runtime sem simular CLI.
 
-## Estrutura mínima planejada
+## API pública para frontends
 
-A estrutura só deve surgir conforme issues de implementação precisarem dela. Um alvo mínimo é:
+Uma CLI, uma TUI ou outro cliente não importam os módulos internos do runtime. Eles usam uma única superfície, `contextmap.runtime.Runtime`:
+
+```text
+CLI / TUI
+   -> contextmap.runtime.Runtime            (API pública de aplicação)
+      -> config / composição / pipeline / reuso / seleção / lifecycle
+```
+
+`Runtime` expõe descoberta de capabilities e backends (sem carregar modelo), resolução de configuração e topologia, preflight, execução com eventos e cancelamento, e inspeção de runs a partir do registro persistido. É uma **fachada**: cada operação delega ao serviço que a possui, os contratos retornados são serializáveis e não contêm classe de backend, objeto ROS nem tipo de biblioteca de UI, e não há registro global nem service locator. A linhagem persistida continua sendo a autoridade: o que o registro não tem, a API não deduz. Detalhes em [api.md](../src/contextmap/runtime/docs/api.md).
+
+## Estrutura implementada
 
 ```text
 src/contextmap/runtime/
-├── __init__.py
-├── config.py          # configuração efetiva e validação transversal
-├── composition.py     # construction/factories concretas
-├── pipeline.py        # DAG/runner quando implementado
-└── cli.py             # entry point fino quando necessário
+├── __init__.py            # contrato público
+├── api.py                 # API pública de aplicação (`Runtime`)
+├── artifacts.py           # `ArtifactRef`, handle de um artifact de estágio
+├── catalog.py             # stages, pontos de variação, backends e o preset `canonical/1`
+├── coercion.py            # parâmetros JSON -> configuração da própria capability
+├── composition.py         # composition root: construção lazy das implementações
+├── config.py              # configuração efetiva, digest, segredos e disponibilidade
+├── errors.py              # falhas de composição e do DAG
+├── ingestion_service.py   # serviço público de ingestion
+├── lifecycle.py           # estados, eventos, falhas, cancelamento e ambiente
+├── pipeline.py            # plano, escopo, preflight e execução do DAG
+├── reuse.py               # reuso por identidade e índice de artifacts
+├── runs.py                # journal persistente, leitura e retomada
+├── selection.py           # seleção explícita de runs e linhagem
+├── cli.py                 # CLI fina
+└── docs/                  # documentação do módulo
 ```
 
-Não criar esses arquivos vazios antecipadamente. A milestone #17 deve materializar somente as partes necessárias para o caminho implementado naquele momento.
+A estrutura surgiu conforme as issues precisaram dela; nenhum arquivo foi criado vazio para antecipar arquitetura.
 
 ## Testabilidade
 
@@ -418,8 +459,8 @@ A divisão arquitetural materializada na `dev` é:
 - **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
 - **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, persiste `SemanticMappingRunArtifact` e já valida deterministicamente contratos, lineage e round-trip; essa validação ainda é sintética;
 - **Entity Resolution**, decide identidade sobre as entidades de origem sem mutá-las e persiste `EntityResolutionRunArtifact` num `output_dir` explícito: quem chama, aqui o runtime, fornece o diretório final e o `run_id` (o escopo de todo id resolvido), pois o escritor não aloca índice de execução nem mantém registry. O runtime deverá conectar as fontes opcionais de aparência (`FeatureStoreVectorSource`) e de representação 3D (`RunReaderRepresentationSource`) e as políticas de recuperação, de canal, de resolução e de materialização, sem decidir nenhuma delas;
-- **Runtime & Configuration**, ainda planejado, deverá compor esse conjunto em um DAG end-to-end, resolver configuração, reuse/recompute, CLI e lifecycle entre capabilities.
+- **Runtime & Configuration**, compõe esse conjunto: configuração efetiva, composition root, DAG com preflight, reuse/recompute, seleção explícita de runs, lifecycle, CLI e a API pública `Runtime`. `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` têm executor real, composto automaticamente da configuração; Visual Perception e Point Representation ainda não têm (backend com modelo/GPU), e a Ingestion tem um executor real que continua exigindo injeção explícita (precisa do `IngestionRequest` da execução, não da configuração). A orquestração end-to-end com dados reais dessas duas capabilities restantes ainda não foi validada.
 
 Spatial Relations e os stages posteriores continuam planejados e devem ser adicionados junto de seus owners, sem antecipar diretórios ou schemas vazios.
 
-O runtime global deve reutilizar as APIs públicas e artifacts dessas capabilities, não reimplementar seus pipelines internos.
+O runtime reutiliza as APIs públicas e artifacts dessas capabilities e não reimplementa seus pipelines internos.

@@ -1,6 +1,6 @@
 # `SemanticFusionRunArtifact`
 
-Este documento descreve `src/contextmap/semantic_fusion/run_artifact.py` e `serialization.py`. As regras gerais de artifacts (imutabilidade, atomicidade, inventário, índice de run) estão em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) e são implementadas uma única vez em `contextmap.shared.run_directory`.
+Este documento descreve `src/contextmap/semantic_fusion/run_artifact.py` e `serialization.py`. As regras gerais de artifacts (imutabilidade, atomicidade, inventário, layout do workspace) estão em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) e são implementadas uma única vez em `contextmap.shared.run_directory`.
 
 Um run persiste os **suportes de fusão** e a **evidência fundida** sobre cada um, com a linhagem, as métricas e a evidência pulada. É imutável, autodescritivo e **abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo**. Toda hipótese fundida volta, depois de reabrir, à evidência e à proveniência exatas de origem. Nada a montante é duplicado: claims, scores, features, qualidade e representações 3D são só referenciados, e a geometria é guardada como deltas posicionais.
 
@@ -13,26 +13,26 @@ Um run persiste os **suportes de fusão** e a **evidência fundida** sobre cada 
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/semantic_fusion/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/semantic-fusion/<sequence>/
-├── runs.json                                   # registry reconstruível
-└── run-000N__<selection>__<policy>/
-    ├── README.md
-    ├── manifest.json                           # identidade, linhagem, políticas e inventário
-    ├── outputs/                                # contratual
-    │   ├── fusion-supports.jsonl               # um FusionSupport por linha
-    │   ├── fused-evidence.jsonl                # um FusedEvidence por linha (autocontido)
-    │   ├── support-observation-index.jsonl     # suporte → observações, offsets nos dois arquivos
-    │   ├── hypothesis-evidence-index.jsonl     # hipótese → evidência exata (claim, stance, frame, resultado, run)
-    │   ├── physical-observation-groups.jsonl   # grupos por frame físico de cada suporte
-    │   ├── contribution-index.jsonl            # contribuição → suporte, observação, resultado, run, claims
-    │   └── excluded-observations.jsonl         # observações que não entraram em suporte algum, com o motivo
-    ├── metrics/                                # contratual
-    │   ├── counts.json
-    │   ├── distributions.json
-    │   ├── payload.json
-    │   └── runtime.json                        # somente quando medido
-    └── debug/                                  # nunca contratual
+<output_dir>/
+├── README.md
+├── manifest.json                           # identidade, linhagem, políticas e inventário
+├── outputs/                                # contratual
+│   ├── fusion-supports.jsonl               # um FusionSupport por linha
+│   ├── fused-evidence.jsonl                # um FusedEvidence por linha (autocontido)
+│   ├── support-observation-index.jsonl     # suporte → observações, offsets nos dois arquivos
+│   ├── hypothesis-evidence-index.jsonl     # hipótese → evidência exata (claim, stance, frame, resultado, run)
+│   ├── physical-observation-groups.jsonl   # grupos por frame físico de cada suporte
+│   ├── contribution-index.jsonl            # contribuição → suporte, observação, resultado, run, claims
+│   └── excluded-observations.jsonl         # observações que não entraram em suporte algum, com o motivo
+├── metrics/                                # contratual
+│   ├── counts.json
+│   ├── distributions.json
+│   ├── payload.json
+│   └── runtime.json                        # somente quando medido
+└── debug/                                  # nunca contratual
 ```
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a configuração efetiva e a linhagem ficam no `manifest.json`, e a evidência pulada em `excluded-observations.jsonl`. Criá-los sem produtor real violaria YAGNI (mesma decisão de Sensor Association e Point Representation).
@@ -49,7 +49,7 @@ O writer recusa, com `FusionRunArtifactError` e sem deixar run visível, quando:
 - um suporte lista observações espaciais diferentes das contribuições da sua evidência;
 - um suporte é sobre outro mapa que o da linhagem, ou uma contribuição vem de uma run de percepção que a linhagem não lista, ou uma referência de estrutura vem de uma run de Point Representation que ela não lista;
 - suporte ou fusão usam política ou configuração diferentes do resto do run: **um run guarda uma política**;
-- já existe um run no caminho (um run finalizado nunca é sobrescrito; reexecutar cria outro índice).
+- já existe um run no `output_dir` (um run finalizado nunca é sobrescrito; reexecutar grava em outro diretório).
 
 ## Linhagem (manifest)
 
@@ -95,7 +95,7 @@ Na execução real de `corridor-02` (ver [avaliação](../../evaluation/docs/sem
 - `read_record()` lê JSON de `outputs/` e `metrics/` e **recusa `debug/`**;
 - `verify_integrity()` confere o inventário (arquivo ausente, tamanho, hash).
 
-Registro malformado, truncado ou adulterado vira `FusionRunArtifactError` explícito, e uma escrita adulterada em um suporte não impede ler os outros. `allocate_fusion_run_index` e `rebuild_fusion_run_registry` seguem as regras dos outros artifacts: o índice é monotônico e calculado dos runs válidos no disco, e o `runs.json` é só conveniência.
+Registro malformado, truncado ou adulterado vira `FusionRunArtifactError` explícito, e uma escrita adulterada em um suporte não impede ler os outros. `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca, e o `run_index` é um ordinal legível que não substitui identidade nem hash.
 
 ## Debug
 

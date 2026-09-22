@@ -1,0 +1,86 @@
+# Composition root
+
+`contextmap.runtime.composition` é o **único** lugar em que backends concretos são nomeados e construídos. Uma capability nunca importa o runtime; um estágio downstream nunca descobre qual backend produziu sua entrada. Cada implementação sai daqui atrás do port que sua capability publica, então trocar de backend é uma mudança de configuração, sem editar código downstream.
+
+```mermaid
+flowchart LR
+    EFF["EffectiveConfig"] --> C["compose()"]
+    PROV["providers<br/>(runtimes do chamador)"] --> C
+    ENV["ambiente<br/>(segredos e módulos)"] --> C
+    C --> CFG["configuração da própria capability<br/>build_config()"]
+    CFG --> AV["módulos e segredos<br/>disponíveis?"]
+    AV --> RT["runtime<br/>(empacotado ou provider)"]
+    RT --> OUT["ComposedRuntime<br/>ports das capabilities"]
+```
+
+## Regras
+
+- **Construir não é carregar.** Os parâmetros são validados pela configuração da própria capability e os módulos/segredos são checados **antes** de qualquer modelo ser pedido. Os loaders empacotados são lazy; um modelo que o repositório não sabe carregar entra por um `RuntimeProvider`.
+- **Sem fallback.** Um backend selecionado que não pode ser construído levanta um erro específico. Nada o substitui por outro backend nem remove o estágio.
+- **Sem política científica.** As factories só traduzem valores configurados para os tipos da capability. Padrões, faixas e significado são da capability; `build_config()` lê os tipos declarados na dataclass de configuração e converte os valores JSON, então o runtime não duplica parâmetros de backend.
+- **Sem registry nem plugin.** A tabela de factories é explícita e fechada; os módulos de backend são importados dentro da factory que os usa, então compor uma configuração importa só o que ela seleciona.
+
+## API
+
+- `compose(effective, providers=..., stages=..., environ=..., module_available=...)` devolve um `ComposedRuntime`.
+- `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `dense_features`, `region_features`, `semantic_interpreter`, `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances` e `association_pose_policy`. Um campo é `None` quando seu estágio não foi composto.
+- `compose_executors(effective, providers=..., environ=..., module_available=...)` devolve um `dict[str, StageExecutor]`: é a contraparte automática de `compose()` para o DAG (ver seção própria abaixo).
+- `RuntimeProvider` é `Callable[[config, ResolvedSecrets], runtime]`: recebe a configuração da capability, já validada, e **somente** os segredos que aquele backend declara.
+- `FeatureBuildScope` reúne o estado de execução de que um extrator de features precisa (run, estágio, artifact, sink de payload, raiz das imagens preparadas, fonte de máscaras). Um extrator escreve seus payloads no run que o possui, então só pode ser construído quando esse run existe; por isso `dense_features` e `region_features` são factories que recebem o escopo, e a configuração é validada já em `compose()`.
+
+## De onde vem cada runtime
+
+| Ponto de variação | Backend | Runtime |
+|---|---|---|
+| `ingestion.source_adapter` | `ros1_bag`, `ros2_bag` | adapter construído a cada pedido (`SourceAdapterConfig`); exige `rosbags`; um pedido de outra família de source é recusado |
+| `visual_perception.region_discovery` | `sam2`, `sam3`, `florence2` | **provider** (`Sam2Runtime`, `Sam3Runtime`, `Florence2Runtime`) |
+| `visual_perception.dense_features` | `dinov2`, `dinov3` | loader Hugging Face empacotado (lazy; `torch`, `transformers`, `Pillow`) ou provider |
+| `visual_perception.region_features` | `clip`, `alphaclip` | loader empacotado (HF / oficial) ou provider; `clip` tem escopo `region` **fixado** pelo slot; `alphaclip` exige `mask_source` no escopo |
+| `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2` | **provider** (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime`); `gemini` declara o segredo `GEMINI_API_KEY` |
+| `state_estimation.estimator` | `external_pose`, `fast_lio` | `external_pose` não precisa de runtime; `fast_lio` usa o runner por subprocesso empacotado, descrito no grupo `runner` (`command`, `timeout_s`, `work_root`), ou um provider |
+| `geometric_mapping.pose_lookup`, `sensor_association.pose_policy` | `lookup-policy-v1` | nenhum; constrói um `state_estimation.LookupPolicy` (o tipo é de `state_estimation`, mas cada estágio que o consome declara seu próprio componente — ver "Estágios") |
+| `geometric_mapping.motion_correction` | `motion-correction-v1` | nenhum; constrói um `MotionCorrectionPolicy` |
+| `sensor_association.occlusion` | `conservative-depth-support-v1` | nenhum; constrói um `OcclusionPolicy` |
+| `sensor_association.tolerances` | `diagnostic-tolerances-v1` | nenhum; constrói um `DiagnosticTolerances` |
+| `point_representation.encoder` | `geometric_descriptor`, `ptv3` | `geometric_descriptor` não precisa de runtime; `ptv3` exige um provider (`PTv3Runtime`) |
+| `semantic_fusion.support`, `semantic_fusion.accumulation` | políticas versionadas | nenhum |
+
+Um provider fornecido para um backend que também empacota um loader **substitui** o loader e a checagem dos módulos opcionais dele: aqueles módulos passam a ser da responsabilidade do runtime fornecido.
+
+## Grupos de parâmetros reservados
+
+Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO. Cada grupo é validado pela dataclass que a capability já define.
+
+## Ordem de validação
+
+1. a configuração da capability (`build_config()`), com **todos** os problemas de uma vez e a mensagem da própria capability;
+2. os módulos opcionais e os segredos declarados no catálogo;
+3. o runtime (provider ou loader empacotado).
+
+Assim um checkpoint inválido ou um limiar fora da faixa falha antes de qualquer modelo ser pedido. Os erros são `BackendConfigurationError`, `BackendUnavailableError`, `BackendRuntimeMissingError` e `StageUnavailableError`, todos `CompositionError`.
+
+## Estágios
+
+`compose()` monta todo estágio habilitado cuja capability existe e lista os demais em `unavailable_stages`; pedir explicitamente um estágio indisponível levanta `StageUnavailableError`. `stages=[...]` compõe só um subconjunto, e a completude da seleção é exigida apenas para ele.
+
+`geometric_mapping` e `sensor_association` não introduzem um tipo próprio de política: `LookupPolicy` é de `state_estimation`, `MotionCorrectionPolicy` é de `geometric_mapping`, `OcclusionPolicy`/`DiagnosticTolerances` são de `sensor_association`. Cada estágio que consome uma política, mesmo uma que outra capability define, declara seu **próprio** componente sob seu próprio nome (`geometric_mapping.pose_lookup` e `sensor_association.pose_policy` são dois componentes distintos, ambos construindo um `LookupPolicy`): um componente pertence a exatamente um estágio, exatamente como `semantic_fusion.support`/`semantic_fusion.accumulation` já pertencem só a `semantic_fusion` (`tests/runtime/test_runtime_catalog.py::test_every_component_belongs_to_exactly_one_stage_of_its_capability`).
+
+## `compose_executors`: os executores reais do DAG
+
+`compose_executors(effective, providers=..., environ=..., module_available=...)` é a contraparte automática de `compose()` para a execução: em vez de devolver backends e políticas soltos, ela os embrulha na classe concreta de `contextmap.runtime.executors` que cada estágio do DAG precisa, indexada por `stage_id`. É o que deixa o binário `contextmap` instalado executar o DAG real sem um chamador Python montando executores à mão.
+
+Hoje ela compõe exatamente `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion`: cada um precisa só da configuração efetiva e dos artifacts upstream que o próprio DAG já entrega. Ela **nunca** levanta: um estágio que não pode ser composto por qualquer motivo (seleção incompleta, um parâmetro que o backend rejeita, um módulo/segredo ausente) fica simplesmente ausente do dicionário devolvido, um estágio de cada vez — o fracasso de `sensor_association` nunca custa o executor de `state_estimation`. A ausência é honesta: o `missing_executors`/"no executor is registered" do preflight já explica por que aquele estágio não vai rodar.
+
+Casos que ficam de fora, deliberadamente:
+
+- **`ingestion`.** `IngestionStageExecutor` precisa de um `IngestionRequest` concreto (caminho da fonte, tópicos, tolerância de sincronização) que nunca é parte de uma `EffectiveConfig` — é o que os próprios flags do comando `ingest` constroem. O caminho canônico é rodar `contextmap ingest` primeiro e alimentar o artifact publicado a `run`/`stage` como entrada fornecida ou selecionada; um chamador que queira `ingestion` dentro de `run_plan` ainda injeta um `IngestionStageExecutor` explicitamente.
+- **`visual_perception` e `point_representation`.** Não têm executor real ainda (backends dependentes de GPU/modelo); continuam ausentes, exatamente como antes.
+- **`semantic_fusion` com a política quality-aware.** `SemanticFusionExecutor` só roda a acumulação `baseline-evidence-accumulation-v1`; se o backend selecionado for `quality-aware-evidence-accumulation-v1`, o estágio fica de fora em vez de rodar com a política errada.
+
+`cli.py` e `Runtime` (`api.py`) mesclam o resultado de `compose_executors` com os executores que o chamador forneceu explicitamente, e o explícito sempre vence — assim um teste, ou um chamador que precise substituir um estágio, continua podendo.
+
+## Lacunas conhecidas
+
+- **Loaders de modelo não empacotados.** O repositório não tem código que carregue SAM2, SAM3, Florence-2, Qwen, Gemini ou PTv3; esses backends dependem de um `RuntimeProvider`. Nenhum é escolhido por padrão, e a falta de provider é um erro explícito, nunca um fallback.
+- **Preset interno de Visual Perception.** A composition root entrega os backends atrás dos ports; ela não monta o `PipelinePreset` interno da percepção. O `CANONICAL_PRESET_V1` ainda usa as operações legadas `interpret_scene`/`interpret_regions`, que Qwen, Gemini e Florence-2 **não** implementam (eles implementam `interpret(request)`), então promover a política de construção de `SemanticInterpretationRequest` continua sendo uma decisão de `visual_perception`, registrada em [`docs/runtime-composition.md`](../../../../docs/runtime-composition.md).
+- **`visual_perception` e `point_representation` sem executor.** Sem um executor real, `compose_executors` nunca os compõe; um run que os inclua precisa de um executor injetado (por exemplo um teste) ou fica bloqueado no preflight, explicitamente.

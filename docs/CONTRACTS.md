@@ -769,6 +769,21 @@ O schema deve ser independente do filesystem layout.
 
 O **schema** já existe em `contextmap.artifact` ([contratos](../src/contextmap/artifact/docs/contracts.md)): `geometry_ref` referencia o `GeometricMapArtifact` por identidade e tamanho (nunca copia pontos); `entities` e `relations` são compostas por referência, com escopo de identidade próprio do mapa e mapeamento explícito para as identidades de origem; `lineage` lista todo artifact a montante citado, e cada resultado carrega uma `EvidenceOrigin` (`SENSOR_OBSERVED`, `MODEL_INFERRED`, `GEOMETRY_DERIVED`, `MULTIVIEW_FUSED`, `HUMAN_ANNOTATED`, `PRIOR_KNOWLEDGE`), que é proveniência e **nunca** confiança; `indexes` são derivados; `capabilities` ficam nos metadados junto com frame, unidades, âncora e extensão. Entidades e relações usam os contratos reais (`ResolvedEntityReference`, `EntityReference`, `RelationPredicate`, `RelationState`), sem registros de referência próprios. A montagem, o serializador e o artifact persistido continuam planejados. Ver também [versionamento do schema](../src/contextmap/artifact/docs/versioning.md).
 
+## Contratos de execução do runtime
+
+O runtime não define semântica científica. Os contratos abaixo descrevem **como uma execução é identificada, referenciada e inspecionada**. Todos existem em `contextmap.runtime`, são serializáveis e não expõem tipo ROS, `torch.Tensor` nem classe de backend. Detalhes em [runtime/docs](../src/contextmap/runtime/docs/README.md).
+
+- `EffectiveConfig`: a configuração que uma execução realmente usa. Schema `0.1.0`, digest `sha256:` da forma canônica (os mesmos valores dão o mesmo digest, qualquer que seja o arquivo ou override que os produziu), as camadas aplicadas (perfil < arquivos < overrides) e nenhum segredo nem valor de override. Os parâmetros pertencem ao backend selecionado e são interpretados pela capability que o possui.
+- `ArtifactRef`: o handle de um artifact imutável de um estágio, com `stage_id`, `contract` (o tipo do artifact, por exemplo `SequenceArtifact`), `artifact_id` (a identidade exata do run, nunca um nome de diretório) e `content_hash`. O hash de conteúdo é o que torna o reuso seguro: dois artifacts com o mesmo hash são intercambiáveis, e um artifact sem hash pode ser consumido, mas nunca é reutilizado.
+- `PipelinePlan` e `ExecutionPlan`: a topologia resolvida (estágios, entradas tipadas ligadas ao produtor, saída, backend de cada ponto de variação, digest de cada estágio e ordem de execução) e o escopo de uma execução. Um estágio de capability inexistente é declarado indisponível com o motivo, nunca omitido.
+- `ReuseKey` e `ReuseDecision`: a identidade de reuso (configuração própria do estágio, hashes de conteúdo das entradas, identidade do código e identidades extras) e a decisão registrada por estágio, `reused` (com o artifact anterior exato) ou `recomputed` (com o motivo).
+- `Lineage`, `CatalogEntry` e `ResolvedSelections`: o que cada artifact declara sobre sua origem (sequência física, seleção de observações, calibração, schema e upstream exato), um run disponível para seleção e a seleção resolvida (id exato, `named:<nome>` ou `latest` como opt-in explícito). Uma seleção incompatível falha antes de qualquer execução, e nada é inferido por nome.
+- `ExecutionEvent`, `RunStatus` e `FailureRecord`: o ciclo de vida de um run (`planned`, `running`, `completed`, `failed`, `blocked`, `cancelled`), eventos numerados sem lacuna e a falha com categoria (`dependency`, `resource`, `contract`, `execution`, `unexpected` ou a do próprio executor). Segredos nunca aparecem.
+- `IngestionRequest` e `IngestionResult`: o pedido e o resultado do serviço público de ingestion. O pedido é composto com os tipos da própria capability (`SourceTopicMapping`, `SynchronizationConfig`, `CalibrationSet`) e sua identidade exclui o workspace.
+- `Runtime`, `RuntimeStatus`, `RuntimeCapability`, `ResolvedPipelinePlan`, `RuntimePreflightReport`, `RuntimeExecutionResult`, `RuntimeRunRecord` e os demais contratos da API pública de aplicação para frontends. A inspeção de um run devolve o que o registro persistido contém: o que ele não tem fica `None`, com uma nota, e nunca é deduzido.
+
+Esses contratos referenciam artifacts por id e por hash; não copiam o conteúdo de nenhum artifact.
+
 ## Escopos de identidade
 
 A tabela resume onde uma identidade é válida por padrão.

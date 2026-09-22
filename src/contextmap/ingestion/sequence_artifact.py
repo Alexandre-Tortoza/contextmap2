@@ -154,7 +154,9 @@ class SequenceArtifactWriter:
 
     Example:
         with SequenceArtifactWriter(
-            workspace_root=Path("workspace"), sequence_name="corridor-02"
+            output_dir=Path("workspace/corridor-02/run-0001/ingestion"),
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
         ) as writer:
             writer.add_observation(image_observation)
             writer.add_observation(lidar_observation)
@@ -164,9 +166,9 @@ class SequenceArtifactWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
-        artifact_id: SequenceArtifactId | None = None,
+        artifact_id: SequenceArtifactId,
     ) -> None:
         """Create a writer for a new sequence artifact.
 
@@ -174,17 +176,19 @@ class SequenceArtifactWriter:
         or :meth:`finalize` is called.
 
         Args:
-            workspace_root: Root of the local workspace (contains
-                ``sequences/``, ``runs/``, etc., per docs/architecture.md).
+            output_dir: The final directory of the artifact. The caller chooses
+                it (in the runtime, ``<workspace>/<dataset>/<run>/ingestion``);
+                the writer computes no path, builds the artifact in a temporary
+                sibling of ``output_dir`` and refuses to replace a directory
+                that already exists.
             sequence_name: Name of the sequence this artifact belongs to.
-            artifact_id: Explicit artifact identity. A random one is
-                generated when omitted.
+            artifact_id: Identity of the artifact, supplied by the caller and
+                recorded as given; the writer never allocates one.
         """
         self._sequence_name = sequence_name
-        self._artifact_id = artifact_id or SequenceArtifactId(uuid4().hex)
-        sequence_dir = workspace_root / "sequences" / sequence_name
-        self._final_dir = sequence_dir / self._artifact_id
-        self._tmp_dir = sequence_dir / f".tmp-{self._artifact_id}-{uuid4().hex[:8]}"
+        self._artifact_id = artifact_id
+        self._final_dir = output_dir
+        self._tmp_dir = output_dir.parent / f".tmp-{output_dir.name}-{uuid4().hex[:8]}"
         self._index_handle: IO[bytes] | None = None
         self._index_hash = hashlib.sha256()
         self._index_size = 0
