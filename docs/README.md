@@ -187,7 +187,7 @@ Módulos com documentação própria:
 - [`sensor_association`](../src/contextmap/sensor_association/docs/README.md) — evidência visual 2D ancorada em geometria 3D persistente: `SpatialObservation`, modelos de câmera, visibilidade e oclusão, pertencimento à máscara, features densas e `ObservationQuality`.
 - [`semantic_fusion`](../src/contextmap/semantic_fusion/docs/README.md) — acumulação de evidência multi-vista sobre suporte espacial, sem identidade de objeto: `FusionSupport`, `FusedEvidence`, agrupamento por observação física, política baseline e ciente de qualidade, canais tipados e o artifact de run.
 - [`semantic_mapping`](../src/contextmap/semantic_mapping/docs/README.md) — entidades semânticas persistentes sem resolução entre suportes: `Entity`, `EntityReference`, resumos geométricos, estado semântico sem colapso, vínculos de evidência, estado temporal, materialização determinística e o artifact de run.
-- [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico e a fronteira do PTv3.
+- [`point_representation`](../src/contextmap/point_representation/docs/README.md) — representação opcional da estrutura 3D local: `PointRepresentation`, `RepresentationSpace`, o port `PointEncoder`, o descritor determinístico, a fronteira PTv3 e o runtime real `PointceptPTv3Runtime`, já medido em geometria real.
 - [`evaluation`](../src/contextmap/evaluation/docs/README.md) — relatórios de qualidade, regressão e custo sem alterar outputs do pipeline.
 
 ## Integração da documentação
