@@ -87,7 +87,7 @@ Nenhum limiar é reajustado por braço: as rampas, o fator neutro, a margem de e
 
 ## Execução real (`corridor-02`, 20 frames)
 
-Rótulo: **real** onde a etapa usou dados reais; a exceção está dita em cada linha. Nada aqui é resultado de contrato. A execução usa a amostra pequena de `outputs/validation/2026-09-21/selection.json` (janela de 90 s, 20 frames) e roda de ponta a ponta pelos leitores e escritores públicos. Os drivers e os relatórios completos ficam fora do repositório (`workspace/corridor-02/validation-semantic-fusion-20260921/`, não versionado; hashes no fim da seção).
+Rótulo: **real** onde a etapa usou dados reais; a exceção está dita em cada linha. Nada aqui é resultado de contrato. A execução usa a amostra pequena de `selection.json` (janela de 90 s, 20 frames) e roda de ponta a ponta pelos leitores e escritores públicos. **Reprodução:** a seleção, o manifest do experimento (identidades e SHA-256 completos das runs de entrada e a configuração dos sete braços), os drivers e os relatórios finais estão versionados no bundle leve [`experiments/semantic-fusion-corridor-02-20260921/`](../../../../experiments/semantic-fusion-corridor-02-20260921/README.md). O dataset e os artifacts grandes (mapa de 924 MB, runs de associação, percepção e Point Representation) **não** estão no Git: o README do bundle diz o que precisa ser regenerado localmente e como conferir as identidades (ver "Reprodução e identidade dos arquivos" no fim desta seção).
 
 | Etapa | O que rodou | Real? |
 | --- | --- | --- |
@@ -150,7 +150,23 @@ A execução real mostrou `inference_results = 604` em `metrics/counts.json` e n
 
 O próximo passo para decidir a política ciente de qualidade são runs de percepção com claims reais e anotações de referência (`ReferenceAnnotation`); o mesmo driver roda de novo sobre elas sem mudança.
 
-SHA-256 do relatório completo (`report.json`), da análise visual (`visual_consistency.json`) e dos drivers (`common.py`, `s04_fusion.py`): `85d33dc59def…ea82d`, `52d7fe609a90…21845`, `57c9be7ec450…80640`, `9119e670bfa6…2d05e`.
+### Reprodução e identidade dos arquivos
+
+O bundle [`experiments/semantic-fusion-corridor-02-20260921/`](../../../../experiments/semantic-fusion-corridor-02-20260921/README.md) (menos de 1 MB) guarda o que se precisa para revisar e repetir a execução sem o dataset: `manifest.json` (versões de código, hash dos arquivos do dataset, `SequenceArtifact`, identidade da seleção e os 20 frames, `run_id` e digest dos outputs de cada run de entrada, parâmetros declarados antes de olhar as saídas e os sete braços), `selection.json`, os drivers `s01` a `s07`, `verify_inputs.py` e os relatórios finais. Precisam ser regenerados localmente: o dataset e o `SequenceArtifact` (não versionados), as três runs de percepção (GPU, de uma validação anterior, que o bundle não regenera) e as etapas `s01` a `s03` e `s04` (sem GPU; a associação leva de 214 a 260 s por run e a fusão cerca de 9 minutos, com Point Representation dentro).
+
+**Estado dos runs registrados.** Os sete braços foram gravados com o código `6826da4` sob `schema_version` `0.1.0`, já com a contagem distinta de resultados. Como o schema do artifact é `0.2.0` (ver [artifact](../../semantic_fusion/docs/artifact.md#versão-do-schema)), o leitor atual **recusa** esses runs locais; reexecutar `s04_fusion.py` os regenera em `0.2.0`.
+
+**Reexecutada nesta correção** (`s03_sensor_association.py` e `s04_fusion.py`, lendo read-only as mesmas runs de State Estimation, Geometric Mapping e Sensor Association já gravadas): dos 4 906 campos folha do relatório, 4 857 são idênticos byte a byte; os 49 diferentes são tempo, memória, `code_sha`/`code_version` e o `schema_version` `0.1.0` → `0.2.0` desta correção, nunca uma grandeza de resultado. As 49 identidades de resultado (`support_count`, `physical_observation_count`, `inference_result_count`, `evidence_base_id`, `hypothesis_labels_id`, `hypothesis_stances_id` e o fingerprint de configuração, nos sete braços) batem, o determinismo se confirma de novo e a repetição de inferência continua dobrando exatamente. Detalhes no README do bundle.
+
+SHA-256 completos, versionado (o arquivo no Git) e executado (o arquivo local que rodou). Os dois coincidem, exceto onde caminhos absolutos pessoais foram trocados por `<VALIDATION_DIR>` e `<REPO_ROOT>` (relatórios) ou por constantes configuráveis (drivers `common.py` e `s04_fusion.py`); o manifest tem os de todos os arquivos.
+
+| Arquivo do bundle | Versionado (SHA-256) | Executado (SHA-256) |
+| --- | --- | --- |
+| `reports/semantic_fusion/report.json` (relatório completo dos sete braços) | `d30b148d71ce0092eec0d60aeab094d16c166da7ce79ae818e672c30002139e2` | `85d33dc59def3d2587c90ab1ab3ec853fa23cbbbd6b0e194f4c5dab4819ea82d` |
+| `reports/semantic_fusion/visual_consistency.json` (análise visual) | `52d7fe609a90a329d6188c6c7f03d83cff593c3f9095af2366f2d43335a21845` | idêntico ao versionado |
+| `scripts/common.py` (constantes de caminho dos drivers) | `a8abc902ab9414dd3564b02878e048efe3ea7daaedc84b881eda3d5946b96a20` | `57c9be7ec450b0a0eab9c2d9d67b8133e70c2347c40123a56b4680e435280640` |
+| `scripts/s04_fusion.py` (driver da fusão) | `dc0d487b7217086fc67bca14c44ea1876dae79be0bdb16b9d5554da579f2621f` | `9119e670bfa60d03b4e051a160e19a7492799a66c46b4aa5abf63d347db2d05e` |
+| `selection.json` (seleção dos 20 frames) | `0fe5c5a4e7ec8babade312ba1c130bcc41b356419d793090c1c24a170af44a31` | idêntico ao versionado |
 
 ## Limitações e pendências
 
