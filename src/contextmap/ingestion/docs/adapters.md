@@ -64,6 +64,30 @@ source:
 
 Configuração específica de um adapter que não cabe na forma comum (ex.: identidade de storage/serialização do ROS 2) vai em `SourceAdapterConfig.extra`, em vez de a fronteira crescer um campo por família de adapter — mantém o contrato pequeno o suficiente para não precisar de um sistema de plugins genérico.
 
+## Ingerir uma janela temporal da fonte (issue #506)
+
+`SourceAdapterConfig.window` (opcional, `SourceWindow | None`) restringe a leitura a um intervalo `[start_seconds, end_seconds)` do **próprio clock de gravação da fonte** — para um bag ROS, o timestamp que `rosbag record` atribuiu a cada mensagem, não o `header.stamp` decodificado. `Ros1BagSourceAdapter`/`Ros2BagSourceAdapter` são os únicos adapters que honram `window` no v0 (fora de escopo: `PoseFileSourceAdapter`, que sempre lê o arquivo inteiro).
+
+```yaml
+source:
+  type: ros1_bag
+  path: datasets/corridor-02/corridor-02.bag
+  window:
+    clock_id: "ros1_bag:datasets/corridor-02/corridor-02.bag:recording_time"  # sempre config.resolved_window_clock_id()
+    start_seconds: 1724621500.0
+    end_seconds: 1724621502.0
+```
+
+**Por que um clock separado do `header.stamp`, e não o mesmo usado por `TimestampRangeSelection`.** Medido no `corridor-02.bag` real: o clock de gravação do bag e o `header.stamp` das mesmas mensagens diferem por **anos** (~78.621.358 segundos), não milissegundos — não é uma pequena latência de transporte, é um domínio de clock totalmente diferente (a máquina que gravou o bag e o clock que carimbou os sensores claramente nunca estiveram sincronizados). Tentar converter um limite em `header.stamp` para um limite em tempo de gravação exigiria estimar esse offset, uma heurística silenciosa que o projeto rejeita explicitamente (`AGENTS.md` §7, §26). Em vez disso, a janela é honesta sobre em qual clock ela opera: `SourceWindow.clock_id` deve ser exatamente `config.resolved_window_clock_id()` (`"<source_type>:<path>:recording_time"`, sempre derivado, nunca sobrescrevível) — um adapter recusa (`InvalidSourceWindowError`) qualquer outro valor, para que ninguém confunda os dois domínios silenciosamente.
+
+**Por que isso é eficiente.** `rosbags.rosbag1.Reader.messages`/`rosbags.rosbag2.Reader.messages` aceitam `start`/`stop` (nanossegundos) e pulam o *chunk* de dado de qualquer mensagem fora do intervalo sem descomprimi-lo nem decodificá-lo — o índice do próprio bag já sabe o tempo de gravação de cada mensagem sem precisar ler seu conteúdo. Por isso ingerir uma janela custa tempo/memória proporcional à janela, não à fonte inteira: medido no `corridor-02.bag` real (24 GB, 208.697 mensagens), uma janela real de 2 s termina em ~1,4 s e produz 47 imagens + 20 varreduras de LiDAR + 399 IMU — ver a issue #506 para os números completos.
+
+**`observation_id` reinicia do zero relativo à janela.** O contador por tópico (`counters: dict[str, int] = {}`) já começa em zero naturalmente para a primeira mensagem que passa pelo filtro de janela — nenhuma mudança de lógica é necessária além de filtrar antes de contar. Isso significa que o mesmo `observation_id` (ex.: `"camera_1_image_raw-000000"`) pode se referir a mensagens físicas diferentes em duas ingestões com janelas diferentes da mesma fonte. **Nenhum código deve correlacionar observações de duas janelas diferentes pelo `observation_id`** — a correlação correta é sempre pelo `timestamp` físico da observação (o mesmo em qualquer janela que a contenha), nunca pelo id. Uma janela que cobre o início da fonte (offset 0) produz os mesmos ids/conteúdo que uma ingestão sem janela, para as observações em comum — teste de contrato em `tests/ingestion/adapters/test_ros1_bag.py::test_windowed_and_full_ingestion_agree_on_content_for_a_prefix_window`.
+
+**Rejeição explícita, nunca truncamento silencioso.** `end_seconds < start_seconds` é `ValueError` na construção do `SourceWindow`. Uma janela que não sobrepõe o intervalo real de tempo de gravação da fonte (para os tópicos configurados) é `InvalidSourceWindowError` — nunca um resultado silenciosamente vazio. Para ROS 1, o intervalo real vem do índice por conexão (`reader.indexes`, sem decodificar chunk); para ROS 2 (sem esse índice por tópico na API pública), usa-se `reader.start_time`/`reader.end_time` do bag inteiro como um superconjunto seguro — uma janela que não sobrepõe o bag inteiro certamente não sobrepõe um tópico específico dele.
+
+**`content_hash()` cobre só o que foi lido.** `Ros1BagSourceAdapter.content_hash()`/`Ros2BagSourceAdapter.content_hash()` (novos métodos, não fazem parte do `SourceAdapter` Protocol) acumulam um hash SHA-256 incrementalmente sobre cada mensagem bruta que `read_observations()` efetivamente lê — no mesmo laço de leitura, sem custo extra de I/O. Diferente de `sequence_provenance.compute_source_content_hash()` (uma passada separada sobre o arquivo/diretório inteiro, O(tamanho da fonte)), isso cobre exatamente a janela quando uma é configurada, nunca a fonte inteira só para declarar proveniência de uma fração pequena dela. Liga isso ao manifest/lineage do `SequenceArtifact` é responsabilidade da composição do runtime, fora do escopo desta issue.
+
 ## Erros vs. warnings
 
 - **Erro** (`MissingRequiredTopicError`, `UnsupportedSourceMessageError`, ambos `SourceAdapterError`): interrompe a leitura — tópico obrigatório ausente, ou mensagem que o adapter não sabe decodificar de forma alguma.

@@ -18,6 +18,7 @@ from contextmap.ingestion import (
     SourceObservationId,
     SourceProvenance,
     SourceTopicMapping,
+    SourceWindow,
 )
 from contextmap.shared import SourceTimestamp
 
@@ -195,6 +196,52 @@ def test_config_rejects_unknown_required_topic_name() -> None:
             timestamp_clock_id="fake-clock",
             required_topics=frozenset({"radar"}),
         )
+
+
+def test_source_window_rejects_end_before_start() -> None:
+    with pytest.raises(ValueError, match="end_seconds"):
+        SourceWindow(clock_id="clock-a", start_seconds=5.0, end_seconds=2.0)
+
+
+def test_source_window_accepts_equal_start_and_end() -> None:
+    window = SourceWindow(clock_id="clock-a", start_seconds=1.0, end_seconds=1.0)
+
+    assert window.start_seconds == window.end_seconds
+
+
+def test_resolved_window_clock_id_is_deterministic_from_source_type_and_path() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.resolved_window_clock_id() == "ros1_bag:data/example.bag:recording_time"
+
+
+def test_resolved_window_clock_id_differs_from_the_header_clock_id() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.resolved_window_clock_id() != config.resolved_timestamp_clock_id()
+
+
+def test_config_accepts_an_optional_window() -> None:
+    window = SourceWindow(
+        clock_id="ros1_bag:data/example.bag:recording_time", start_seconds=0.0, end_seconds=2.0
+    )
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping(), window=window
+    )
+
+    assert config.window is window
+
+
+def test_config_window_defaults_to_none() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.window is None
 
 
 def test_generic_adapter_exposes_configured_calibration() -> None:
