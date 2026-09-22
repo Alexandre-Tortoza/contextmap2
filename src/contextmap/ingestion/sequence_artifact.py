@@ -649,8 +649,13 @@ class SequenceArtifactReader:
                     SourceObservationId(record["observation_id"]) for record in dropped_records
                 }
                 offsets_by_id = self._offsets_by_id()
+                # Diagnostics de dropped_events precisam só de identidade/modalidade
+                # (ver decode_dropped_event); carregar o payload binário aqui
+                # violaria a garantia de custo do #374 (metadados apenas).
                 observations_by_id = {
-                    str(observation_id): self.observation_at(offsets_by_id[observation_id])
+                    str(observation_id): self.observation_at(
+                        offsets_by_id[observation_id], load_payload=False
+                    )
                     for observation_id in needed_ids
                     if observation_id in offsets_by_id
                 }
@@ -760,15 +765,21 @@ class SequenceArtifactReader:
                     timestamp=SourceTimestamp(**record["timestamp"]),
                 )
 
-    def observation_at(self, offset: int) -> SourceObservation:
+    def observation_at(self, offset: int, *, load_payload: bool = True) -> SourceObservation:
         """Decode a single observation given a byte offset from :meth:`iter_index`.
 
-        Reads exactly one index line and, when its modality has one, its one
-        payload file — never any other observation's data.
+        Reads exactly one index line and, when its modality has one and
+        ``load_payload`` is true, its one payload file — never any other
+        observation's data.
 
         Args:
             offset: An :attr:`IndexEntry.offset` returned by this same reader's
                 :meth:`iter_index`.
+            load_payload: When ``False``, decode only the metadata carried by
+                the index line: an ``ImageObservation``/``LidarObservation``
+                is returned with ``data=b""`` and no payload file is opened.
+                Used where only identity/provenance/shape metadata is
+                needed, e.g. reconstructing dropped-event diagnostics.
 
         Returns:
             The decoded observation.
@@ -777,7 +788,9 @@ class SequenceArtifactReader:
         with index_path.open("rb") as handle:
             handle.seek(offset)
             line = handle.readline()
-        return _decode_observation(json.loads(line.decode("utf-8")), self._root)
+        return _decode_observation(
+            json.loads(line.decode("utf-8")), self._root, load_payload=load_payload
+        )
 
     def _offsets_by_id(self) -> dict[SourceObservationId, int]:
         """Build (once) and cache the id-to-index-offset lookup used by :meth:`get_observation`."""
@@ -883,7 +896,9 @@ def _encode_observation(
     raise SequenceArtifactError(f"unsupported observation type: {type(observation)!r}")
 
 
-def _decode_observation(record: dict[str, Any], root: Path) -> SourceObservation:
+def _decode_observation(
+    record: dict[str, Any], root: Path, *, load_payload: bool = True
+) -> SourceObservation:
     common: dict[str, Any] = {
         "observation_id": SourceObservationId(record["observation_id"]),
         "sensor_id": SensorId(record["sensor_id"]),
@@ -900,7 +915,7 @@ def _decode_observation(record: dict[str, Any], root: Path) -> SourceObservation
     modality = record["modality"]
 
     if modality == "image":
-        data = (root / record["payload_path"]).read_bytes()
+        data = (root / record["payload_path"]).read_bytes() if load_payload else b""
         return ImageObservation(
             **common,
             width=record["width"],
@@ -910,7 +925,7 @@ def _decode_observation(record: dict[str, Any], root: Path) -> SourceObservation
         )
 
     if modality == "lidar":
-        data = (root / record["payload_path"]).read_bytes()
+        data = (root / record["payload_path"]).read_bytes() if load_payload else b""
         fields = tuple(
             PointFieldDescriptor(
                 name=item["name"],

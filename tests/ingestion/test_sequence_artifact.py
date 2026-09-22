@@ -662,6 +662,73 @@ def test_read_diagnostics_dropped_events_do_not_decode_unrelated_payloads(
     )
 
 
+def test_read_diagnostics_dropped_image_and_lidar_do_not_decode_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão do #374: reconstruir dropped_events não pode decodificar payload.
+
+    O teste anterior só usava um IMU descartado (sem payload), então nunca
+    exercitava o caminho de bug: uma IMAGE ou um LIDAR descartados forçavam
+    ``read_diagnostics`` a decodificar o payload binário completo via
+    ``observation_at`` só para reconstruir metadados de diagnóstico.
+    """
+    dropped_image = _image(0, b"\x0a" * 100)
+    dropped_lidar = LidarObservation(
+        observation_id=SourceObservationId("scan-dropped"),
+        sensor_id=SensorId("velodyne_top"),
+        frame_id=FrameId("velodyne"),
+        timestamp=_timestamp(1),
+        provenance=_provenance(source_topic="/velodyne_points"),
+        point_count=1,
+        point_step_bytes=12,
+        fields=(
+            PointFieldDescriptor(name="x", offset_bytes=0, data_type=PointFieldDataType.FLOAT32),
+            PointFieldDescriptor(name="y", offset_bytes=4, data_type=PointFieldDataType.FLOAT32),
+            PointFieldDescriptor(name="z", offset_bytes=8, data_type=PointFieldDataType.FLOAT32),
+        ),
+        data=b"\x00" * 12,
+    )
+    kept_image = _image(1, b"\x09" * 100)
+    writer = _writer(tmp_path)
+    writer.add_observation(dropped_image)
+    writer.add_observation(dropped_lidar)
+    writer.add_observation(kept_image)
+    writer.set_diagnostics(
+        synchronization=SynchronizationDiagnostics(
+            dropped_events=(
+                DroppedEvent(observation=dropped_image, reason="no match within tolerance"),
+                DroppedEvent(observation=dropped_lidar, reason="no match within tolerance"),
+            ),
+            decisions=(),
+        )
+    )
+    writer.finalize()
+    reader = SequenceArtifactReader(_output_dir(tmp_path))
+
+    payload_reads: list[Path] = []
+    real_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        if self.parent.name in ("rgb", "pointcloud"):
+            payload_reads.append(self)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    diagnostics = reader.read_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics.synchronization is not None
+    assert {
+        str(event.observation.observation_id)
+        for event in diagnostics.synchronization.dropped_events
+    } == {"frame-0000", "scan-dropped"}
+    assert payload_reads == [], (
+        "reading diagnostics must resolve dropped IMAGE/LIDAR events from index "
+        f"metadata alone, not by decoding their payload; read {payload_reads}"
+    )
+
+
 def _image(index: int, data: bytes) -> ImageObservation:
     return ImageObservation(
         observation_id=SourceObservationId(f"frame-{index:04d}"),
