@@ -589,8 +589,9 @@ antes da finalização.
 
 Qwen, Gemini e Florence-2 implementam o mesmo port `SemanticInterpreter` e usam o parser
 compartilhado com policy `UNSCORED_ONLY`, portanto confidence auto-relatada
-pelo VLM não vira score canônico. Execuções controladas com checkpoints ou
-serviços reais continuam pendentes.
+pelo VLM não vira score canônico. Qwen e Florence-2 possuem execuções controladas
+com runtimes transformers reais sobre os 20 frames de corridor-02, sem anotações
+humanas; a execução real do Gemini continua pendente.
 
 A capability executável `semantic_interpreter` já existe em
 `visual_perception.pipeline`, recebendo um estágio-fonte `semantic_request`.
@@ -656,7 +657,7 @@ Os seguintes elementos aparecem na arquitetura alvo ou como variation points já
 
 - seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela futura composition root global; DINOv2/DINOv3/CLIP já foram validados com pesos reais, mas AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
 - backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; execuções controladas de Qwen/Gemini/Florence-2 com checkpoints ou serviços reais continuam pendentes;
+- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; a execução real do Gemini (sem credencial nem consentimento para enviar frames) e a avaliação de Qwen/Gemini/Florence-2 com anotações semânticas humanas continuam pendentes;
 - integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
 - semantic refinement;
 - conexão do DAG interno de Visual Perception com State Estimation, Geometric Mapping e Sensor Association pela composition root global; as capabilities existem, mas essa orquestração end-to-end ainda pertence ao runtime planejado.
