@@ -302,7 +302,7 @@ flowchart LR
     EXT["ExternalPose"] -->|implementado| SE
     FL["FAST-LIO"] -->|implementado,<br/>execução real em container| SE
     DET["deterministic descriptor"] -->|implementado| PE
-    PT["PTv3"] -->|fronteira implementada,<br/>execução real pendente| PE
+    PT["PTv3"] -->|runtime real implementado e medido,<br/>efeito downstream pendente| PE
 ```
 
 Um backend pode atender mais de uma capability através de adapters distintos. Florence-2 usado para Region Discovery não é o mesmo contrato que Florence-2 usado para Semantic Interpretation.
