@@ -11,8 +11,13 @@ manifest carries a content identity that ignores the write time. Nothing invalid
 silently: an inconsistent map is refused whole with the reason. The schema already refuses an
 invalid map when it is built (references, provenance, declared capabilities), so the writer adds
 only what the schema cannot know: that the upstream artifacts the map cites are on disk, are
-intact and are exactly the ones its lineage names. No model, ROS or runtime object ever reaches
-the files.
+intact and are exactly the ones its lineage names. Pinning a structural dependency by the digest
+of its manifest is not enough on its own to prove that: ``artifact_id`` and ``content_identity``
+are independent fields, so the writer also opens the Entity Resolution and Spatial Relations runs
+with their own readers (:mod:`contextmap.artifact.serialization.structural_dependencies`) to
+check their own identity, that Spatial Relations was built over the very Entity Resolution run
+the map also cites, and that every resolved entity and relation the map's records point at
+actually exists upstream. No model, ROS or runtime object ever reaches the files.
 """
 
 from __future__ import annotations
@@ -59,6 +64,9 @@ from contextmap.artifact.serialization.manifest import (
     create_manifest,
     decode_manifest,
     encode_manifest,
+)
+from contextmap.artifact.serialization.structural_dependencies import (
+    check_structural_dependencies,
 )
 from contextmap.artifact.serialization.tables import (
     document_json,
@@ -110,8 +118,12 @@ class ContextMapArtifactWriter:
                 overwritten.
             InvalidContentError: If a location names an artifact the map does not cite, a
                 structural dependency has no location, an upstream artifact is not the one the
-                lineage names, or the geometric map is not the one the map declares (identity,
-                point count or frame).
+                lineage names, the geometric map is not the one the map declares (identity, point
+                count or frame), an Entity Resolution or Spatial Relations run's own identity or
+                geometric-map lineage disagrees with what the map declares for it, a Spatial
+                Relations run was built over a different Entity Resolution run than the one the
+                map also cites, or a ``ContextEntity.source`` or ``ContextRelation`` the map
+                lists does not resolve in the corresponding run.
             RecordTableError: If a record is not plain JSON.
             UpstreamArtifactError: If an upstream artifact is missing or does not match its own
                 inventory.
@@ -182,6 +194,8 @@ class ContextMapArtifactWriter:
                 f"a location was given for {artifact_id!r}, which the map does not cite"
             )
         records: list[DependencyRecord] = []
+        entity_resolution_locations: dict[str, Path] = {}
+        spatial_relations_locations: dict[str, Path] = {}
         for upstream in context_map.lineage:
             requirement = (
                 Requirement.REQUIRED if upstream.kind.is_structural else Requirement.OPTIONAL
@@ -202,6 +216,10 @@ class ContextMapArtifactWriter:
                         f"content identity {upstream.content_identity} but the artifact at "
                         f"{location.name!r} has {found}"
                     )
+                if upstream.kind is ArtifactKind.ENTITY_RESOLUTION_RUN:
+                    entity_resolution_locations[upstream.artifact_id] = location
+                elif upstream.kind is ArtifactKind.SPATIAL_RELATIONS_RUN:
+                    spatial_relations_locations[upstream.artifact_id] = location
             records.append(
                 DependencyRecord(
                     artifact_type=upstream.kind.value,
@@ -212,6 +230,16 @@ class ContextMapArtifactWriter:
                     if location is None
                     else relative_locator(self._output_dir, location),
                 )
+            )
+        problems = check_structural_dependencies(
+            context_map,
+            entity_resolution_locations=entity_resolution_locations,
+            spatial_relations_locations=spatial_relations_locations,
+        )
+        if problems:
+            raise InvalidContentError(
+                "the structural dependencies do not match what the map's own entities and "
+                "relations need: " + "; ".join(problems)
             )
         return tuple(records)
 

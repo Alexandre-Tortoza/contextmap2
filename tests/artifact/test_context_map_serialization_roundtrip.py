@@ -18,12 +18,9 @@ import pytest
 from context_map_builders import (
     GEOMETRIC_MAP_ID,
     entity,
-    entity_capabilities,
     entity_reference,
-    metadata,
-    populated_map,
-    relation,
 )
+from context_map_builders import context_map as schema_context_map
 from context_map_serialization_builders import (
     MAP_ID,
     World,
@@ -51,6 +48,7 @@ from contextmap.artifact import (
     validate_context_map_artifact,
     verify_bundle,
 )
+from contextmap.artifact.records import _encode
 from contextmap.artifact.serialization.layout import (
     CONTRACTUAL_FILES,
     FORMAT_VERSION,
@@ -58,10 +56,12 @@ from contextmap.artifact.serialization.layout import (
     SUPPORTED_FORMAT_VERSIONS,
 )
 from contextmap.artifact.serialization.manifest import (
+    RecordPayload,
     create_manifest,
     decode_manifest,
     encode_manifest,
 )
+from contextmap.artifact.serialization.tables import encode_record_table
 from contextmap.entity_resolution import EntityResolutionRunReader, resolution_artifact_digest
 from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
@@ -70,11 +70,7 @@ from contextmap.geometric_mapping import (
     geometry_id_for,
 )
 from contextmap.shared import file_entry
-from contextmap.spatial_relations import (
-    RelationPredicate,
-    RelationState,
-    SpatialRelationsRunReader,
-)
+from contextmap.spatial_relations import RelationState, SpatialRelationsRunReader
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "context_map_artifact" / "v0.1.0"
 FIXTURE_CONTENT_IDENTITY = "sha256:7ba7df7c5d165bdac6f5700ed0b4249278ee4cbd4bb4761e10f4ec3b919c52d7"
@@ -211,30 +207,30 @@ def test_one_entity_of_a_large_map_is_read_without_reading_the_others(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     world = make_world(tmp_path)
+    artifact, manifest = write_artifact(world)
+    # O que este teste mede é a leitura preguiçosa de UMA entidade dentro de uma tabela grande,
+    # não a integridade estrutural do upstream (coberta por outros testes): as 2000 entidades
+    # sintéticas substituem a tabela pequena e real diretamente nos arquivos publicados, sem
+    # passar pelo writer, que exigiria 2000 entidades resolvidas de verdade na resolução.
     entities = tuple(
         entity(f"entity-{n:05d}", geometry=(n % 990, n % 990 + 1, n % 990 + 2)) for n in range(2000)
     )
-    chain = tuple(
-        relation(
-            f"relation-{n:05d}",
-            f"entity-{n:05d}",
-            RelationPredicate.ON_TOP_OF,
-            f"entity-{n + 1:05d}",
-        )
-        for n in range(0, 1998, 2)
+    table = encode_record_table(
+        {"key": str(item.entity_id), "record": _encode(item)} for item in entities
     )
-    large = pinned(
-        populated_map(
-            entities=entities,
-            relations=chain,
-            metadata=metadata(capabilities=entity_capabilities(RelationPredicate.ON_TOP_OF)),
-        ),
-        world,
+    (artifact / "entities" / "entities.jsonl").write_bytes(table.payload)
+    (artifact / "indexes" / "entity-index.jsonl").write_bytes(table.index)
+    resized = {"entities/entities.jsonl", "indexes/entity-index.jsonl"}
+    payloads = tuple(
+        replace(item, record_count=table.record_count)
+        if isinstance(item, RecordPayload) and item.path in resized
+        else item
+        for item in manifest.payloads
     )
-    artifact, manifest = write_artifact(world, context_map=large)
+    _reseal(artifact, entity_count=table.record_count, payloads=payloads)
+
     payload = artifact / "entities/entities.jsonl"
     assert payload.stat().st_size > 500_000
-    assert manifest.entity_count == 2000
 
     counter: list[int] = []
     real_open = pathlib.Path.open
@@ -257,8 +253,12 @@ def test_a_large_geometry_is_resolved_lazily_without_loading_the_payload(
 ) -> None:
     world = make_world(tmp_path, geometry_scans=8, points_per_scan=5000)
     payload_size = (world.geometry_dir / "outputs/geometry.bin").stat().st_size
+    # Geometria apenas: o teste mede a leitura preguiçosa da geometria, não a resolução
+    # estrutural de entidades/relações, então nenhuma delas precisa existir aqui.
     large = pinned(
-        populated_map(geometry_ref=GeometricMapLink(map_id=GEOMETRIC_MAP_ID, point_count=40_000)),
+        schema_context_map(
+            geometry_ref=GeometricMapLink(map_id=GEOMETRIC_MAP_ID, point_count=40_000)
+        ),
         world,
     )
     artifact, _ = write_artifact(world, context_map=large)

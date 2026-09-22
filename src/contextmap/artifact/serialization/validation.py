@@ -3,9 +3,13 @@
 The validator answers one question for a consumer that is about to trust an artifact: is it
 intact, consistent and complete enough to use? It checks the manifest and its versions, the
 inventory of files, the hashes, the descriptors of the payloads, the indexes, the references
-between records, the lineage, the declared capabilities against the content, and the upstream
-artifacts the map depends on, distinguishing the ones it cannot work without from optional
-evidence.
+between records, the lineage, the declared capabilities against the content, the upstream
+artifacts the map depends on (distinguishing the ones it cannot work without from optional
+evidence), and, at the FULL level, whether the pinned Entity Resolution and Spatial Relations runs
+are exactly what the map's own entities and relations need
+(:mod:`contextmap.artifact.serialization.structural_dependencies`): pinning by the digest of a
+manifest proves the bytes match, not that the declared identity or the resolved entity and
+relation ids the map cites actually exist upstream.
 
 It never raises for a damaged artifact and never repairs one: everything it finds is a finding in
 a deterministic, machine-readable :class:`ValidationReport`, with the checks that ran and the
@@ -27,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from contextmap.artifact.metadata import ContextMapMetadata, MapCapability
-from contextmap.artifact.models import GeometricMapLink
+from contextmap.artifact.models import ContextMap, GeometricMapLink
 from contextmap.artifact.records import ContextMapRecordError, context_map_from_record
 from contextmap.artifact.serialization.decoding import (
     ENTITY_LINE_FIELDS,
@@ -37,7 +41,9 @@ from contextmap.artifact.serialization.decoding import (
     decode_upstream_artifacts,
 )
 from contextmap.artifact.serialization.dependencies import (
+    ENTITY_RESOLUTION_RUN_ARTIFACT_TYPE,
     GEOMETRIC_MAP_ARTIFACT_TYPE,
+    SPATIAL_RELATIONS_RUN_ARTIFACT_TYPE,
     DependencyResolution,
     DependencyStatus,
     read_inventory,
@@ -74,6 +80,9 @@ from contextmap.artifact.serialization.manifest import (
     PayloadRole,
     RecordPayload,
     Requirement,
+)
+from contextmap.artifact.serialization.structural_dependencies import (
+    check_structural_dependencies,
 )
 from contextmap.artifact.serialization.tables import (
     RecordTable,
@@ -342,6 +351,7 @@ _CHECK_ORDER = (
     "reference_integrity",
     "index_rebuild",
     "schema_invariants",
+    "structural_references",
     "dependency_integrity",
     "unlisted_files",
 )
@@ -407,6 +417,7 @@ class _Validation:
         self._link: GeometricMapLink | None = None
         self._entity_records: list[dict[str, Any]] | None = None
         self._relation_records: list[dict[str, Any]] | None = None
+        self._context_map: ContextMap | None = None
         self._resolutions: list[DependencyResolution] = []
         self._entity_keys: set[str] | None = None
         self._endpoints: list[tuple[str, str, str]] | None = None
@@ -431,6 +442,7 @@ class _Validation:
             self._at_full("reference_integrity", self._check_references)
             self._at_full("index_rebuild", self._check_index_rebuild)
             self._at_full("schema_invariants", self._check_schema_invariants)
+            self._at_full("structural_references", self._check_structural_references)
             self._at_full("dependency_integrity", self._check_upstream_files)
             self._check("unlisted_files", self._check_unlisted)
         return self._report()
@@ -898,7 +910,7 @@ class _Validation:
         ):
             raise _Skip("the records of the map are not intact")
         try:
-            context_map_from_record(
+            self._context_map = context_map_from_record(
                 {
                     "context_map_id": manifest.context_map_id,
                     "schema_version": manifest.schema_version,
@@ -915,6 +927,28 @@ class _Validation:
                 f"the stored records do not form a valid map under the schema: {error}",
                 manifest.context_map_id,
             )
+
+    def _check_structural_references(self) -> None:
+        if self._context_map is None:
+            raise _Skip("the stored records do not form a valid map")
+        entity_resolution_locations: dict[str, Path] = {}
+        spatial_relations_locations: dict[str, Path] = {}
+        for resolution in self._resolutions:
+            if resolution.status is not DependencyStatus.FOUND or resolution.location is None:
+                continue
+            if resolution.record.artifact_type == ENTITY_RESOLUTION_RUN_ARTIFACT_TYPE:
+                entity_resolution_locations[resolution.record.artifact_id] = resolution.location
+            elif resolution.record.artifact_type == SPATIAL_RELATIONS_RUN_ARTIFACT_TYPE:
+                spatial_relations_locations[resolution.record.artifact_id] = resolution.location
+        if not entity_resolution_locations and not spatial_relations_locations:
+            raise _Skip("no located entity resolution or spatial relations dependency to check")
+        problems = check_structural_dependencies(
+            self._context_map,
+            entity_resolution_locations=entity_resolution_locations,
+            spatial_relations_locations=spatial_relations_locations,
+        )
+        for problem in problems:
+            self._error("dependency.structural_reference_invalid", problem)
 
     def _check_upstream_files(self) -> None:
         for resolution in self._resolutions:

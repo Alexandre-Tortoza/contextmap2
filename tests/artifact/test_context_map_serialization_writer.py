@@ -18,7 +18,9 @@ import pytest
 from context_map_builders import (
     ENTITY_RESOLUTION_ARTIFACT_ID,
     FUSION_ARTIFACT_ID,
+    SEMANTIC_MAP_ARTIFACT_ID,
     SEQUENCE_ARTIFACT_ID,
+    SPATIAL_RELATIONS_ARTIFACT_ID,
     entity_capabilities,
     metadata,
 )
@@ -33,6 +35,7 @@ from context_map_serialization_builders import (
     tree_files,
     write_artifact,
 )
+from context_map_serialization_upstream import write_relations_run, write_resolution_run
 
 from contextmap.artifact import (
     ContextMapArtifactError,
@@ -60,8 +63,10 @@ from contextmap.artifact.serialization.manifest import (
     manifest_content_identity,
 )
 from contextmap.artifact.serialization.tables import RecordTable
+from contextmap.entity_resolution import EntityResolutionRunId, ResolvedEntityId
 from contextmap.ingestion import FrameId
 from contextmap.shared import check_file_inventory
+from contextmap.spatial_relations import RelationId, SpatialRelationsRunId
 
 
 @pytest.fixture
@@ -365,6 +370,164 @@ def test_a_structural_dependency_without_a_location_is_refused(world: World) -> 
 def test_a_location_for_an_artifact_the_map_does_not_cite_is_refused(world: World) -> None:
     with pytest.raises(InvalidContentError, match="not-cited"):
         write_artifact(world, locations={**world.locations, "not-cited": world.fusion_dir})
+    assert not (world.root / "out").exists()
+
+
+# --- structural dependencies must be exactly what the map's own records need ------------------
+#
+# Pinning an upstream artifact by the digest of its manifest proves the bytes found are the
+# artifact the digest was computed from; it does not prove that artifact is the one the map's own
+# entities and relations need. These regressions reproduce the three ways that gap was exploitable
+# before the fix: a resolved entity or relation id that does not exist upstream, an artifact_id
+# declared independently of the (matching) digest it is pinned by, and a Spatial Relations run
+# that was genuinely built over a different Entity Resolution run than the one the map cites.
+
+
+def _flipped_last_char(value: str) -> str:
+    """The same string with its last character swapped to a different one, same length."""
+    return value[:-1] + ("0" if value[-1] != "0" else "1")
+
+
+def test_an_entity_with_a_dangling_resolved_entity_id_is_refused(world: World) -> None:
+    written = make_context_map(world)
+    real = written.entities[0]
+    fake_id = ResolvedEntityId(_flipped_last_char(str(real.source.resolved_entity_id)))
+    assert fake_id != real.source.resolved_entity_id
+    dangling = replace(
+        written,
+        entities=(
+            replace(real, source=replace(real.source, resolved_entity_id=fake_id)),
+            *written.entities[1:],
+        ),
+    )
+
+    with pytest.raises(ContextMapArtifactError, match=str(fake_id)):
+        write_artifact(world, context_map=dangling)
+    assert not (world.root / "out").exists()
+
+
+def test_a_relation_with_a_dangling_source_relation_id_is_refused(world: World) -> None:
+    written = make_context_map(world)
+    real = written.relations[0]
+    fake_id = RelationId(_flipped_last_char(str(real.source_relation_id)))
+    assert fake_id != real.source_relation_id
+    dangling = replace(
+        written, relations=(replace(real, source_relation_id=fake_id), *written.relations[1:])
+    )
+
+    with pytest.raises(ContextMapArtifactError, match=str(fake_id)):
+        write_artifact(world, context_map=dangling)
+    assert not (world.root / "out").exists()
+
+
+def test_a_swapped_entity_resolution_artifact_id_with_the_same_digest_is_refused(
+    world: World,
+) -> None:
+    written = make_context_map(world)
+    fake_id = ENTITY_RESOLUTION_ARTIFACT_ID.replace("0001", "9999")
+    assert fake_id != ENTITY_RESOLUTION_ARTIFACT_ID and len(fake_id) == len(
+        ENTITY_RESOLUTION_ARTIFACT_ID
+    )
+    swapped = replace(
+        written,
+        entities=tuple(
+            replace(
+                item, source=replace(item.source, resolution_run_id=EntityResolutionRunId(fake_id))
+            )
+            for item in written.entities
+        ),
+        lineage=tuple(
+            replace(item, artifact_id=fake_id)
+            if item.artifact_id == ENTITY_RESOLUTION_ARTIFACT_ID
+            else item
+            for item in written.lineage
+        ),
+    )
+    locations = {**world.locations, fake_id: world.resolution_dir}
+    del locations[ENTITY_RESOLUTION_ARTIFACT_ID]
+    # A prova de que o digest continua batendo: o mesmo diretório real, só o nome declarado muda.
+    assert artifact_digest(world.resolution_dir) == next(
+        item.content_identity for item in swapped.lineage if item.artifact_id == fake_id
+    )
+
+    with pytest.raises(ContextMapArtifactError, match=fake_id):
+        write_artifact(world, context_map=swapped, locations=locations)
+    assert not (world.root / "out").exists()
+
+
+def _renamed_derived_from(origin: Any, old_id: str, new_id: str) -> Any:
+    """The same origin, with any ``derived_from`` reference to ``old_id`` renamed to ``new_id``."""
+    return replace(
+        origin,
+        derived_from=tuple(
+            replace(item, artifact_id=new_id) if item.artifact_id == old_id else item
+            for item in origin.derived_from
+        ),
+    )
+
+
+def test_a_swapped_spatial_relations_artifact_id_with_the_same_digest_is_refused(
+    world: World,
+) -> None:
+    written = make_context_map(world)
+    fake_id = SPATIAL_RELATIONS_ARTIFACT_ID.replace("0001", "9999")
+    assert fake_id != SPATIAL_RELATIONS_ARTIFACT_ID
+    swapped = replace(
+        written,
+        relations=tuple(
+            replace(
+                item,
+                source_run_id=SpatialRelationsRunId(fake_id),
+                origin=_renamed_derived_from(item.origin, SPATIAL_RELATIONS_ARTIFACT_ID, fake_id),
+            )
+            for item in written.relations
+        ),
+        lineage=tuple(
+            replace(item, artifact_id=fake_id)
+            if item.artifact_id == SPATIAL_RELATIONS_ARTIFACT_ID
+            else item
+            for item in written.lineage
+        ),
+    )
+    locations = {**world.locations, fake_id: world.relations_dir}
+    del locations[SPATIAL_RELATIONS_ARTIFACT_ID]
+
+    with pytest.raises(ContextMapArtifactError, match=fake_id):
+        write_artifact(world, context_map=swapped, locations=locations)
+    assert not (world.root / "out").exists()
+
+
+def test_a_spatial_relations_run_linked_to_a_different_entity_resolution_run_is_refused(
+    world: World, tmp_path: Path
+) -> None:
+    other_resolution_dir = tmp_path / "other-entity-resolution"
+    other_relations_dir = tmp_path / "other-spatial-relations"
+    other_er_run_id = "entity-resolution--run-9999"
+    write_resolution_run(
+        other_resolution_dir,
+        run_id=other_er_run_id,
+        geometric_map_id=MAP_ID,
+        semantic_map_id=SEMANTIC_MAP_ARTIFACT_ID,
+    )
+    write_relations_run(
+        other_relations_dir,
+        run_id=SPATIAL_RELATIONS_ARTIFACT_ID,
+        resolution_dir=other_resolution_dir,
+    )
+    written = make_context_map(world)
+    relinked = replace(
+        written,
+        lineage=tuple(
+            replace(item, content_identity=artifact_digest(other_relations_dir))
+            if item.artifact_id == SPATIAL_RELATIONS_ARTIFACT_ID
+            else item
+            for item in written.lineage
+        ),
+    )
+    locations = {**world.locations, SPATIAL_RELATIONS_ARTIFACT_ID: other_relations_dir}
+
+    with pytest.raises(ContextMapArtifactError, match=other_er_run_id):
+        write_artifact(world, context_map=relinked, locations=locations)
     assert not (world.root / "out").exists()
 
 

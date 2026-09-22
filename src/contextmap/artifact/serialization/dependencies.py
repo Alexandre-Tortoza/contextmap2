@@ -28,6 +28,12 @@ from contextmap.shared import FileEntry, check_file_inventory
 GEOMETRIC_MAP_ARTIFACT_TYPE = "geometric_map"
 """``artifact_type`` of the dependency that holds the authoritative geometry."""
 
+ENTITY_RESOLUTION_RUN_ARTIFACT_TYPE = "entity_resolution_run"
+"""``artifact_type`` of the dependency that resolves the map's entities."""
+
+SPATIAL_RELATIONS_RUN_ARTIFACT_TYPE = "spatial_relations_run"
+"""``artifact_type`` of the dependency that decides the map's relations."""
+
 
 def _read_manifest_record(directory: Path) -> dict[str, Any]:
     manifest_path = directory / MANIFEST
