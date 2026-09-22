@@ -11,6 +11,7 @@ from contextmap.ingestion import (
     CalibrationProvenance,
     CalibrationReferenceId,
     CalibrationSet,
+    DroppedEvent,
     ExternalPoseMeasurement,
     FrameId,
     ImageEncoding,
@@ -30,6 +31,7 @@ from contextmap.ingestion import (
     SourceObservationId,
     SourceProvenance,
     SynchronizationConfig,
+    SynchronizationDiagnostics,
     synchronize,
 )
 from contextmap.ingestion.calibration import compute_content_hash
@@ -549,6 +551,115 @@ def test_read_summary_diagnostics_does_not_decode_observation_payloads(
     monkeypatch.setattr(reader, "list_observations", fail_if_called)
 
     assert reader.read_diagnostics() is not None
+
+
+def _count_payload_reads(monkeypatch: pytest.MonkeyPatch, *, directory: str) -> list[Path]:
+    """Track calls to ``Path.read_bytes`` for files under ``directory`` (e.g. "rgb").
+
+    A payload file (image/LiDAR) is read through :meth:`Path.read_bytes`
+    exactly where :func:`contextmap.ingestion.sequence_artifact._decode_observation`
+    decodes it; counting those calls is a direct, deterministic proxy for
+    "how many observations were actually decoded with their payload",
+    without depending on process memory measurement.
+    """
+    calls: list[Path] = []
+    real_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        if self.parent.name == directory:
+            calls.append(self)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+    return calls
+
+
+def test_get_observation_reads_only_the_matching_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    for index in range(6):
+        writer.add_observation(_image(index, bytes([index]) * 100))
+    writer.finalize()
+    reader = SequenceArtifactReader(_output_dir(tmp_path))
+
+    payload_reads = _count_payload_reads(monkeypatch, directory="rgb")
+    observation = reader.get_observation(SourceObservationId("frame-0005"))
+
+    assert isinstance(observation, ImageObservation)
+    assert observation.data == bytes([5]) * 100
+    assert len(payload_reads) == 1, (
+        "get_observation must decode only the matching observation's payload, "
+        f"not every preceding one; read {len(payload_reads)} payload files"
+    )
+
+
+def test_resolve_selection_frame_range_reads_only_selected_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextmap.ingestion import FrameRangeSelection, resolve_selection
+
+    writer = _writer(tmp_path)
+    for index in range(6):
+        writer.add_observation(_image(index, bytes([index]) * 100))
+    writer.finalize()
+    reader = SequenceArtifactReader(_output_dir(tmp_path))
+
+    payload_reads = _count_payload_reads(monkeypatch, directory="rgb")
+    result = resolve_selection(reader, FrameRangeSelection(start_frame_index=1, end_frame_index=3))
+
+    assert payload_reads == [], (
+        "resolving a selection must not decode any payload before the caller "
+        "accesses the resulting observations"
+    )
+
+    materialized = list(result.observations)
+
+    assert [obs.observation_id for obs in materialized] == ["frame-0001", "frame-0002"]
+    assert len(payload_reads) == 2, (
+        "accessing the resolved selection must decode exactly the selected "
+        f"payloads, not the whole sequence; read {len(payload_reads)} payload files"
+    )
+
+
+def test_read_diagnostics_dropped_events_do_not_decode_unrelated_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dropped_imu = ImuObservation(
+        observation_id=SourceObservationId("imu-dropped"),
+        sensor_id=SensorId("imu0"),
+        frame_id=FrameId("imu_link"),
+        timestamp=_timestamp(1),
+        provenance=_provenance(source_topic="/imu/data"),
+    )
+    kept_image = _image(0, b"\x09" * 100)
+    writer = _writer(tmp_path)
+    writer.add_observation(dropped_imu)
+    writer.add_observation(kept_image)
+    writer.set_diagnostics(
+        synchronization=SynchronizationDiagnostics(
+            dropped_events=(
+                DroppedEvent(observation=dropped_imu, reason="no match within tolerance"),
+            ),
+            decisions=(),
+        )
+    )
+    writer.finalize()
+    reader = SequenceArtifactReader(_output_dir(tmp_path))
+
+    payload_reads = _count_payload_reads(monkeypatch, directory="rgb")
+    diagnostics = reader.read_diagnostics()
+
+    assert diagnostics is not None
+    assert diagnostics.synchronization is not None
+    assert [
+        str(event.observation.observation_id)
+        for event in diagnostics.synchronization.dropped_events
+    ] == ["imu-dropped"]
+    assert payload_reads == [], (
+        "reading diagnostics must resolve dropped events from index metadata, "
+        "not by decoding every observation's payload"
+    )
 
 
 def _image(index: int, data: bytes) -> ImageObservation:

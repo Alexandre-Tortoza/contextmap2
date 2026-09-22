@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Any, NewType
+from typing import IO, Any, NamedTuple, NewType
 from uuid import uuid4
 
 from contextmap.ingestion.calibration import (
@@ -530,6 +530,27 @@ class SequenceArtifactWriter:
         return manifest
 
 
+class IndexEntry(NamedTuple):
+    """One observation's identity, timestamp, and position, without its payload.
+
+    Returned by :meth:`SequenceArtifactReader.iter_index`, which streams
+    ``index.jsonl`` without ever reading a payload file.
+
+    Attributes:
+        offset: Byte offset of this entry's line within ``index.jsonl``.
+            An implementation detail, kept only so a caller can later
+            decode this one observation directly through
+            :meth:`SequenceArtifactReader.observation_at` — never
+            persisted or meaningful across a different artifact.
+        observation_id: Identity of the observation this entry describes.
+        timestamp: Capture time in the source's own clock domain.
+    """
+
+    offset: int
+    observation_id: SourceObservationId
+    timestamp: SourceTimestamp
+
+
 class SequenceArtifactReader:
     """Reads a finalized canonical sequence artifact from the local filesystem."""
 
@@ -546,6 +567,7 @@ class SequenceArtifactReader:
         """
         self._root = artifact_dir
         self._manifest = _load_manifest(artifact_dir)
+        self._offsets_by_id_cache: dict[SourceObservationId, int] | None = None
 
     @property
     def manifest(self) -> SequenceArtifactManifest:
@@ -623,9 +645,14 @@ class SequenceArtifactReader:
                 if line.strip()
             ]
             if dropped_records:
+                needed_ids = {
+                    SourceObservationId(record["observation_id"]) for record in dropped_records
+                }
+                offsets_by_id = self._offsets_by_id()
                 observations_by_id = {
-                    str(observation.observation_id): observation
-                    for observation in self.list_observations()
+                    str(observation_id): self.observation_at(offsets_by_id[observation_id])
+                    for observation_id in needed_ids
+                    if observation_id in offsets_by_id
                 }
                 dropped_events = tuple(
                     decode_dropped_event(record, observations_by_id) for record in dropped_records
@@ -669,6 +696,14 @@ class SequenceArtifactReader:
     def list_observations(self) -> list[SourceObservation]:
         """Return every observation in the artifact, in index order.
 
+        This necessarily decodes every payload (image/LiDAR data included),
+        so its cost is proportional to the artifact's total payload size —
+        use it only when the whole sequence is genuinely needed. Looking up
+        one observation or a subset should use :meth:`get_observation` or
+        :func:`~contextmap.ingestion.sequence_selection.resolve_selection`
+        instead, which cost memory proportional to the index, not to the
+        payload.
+
         Returns:
             All observations, decoded from the index and their payload
             files.
@@ -677,6 +712,10 @@ class SequenceArtifactReader:
 
     def get_observation(self, observation_id: SourceObservationId) -> SourceObservation:
         """Return a single observation by identity.
+
+        Resolves ``observation_id`` through an id-to-index-offset lookup
+        (built once per reader, from the index alone, and cached) instead
+        of scanning and decoding every preceding observation's payload.
 
         Args:
             observation_id: Identity of the observation to look up.
@@ -687,10 +726,66 @@ class SequenceArtifactReader:
         Raises:
             SequenceArtifactError: If no observation has this identity.
         """
-        for observation in self._iter_observations():
-            if observation.observation_id == observation_id:
-                return observation
-        raise SequenceArtifactError(f"observation not found: {observation_id!r}")
+        offset = self._offsets_by_id().get(observation_id)
+        if offset is None:
+            raise SequenceArtifactError(f"observation not found: {observation_id!r}")
+        return self.observation_at(offset)
+
+    def iter_index(self) -> Iterator[IndexEntry]:
+        """Stream this sequence's index in canonical order, without reading any payload.
+
+        Cost is proportional to the index size (``index.jsonl``), never to
+        the total payload size: no image/LiDAR payload file is opened.
+        Used by :func:`~contextmap.ingestion.sequence_selection.resolve_selection`
+        to decide which observations match a selection before paying the
+        cost of decoding any of them.
+
+        Yields:
+            One :class:`IndexEntry` per observation, in canonical index order.
+        """
+        index_path = self._root / _INDEX_FILENAME
+        with index_path.open("rb") as handle:
+            while True:
+                offset = handle.tell()
+                line = handle.readline()
+                if not line:
+                    return
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                record = json.loads(stripped)
+                yield IndexEntry(
+                    offset=offset,
+                    observation_id=SourceObservationId(record["observation_id"]),
+                    timestamp=SourceTimestamp(**record["timestamp"]),
+                )
+
+    def observation_at(self, offset: int) -> SourceObservation:
+        """Decode a single observation given a byte offset from :meth:`iter_index`.
+
+        Reads exactly one index line and, when its modality has one, its one
+        payload file — never any other observation's data.
+
+        Args:
+            offset: An :attr:`IndexEntry.offset` returned by this same reader's
+                :meth:`iter_index`.
+
+        Returns:
+            The decoded observation.
+        """
+        index_path = self._root / _INDEX_FILENAME
+        with index_path.open("rb") as handle:
+            handle.seek(offset)
+            line = handle.readline()
+        return _decode_observation(json.loads(line.decode("utf-8")), self._root)
+
+    def _offsets_by_id(self) -> dict[SourceObservationId, int]:
+        """Build (once) and cache the id-to-index-offset lookup used by :meth:`get_observation`."""
+        if self._offsets_by_id_cache is None:
+            self._offsets_by_id_cache = {
+                entry.observation_id: entry.offset for entry in self.iter_index()
+            }
+        return self._offsets_by_id_cache
 
     def _iter_observations(self) -> Iterator[SourceObservation]:
         index_path = self._root / _INDEX_FILENAME
