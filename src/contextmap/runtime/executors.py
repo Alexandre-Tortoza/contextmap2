@@ -253,9 +253,10 @@ class SensorAssociationExecutor:
             for item in sequence.list_observations()
             if isinstance(item, ImageObservation)
         }
+        perception = PerceptionRunReader(_one(request, "perception"))
         frames = tuple(
             self._frame(images[str(result.source_observation_id)], result)
-            for result in PerceptionRunReader(_one(request, "perception")).list_results()
+            for result in perception.list_results()
             if str(result.source_observation_id) in images
         )
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
@@ -274,6 +275,9 @@ class SensorAssociationExecutor:
                     frames=frames,
                     state_estimation_run_id=trajectory.manifest.run_id,
                     code_version=self._code_version,
+                    # A reopened perception run never inlines mask pixels (#378); this
+                    # is how association resolves a region's mask_reference on demand.
+                    mask_loader=perception.mask_store(),
                 )
             )
         manifest = SensorAssociationRunWriter(
