@@ -41,6 +41,8 @@ flowchart LR
 
 Uma pose externa é medição de entrada, não ground truth: nada aqui a rotula como referência. O backend não conhece nomes de dataset, arquivo ou frame; o parsing de arquivos e a normalização de convenções pertencem a Ingestion, que já entrega frames, metros e quaternions `(x, y, z, w)`.
 
+`contextmap.ingestion.adapters.pose_file.PoseFileSourceAdapter` (issue #376) é o adapter real que fecha essa fronteira: lê um arquivo de pose TUM autônomo (`t x y z qx qy qz qw`) e produz `ExternalPoseMeasurement`s com `parent_frame`/`frame_id`, clock e proveniência (caminho e hash `sha256` do arquivo) explícitos por configuração — nunca inferidos do nome do arquivo. Ver [`adapters.md`](../../ingestion/docs/adapters.md) da capability Ingestion. Antes deste adapter, uma execução real (ex.: `evaluation/docs/state_estimation.md`) tinha que montar as medições fora de Ingestion, sem proveniência para o arquivo de origem; esse caminho ad hoc deixa de ser necessário para uma fonte de pose em arquivo.
+
 ### Configuração (`ExternalPoseConfig`)
 
 | Campo | Significado |
