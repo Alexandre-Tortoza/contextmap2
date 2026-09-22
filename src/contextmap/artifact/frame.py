@@ -6,8 +6,12 @@ statement is explicit, and what is not known is written as ``None`` instead of b
 
 The most important distinction is the origin. An estimator-local origin is defined by where a
 run of an estimator happened to start, so its coordinates mean something only inside that one
-artifact. An externally anchored origin is tied to an external reference frame. Coordinates of
-two maps are never implied to be comparable unless both are anchored to the same reference.
+artifact. An externally anchored origin means the map's coordinates are already expressed
+exactly in the named external reference frame: there is no separate local origin or basis of
+its own that a transform would need to remove. That invariant is what makes two externally
+anchored maps directly comparable; without it, sharing the name of a reference would prove
+nothing about whether their XYZ values live in the same basis. Coordinates of two maps are
+never implied to be comparable unless both satisfy it against the same reference.
 """
 
 from __future__ import annotations
@@ -51,8 +55,11 @@ class AnchorKind(Enum):
     Attributes:
         ESTIMATOR_LOCAL: Defined by an estimator run (for example, its first pose). Coordinates
             are meaningful only inside this artifact.
-        EXTERNALLY_ANCHORED: Tied to a named external reference frame through an explicit
-            alignment.
+        EXTERNALLY_ANCHORED: The map's coordinates are already expressed exactly in the named
+            external reference frame, with no separate local origin or basis: the map frame
+            *is* the reference frame, and :class:`MapFrame` requires ``frame_id`` to equal
+            ``reference_frame_id`` to make that identity explicit and verifiable. This is a
+            structural guarantee, not a claim about how the alignment was produced upstream.
     """
 
     ESTIMATOR_LOCAL = "estimator_local"
@@ -66,9 +73,12 @@ class MapAnchor:
     Attributes:
         kind: Estimator-local or externally anchored.
         origin_definition: Human-readable statement of how the origin is defined and, for an
-            external anchor, how the alignment was established.
+            external anchor, how the alignment that put the coordinates in the reference frame
+            was established upstream. It documents that history; it is not what makes two maps
+            comparable, since free text can drift from the data without being detectable.
         reference_frame_id: Identity of the external reference frame; required when the map is
-            externally anchored and ``None`` when it is estimator-local.
+            externally anchored and ``None`` when it is estimator-local. For an externally
+            anchored map, :class:`MapFrame` requires this to equal the map's own ``frame_id``.
     """
 
     kind: AnchorKind
@@ -97,7 +107,9 @@ class MapFrame:
     """The coordinate frame every position of the map is expressed in.
 
     Attributes:
-        frame_id: Identity of the map frame; the frame of the geometry the map references.
+        frame_id: Identity of the map frame; the frame of the geometry the map references. For
+            an externally anchored map this equals ``anchor.reference_frame_id``: the map frame
+            *is* the reference frame, never a separate local basis aligned to it.
         unit: Unit of every coordinate.
         handedness: Handedness of the axes.
         up_direction: Unit vector, in the map frame, that points away from gravity; ``None``
@@ -112,11 +124,12 @@ class MapFrame:
     anchor: MapAnchor
 
     def __post_init__(self) -> None:
-        """Validate the frame identity and the up direction.
+        """Validate the frame identity, the up direction and the external-anchor invariant.
 
         Raises:
-            ValueError: If the frame identity is blank or the up direction is not a finite
-                unit vector.
+            ValueError: If the frame identity is blank, the up direction is not a finite unit
+                vector, or the map is externally anchored but its ``frame_id`` differs from
+                ``anchor.reference_frame_id``.
         """
         require_present(self, "frame_id")
         if self.up_direction is not None:
@@ -128,6 +141,18 @@ class MapFrame:
                 raise ValueError(
                     f"up_direction must be a finite unit vector, got {self.up_direction!r}"
                 )
+        if (
+            self.anchor.kind is AnchorKind.EXTERNALLY_ANCHORED
+            and self.frame_id != self.anchor.reference_frame_id
+        ):
+            # EXTERNALLY_ANCHORED significa que as coordenadas já estão no frame externo, sem
+            # base local própria: sem esta igualdade, dois mapas citando o mesmo
+            # reference_frame_id poderiam ter bases diferentes e ainda assim parecer comparáveis.
+            raise ValueError(
+                "an externally anchored frame's frame_id must equal its reference_frame_id "
+                f"{self.anchor.reference_frame_id!r} (no separate local origin/base is "
+                f"representable), got frame_id={self.frame_id!r}"
+            )
 
     def is_comparable_with(self, other: MapFrame) -> bool:
         """Check whether coordinates of two maps can be compared directly.
@@ -135,7 +160,10 @@ class MapFrame:
         Comparability is never implied by a shared name: two estimator-local frames are not
         comparable even when both are called ``map``, because no alignment exists between them.
         Two frames are comparable only when both are externally anchored to the same reference
-        frame and agree on unit and handedness.
+        frame and agree on unit and handedness. This is sound, not merely a naming coincidence,
+        because :class:`MapFrame` requires an externally anchored frame's ``frame_id`` to equal
+        its ``reference_frame_id``: matching ``reference_frame_id`` therefore proves the two
+        frames share the same identity, with no separate local basis either could diverge in.
 
         Args:
             other: The frame of the other map.

@@ -7,6 +7,7 @@ import math
 
 import pytest
 from context_map_builders import (
+    anchored_map_frame,
     bounds,
     capabilities,
     context_map,
@@ -127,33 +128,54 @@ def test_two_local_frames_are_never_comparable_even_with_the_same_name() -> None
 
 
 def test_frames_anchored_to_the_same_reference_are_comparable() -> None:
-    first = map_frame(frame_id="map-a", anchor=external_anchor("site-a/enu"))
-    second = map_frame(frame_id="map-b", anchor=external_anchor("site-a/enu"))
+    first = anchored_map_frame("site-a/enu")
+    second = anchored_map_frame("site-a/enu")
 
     assert first.is_comparable_with(second)
     assert second.is_comparable_with(first)
 
 
 def test_frames_anchored_to_different_references_are_not_comparable() -> None:
-    first = map_frame(anchor=external_anchor("site-a/enu"))
-    second = map_frame(anchor=external_anchor("site-b/enu"))
+    first = anchored_map_frame("site-a/enu")
+    second = anchored_map_frame("site-b/enu")
 
     assert not first.is_comparable_with(second)
 
 
 def test_a_local_frame_is_not_comparable_to_an_anchored_one() -> None:
     local = map_frame()
-    anchored = map_frame(anchor=external_anchor())
+    anchored = anchored_map_frame()
 
     assert not local.is_comparable_with(anchored)
     assert not anchored.is_comparable_with(local)
 
 
 def test_frames_with_different_handedness_are_not_comparable() -> None:
-    right = map_frame(anchor=external_anchor())
-    left = map_frame(anchor=external_anchor(), handedness=Handedness.LEFT_HANDED)
+    right = anchored_map_frame()
+    left = anchored_map_frame(handedness=Handedness.LEFT_HANDED)
 
     assert not right.is_comparable_with(left)
+
+
+def test_an_externally_anchored_frame_id_must_equal_its_reference() -> None:
+    # Reprodução do bug relatado na revisão: sem esta invariante, dois mapas podiam citar o
+    # mesmo reference_frame_id mas ter bases locais (frame_id) diferentes, e is_comparable_with
+    # ainda os declarava diretamente comparáveis, mesmo sem nenhum transform que os ligasse.
+    with pytest.raises(ValueError, match="reference_frame_id"):
+        map_frame(frame_id="map-a", anchor=external_anchor("site-a/enu"))
+
+
+def test_two_maps_sharing_a_reference_but_not_the_same_alignment_are_refused() -> None:
+    # A combinação que produzia o falso positivo (mesma reference_frame_id, frame_id
+    # diferente, ou seja, bases locais potencialmente distintas) deixa de ser representável:
+    # pelo menos um dos dois mapas falha na construção antes que is_comparable_with seja chamado.
+    shared_reference = external_anchor("site-a/enu")
+
+    valid = map_frame(frame_id="site-a/enu", anchor=shared_reference)
+    assert valid.is_comparable_with(valid)
+
+    with pytest.raises(ValueError, match="reference_frame_id"):
+        map_frame(frame_id="warehouse-local-basis", anchor=shared_reference)
 
 
 # --- extent ------------------------------------------------------------------------------------
@@ -265,9 +287,8 @@ def test_relations_may_be_declared_with_no_predicate_yet() -> None:
 def test_the_frame_and_extent_survive_a_json_round_trip() -> None:
     original = context_map(
         metadata=metadata(
-            frame=map_frame(
-                up_direction=None, anchor=external_anchor(), handedness=Handedness.LEFT_HANDED
-            ),
+            frame=anchored_map_frame(up_direction=None, handedness=Handedness.LEFT_HANDED),
+            bounds=bounds(frame_id="site-a/enu"),
         )
     )
 

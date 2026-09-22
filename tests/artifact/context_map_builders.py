@@ -135,6 +135,18 @@ def external_anchor(reference_frame_id: str | None = "site-a/enu", **overrides: 
     )
 
 
+def anchored_map_frame(reference_frame_id: str = "site-a/enu", **overrides: Any) -> MapFrame:
+    """Build an externally anchored frame whose frame_id already is its reference_frame_id.
+
+    MapFrame requires that equality for an externally anchored frame (no separate local basis is
+    representable), so every test that wants a valid anchored frame should build it from here
+    instead of pairing map_frame() with external_anchor() under two different names.
+    """
+    return map_frame(
+        frame_id=reference_frame_id, anchor=external_anchor(reference_frame_id), **overrides
+    )
+
+
 def map_frame(**overrides: Any) -> MapFrame:
     return replace(
         MapFrame(
