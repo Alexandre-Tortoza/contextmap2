@@ -76,6 +76,11 @@ class PTv3Config:
             or ``l2``.
         min_support_points: Supports smaller than this are reported as failed
             without invoking the runtime.
+        padding_channels: Number of trailing input channels, beyond XYZ, that the
+            checkpoint expects and the runtime fills with zeros (for example the
+            LiDAR intensity channel of a model trained on nuScenes). It is part of
+            the input definition, so it changes the space identity; no measured
+            value is ever supplied for these channels.
     """
 
     variant: str
@@ -88,6 +93,7 @@ class PTv3Config:
     pooling: str
     normalization: str
     min_support_points: int
+    padding_channels: int = 0
 
     def __post_init__(self) -> None:
         """Validate the configuration before any model is built.
@@ -126,6 +132,8 @@ class PTv3Config:
             raise ValueError("PTv3 output_dimension must be positive")
         if self.min_support_points < 1:
             raise ValueError("PTv3 min_support_points must be at least 1")
+        if self.padding_channels < 0:
+            raise ValueError("PTv3 padding_channels must not be negative")
 
     def to_dict(self) -> dict[str, str | int | float]:
         """Return the secret-free, JSON-compatible effective configuration."""
@@ -151,7 +159,11 @@ class PTv3OutOfMemoryError(RuntimeError):
 
 
 class PTv3RuntimeUnavailableError(RuntimeError):
-    """Raised by a runtime that cannot run at all: a missing dependency, device or checkpoint."""
+    """Raised by a runtime that cannot run at all.
+
+    A missing dependency, device or checkpoint, or a backbone whose weights do not fit on the
+    device.
+    """
 
 
 class PTv3Runtime(Protocol):
@@ -226,9 +238,7 @@ class PTv3PointEncoder:
             dimension=config.output_dimension,
             dtype="float32",
             normalization=config.normalization,
-            input_definition=(
-                f"xyz-local-prepared;grid_size_m={config.grid_size_m};precision={config.precision}"
-            ),
+            input_definition=_input_definition(config),
             support_semantics=support_policy,
             feature_names=(),
         )
@@ -326,6 +336,14 @@ class PTv3PointEncoder:
             values = _l2_normalized(values)
         self._encoded += 1
         return EncodedVector(values=values)
+
+
+def _input_definition(config: PTv3Config) -> str:
+    """Describe exactly what the runtime feeds the backbone, so the space identity is honest."""
+    definition = f"xyz-local-prepared;grid_size_m={config.grid_size_m};precision={config.precision}"
+    if config.padding_channels:
+        definition += f";zero_padding_channels={config.padding_channels}"
+    return definition
 
 
 def _l2_normalized(values: tuple[float, ...]) -> tuple[float, ...]:

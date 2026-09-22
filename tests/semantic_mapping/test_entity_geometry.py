@@ -23,6 +23,7 @@ from contextmap.geometric_mapping import (
 )
 from contextmap.ingestion import FrameId
 from contextmap.semantic_mapping import (
+    DEFAULT_MAX_CONNECTIVITY_POINTS,
     GEOMETRY_SUMMARY_ALGORITHM_ID,
     EmptyGeometrySupportError,
     EntityGeometry,
@@ -263,6 +264,89 @@ class TestSupportStatisticsAndDiagnostics:
 
         assert geometry.statistics.point_count == 4000
         assert geometry.statistics.component_count == 1
+
+
+class TestConnectivityCostLimit:
+    """A support above the policy's limit is not linked: the cost is explicit, never silent."""
+
+    LIMITED = GeometrySummaryPolicy(
+        sparse_point_threshold=1, connectivity_radius_m=1.5, max_connectivity_points=8
+    )
+    NINE_POINTS = (*CUBE, (0.5, 0.5, 0.5))
+
+    def test_the_default_limit_is_a_named_constant(self) -> None:
+        policy = GeometrySummaryPolicy(sparse_point_threshold=1, connectivity_radius_m=1.0)
+
+        assert policy.max_connectivity_points == DEFAULT_MAX_CONNECTIVITY_POINTS
+
+    def test_a_support_at_the_limit_is_still_linked(self) -> None:
+        geometry = _summarize(CUBE, self.LIMITED)
+
+        assert geometry.statistics.component_count == 1
+        assert GeometryDiagnosticKind.CONNECTIVITY_NOT_COMPUTED not in geometry.diagnostic_kinds()
+
+    def test_a_support_above_the_limit_is_not_linked_and_says_why(self) -> None:
+        geometry = _summarize(self.NINE_POINTS, self.LIMITED)
+
+        assert geometry.statistics.component_count is None
+        assert geometry.statistics.largest_component_fraction is None
+        assert GeometryDiagnosticKind.DISCONNECTED_SUPPORT not in geometry.diagnostic_kinds()
+        (item,) = [
+            item
+            for item in geometry.diagnostics
+            if item.kind is GeometryDiagnosticKind.CONNECTIVITY_NOT_COMPUTED
+        ]
+        assert "9 points" in item.detail and "limit of 8" in item.detail
+
+    def test_the_rest_of_the_summary_does_not_depend_on_the_limit(self) -> None:
+        limited = _summarize(self.NINE_POINTS, self.LIMITED)
+        unlimited = _summarize(self.NINE_POINTS)
+
+        assert limited.centroid_m == unlimited.centroid_m
+        assert limited.bounds == unlimited.bounds
+        assert limited.statistics.point_count == unlimited.statistics.point_count
+        assert limited.statistics.density_per_m3 == unlimited.statistics.density_per_m3
+
+    def test_the_limit_is_part_of_the_configuration_identity(self) -> None:
+        other = dataclasses.replace(self.LIMITED, max_connectivity_points=9)
+
+        assert self.LIMITED.fingerprint() != other.fingerprint()
+
+    def test_the_limit_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="max_connectivity_points"):
+            GeometrySummaryPolicy(
+                sparse_point_threshold=1, connectivity_radius_m=1.0, max_connectivity_points=0
+            )
+
+    def test_the_diagnostic_is_present_exactly_when_the_components_were_not_counted(self) -> None:
+        item = GeometryDiagnostic(
+            kind=GeometryDiagnosticKind.CONNECTIVITY_NOT_COMPUTED, detail="not counted"
+        )
+        skipped = _summarize(self.NINE_POINTS, self.LIMITED)
+
+        with pytest.raises(ValueError, match="connectivity_not_computed"):
+            dataclasses.replace(_summarize(CUBE, self.LIMITED), diagnostics=(item,))
+        with pytest.raises(ValueError, match="connectivity_not_computed"):
+            dataclasses.replace(skipped, diagnostics=())
+
+    def test_the_statistics_carry_both_connectivity_figures_or_neither(self) -> None:
+        with pytest.raises(ValueError, match="component_count and largest_component_fraction"):
+            SupportStatistics(
+                point_count=8,
+                volume_m3=1.0,
+                density_per_m3=8.0,
+                component_count=None,
+                largest_component_fraction=1.0,
+            )
+
+    def test_an_uncounted_summary_verifies_and_survives_persistence(self) -> None:
+        source = _source(self.NINE_POINTS)
+        geometry = _summarize(self.NINE_POINTS, self.LIMITED)
+
+        assert verify_geometry_summary(geometry, source=source, policy=self.LIMITED) == []
+        assert verify_geometry_summary(geometry, source=source, policy=POLICY) != []
+        record = json.loads(json.dumps(encode_entity(make_entity(geometry=geometry))))
+        assert decode_entity(record).geometry == geometry
 
 
 class TestOrientation:

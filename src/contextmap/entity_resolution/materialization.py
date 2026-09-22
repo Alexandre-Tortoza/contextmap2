@@ -12,9 +12,16 @@ the rule is conservative and explicit: a component that contains a ``DISTINCT`` 
 merged**, every member stays its own resolved entity, and a
 :class:`~contextmap.entity_resolution.resolved_entity.TransitivityContradiction` names the
 ``DISTINCT`` decision, the chain of ``MATCH`` decisions that links the pair, and the withheld
-entities. Each withheld entity carries the contradiction id, so a consumer sees why a probable
-match was not honored. An ``UNRESOLVED`` decision never merges, and is recorded as an unresolved
+entities. A component may hold several contradictions; each withheld entity carries the id of
+every one of them, so a consumer sees why a probable match was not honored. An ``UNRESOLVED``
+decision never merges, and is recorded as an unresolved
 neighbor of both entities.
+
+Two members that independently propose the *same* attribute (same name, value, origin and
+derivation, the common case of two observations of one object) are not a conflict: their evidence
+and support are unioned instead of compared for equality, so their separate provenances are kept.
+A hypothesis, an uncertainty record or an attribute whose identity matches but whose remaining
+content still disagrees is a real aggregation error.
 
 An entity in a group must share the geometric map and frame of the others (their supports are
 unioned as references and their bounds are unioned), and a group must share one clock domain;
@@ -27,7 +34,7 @@ import hashlib
 import json
 from collections import defaultdict, deque
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 
 from contextmap.entity_resolution.decision import (
@@ -142,9 +149,10 @@ def materialize_resolved_entities(
     graph = _match_graph(decision_list)
     components = _components(by_reference, graph)
     contradictions = _contradictions(decision_list, components, graph)
-    withheld = {
-        reference: item.contradiction_id for item in contradictions for reference in item.component
-    }
+    withheld: dict[EntityReference, set[ContradictionId]] = {}
+    for item in contradictions:
+        for reference in item.component:
+            withheld.setdefault(reference, set()).add(item.contradiction_id)
     neighbors = _unresolved_neighbors(decision_list)
     policy = materialization_policy()
     resolved: list[ResolvedEntity] = []
@@ -305,7 +313,7 @@ def _aggregate(
     members: tuple[Entity, ...],
     graph: _Graph,
     unresolved: dict[EntityReference, set[EntityReference]],
-    withheld: dict[EntityReference, ContradictionId],
+    withheld: dict[EntityReference, set[ContradictionId]],
     resolution_run_id: EntityResolutionRunId,
     provenance: ResolvedEntityProvenance,
 ) -> ResolvedEntity:
@@ -338,7 +346,9 @@ def _aggregate(
         temporal_state=_temporal_state(members),
         resolution_decision_refs=tuple(sorted({d for ids in matched.values() for d in ids})),
         unresolved_neighbor_refs=tuple(neighbors),
-        contradiction_ids=tuple(sorted({withheld[ref] for ref in references if ref in withheld})),
+        contradiction_ids=tuple(
+            sorted({item for ref in references for item in withheld.get(ref, ())})
+        ),
         provenance=provenance,
     )
 
@@ -376,14 +386,10 @@ def _geometry(members: tuple[Entity, ...]) -> ResolvedGeometry:
 
 def _semantic_state(members: tuple[Entity, ...]) -> ResolvedSemanticState:
     hypotheses: dict[tuple[str, str], EntityHypothesis] = {}
-    attributes: dict[tuple[str, str, str, str], EntityAttribute] = {}
     uncertainty: dict[tuple[str, ...], EntityUncertainty] = {}
     for member in members:
         for hypothesis in member.semantic_state.hypotheses:
             _put(hypotheses, (hypothesis.fused_evidence_id, hypothesis.hypothesis_id), hypothesis)
-        for attribute in member.semantic_state.attributes:
-            key = (attribute.name, attribute.value, attribute.origin.value, attribute.derivation_id)
-            _put(attributes, key, attribute)
         for item in member.semantic_state.uncertainty:
             _put(uncertainty, uncertainty_key(item), item)
     ambiguity = tuple(
@@ -395,10 +401,67 @@ def _semantic_state(members: tuple[Entity, ...]) -> ResolvedSemanticState:
     union = tuple(hypotheses[key] for key in sorted(hypotheses))
     return ResolvedSemanticState(
         hypotheses=union,
-        attributes=tuple(attributes[key] for key in sorted(attributes)),
+        attributes=_attributes(members),
         uncertainty=tuple(uncertainty[key] for key in sorted(uncertainty)),
         member_ambiguity=ambiguity,
         ambiguity_state=derive_resolved_ambiguity(ambiguity, union),
+    )
+
+
+def _attributes(members: tuple[Entity, ...]) -> tuple[EntityAttribute, ...]:
+    """Union the evidence and support of attributes that are the same semantic property.
+
+    Two independent members classified the same way (for example, both ``class=chair`` from
+    ``primary-hypothesis-label-v1``) carry their own, distinct evidence for it: that is two
+    observations of the same property, not a conflict, and materializing their ``MATCH`` must
+    not raise. ``evidence`` and ``support`` are unioned the same way every other per-member
+    evidence link is (see :func:`_evidence`), keyed exactly as
+    :class:`~contextmap.semantic_mapping.EntityAttribute` itself requires them to be canonical.
+    An attribute that still disagrees after that union (the same identity, a real conflict at the
+    level of one evidence reference, one support signal or, for external knowledge, the source
+    itself) is still an aggregation error: nothing is silently dropped or averaged.
+    ``external_source`` is not part of the grouping key and carries no evidence to union, so it is
+    checked separately: the schema has no way to represent more than one external source on one
+    attribute, and picking one over another would discard a member's provenance.
+    """
+    grouped: dict[tuple[str, str, str, str], list[EntityAttribute]] = defaultdict(list)
+    for member in members:
+        for attribute in member.semantic_state.attributes:
+            key = (attribute.name, attribute.value, attribute.origin.value, attribute.derivation_id)
+            grouped[key].append(attribute)
+    merged: dict[tuple[str, str, str, str], EntityAttribute] = {}
+    for key, group in grouped.items():
+        sources = {attribute.external_source for attribute in group}
+        if len(sources) > 1:
+            raise MaterializationError(
+                f"two members disagree about the external_source of attribute {key!r}"
+            )
+        evidence: dict[tuple[str, str], Any] = {}
+        support: dict[tuple[str, ...], Any] = {}
+        for attribute in group:
+            for ref in attribute.evidence:
+                _put(evidence, (ref.contribution_id, ref.claim_id or ""), ref)
+            for signal in attribute.support:
+                _put(support, _support_signal_key(signal), signal)
+        merged[key] = replace(
+            group[0],
+            evidence=tuple(evidence[item] for item in sorted(evidence)),
+            support=tuple(support[item] for item in sorted(support)),
+        )
+    return tuple(merged[key] for key in sorted(merged))
+
+
+def _support_signal_key(signal: Any) -> tuple[str, ...]:
+    """The canonical identity of a support signal, mirroring ``EntityAttribute``'s own rule."""
+    producer = signal.producer
+    return (
+        signal.kind.value,
+        producer.backend_id,
+        producer.capability,
+        producer.provider,
+        producer.model,
+        producer.version,
+        producer.configuration_fingerprint or "",
     )
 
 

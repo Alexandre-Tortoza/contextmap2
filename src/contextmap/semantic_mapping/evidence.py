@@ -81,6 +81,9 @@ class FusedEvidenceRef:
         fusion_schema_version: The schema version of that artifact.
         fusion_artifact_digest: Digest of the artifact's identity and inventory when the entity
             was materialized; see :func:`fusion_artifact_digest`.
+        sequence_artifact_id: The canonical sequence that run was built over when the entity was
+            materialized. The digest does not cover the run's lineage, so validation compares
+            this identity with the run's manifest explicitly.
         fused_evidence_id: The fused evidence, local to that run.
         fusion_support_id: The support the evidence was accumulated over.
     """
@@ -88,6 +91,7 @@ class FusedEvidenceRef:
     fusion_run_id: SemanticFusionRunId
     fusion_schema_version: str
     fusion_artifact_digest: str
+    sequence_artifact_id: str
     fused_evidence_id: FusedEvidenceId
     fusion_support_id: FusionSupportId
 
@@ -102,6 +106,7 @@ class FusedEvidenceRef:
             "fusion_run_id",
             "fusion_schema_version",
             "fusion_artifact_digest",
+            "sequence_artifact_id",
             "fused_evidence_id",
             "fusion_support_id",
         )
@@ -114,9 +119,13 @@ class EntityFeatureRef:
     The vector stays in Visual Perception's feature store; only the identity travels, with the
     embedding space, so features of different spaces are never mixed by accident.
 
+    The identity is the whole triple ``(perception_run_id, perception_result_id, feature_id)``:
+    a result id is local to its run and a feature id to its result, so two runs may reuse the
+    same pair and only the run tells them apart.
+
     Attributes:
         perception_run_id: The perception run that produced the feature.
-        perception_result_id: The perception result that owns it.
+        perception_result_id: The perception result that owns it, local to that run.
         feature_id: The feature, local to that result.
         embedding_space_id: The embedding space its vector lives in.
         scope: Whether the feature is dense, global or per-region.
@@ -156,7 +165,7 @@ class EntityEvidenceLinks:
         physical_observation_ids: The physical frames that contributed, sorted and unique:
             the end of the provenance chain, however many inference runs interpreted each.
         visual_feature_refs: Region and global features of the contributing views, sorted by
-            result and feature and unique; empty when the channel is absent.
+            perception run, result and feature and unique; empty when the channel is absent.
         point_representation_refs: The 3D representations attached to the support, sorted by
             run and representation and unique; empty when the channel is absent.
     """
@@ -189,11 +198,7 @@ class EntityEvidenceLinks:
         require_canonical(
             "physical_observation_ids", self.physical_observation_ids, lambda item: (item,)
         )
-        require_canonical(
-            "visual_feature_refs",
-            self.visual_feature_refs,
-            lambda ref: (ref.perception_result_id, ref.feature_id),
-        )
+        require_canonical("visual_feature_refs", self.visual_feature_refs, _feature_key)
         require_canonical(
             "point_representation_refs",
             self.point_representation_refs,
@@ -208,19 +213,23 @@ def feature_refs_of(evidence: FusedEvidence) -> tuple[EntityFeatureRef, ...]:
         evidence: The evidence fused over one support.
 
     Returns:
-        One reference per feature, each once, sorted by result and feature.
+        One reference per feature, each once, sorted by perception run, result and feature.
+        Two runs that reuse the same result and feature ids keep one reference each.
     """
     found = {
-        (item.perception_result_id, ref.feature_id): EntityFeatureRef(
-            perception_run_id=item.perception_run_id,
-            perception_result_id=item.perception_result_id,
-            feature_id=ref.feature_id,
-            embedding_space_id=ref.embedding_space_id,
-            scope=ref.scope,
-            region_id=ref.region_id,
+        _feature_key(ref): ref
+        for ref in (
+            EntityFeatureRef(
+                perception_run_id=item.perception_run_id,
+                perception_result_id=item.perception_result_id,
+                feature_id=feature.feature_id,
+                embedding_space_id=feature.embedding_space_id,
+                scope=feature.scope,
+                region_id=feature.region_id,
+            )
+            for item in evidence.contributions
+            for feature in item.visual_feature_refs
         )
-        for item in evidence.contributions
-        for ref in item.visual_feature_refs
     }
     return tuple(found[key] for key in sorted(found))
 
@@ -246,6 +255,7 @@ def evidence_links_from_fused_evidence(
                 fusion_run_id=manifest.run_id,
                 fusion_schema_version=manifest.schema_version,
                 fusion_artifact_digest=fusion_artifact_digest(manifest),
+                sequence_artifact_id=manifest.lineage.sequence_artifact_id,
                 fused_evidence_id=evidence.fused_evidence_id,
                 fusion_support_id=evidence.fusion_support_id,
             ),
@@ -259,6 +269,11 @@ def evidence_links_from_fused_evidence(
         visual_feature_refs=feature_refs_of(evidence),
         point_representation_refs=evidence.point_representation_refs,
     )
+
+
+def _feature_key(ref: EntityFeatureRef) -> tuple[str, str, str]:
+    """The identity of a feature reference: run, result and feature, in that order."""
+    return (ref.perception_run_id, ref.perception_result_id, ref.feature_id)
 
 
 def _sorted_unique(items: Iterable[_Id]) -> tuple[_Id, ...]:

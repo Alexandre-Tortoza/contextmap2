@@ -48,7 +48,7 @@ O suporte 3D persistente e seus resumos derivados; detalhes em [`geometry.md`](g
 | `geometry_refs` | `GeometryReference` ordenadas por `geometry_id`, únicas, de um só mapa e **nunca vazias**: é a autoridade. |
 | `map_frame` | Frame do mapa; todo resumo está expresso nele. |
 | `centroid_m`, `bounds`, `extent_m` | Centroide, `Bounds3D` justo e lados da caixa, derivados do suporte. |
-| `statistics` | `SupportStatistics`: pontos, volume, densidade (`None` se a caixa é plana), componentes conexos. |
+| `statistics` | `SupportStatistics`: pontos, volume, densidade (`None` se a caixa é plana), componentes conexos (`None` se o suporte excede `max_connectivity_points` e não foi ligado). |
 | `summary` | `SpatialSummaryProvenance`: algoritmo, frame, conjunto de entrada (contagem e digest), convenções numéricas, filtragem e fingerprint da política. |
 | `orientation` | `EntityOrientation` (eixos ortonormais destros e variâncias) ou `None`. |
 | `diagnostics` | `GeometryDiagnostic` (`sparse_support`, `disconnected_support`, `degenerate_extent`, `orientation_not_justified`). |
@@ -70,7 +70,7 @@ O estado semântico, sem colapso; detalhes em [`semantic-state.md`](semantic-sta
 
 `EntityHypothesis` guarda `fused_evidence_id`, `hypothesis_id`, o `label` verbatim (equivalência entre labels é decisão de política, nunca suposta) e a `evidence` (`HypothesisEvidence` de Semantic Fusion: claim, stance, papel e sinais tipados). Uma hipótese exige ao menos uma evidência que a suporte, e um label não se repete dentro da mesma evidência fundida.
 
-Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado e exige uma derivação documentada. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
+Um atributo observado ou derivado sem evidência é recusado; `EXTERNAL_KNOWLEDGE` é rotulado, exige uma derivação documentada **e** uma `ExternalKnowledgeSource` (`external_source`: fonte, versão e entrada consultada), e só ele pode nomear uma: sem a fonte, um conhecimento externo não passaria de uma afirmação sem origem dentro do estado da entidade, misturando Knowledge com Belief. Uma primária não pode ser exposta enquanto o estado não é `unambiguous`.
 
 ## `EntityEvidenceLinks` e seus tipos
 
@@ -78,10 +78,10 @@ Onde está a evidência que suporta a entidade; detalhes em [`evidence.md`](evid
 
 | Campo | Significado |
 | --- | --- |
-| `fused_evidence` | `FusedEvidenceRef` (run, versão do schema, digest do artifact, evidência e suporte); **nunca vazio**. |
+| `fused_evidence` | `FusedEvidenceRef` (run, versão do schema, digest do artifact, sequência canônica, evidência e suporte); **nunca vazio**. |
 | `spatial_observation_ids` | `SpatialObservationId` que contribuíram, ordenados e únicos. |
 | `physical_observation_ids` | `SourceObservationId` dos frames físicos que contribuíram, ordenados e únicos. |
-| `visual_feature_refs` | `EntityFeatureRef` (`perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope`, `region_id`); vazio se o canal está ausente. |
+| `visual_feature_refs` | `EntityFeatureRef` (`perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope`, `region_id`), identificada pela tripla run, resultado e feature e ordenada nessa ordem; vazio se o canal está ausente. |
 | `point_representation_refs` | `PointRepresentationRef` das representações 3D do suporte; vazio se o canal está ausente. |
 
 Nada aqui copia imagens, máscaras, embeddings nem payloads de fusão. Uma representação 3D ancorada fora do suporte geométrico da entidade é recusada por `Entity`.

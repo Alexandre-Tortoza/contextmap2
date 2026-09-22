@@ -27,7 +27,18 @@ from contextmap.visual_perception.semantic_requests import (
 
 
 class SemanticResponseParseError(ValueError):
-    """Raised when a backend response cannot become canonical semantic evidence."""
+    """Raised when a backend response cannot become canonical semantic evidence.
+
+    Attributes:
+        raw_response: The exact response text that was rejected, so a failed parse never
+            loses what the model said (truncation and schema drift are diagnosed from it).
+            ``None`` only when the error was raised outside :func:`parse_semantic_response`.
+    """
+
+    def __init__(self, message: str, *, raw_response: str | None = None) -> None:
+        """Create the error with an optional rejected raw response."""
+        super().__init__(message)
+        self.raw_response = raw_response
 
 
 class SemanticConfidencePolicy(Enum):
@@ -289,7 +300,28 @@ def parse_semantic_response(
     mode, treating an omitted ``scene_context`` as ``null``. The key is null-only in that
     mode, so its absence carries the same information; both cases add a
     :class:`SemanticParseDiagnostic` to the result.
+
+    Raises:
+        SemanticResponseParseError: If the response is not canonical. The error carries the
+            rejected text in ``raw_response``.
     """
+    try:
+        return _parse_semantic_response(
+            raw_response, request, provenance, confidence_policy=confidence_policy
+        )
+    except SemanticResponseParseError as error:
+        if error.raw_response is None:
+            error.raw_response = raw_response
+        raise
+
+
+def _parse_semantic_response(
+    raw_response: str,
+    request: SemanticInterpretationRequest,
+    provenance: SemanticInferenceProvenance,
+    *,
+    confidence_policy: SemanticConfidencePolicy,
+) -> ParsedSemanticResponse:
     _validate_parse_identity(request, provenance)
     if not raw_response.strip():
         raise SemanticResponseParseError("raw response must not be empty")

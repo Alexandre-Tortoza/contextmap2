@@ -17,7 +17,10 @@ The baseline algorithm, ``entity-geometry-summary-v1``:
 * **statistics** -- the number of points, the volume of the bounds and the density in points per
   cubic meter (``None`` when the box is flat, so a planar support has no density);
 * **connectivity** -- points closer than ``connectivity_radius_m`` are linked and the connected
-  components of those links are counted; more than one component is a disconnected support;
+  components of those links are counted; more than one component is a disconnected support. The
+  cost grows roughly with the square of the local density, so the policy bounds it with
+  ``max_connectivity_points``: a larger support is not linked and says so instead of taking
+  unbounded time;
 * **orientation** -- optional. The principal axes of the covariance of the support, computed only
   when the policy asks for it and only when they are well defined: enough points and three
   clearly distinct variances. Otherwise the orientation is absent and the diagnostic says why.
@@ -48,6 +51,16 @@ from contextmap.semantic_mapping._checks import require_canonical, require_prese
 from contextmap.shared import Vector3
 
 GEOMETRY_SUMMARY_ALGORITHM_ID = "entity-geometry-summary-v1"
+
+DEFAULT_MAX_CONNECTIVITY_POINTS = 10_000
+"""Largest support whose connected components are counted unless the policy says otherwise.
+
+The pairwise comparison inside each 27-cell neighborhood is roughly quadratic in the local density.
+One synthetic run in pure Python (random points in a 2 x 2 x 1 m box, 0.3 m radius) took about 4.5 s
+at 10,000 points and 42 s at 30,000, and no real support has been measured: the limit keeps one
+entity in the order of seconds. It is a cost guard, not a scientific threshold, so a profile that
+accepts the cost raises it explicitly, and the value enters the configuration fingerprint.
+"""
 """Versioned identity of the baseline spatial summary described in this module."""
 
 _ORIENTATION_METHOD = "pca-covariance-jacobi-v1"
@@ -81,12 +94,15 @@ class GeometryDiagnosticKind(Enum):
             meaningful.
         ORIENTATION_NOT_JUSTIFIED: An orientation was requested but its principal axes are not
             well defined for this support.
+        CONNECTIVITY_NOT_COMPUTED: The support has more points than the policy's connectivity
+            limit, so its connected components were not counted; it may or may not be connected.
     """
 
     SPARSE_SUPPORT = "sparse_support"
     DISCONNECTED_SUPPORT = "disconnected_support"
     DEGENERATE_EXTENT = "degenerate_extent"
     ORIENTATION_NOT_JUSTIFIED = "orientation_not_justified"
+    CONNECTIVITY_NOT_COMPUTED = "connectivity_not_computed"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -118,27 +134,35 @@ class SupportStatistics:
         point_count: Geometry elements in the support.
         volume_m3: Volume of the bounds, in cubic meters.
         density_per_m3: ``point_count`` over ``volume_m3``; ``None`` when the bounds are flat.
-        component_count: Connected components at the policy's connectivity radius.
-        largest_component_fraction: Share of the points in the largest component, in ``(0, 1]``.
+        component_count: Connected components at the policy's connectivity radius; ``None`` when
+            the support is above the policy's connectivity limit and they were not counted,
+            which is not the same as one component.
+        largest_component_fraction: Share of the points in the largest component, in ``(0, 1]``;
+            ``None`` exactly when ``component_count`` is.
     """
 
     point_count: int
     volume_m3: float
     density_per_m3: float | None
-    component_count: int
-    largest_component_fraction: float
+    component_count: int | None
+    largest_component_fraction: float | None
 
     def __post_init__(self) -> None:
         """Validate that the figures are coherent with each other.
 
         Raises:
-            ValueError: If the count or components are not positive, a figure is not finite or
-                negative, the density does not match the volume, or the largest component
-                fraction is outside ``(0, 1]``.
+            ValueError: If the count or components are not positive, only one of the two
+                connectivity figures is present, a figure is not finite or negative, the density
+                does not match the volume, or the largest component fraction is outside
+                ``(0, 1]``.
         """
-        if self.point_count < 1 or self.component_count < 1:
+        if (self.component_count is None) != (self.largest_component_fraction is None):
+            raise ValueError(
+                "component_count and largest_component_fraction must be both present or both None"
+            )
+        if self.point_count < 1 or (self.component_count is not None and self.component_count < 1):
             raise ValueError("point_count and component_count must be at least 1")
-        if self.component_count > self.point_count:
+        if self.component_count is not None and self.component_count > self.point_count:
             raise ValueError("component_count cannot exceed point_count")
         if not (math.isfinite(self.volume_m3) and self.volume_m3 >= 0.0):
             raise ValueError(f"volume_m3 must be finite and not negative, got {self.volume_m3!r}")
@@ -149,7 +173,9 @@ class SupportStatistics:
             self.density_per_m3, self.point_count / self.volume_m3, rel_tol=1e-9
         ):
             raise ValueError("density_per_m3 must equal point_count over volume_m3")
-        if not (0.0 < self.largest_component_fraction <= 1.0):
+        if self.largest_component_fraction is not None and not (
+            0.0 < self.largest_component_fraction <= 1.0
+        ):
             raise ValueError(
                 f"largest_component_fraction must be within (0, 1], got "
                 f"{self.largest_component_fraction!r}"
@@ -283,22 +309,31 @@ class GeometrySummaryPolicy:
         sparse_point_threshold: Supports with fewer points are flagged as sparse.
         connectivity_radius_m: Distance under which two points are linked, in meters.
         orientation: When to derive an orientation, or ``None`` to never derive one.
+        max_connectivity_points: Largest support whose connected components are counted. A
+            larger support is not linked, so its components are ``None`` and a diagnostic says
+            so; it bounds the cost of the connectivity check (see
+            :data:`DEFAULT_MAX_CONNECTIVITY_POINTS`).
     """
 
     sparse_point_threshold: int
     connectivity_radius_m: float
     orientation: OrientationPolicy | None = None
+    max_connectivity_points: int = DEFAULT_MAX_CONNECTIVITY_POINTS
 
     def __post_init__(self) -> None:
         """Validate the thresholds.
 
         Raises:
-            ValueError: If the sparse threshold is below one or the radius is not finite and
-                positive.
+            ValueError: If the sparse threshold or the connectivity limit is below one or the
+                radius is not finite and positive.
         """
         if self.sparse_point_threshold < 1:
             raise ValueError(
                 f"sparse_point_threshold must be at least 1, got {self.sparse_point_threshold}"
+            )
+        if self.max_connectivity_points < 1:
+            raise ValueError(
+                f"max_connectivity_points must be at least 1, got {self.max_connectivity_points}"
             )
         if not (math.isfinite(self.connectivity_radius_m) and self.connectivity_radius_m > 0.0):
             raise ValueError(
@@ -317,6 +352,7 @@ class GeometrySummaryPolicy:
                 "algorithm_id": GEOMETRY_SUMMARY_ALGORITHM_ID,
                 "sparse_point_threshold": self.sparse_point_threshold,
                 "connectivity_radius_m": self.connectivity_radius_m,
+                "max_connectivity_points": self.max_connectivity_points,
                 "orientation": None
                 if self.orientation is None
                 else {
@@ -462,11 +498,17 @@ class EntityGeometry:
             "diagnostics", self.diagnostics, lambda item: (item.kind.value,), detail="by kind "
         )
         kinds = self.diagnostic_kinds()
-        disconnected = self.statistics.component_count > 1
+        components = self.statistics.component_count
+        disconnected = components is not None and components > 1
         if disconnected != (GeometryDiagnosticKind.DISCONNECTED_SUPPORT in kinds):
             raise ValueError(
                 "the disconnected_support diagnostic must be present exactly when the support "
                 "has more than one connected component"
+            )
+        if (components is None) != (GeometryDiagnosticKind.CONNECTIVITY_NOT_COMPUTED in kinds):
+            raise ValueError(
+                "the connectivity_not_computed diagnostic must be present exactly when the "
+                "connected components were not counted"
             )
         flat = any(side == 0.0 for side in self.extent_m)
         if flat != (GeometryDiagnosticKind.DEGENERATE_EXTENT in kinds):
@@ -560,13 +602,19 @@ def summarize_geometry(
         high - low for low, high in zip(bounds.minimum_m, bounds.maximum_m, strict=True)
     )
     volume = math.prod(extent)
-    sizes = _component_sizes(coordinates, policy.connectivity_radius_m)
+    # O custo da conectividade cresce ~quadraticamente com a densidade local: acima do limite da
+    # política os componentes não são contados, e o diagnóstico diz isso em vez de demorar sem teto.
+    sizes = (
+        None
+        if len(points) > policy.max_connectivity_points
+        else _component_sizes(coordinates, policy.connectivity_radius_m)
+    )
     statistics = SupportStatistics(
         point_count=len(points),
         volume_m3=volume,
         density_per_m3=None if volume == 0.0 else len(points) / volume,
-        component_count=len(sizes),
-        largest_component_fraction=max(sizes) / len(points),
+        component_count=None if sizes is None else len(sizes),
+        largest_component_fraction=None if sizes is None else max(sizes) / len(points),
     )
     diagnostics = {item.kind: item for item in _diagnostics(statistics, extent, policy)}
     orientation = None
@@ -680,7 +728,18 @@ def _diagnostics(
                 ),
             )
         )
-    if statistics.component_count > 1:
+    if statistics.component_count is None:
+        found.append(
+            GeometryDiagnostic(
+                kind=GeometryDiagnosticKind.CONNECTIVITY_NOT_COMPUTED,
+                detail=(
+                    f"{statistics.point_count} points, above the connectivity limit of "
+                    f"{policy.max_connectivity_points} the policy accepts: the connected "
+                    f"components were not counted"
+                ),
+            )
+        )
+    elif statistics.component_count > 1:
         found.append(
             GeometryDiagnostic(
                 kind=GeometryDiagnosticKind.DISCONNECTED_SUPPORT,

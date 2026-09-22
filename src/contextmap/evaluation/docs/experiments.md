@@ -15,7 +15,7 @@ Resolver uma configuração em um DAG é responsabilidade do `runtime`, que aind
 | `base_configuration_digest` | digest da configuração efetiva base/default |
 | `variables` | as variáveis sob teste, com tipo, estágios que podem tocar, valores e baseline |
 | `mode` e `arms` | a matriz de ablação e, para cada célula, a **topologia resolvida** (estágios, backend, modelo, digest de configuração, dependências) |
-| artefatos upstream | por estágio, o `ArtifactIdentity` (com digest) **reaproveitado em vez de recalculado** |
+| artefatos upstream | por estágio, o `ArtifactIdentity` (com digest `sha256:<64 hex>` válido) **reaproveitado em vez de recalculado** |
 | `fixed_controls` | valores constantes entre arms (versão de prompt, seed, variante de evidência, …) |
 | `quality_metrics` / `resource_capture` | métricas de qualidade e de performance exigidas em todo relatório (política de captura de runtime, memória, storage e throughput) |
 | `registry` | identidade do registro de métricas ([`metrics.md`](metrics.md)) |

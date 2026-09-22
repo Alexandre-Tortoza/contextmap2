@@ -1,0 +1,48 @@
+{
+ "different_support_cross_frame_cosine": {
+  "count": 185,
+  "median": 0.7414223727157827,
+  "p10": 0.6043539662344428,
+  "p90": 0.8459367747094222
+ },
+ "embedding_space_id": "sha256:70a72c65213800ad3fbf47c2b8b3d2504038f99af2994a885caab49a8fec26e3",
+ "factor_source": "quality_aware_depth_border arm (declared a priori); the factor only stratifies pairs here",
+ "label": "ad hoc driver measurement (real data, annotation-free proxy); NOT a harness metric",
+ "note": "1.0 = perfect separation, 0.5 = the region embedding carries no information about the geometric support",
+ "probability_same_support_pair_more_similar_than_random_pair": 0.9937764791818846,
+ "same_support_cross_frame_cosine": {
+  "count": 185,
+  "median": 0.9859240020176635,
+  "p10": 0.9516318375853616,
+  "p90": 0.9966928899473663
+ },
+ "same_support_cross_frame_cosine_by_min_pair_factor": {
+  "0.5<=factor<1": {
+   "count": 62,
+   "median": 0.9928483902110392,
+   "p10": 0.9674729340904955,
+   "p90": 0.9978772450350666
+  },
+  "0<factor<0.5": {
+   "count": 49,
+   "median": 0.9857543516116005,
+   "p10": 0.966609516198029,
+   "p90": 0.9941406922142683
+  },
+  "factor_0": {
+   "count": 55,
+   "median": 0.9807898656073873,
+   "p10": 0.877707682649687,
+   "p90": 0.995889298400422
+  },
+  "factor_1": {
+   "count": 19,
+   "median": 0.9837562215997968,
+   "p10": 0.9539904143640824,
+   "p90": 0.9959044901002543
+  }
+ },
+ "single_run_used": "vp-sam2-sel (vp-sam2-rerun duplicates it bit for bit; vp-sam3-building has no region features)",
+ "supports_with_region_features": 178,
+ "supports_with_two_or_more_frames": 38
+}

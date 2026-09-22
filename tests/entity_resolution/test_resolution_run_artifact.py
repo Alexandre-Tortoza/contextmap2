@@ -17,6 +17,7 @@ from resolution_run_fixtures import (
     LINEAGE,
     RUN,
     RunInputs,
+    build_contradicted_inputs,
     build_inputs,
     resolution_of,
     write_run,
@@ -310,11 +311,13 @@ def test_the_lineage_is_derived_from_the_semantic_mapping_manifest() -> None:
         identity_policy_id="support-derived-entity-id-v1",
         configuration_fingerprint="sha256:cfg",
         code_version="test",
+        code_digest="sha256:code",
         entity_count=6,
         rejected_count=0,
         warnings=(),
         debug_level="none",
         schema_version="0.1.0",
+        entity_schema_version="0.1.0",
         created_at="2026-09-21T00:00:00+00:00",
         file_inventory=(
             FileEntry(path="outputs/entities.jsonl", size_bytes=10, content_hash="sha256:a"),
@@ -636,6 +639,114 @@ def test_an_empty_run_is_valid_and_reads_back_empty(tmp_path: Path) -> None:
     assert reader.manifest.count("resolved_entities") == 0
     assert reader.read_record("metrics/distributions.json")["candidates_per_entity"]["count"] == 0
     assert reader.verify_integrity() == []
+
+
+# --- candidate-set integrity ---------------------------------------------------------------------
+
+
+def test_a_candidate_set_missing_for_a_source_entity_is_refused(tmp_path: Path) -> None:
+    inputs = build_inputs()
+    without_f = tuple(
+        item
+        for item in inputs.candidate_sets
+        if item.source_entity_ref != inputs.entities["f"].reference
+    )
+    incomplete = dataclasses.replace(inputs, candidate_sets=without_f)
+
+    with pytest.raises(RunArtifactError, match="no candidate set"):
+        write_run(tmp_path / "artifact", incomplete)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_source_entity_with_two_candidate_sets_is_refused(tmp_path: Path) -> None:
+    inputs = build_inputs()
+    duplicated = dataclasses.replace(
+        inputs, candidate_sets=(*inputs.candidate_sets, inputs.candidate_sets[0])
+    )
+
+    with pytest.raises(RunArtifactError, match="more than one candidate set"):
+        write_run(tmp_path / "artifact", duplicated)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_candidate_set_for_an_entity_outside_the_materialization_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_inputs()
+    foreign = entity_at("z", (100.0, 0.0, 0.0), support_number=99, spatial=("spatial--z",))
+    foreign_sets = retrieve_candidate_sets(
+        [foreign], CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+    )
+    extended = dataclasses.replace(inputs, candidate_sets=inputs.candidate_sets + foreign_sets)
+
+    with pytest.raises(RunArtifactError, match="does not have"):
+        write_run(tmp_path / "artifact", extended)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_candidate_naming_an_entity_outside_the_materialization_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_inputs()
+    # z fica bem perto de a: aparece como candidata de todo mundo, mas nunca é materializada.
+    foreign = entity_at("z", (0.0, 0.0, 0.0), support_number=99, spatial=("spatial--z",))
+    combined = retrieve_candidate_sets(
+        [*inputs.entities.values(), foreign],
+        CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1),
+    )
+    contaminated_sets = tuple(
+        item for item in combined if item.source_entity_ref != foreign.reference
+    )
+    assert any(foreign.reference in item.candidate_entity_refs for item in contaminated_sets)
+    contaminated = dataclasses.replace(inputs, candidate_sets=contaminated_sets)
+
+    with pytest.raises(RunArtifactError, match="does not have"):
+        write_run(tmp_path / "artifact", contaminated)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+# --- several contradictions in one component ----------------------------------------------------
+
+
+def test_a_component_with_several_contradictions_round_trips_through_the_artifact(
+    tmp_path: Path,
+) -> None:
+    inputs = build_contradicted_inputs()
+    write_run(tmp_path / "artifact", inputs)
+    reader = EntityResolutionRunReader(tmp_path / "artifact")
+
+    expected = tuple(item.contradiction_id for item in inputs.materialization.contradictions)
+
+    assert len(expected) == 2
+    assert reader.contradictions() == inputs.materialization.contradictions
+    assert reader.manifest.count("transitivity_contradictions") == 2
+    resolved = reader.resolved_entities()
+    assert resolved == inputs.materialization.resolved
+    assert len(resolved.entities) == 4
+    assert all(entity.contradiction_ids == expected for entity in resolved.entities)
+    lineage = reader.read_table("outputs/merge-lineage.jsonl")
+    assert all(row["contradiction_ids"] == list(expected) for row in lineage)
+    open_entities = reader.unresolved_entities()
+    assert len(open_entities) == 4
+    assert all(item.contradiction_ids == expected for item in open_entities)
+    assert reader.verify_integrity() == []
+
+
+def test_a_contradiction_that_cites_a_decision_that_was_not_written_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_contradicted_inputs()
+    # A primeira decisão é a~b, que aparece no caminho de MATCH da contradição a!=c.
+    without_a_match = dataclasses.replace(inputs, resolutions=inputs.resolutions[1:])
+
+    with pytest.raises(RunArtifactError, match="contradiction"):
+        write_run(tmp_path / "artifact", without_a_match)
+
+    assert not (tmp_path / "artifact").exists()
 
 
 # --- what a downstream consumer pins and follows -------------------------------------------------
