@@ -326,6 +326,9 @@ class TestInspectPlan:
             "geometric_mapping",
             "sensor_association",
             "semantic_fusion",
+            "semantic_mapping",
+            "entity_resolution",
+            "spatial_relations",
         ]
         assert document["plan_digest"].startswith("sha256:")
 

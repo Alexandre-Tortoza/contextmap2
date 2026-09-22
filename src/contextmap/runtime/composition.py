@@ -49,6 +49,11 @@ from contextmap.runtime.errors import (
 )
 
 if TYPE_CHECKING:
+    from contextmap.entity_resolution import (
+        CandidateRetrievalPolicy,
+        ComparisonChannels,
+        ConservativeResolutionPolicy,
+    )
     from contextmap.geometric_mapping import MotionCorrectionPolicy
     from contextmap.ingestion import SourceAdapter, SourceAdapterConfig
     from contextmap.point_representation import PointEncoder
@@ -58,7 +63,9 @@ if TYPE_CHECKING:
         GeometryOverlapSupportPolicy,
         QualityAwareAccumulationPolicy,
     )
+    from contextmap.semantic_mapping import GeometrySummaryPolicy
     from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
+    from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
         FeatureExtractor,
@@ -134,6 +141,15 @@ class ComposedRuntime:
         occlusion_policy: Sensor Association visibility rule.
         association_tolerances: Sensor Association diagnostic tolerances.
         association_pose_policy: Pose lookup rule Sensor Association uses per frame.
+        entity_retrieval_policy: Entity Resolution candidate retrieval policy.
+        entity_comparison_channels: The evidence channels Entity Resolution evaluates; geometry
+            is always present, every other channel is ``None`` when not selected.
+        entity_resolution_policy: Entity Resolution's conservative decision policy.
+        spatial_relations_policies: Spatial Relations' effective policies: frame conventions and
+            candidate generation are always present, the predicate evaluators are ``None`` when
+            not selected.
+        spatial_relations_geometry_summary: Policy Spatial Relations uses to summarize a resolved
+            entity's geometry before generating candidates.
     """
 
     effective: EffectiveConfig
@@ -153,6 +169,11 @@ class ComposedRuntime:
     occlusion_policy: OcclusionPolicy | None = None
     association_tolerances: DiagnosticTolerances | None = None
     association_pose_policy: LookupPolicy | None = None
+    entity_retrieval_policy: CandidateRetrievalPolicy | None = None
+    entity_comparison_channels: ComparisonChannels | None = None
+    entity_resolution_policy: ConservativeResolutionPolicy | None = None
+    spatial_relations_policies: RelationsRunPolicies | None = None
+    spatial_relations_geometry_summary: GeometrySummaryPolicy | None = None
 
 
 def compose(
@@ -650,6 +671,103 @@ def _diagnostic_tolerances(context: _Context, component_id: str) -> Any:
     return policy
 
 
+# --- entity resolution ---------------------------------------------------------------
+
+
+def _entity_retrieval_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import CandidateRetrievalPolicy
+
+    policy, _ = context.build(component_id, CandidateRetrievalPolicy)
+    return policy
+
+
+def _entity_resolution_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import ConservativeResolutionPolicy
+
+    policy, _ = context.build(component_id, ConservativeResolutionPolicy)
+    return policy
+
+
+def _entity_geometry_comparison(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import GeometryComparisonPolicy
+
+    policy, _ = context.build(component_id, GeometryComparisonPolicy)
+    return policy
+
+
+def _entity_semantic_compatibility(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import SemanticCompatibilityPolicy
+
+    policy, _ = context.build(component_id, SemanticCompatibilityPolicy)
+    return policy
+
+
+def _entity_temporal_compatibility(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import TemporalCompatibilityPolicy
+
+    policy, _ = context.build(component_id, TemporalCompatibilityPolicy)
+    return policy
+
+
+def _entity_appearance(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import AppearanceComparator, AppearanceComparisonPolicy
+
+    config, _ = context.build(component_id, AppearanceComparisonPolicy)
+    context.ensure_available(component_id)
+    source = context.runtime(component_id, config, "FeatureVectorSource")
+    return AppearanceComparator(source=source, policy=config)
+
+
+def _entity_representation(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import (
+        RepresentationComparator,
+        RepresentationComparisonPolicy,
+    )
+
+    config, _ = context.build(component_id, RepresentationComparisonPolicy)
+    context.ensure_available(component_id)
+    source = context.runtime(component_id, config, "RepresentationVectorSource")
+    return RepresentationComparator(source=source, policy=config)
+
+
+# --- spatial relations -----------------------------------------------------------------
+
+
+def _frame_conventions(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import FrameConventions
+
+    policy, _ = context.build(component_id, FrameConventions)
+    return policy
+
+
+def _candidate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import CandidatePolicy
+
+    policy, _ = context.build(component_id, CandidatePolicy)
+    return policy
+
+
+def _geometry_summary_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.semantic_mapping import GeometrySummaryPolicy
+
+    policy, _ = context.build(component_id, GeometrySummaryPolicy)
+    return policy
+
+
+def _geometric_predicate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import GeometricPredicatePolicy
+
+    policy, _ = context.build(component_id, GeometricPredicatePolicy)
+    return policy
+
+
+def _contact_predicate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import ContactPredicatePolicy
+
+    policy, _ = context.build(component_id, ContactPredicatePolicy)
+    return policy
+
+
 # --- point representation ----------------------------------------------------------
 
 
@@ -746,6 +864,32 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "baseline-evidence-accumulation-v1": _baseline_accumulation,
         "quality-aware-evidence-accumulation-v1": _quality_aware_accumulation,
     },
+    "entity_resolution.retrieval": {"entity-candidate-retrieval-v1": _entity_retrieval_policy},
+    "entity_resolution.resolution": {
+        "conservative-staged-resolution-v1": _entity_resolution_policy
+    },
+    "entity_resolution.geometry_comparison": {
+        "entity-geometry-comparison-v1": _entity_geometry_comparison
+    },
+    "entity_resolution.semantic_compatibility": {
+        "entity-semantic-compatibility-v1": _entity_semantic_compatibility
+    },
+    "entity_resolution.temporal_compatibility": {
+        "entity-temporal-compatibility-v1": _entity_temporal_compatibility
+    },
+    "entity_resolution.appearance": {"entity-appearance-comparison-v1": _entity_appearance},
+    "entity_resolution.representation": {
+        "entity-representation-comparison-v1": _entity_representation
+    },
+    "spatial_relations.frame_conventions": {"map-frame-conventions-v1": _frame_conventions},
+    "spatial_relations.candidate": {"bounds-neighborhood-candidates-v1": _candidate_policy},
+    "spatial_relations.geometry_summary": {"entity-geometry-summary-v1": _geometry_summary_policy},
+    "spatial_relations.geometric_predicate": {
+        "bounds-geometric-predicates-v1": _geometric_predicate_policy
+    },
+    "spatial_relations.contact_predicate": {
+        "point-contact-predicates-v1": _contact_predicate_policy
+    },
 }
 
 
@@ -754,6 +898,19 @@ def _construct(context: _Context, component_id: str) -> Any:
     backend = context.component(component_id).backend
     assert backend is not None  # a seleção completa já foi exigida em compose().
     return _FACTORIES[component_id][backend](context, component_id)
+
+
+def _construct_optional(context: _Context, component_id: str) -> Any | None:
+    """Build a genuinely optional variation point, or ``None`` when it was not selected.
+
+    Unlike :func:`_construct`, a missing backend here is not a configuration error: the
+    catalog marks the component ``optional`` (see :class:`~contextmap.runtime.catalog.
+    ComponentSpec`), so :func:`~contextmap.runtime.config.check_component_selection` never
+    requires it, and its absence must never be replaced by a default policy.
+    """
+    if context.component(component_id).backend is None:
+        return None
+    return _construct(context, component_id)
 
 
 # --- stages ------------------------------------------------------------------------
@@ -802,6 +959,45 @@ def _compose_semantic_fusion(context: _Context) -> dict[str, object]:
     }
 
 
+def _compose_nothing(context: _Context) -> dict[str, object]:
+    """Compose a stage with no variation point yet: its service is stateless capability code."""
+    return {}
+
+
+def _compose_entity_resolution(context: _Context) -> dict[str, object]:
+    from contextmap.entity_resolution import ComparisonChannels
+
+    channels = ComparisonChannels(
+        geometry=_construct(context, "entity_resolution.geometry_comparison"),
+        semantic=_construct_optional(context, "entity_resolution.semantic_compatibility"),
+        temporal=_construct_optional(context, "entity_resolution.temporal_compatibility"),
+        appearance=_construct_optional(context, "entity_resolution.appearance"),
+        representation=_construct_optional(context, "entity_resolution.representation"),
+    )
+    return {
+        "entity_retrieval_policy": _construct(context, "entity_resolution.retrieval"),
+        "entity_comparison_channels": channels,
+        "entity_resolution_policy": _construct(context, "entity_resolution.resolution"),
+    }
+
+
+def _compose_spatial_relations(context: _Context) -> dict[str, object]:
+    from contextmap.spatial_relations import RelationsRunPolicies
+
+    policies = RelationsRunPolicies(
+        frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
+        candidate=_construct(context, "spatial_relations.candidate"),
+        geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
+        contact=_construct_optional(context, "spatial_relations.contact_predicate"),
+    )
+    return {
+        "spatial_relations_policies": policies,
+        "spatial_relations_geometry_summary": _construct(
+            context, "spatial_relations.geometry_summary"
+        ),
+    }
+
+
 _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "ingestion": _compose_ingestion,
     "visual_perception": _compose_visual_perception,
@@ -810,6 +1006,9 @@ _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "sensor_association": _compose_sensor_association,
     "point_representation": _compose_point_representation,
     "semantic_fusion": _compose_semantic_fusion,
+    "semantic_mapping": _compose_nothing,
+    "entity_resolution": _compose_entity_resolution,
+    "spatial_relations": _compose_spatial_relations,
 }
 
 
@@ -841,9 +1040,9 @@ def compose_executors(
     existing ``missing_executors``/"no executor is registered" preflight reporting already
     explains why such a stage will not run; this function never hides that behind a guess.
 
-    Only ``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
-    ``semantic_fusion`` can be composed this way: each needs only the effective
-    configuration and the upstream artifacts the DAG already carries.
+    ``state_estimation``, ``geometric_mapping``, ``sensor_association``, ``semantic_fusion``,
+    ``entity_resolution`` and ``spatial_relations`` can be composed this way: each needs only
+    the effective configuration and the upstream artifacts the DAG already carries.
 
     - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
       IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
@@ -859,6 +1058,16 @@ def compose_executors(
       one :class:`~contextmap.runtime.executors.SemanticFusionExecutor` actually runs
       (``baseline-evidence-accumulation-v1``); the quality-aware accumulation backend has
       no executor yet, so it is left out rather than run through the wrong policy.
+    - ``semantic_mapping`` has no catalog component and no executor of its own yet: it stays
+      absent here, and its artifact must be supplied (``provided``/``selections``) for
+      ``entity_resolution`` to consume, never computed automatically by this function.
+    - ``entity_resolution`` always evaluates the required geometry channel; every other
+      channel (``semantic``, ``temporal``, ``appearance``, ``representation``) is evaluated
+      only when its own component is selected, and is ``None`` -- never a default policy --
+      when it is not.
+    - ``spatial_relations`` always applies the required frame conventions, candidate policy
+      and geometry summary; the geometric and contact predicate evaluators run only when
+      their own component is selected.
 
     Args:
         effective: The resolved configuration.
@@ -873,10 +1082,13 @@ def compose_executors(
         parameter, a missing module or secret) is simply absent from the result, one stage
         at a time, so one broken stage never costs the others their real executor.
     """
+    from contextmap.entity_resolution import MatchEvidenceBuilder
     from contextmap.runtime.executors import (
+        EntityResolutionExecutor,
         GeometricMappingExecutor,
         SemanticFusionExecutor,
         SensorAssociationExecutor,
+        SpatialRelationsExecutor,
         StateEstimationExecutor,
     )
     from contextmap.semantic_fusion import BaselineAccumulationPolicy
@@ -932,5 +1144,25 @@ def compose_executors(
                 support_policy=semantic_fusion.support_policy,
                 accumulation_policy=semantic_fusion.accumulation_policy,
             )
+
+    entity_resolution = _compose_stage("entity_resolution")
+    if entity_resolution is not None:
+        assert entity_resolution.entity_retrieval_policy is not None
+        assert entity_resolution.entity_comparison_channels is not None
+        assert entity_resolution.entity_resolution_policy is not None
+        executors["entity_resolution"] = EntityResolutionExecutor(
+            retrieval=entity_resolution.entity_retrieval_policy,
+            builder=MatchEvidenceBuilder(entity_resolution.entity_comparison_channels),
+            resolution=entity_resolution.entity_resolution_policy,
+        )
+
+    spatial_relations = _compose_stage("spatial_relations")
+    if spatial_relations is not None:
+        assert spatial_relations.spatial_relations_policies is not None
+        assert spatial_relations.spatial_relations_geometry_summary is not None
+        executors["spatial_relations"] = SpatialRelationsExecutor(
+            policies=spatial_relations.spatial_relations_policies,
+            geometry_summary=spatial_relations.spatial_relations_geometry_summary,
+        )
 
     return executors

@@ -521,9 +521,11 @@ class TestComposeExecutors:
         self, tmp_path: Path
     ) -> None:
         from contextmap.runtime.executors import (
+            EntityResolutionExecutor,
             GeometricMappingExecutor,
             SemanticFusionExecutor,
             SensorAssociationExecutor,
+            SpatialRelationsExecutor,
             StateEstimationExecutor,
         )
 
@@ -536,15 +538,20 @@ class TestComposeExecutors:
             "geometric_mapping",
             "sensor_association",
             "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
         }
         assert isinstance(executors["state_estimation"], StateEstimationExecutor)
         assert isinstance(executors["geometric_mapping"], GeometricMappingExecutor)
         assert isinstance(executors["sensor_association"], SensorAssociationExecutor)
         assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
+        assert isinstance(executors["entity_resolution"], EntityResolutionExecutor)
+        assert isinstance(executors["spatial_relations"], SpatialRelationsExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
         assert "ingestion" not in executors
         assert "visual_perception" not in executors
         assert "point_representation" not in executors
+        assert "semantic_mapping" not in executors
 
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
@@ -557,7 +564,12 @@ class TestComposeExecutors:
             effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
         )
 
-        assert set(executors) == {"state_estimation", "semantic_fusion"}
+        assert set(executors) == {
+            "state_estimation",
+            "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
+        }
 
     def test_a_broken_backend_in_one_stage_never_costs_another_stage_its_executor(
         self, tmp_path: Path
@@ -566,7 +578,7 @@ class TestComposeExecutors:
 
         ``sensor_association.tolerances`` rejects ``max_reprojection_invalid_rate`` above 1
         (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
-        other three stages, whose own configuration is unrelated, still compose normally.
+        other stages, whose own configuration is unrelated, still compose normally.
         """
         document = selected_document()
         document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
@@ -577,7 +589,54 @@ class TestComposeExecutors:
             effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
         )
 
-        assert set(executors) == {"state_estimation", "geometric_mapping", "semantic_fusion"}
+        assert set(executors) == {
+            "state_estimation",
+            "geometric_mapping",
+            "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
+        }
+
+    def test_an_unselected_optional_channel_leaves_it_none_never_a_default_policy(
+        self, tmp_path: Path
+    ) -> None:
+        """Every optional Entity Resolution channel and Spatial Relations predicate is absent.
+
+        ``selected_document()`` never selects ``semantic_compatibility``, ``temporal_
+        compatibility``, ``appearance``, ``representation``, ``geometric_predicate`` or
+        ``contact_predicate``: the stages still compose, with the geometry-only path.
+        """
+        composed = _compose(tmp_path)
+
+        channels = composed.entity_comparison_channels
+        assert channels is not None
+        assert channels.geometry is not None
+        assert channels.semantic is None
+        assert channels.temporal is None
+        assert channels.appearance is None
+        assert channels.representation is None
+
+        policies = composed.spatial_relations_policies
+        assert policies is not None
+        assert policies.frame_conventions is not None
+        assert policies.candidate is not None
+        assert policies.geometric is None
+        assert policies.contact is None
+
+    def test_an_incomplete_required_selection_leaves_the_stage_absent_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        del document["components"]["entity_resolution"]["geometry_comparison"]
+
+        executors = compose_executors(
+            effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
+        )
+
+        assert "entity_resolution" not in executors
+        # spatial_relations depende de entity_resolution rio abaixo, não da sua composição:
+        # a seleção incompleta de um estágio nunca contamina a composição de outro.
+        assert "spatial_relations" in executors
 
     def test_a_composed_executor_is_the_real_thing_and_runs_against_a_real_artifact(
         self, tmp_path: Path
@@ -649,6 +708,79 @@ class TestComposeExecutors:
         ref = executors["state_estimation"].execute(request)
 
         assert ref.contract == "StateEstimationRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
+
+    def test_the_entity_resolution_executor_is_the_real_thing_and_runs_against_a_real_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``EntityResolutionExecutor`` reads a real ``SemanticMappingRunArtifact``.
+
+        Not a fake type-compatible stand-in: ``make_entity`` builds one genuinely self-consistent
+        ``Entity`` (its geometry derived through ``summarize_geometry`` over a real
+        ``GeometrySource``), persisted with the capability's own ``SemanticMappingRunWriter``. The
+        composed executor reads it back through ``SemanticMappingRunReader`` and writes a real
+        ``EntityResolutionRunArtifact``, exactly as the runtime's own DAG runner would call it.
+        """
+        from runtime_entities import make_entity
+
+        from contextmap.geometric_mapping import MapId
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        entity = make_entity(semantic_map_id=semantic_map_id)
+        manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=MapId("map-0001"),
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest="sha256:artifact",
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write([entity])
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(manifest.run_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/semantic_mapping",
+        )
+        effective = effective_from(tmp_path)
+        executors = compose_executors(effective, module_available=lambda _name: True, environ={})
+        output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        request = StageRequest(
+            stage_id="entity_resolution",
+            inputs={"entities": (entities_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executors["entity_resolution"].execute(request)
+
+        assert ref.contract == "EntityResolutionRunArtifact"
         assert (output_dir / "manifest.json").is_file()
 
 

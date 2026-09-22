@@ -405,14 +405,18 @@ def check_component_selection(
 ) -> ConfigProblem | None:
     """Report a variation point that has no backend selected.
 
+    A component the catalog marks ``optional`` (see :class:`~contextmap.runtime.catalog.
+    ComponentSpec`) is never reported for having no backend: its absence is a valid,
+    explicit configuration, not an incomplete one.
+
     Args:
         component_id: Identity of the variation point, ``"<capability>.<slot>"``.
         component: Its resolved configuration.
 
     Returns:
-        The problem, or ``None`` when a backend is selected.
+        The problem, or ``None`` when a backend is selected or the component is optional.
     """
-    if component.backend is not None:
+    if component.backend is not None or COMPONENTS[component_id].optional:
         return None
     supported = ", ".join(sorted(COMPONENTS[component_id].backends))
     capability, slot = component_id.split(".", 1)

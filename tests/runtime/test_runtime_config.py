@@ -63,13 +63,12 @@ class TestCanonicalProfile:
         assert stages["ingestion"] is True
         assert stages["semantic_fusion"] is True
         assert stages["point_representation"] is False
-        # O preset canônico só declara o que executa hoje; os estágios seguintes vêm em outro.
-        assert not {
-            "semantic_mapping",
-            "entity_resolution",
-            "spatial_relations",
-            "context_map",
-        } & set(stages)
+        # semantic_mapping, entity_resolution e spatial_relations já fazem parte da topologia
+        # canônica; só a montagem do ContextMapArtifact continua fora, para depois.
+        assert stages["semantic_mapping"] is True
+        assert stages["entity_resolution"] is True
+        assert stages["spatial_relations"] is True
+        assert "context_map" not in stages
 
     def test_makes_no_backend_choice_on_the_users_behalf(self) -> None:
         config = resolve_effective_config().config
@@ -403,6 +402,31 @@ class TestSelectionCompleteness:
 
         assert check_selection(effective.config) == ()
 
+    def test_an_unselected_optional_evidence_channel_is_never_reported_as_incomplete(
+        self, tmp_path: Path
+    ) -> None:
+        """The geometry-only path is a complete selection, not an incomplete one.
+
+        ``_all_selected()`` never chooses a backend for the optional Entity Resolution channels
+        or Spatial Relations predicates: their absence must not surface as a problem.
+        """
+        file = _write(tmp_path / "a.json", _all_selected())
+
+        effective = resolve_effective_config(files=[file])
+
+        paths = {
+            problem.path.removeprefix("components.")
+            for problem in check_selection(effective.config)
+        }
+        assert not paths & {
+            "entity_resolution.semantic_compatibility",
+            "entity_resolution.temporal_compatibility",
+            "entity_resolution.appearance",
+            "entity_resolution.representation",
+            "spatial_relations.geometric_predicate",
+            "spatial_relations.contact_predicate",
+        }
+
 
 def _all_selected() -> dict[str, object]:
     return {
@@ -427,6 +451,16 @@ def _all_selected() -> dict[str, object]:
             "semantic_fusion": {
                 "support": {"backend": "geometry-jaccard-support-v1"},
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
+            },
+            "entity_resolution": {
+                "retrieval": {"backend": "entity-candidate-retrieval-v1"},
+                "resolution": {"backend": "conservative-staged-resolution-v1"},
+                "geometry_comparison": {"backend": "entity-geometry-comparison-v1"},
+            },
+            "spatial_relations": {
+                "frame_conventions": {"backend": "map-frame-conventions-v1"},
+                "candidate": {"backend": "bounds-neighborhood-candidates-v1"},
+                "geometry_summary": {"backend": "entity-geometry-summary-v1"},
             },
         }
     }

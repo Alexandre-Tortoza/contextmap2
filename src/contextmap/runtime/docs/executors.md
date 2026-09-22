@@ -13,6 +13,8 @@ O módulo é `contextmap.runtime.executors` e é importado **explicitamente**, n
 | `geometric_mapping` | `GeometricMappingExecutor` | `sequence`, `trajectory` | política de pose, correção de movimento, agregação opcional |
 | `sensor_association` | `SensorAssociationExecutor` | `sequence`, `perception`, `trajectory`, `geometry` | oclusão, tolerâncias e política de pose; só o canal de geometria |
 | `semantic_fusion` | `SemanticFusionExecutor` | `sequence`, `association`, `perception`, `geometry` | política de suporte e de acumulação baseline |
+| `entity_resolution` | `EntityResolutionExecutor` | `entities` | política de retrieval, o `MatchEvidenceBuilder` (canal de geometria obrigatório; semântico, temporal, aparência e representação só quando configurados) e a política de decisão conservadora |
+| `spatial_relations` | `SpatialRelationsExecutor` | `entities`, `geometry` | convenções de eixo, política de candidatos e resumo de geometria, sempre presentes; avaliadores geométrico e de contato só quando configurados |
 
 ## Identidade
 
@@ -28,10 +30,12 @@ Para que os executores tenham o que precisam, o DAG `canonical/1` dá `sequence`
 
 ## Como um executor chega a existir
 
-Construir um destes executores manualmente (juntar backend, políticas e classe do executor) é trabalho da [composition root](composition.md). `compose_executors(effective, ...)`, em `contextmap.runtime.composition`, faz exatamente isso a partir de uma `EffectiveConfig`: monta `StateEstimationExecutor`, `GeometricMappingExecutor`, `SensorAssociationExecutor` e `SemanticFusionExecutor` (nessa ordem de dependência) e devolve um `dict[str, StageExecutor]` indexado por `stage_id`, sem fabricar nada para o que não pode compor de verdade. `IngestionStageExecutor` fica de fora dessa composição automática: ele precisa de um `IngestionRequest` concreto, que é entrada de uma execução (os flags de `contextmap ingest`), não parte de uma configuração — continua sendo construído e injetado explicitamente por quem chama (`main(executors=...)` ou `Runtime(executors=...)`), que é como o comando `ingest` e os testes deste módulo já o exercitam.
+Construir um destes executores manualmente (juntar backend, políticas e classe do executor) é trabalho da [composition root](composition.md). `compose_executors(effective, ...)`, em `contextmap.runtime.composition`, faz exatamente isso a partir de uma `EffectiveConfig`: monta `StateEstimationExecutor`, `GeometricMappingExecutor`, `SensorAssociationExecutor`, `SemanticFusionExecutor`, `EntityResolutionExecutor` e `SpatialRelationsExecutor` (nessa ordem de dependência) e devolve um `dict[str, StageExecutor]` indexado por `stage_id`, sem fabricar nada para o que não pode compor de verdade. `IngestionStageExecutor` fica de fora dessa composição automática: ele precisa de um `IngestionRequest` concreto, que é entrada de uma execução (os flags de `contextmap ingest`), não parte de uma configuração — continua sendo construído e injetado explicitamente por quem chama (`main(executors=...)` ou `Runtime(executors=...)`), que é como o comando `ingest` e os testes deste módulo já o exercitam.
 
 ## O que ainda não existe
 
 - **`visual_perception`** não tem executor: a percepção usa modelos e GPU e entra por **referência** a um run existente (`provided` ou `inputs.selections`). Um executor real de percepção é um trabalho à parte.
 - **`point_representation`** também não tem executor, pelo mesmo motivo (backend dependente de modelo); é o único estágio opcional do canônico, então um run que não o habilita nunca sente essa lacuna.
-- **Estágios depois de `semantic_fusion`** (`semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map`) não fazem parte de `canonical/1`: as capabilities ainda não estão em `dev`. Um preset versionado posterior os declara, com os executores correspondentes.
+- **`semantic_mapping`** faz parte da topologia de `canonical/1` (é a fonte de `entities` para `entity_resolution`), mas não tem componente de catálogo nem executor automático: seu artifact precisa ser **suprido** (`provided`/`inputs.selections`) para que `entity_resolution` o consuma, nunca produzido no mesmo run por `compose_executors`.
+- **`context_map`** (a montagem do `ContextMapArtifact`) ainda não faz parte de `canonical/1`: é trabalho à parte, tratado por outro milestone.
+- **`entity_resolution.appearance`** e **`entity_resolution.representation`**, quando selecionados, precisam de um `FeatureVectorSource`/`RepresentationVectorSource` que só existe vinculado a runs de percepção/representação já abertos: `compose_executors` os obtém de um `provider` fornecido pelo chamador (o mesmo mecanismo de `RuntimeProvider` já usado por `sam3`/`qwen`/`gemini`), nunca os inventa.
