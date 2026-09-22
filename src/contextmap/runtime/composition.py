@@ -841,9 +841,9 @@ def compose_executors(
     existing ``missing_executors``/"no executor is registered" preflight reporting already
     explains why such a stage will not run; this function never hides that behind a guess.
 
-    Only ``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
-    ``semantic_fusion`` can be composed this way: each needs only the effective
-    configuration and the upstream artifacts the DAG already carries.
+    Only ``state_estimation``, ``geometric_mapping``, ``sensor_association``,
+    ``semantic_fusion`` and ``visual_perception`` can be composed this way: each needs
+    only the effective configuration and the upstream artifacts the DAG already carries.
 
     - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
       IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
@@ -853,8 +853,12 @@ def compose_executors(
       still injects an :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`
       explicitly; the ordinary canonical path is to run ``contextmap ingest`` first and
       feed its published artifact to ``run``/``stage`` as a provided or selected input.
-    - ``visual_perception`` and ``point_representation`` have no real executor yet (their
-      backends are GPU/model dependent): they stay absent, exactly as before.
+    - ``visual_perception`` is composed only when all four of its variation points
+      (``region_discovery``, ``dense_features``, ``region_features``,
+      ``semantic_interpretation``) are genuinely selected and available -- a partially
+      configured capability never gets a partial executor (#507).
+    - ``point_representation`` has no real executor yet (its backend is GPU/model
+      dependent): it stays absent, exactly as before.
     - ``semantic_fusion`` is composed only when the selected accumulation backend is the
       one :class:`~contextmap.runtime.executors.SemanticFusionExecutor` actually runs
       (``baseline-evidence-accumulation-v1``); the quality-aware accumulation backend has
@@ -878,6 +882,7 @@ def compose_executors(
         SemanticFusionExecutor,
         SensorAssociationExecutor,
         StateEstimationExecutor,
+        VisualPerceptionExecutor,
     )
     from contextmap.semantic_fusion import BaselineAccumulationPolicy
 
@@ -897,6 +902,19 @@ def compose_executors(
             return None
 
     executors: dict[str, StageExecutor] = {}
+
+    visual_perception = _compose_stage("visual_perception")
+    if visual_perception is not None:
+        assert visual_perception.region_discovery is not None
+        assert visual_perception.dense_features is not None
+        assert visual_perception.region_features is not None
+        assert visual_perception.semantic_interpreter is not None
+        executors["visual_perception"] = VisualPerceptionExecutor(
+            region_discovery=visual_perception.region_discovery,
+            dense_features=visual_perception.dense_features,
+            region_features=visual_perception.region_features,
+            semantic_interpreter=visual_perception.semantic_interpreter,
+        )
 
     state_estimation = _compose_stage("state_estimation")
     if state_estimation is not None:

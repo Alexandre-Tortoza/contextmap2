@@ -542,6 +542,9 @@ class TestComposeExecutors:
         assert isinstance(executors["sensor_association"], SensorAssociationExecutor)
         assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
+        # visual_perception fica de fora aqui porque a seleção padrão usa sam3, que não tem
+        # loader embutido (precisa de um provider) -- não porque falte um VisualPerceptionExecutor
+        # (#507); ver TestComposeVisualPerceptionExecutor para composição bem-sucedida.
         assert "ingestion" not in executors
         assert "visual_perception" not in executors
         assert "point_representation" not in executors
@@ -650,6 +653,260 @@ class TestComposeExecutors:
 
         assert ref.contract == "StateEstimationRunArtifact"
         assert (output_dir / "manifest.json").is_file()
+
+
+class TestComposeVisualPerceptionExecutor:
+    """#507: ``visual_perception`` gets a real, wired ``VisualPerceptionExecutor``.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader, so a real provider for both is
+    required for the four variation points to compose successfully -- exactly like
+    ``TestCanonicalComposition`` already needs for those two slots individually.
+    """
+
+    def test_composes_a_real_executor_when_all_four_slots_are_selected(
+        self, tmp_path: Path
+    ) -> None:
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" in executors
+        executor = executors["visual_perception"]
+        assert isinstance(executor, VisualPerceptionExecutor)
+        # Backends de verdade, não um stub type-compatible: region_discovery e
+        # semantic_interpreter já vêm prontos; dense_features/region_features são
+        # fábricas run-scoped que, quando chamadas, devolvem o adapter real.
+        assert isinstance(executor._region_discovery, Sam3RegionDiscovery)  # type: ignore[attr-defined]
+        assert isinstance(executor._semantic_interpreter, QwenSemanticInterpreter)  # type: ignore[attr-defined]
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        assert isinstance(executor._dense_features(scope), DinoV3DenseFeatureBackend)  # type: ignore[attr-defined]
+        assert isinstance(executor._region_features(scope), ClipVisualFeatureBackend)  # type: ignore[attr-defined]
+
+    def test_an_incomplete_visual_perception_selection_leaves_it_out_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        del document["components"]["visual_perception"]["semantic_interpretation"]
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" not in executors
+        # Nenhum estágio irmão paga pelo problema de visual_perception (#507).
+        assert "state_estimation" in executors
+
+    def test_composed_executor_actually_runs_and_produces_a_real_perception_run_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """Prove the executor's own orchestration (#507), not the backends' science.
+
+        Region discovery, feature extraction and semantic interpretation are
+        deterministic fakes injected directly (constructing the real ``Sam3``/``DINOv3``/
+        ``CLIP``/``Qwen`` backends would need real weights and, for two of them, a real
+        model runtime) -- but the sequence, the prepared-image materialization, the
+        resolved stage graph, the assembled ``PerceptionResult`` and the written/reopened
+        ``PerceptionRunArtifact`` are all real. See the milestone PR for the separate,
+        real-backend GPU validation this local test cannot perform.
+        """
+        pytest.importorskip("PIL")  # Pillow decodes/writes the prepared-image PNG; not a base dep.
+
+        from collections.abc import Sequence
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+
+        class _FakeRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeFeatureExtractor:
+            def __init__(self, scope: FeatureScope) -> None:
+                self._scope = scope
+
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id=f"fake_{self._scope.value}_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return self._scope
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                if self._scope is FeatureScope.DENSE:
+                    return [
+                        VisualFeature(
+                            feature_id=FeatureId("feature-dense-0000"),
+                            scope=FeatureScope.DENSE,
+                            embedding_space_id="fake-dense-space",
+                            shape=(2,),
+                            dtype="float32",
+                            payload_reference=f"{image.source_observation_id}-dense.npy",
+                            provenance=self.backend_provenance(),
+                        )
+                    ]
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId(f"feature-{region.region_id}"),
+                        scope=FeatureScope.REGION,
+                        embedding_space_id="fake-region-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-{region.region_id}.npy",
+                        provenance=self.backend_provenance(),
+                        region_id=region.region_id,
+                    )
+                    for region in regions
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.DENSE),  # type: ignore[arg-type]
+            region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            for index in range(2):
+                writer.add_observation(
+                    ImageObservation(
+                        observation_id=SourceObservationId(f"frame-{index:04d}"),
+                        sensor_id=SensorId("camera_1"),
+                        frame_id=FrameId("camera_1_optical"),
+                        timestamp=SourceTimestamp(
+                            seconds=index, nanoseconds=0, clock_id="fixture:header"
+                        ),
+                        provenance=SourceProvenance(
+                            source_type="fixture", source_path="fixtures/images"
+                        ),
+                        width=2,
+                        height=2,
+                        encoding=ImageEncoding.BGR8,
+                        data=pixels,
+                    )
+                )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
+        # O diretório de rascunho das imagens preparadas nunca sobrevive à execução.
+        assert list(workspace.glob(".tmp-*")) == []
+
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert {str(result.source_observation_id) for result in results} == {
+            "frame-0000",
+            "frame-0001",
+        }
+        for result in results:
+            assert len(result.regions) == 1
+            assert len(result.features) == 2  # one dense + one region feature
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:
