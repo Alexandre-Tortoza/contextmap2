@@ -81,7 +81,7 @@ Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
 - `evaluate_spatial_relations()`/`SpatialRelationsEvaluationReport` — avaliação de um run de relações persistido contra um `RelationAnnotationSet`, **por predicado canônico** e sem score agregado: verdadeiros positivos, relações perdidas (não resolvidas, rejeitadas ou nunca recuperadas pelo estágio de candidatos), falsos positivos (violação de negativos), negativos corretos e não resolvidos, previsões sem anotação, com precisão, revocação, F1, taxa de falsa relação, de relação perdida, de não resolvidas e recall de recuperação de candidatos.
 - `RelationPredicateEvaluation`, `RelationConsistencyViolation`, `RelationUnmatchedReport` — os contadores por predicado, as contradições estruturais das relações persistidas (inverso, simetria e suporte mútuo) e o que não pôde ser comparado e de quem é a falha (referência sem entidade casada, identidade com várias entidades, predicados sem mapeamento, estados ambíguos e desconhecidos).
 - `spatial_relations_evaluation_report()` — relatório comum com `relations.f1` e `relations.negative_violation.rate` por predicado, a linhagem (run de relações e de resolução), as políticas efetivas e o reference set.
-- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION`, `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia.
+- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION` (`"2"`), `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia, ou de uma `identity`/`identity_reproducibility` cujo `run_id` ou `resolution_artifact_digest` não é o do run de resolução da linhagem das relações.
 
 Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
 
@@ -89,7 +89,7 @@ Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
 
 - `evaluate_entity_resolution()`/`EntityResolutionEvaluationReport` — validação de um run de resolução persistido em três camadas (`ResolutionValidationLayer`) e avaliação de identidade contra uma `IdentityAnnotationSet` explícita: `entity.false_merge.rate` e `entity.duplicate.rate` do registro, mais cada classe de falha em separado (fusão falsa, fusão perdida por causa, `DISTINCT` errado, abstenção); sem score composto.
 - `OccurrenceLink` — vínculo explícito entre uma ocorrência anotada (amostra, observação, região) e a entidade de origem; nunca adivinhado.
-- `IdentityEvaluation.identity_of_resolved_entity` — identidade anotada de cada entidade resolvida, para quem avalia saídas construídas sobre elas (Spatial Relations).
+- `IdentityEvaluation.identity_of_resolved_entity` — identidade anotada de cada entidade resolvida, para quem avalia saídas construídas sobre elas (Spatial Relations); a proveniência dessa avaliação (run e digest) vem de `EvaluationReproducibility`, nunca dos refs presentes no mapeamento.
 - `EvaluationReproducibility` — versão de schema e digest do run avaliado (`resolution_artifact_digest`), referência, políticas e código.
 - `evaluate_splits()`/`SplitReference` — diagnóstico de divisão à parte da qualidade de fusão.
 - `evaluate_channel_ablation()`/`ResolutionArm`/`ArmEvaluation` — braços por conjunto de canais sobre as mesmas entidades, candidatos e referência.

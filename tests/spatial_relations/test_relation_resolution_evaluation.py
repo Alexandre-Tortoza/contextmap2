@@ -7,11 +7,11 @@ from pathlib import Path
 from relation_resolution_fixture import ER_RUN, build_inputs, er_scene_source, write_er_run
 from relation_scene import CONNECTED_POLICY
 
-from contextmap.entity_resolution import EntityResolutionRunReader
+from contextmap.entity_resolution import CandidateRetrievalPolicy, EntityResolutionRunReader
 from contextmap.evaluation import (
     Coverage,
+    EntityResolutionEvaluationReport,
     IdentityAnnotationSet,
-    IdentityEvaluation,
     IdentityOccurrence,
     IdentityScope,
     LabelNormalization,
@@ -23,7 +23,7 @@ from contextmap.evaluation import (
     RelationAnnotation,
     RelationAnnotationSet,
     RelationStatus,
-    evaluate_identity,
+    evaluate_entity_resolution,
     evaluate_spatial_relations,
 )
 from contextmap.ingestion import SourceObservationId
@@ -114,7 +114,17 @@ def _relations_reference() -> RelationAnnotationSet:
     )
 
 
-def _identity_evaluation() -> IdentityEvaluation:
+RETRIEVAL = CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+"""The retrieval policy ``build_inputs()`` itself used, so the reproducibility check reproduces."""
+
+
+def _identity_report(resolution_dir: Path) -> EntityResolutionEvaluationReport:
+    """Entity Resolution's own evaluation of the persisted run, identity and provenance together.
+
+    This is the report a real caller gets from ``evaluate_entity_resolution``: its ``identity``
+    and its ``reproducibility`` are never built apart, because Spatial Relations only trusts an
+    identity evaluation once its own reproducibility names this exact resolution run and artifact.
+    """
     inputs = build_inputs()
     links = [
         OccurrenceLink(
@@ -125,13 +135,13 @@ def _identity_evaluation() -> IdentityEvaluation:
         )
         for name in "abcdef"
     ]
-    return evaluate_identity(
+    return evaluate_entity_resolution(
+        EntityResolutionRunReader(resolution_dir),
+        entities=inputs.entities.values(),
         reference=_identity_reference(),
         links=links,
-        resolved=inputs.materialization.resolved,
-        candidate_sets=inputs.candidate_sets,
-        decisions=[item.decision for item in inputs.resolutions],
-        contradictions=inputs.materialization.contradictions,
+        retrieval_policy=RETRIEVAL,
+        reference_set_id="test",
     )
 
 
@@ -165,13 +175,20 @@ def test_relations_are_evaluated_by_the_identity_of_entity_resolutions_own_evalu
 ) -> None:
     write_er_run(tmp_path / "resolution")
     run = _relations_run(tmp_path / "relations", tmp_path / "resolution")
-    identity = _identity_evaluation()
+    identity_report = _identity_report(tmp_path / "resolution")
+    identity = identity_report.identity
     assert identity.duplicated_identities == 1
     assert {
         reference.resolution_run_id for reference, _ in identity.identity_of_resolved_entity
     } == {ER_RUN}
+    assert identity_report.reproducibility.run_id == ER_RUN
 
-    report = evaluate_spatial_relations(run, reference=_relations_reference(), identity=identity)
+    report = evaluate_spatial_relations(
+        run,
+        reference=_relations_reference(),
+        identity=identity,
+        identity_reproducibility=identity_report.reproducibility,
+    )
 
     next_to = report.predicate(RelationPredicate.NEXT_TO)
     assert (next_to.annotated_holds, next_to.true_positives) == (4, 4)
@@ -181,3 +198,7 @@ def test_relations_are_evaluated_by_the_identity_of_entity_resolutions_own_evalu
     assert report.unmatched.identities_with_several_entities == ("I1",)
     assert report.unmatched.reference_without_entity == 0
     assert report.entity_resolution_run_id == ER_RUN
+    assert (
+        report.entity_resolution_artifact_digest
+        == identity_report.reproducibility.resolution_artifact_digest
+    )

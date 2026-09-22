@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 from relation_builders import entity_ref
-from relation_run_fixture import Run, build_run, write_run
+from relation_run_fixture import LINEAGE, Run, build_run, write_run
 
 from contextmap.entity_resolution import ResolvedEntityReference
 from contextmap.evaluation import (
     EvaluationReport,
+    EvaluationReproducibility,
     IdentityEvaluation,
     LabelNormalization,
     MetricStatus,
@@ -157,17 +158,48 @@ def identity_evaluation(
     )
 
 
+def identity_reproducibility(
+    *, run_id: str | None = None, digest: str | None = None
+) -> EvaluationReproducibility:
+    """The reproducibility metadata of the identity evaluation, matching the run by default.
+
+    Args:
+        run_id: The resolution run it claims to be about; defaults to the fixture run's own.
+        digest: The resolution artifact digest it claims to be about; defaults to the fixture
+            run's own digest.
+    """
+    return EvaluationReproducibility(
+        evaluator_id="entity-resolution-evaluator",
+        evaluator_version="1",
+        run_id=str(LINEAGE.entity_resolution_run_id) if run_id is None else run_id,
+        resolution_schema_version=LINEAGE.entity_resolution_schema_version,
+        resolution_artifact_digest=(
+            LINEAGE.entity_resolution_artifact_digest if digest is None else digest
+        ),
+        semantic_mapping_run_id="semantic-mapping-run-0001",
+        semantic_mapping_artifact_digest="sha256:" + "11" * 32,
+        reference_set_id="reference-set-0001",
+        annotation_digest="sha256:" + "22" * 32,
+        policies=(),
+        code_version="test",
+    )
+
+
 def _evaluate(
     artifact: Path,
     reference: RelationAnnotationSet,
     identities: dict[ResolvedEntityReference, str] | None = None,
     spanning: tuple[ResolvedEntityReference, ...] = (),
+    reproducibility: EvaluationReproducibility | None = None,
     **options: object,
 ) -> SpatialRelationsEvaluationReport:
     return evaluate_spatial_relations(
         SpatialRelationsRunReader(artifact),
         reference=reference,
         identity=identity_evaluation(IDENTITIES if identities is None else identities, spanning),
+        identity_reproducibility=(
+            identity_reproducibility() if reproducibility is None else reproducibility
+        ),
         **options,  # type: ignore[arg-type]
     )
 
@@ -288,15 +320,37 @@ def test_a_reference_without_an_entity_is_an_entity_failure_not_a_relation_error
 
 
 def test_an_identity_evaluation_of_another_resolution_run_is_refused(artifact: Path) -> None:
-    other = {
-        entity_ref(number, run="resolution-run-0002"): identity
-        for number, identity in enumerate((FLOOR, CRATE, PALLET, HOVER), start=1)
-    }
+    wrong_run = identity_reproducibility(run_id="resolution-run-0002")
     with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
-        _evaluate(artifact, _reference(*CORE), identities=other)
-    spanning = (entity_ref(1, run="resolution-run-0002"),)
+        _evaluate(artifact, _reference(*CORE), reproducibility=wrong_run)
+
+
+def test_an_empty_identity_population_still_needs_matching_reproducibility(artifact: Path) -> None:
+    """No annotated/eligible identity is a valid outcome, and must not let provenance go unchecked.
+
+    Regressão: antes, a checagem só olhava para as referências presentes em
+    ``identity_of_resolved_entity`` e em ``resolved_entities_spanning_identities``; com as duas
+    vazias, ``runs`` ficava vazio e qualquer avaliação de identidade passava sem checagem.
+    """
+    wrong_run = identity_reproducibility(run_id="resolution-run-0002")
     with pytest.raises(SpatialRelationsEvaluationError, match="resolution run"):
-        _evaluate(artifact, _reference(*CORE), spanning=spanning)
+        _evaluate(
+            artifact, _reference(*CORE), identities={}, spanning=(), reproducibility=wrong_run
+        )
+
+
+def test_an_identity_evaluation_of_a_different_resolution_artifact_is_refused(
+    artifact: Path,
+) -> None:
+    """Same run id, different artifact: the digest must also match, not only the run id.
+
+    Regressão: o relatório gravava ``entity_resolution_artifact_digest`` a partir da linhagem do
+    próprio run de relações, nunca a partir da avaliação de identidade realmente fornecida, então
+    um digest incompatível nunca era detectado.
+    """
+    wrong_digest = identity_reproducibility(digest="sha256:" + "99" * 32)
+    with pytest.raises(SpatialRelationsEvaluationError, match="digest"):
+        _evaluate(artifact, _reference(*CORE), reproducibility=wrong_digest)
 
 
 def test_entities_that_span_identities_are_left_out_counted_and_never_guessed(
@@ -428,7 +482,10 @@ def test_the_report_names_the_run_the_resolution_the_policies_and_the_reference(
     manifest = reader.manifest
     assert report.spatial_relations_run_id == manifest.run_id
     assert report.entity_resolution_run_id == manifest.lineage.entity_resolution_run_id
-    assert report.entity_resolution_artifact_digest == "sha256:resolution"
+    assert (
+        report.entity_resolution_artifact_digest
+        == manifest.lineage.entity_resolution_artifact_digest
+    )
     assert report.geometric_map_id == manifest.lineage.geometric_map_id
     assert report.taxonomy_version == manifest.taxonomy_version
     assert (
@@ -438,7 +495,7 @@ def test_the_report_names_the_run_the_resolution_the_policies_and_the_reference(
     assert report.policies["decision"]["id"] == manifest.policies["decision"]["policy_id"]
     assert report.reference_normalization == "casefold-exact/1"
     assert report.reference_relation_count == len(CORE)
-    assert (report.evaluator_id, report.evaluator_version) == ("spatial-relations-evaluator", "1")
+    assert (report.evaluator_id, report.evaluator_version) == ("spatial-relations-evaluator", "2")
     assert report.code_version == "abc123"
     assert report.configuration_digest().startswith("sha256:")
 
