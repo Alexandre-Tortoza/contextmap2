@@ -30,7 +30,9 @@ flowchart LR
     FUS --> FUSA["SemanticFusionRunArtifact<br/>implementado"]
     FUSA --> SMP["Semantic Mapping<br/>implementado"]
     SMP --> SMPA["SemanticMappingRunArtifact<br/>implementado"]
-    SMPA -. próximo boundary .-> F["Entity Resolution +<br/>Spatial Relations planejados"]
+    SMPA --> ER["Entity Resolution<br/>implementado"]
+    ER --> ERA["EntityResolutionRunArtifact<br/>implementado"]
+    ERA -. próximo boundary .-> F["Spatial Relations<br/>planejado"]
     F --> G["ContextMapArtifact<br/>alvo"]
 ```
 
@@ -56,7 +58,7 @@ Um componente não deve entrar no pipeline principal apenas porque funciona qual
 
 ## Estado implementado
 
-A branch `dev` já contém oito módulos de domínio, além da capability de avaliação que mede seus resultados:
+A branch `dev` já contém nove módulos de domínio, além da capability de avaliação que mede seus resultados:
 
 - [`contextmap.ingestion`](src/contextmap/ingestion/docs/README.md), com contratos canônicos, adapters ROS 1/ROS 2, sincronização, calibração, seleção/replay, provenance, validação e `SequenceArtifact`;
 - [`contextmap.visual_perception`](src/contextmap/visual_perception/docs/README.md), com contratos de evidência, ports, preset canônico versionado, executor de DAG, Region Discovery concreto, Feature Extraction com adapters DINOv2, DINOv3, CLIP e AlphaCLIP e o boundary canônico de Semantic Interpretation, com requests auditáveis, prompt/parser versionados, adapters Qwen/Gemini/Florence-2 e `SemanticScore` separado das claims; `PerceptionRunArtifact` e `PerceptionEvidenceSet` preservam esses resultados sem fusão implícita.
@@ -66,7 +68,8 @@ A branch `dev` já contém oito módulos de domínio, além da capability de ava
 - [`contextmap.point_representation`](src/contextmap/point_representation/docs/README.md), capability **opcional** com `PointRepresentation` e `RepresentationSpace`, extração de suporte local sobre `GeometrySource`, o port `PointEncoder`, o descritor geométrico determinístico (baseline), a fronteira do backend PTv3 com seu runtime real sobre o Pointcept e o `PointRepresentationRunArtifact`; o PTv3 foi medido em geometria real (custo e comparação com `off` e com o descritor) e o efeito downstream está pendente;
 - [`contextmap.semantic_fusion`](src/contextmap/semantic_fusion/docs/README.md), com `FusionSupport` (onde a evidência é acumulada, sem identidade de objeto), `EvidenceContribution`, agrupamento por observação física (inferência repetida é correlacionada, não votos independentes), a política baseline de acumulação, a preservação de ambiguidade, contradição, empate e abstenção, canais de evidência tipados, uma política opcional ciente de qualidade e o `SemanticFusionRunArtifact`; a verificação é sintética mais uma execução real sem claims nem anotações, e nenhuma decisão sobre a política ciente de qualidade foi tomada;
 - [`contextmap.semantic_mapping`](src/contextmap/semantic_mapping/docs/README.md), com `Entity` (suporte 3D exato por referência, estado semântico sem colapso, vínculos de evidência e estado temporal), `EntityReference` com escopo de identidade explícito, a materialização `one-support-one-entity-v1` a partir da evidência fundida **sem nenhuma resolução entre suportes** e o `SemanticMappingRunArtifact`; entidades de suportes diferentes continuam distintas até Entity Resolution, e toda a verificação usa fixtures sintéticos;
-- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, Semantic Interpretation, State Estimation, Geometric Mapping, Sensor Association, Point Representation, Semantic Fusion e Semantic Mapping, e com a infraestrutura de avaliação controlada (reference set versionado, anotações e QA, registro de métricas, manifestos de experimento e protocolos das técnicas opcionais). Ainda não há reference set real nem execução real de experimento.
+- [`contextmap.entity_resolution`](src/contextmap/entity_resolution/docs/README.md), com a recuperação de candidatos, a evidência tipada por canal (geometria, semântica, aparência, temporal e, opcional, representação 3D) sem score único, as decisões `MATCH`/`DISTINCT`/`UNRESOLVED`, a política baseline conservadora, `ResolvedEntity` com linhagem de fusão (uma contradição de transitividade impede a fusão), a detecção opcional de candidatos a divisão e o `EntityResolutionRunArtifact`; toda a verificação usa dados sintéticos, sem run de resolução sobre dados reais;
+- [`contextmap.evaluation`](src/contextmap/evaluation/docs/README.md), com protocolos determinísticos já implementados para Region Discovery, Feature Extraction, Semantic Interpretation, State Estimation, Geometric Mapping, Sensor Association, Point Representation, Semantic Fusion, Semantic Mapping e Entity Resolution, e com a infraestrutura de avaliação controlada (reference set versionado, anotações e QA, registro de métricas, manifestos de experimento e avaliação das técnicas opcionais). Ainda não há reference set real nem execução real de experimento.
 
 Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais por default. A CI valida contratos e transformações com runtimes determinísticos injetados. DINOv2, DINOv3 e CLIP foram executados com pesos reais em frames de `corridor-02`, com resultados nos documentos de cada adapter; AlphaCLIP (sem checkpoint de origem e integridade verificáveis) continua sem execução real. Essas validações dos adapters não equivalem a uma avaliação científica comparativa da qualidade dos embeddings.
 
