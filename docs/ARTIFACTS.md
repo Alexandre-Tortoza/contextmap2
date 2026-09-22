@@ -58,7 +58,7 @@ Pode conter os produtos finais `ContextMapArtifact` ou bundles finais, conforme 
 
 ### `experiments/`
 
-Pode conter manifests/reports que referenciam runs imutáveis usados em comparações e ablations.
+Contém os manifests/reports que referenciam runs imutáveis usados em comparações e ablations: o run de um experimento (`experiment.json`, um run manifest e um relatório por arm e `comparison.json`) e a evidência/decisão sobre uma técnica opcional. Os formatos estão em [Artefatos de avaliação](#artefatos-de-avaliação).
 
 O registro **versionado** de uma execução real fica no repositório, em `experiments/<experimento>/` (diretório de topo, fora de `src/` e `tests/`): um bundle leve com o manifest do experimento (identidades e SHA-256 completos das runs de entrada), a seleção, a configuração, os drivers e os relatórios finais, **sem** o dataset nem os artifacts grandes, que continuam fora do Git e são regenerados localmente. Os drivers ficam fora de `src/` e de `tests/` porque são scripts de pesquisa, não código do pacote nem testes, e alterá-los para passar nos gates do pacote quebraria o hash do que foi executado. O teste `tests/evaluation/test_experiment_bundles.py` confere cada bundle contra o próprio manifest (hashes completos, todo arquivo listado, menos de 1 MB, sem caminhos pessoais nem segredos). Exemplo: [`experiments/semantic-fusion-corridor-02-20260921/`](../experiments/semantic-fusion-corridor-02-20260921/README.md).
 
@@ -385,6 +385,32 @@ Detalhes específicos permanecem nos owners:
 
 - [Ingestion artifact](../src/contextmap/ingestion/docs/artifact.md);
 - [Visual Perception run artifact](../src/contextmap/visual_perception/docs/run_artifact.md).
+
+### Artefatos de avaliação
+
+A capability `evaluation` persiste documentos JSON imutáveis, escritos por publicação atômica (recusam sobrescrever) e com digest `sha256` verificado na leitura. Não são artifacts de run do pipeline e não alteram nenhum artifact avaliado.
+
+```text
+<reference-set>/<versão>/
+├── manifest.json            # ReferenceSetManifest (contextmap.reference-set/v1), com digest
+└── annotations/<família>.json  # contextmap.reference.<família>/v1, hash declarado no manifesto
+
+<experimento>/<run>/         # diretório novo por execução
+├── experiment.json          # ExperimentManifest (contextmap.experiment/v1)
+├── arms/<arm>/run.json      # topologia resolvida, artifacts por estágio, resultado (…-arm-run/v1)
+├── arms/<arm>/report.json   # EvaluationReport (contextmap.evaluation-report/v1), só arms concluídos
+└── comparison.json          # ComparisonManifest (…-comparison/v1): métricas lado a lado, artifacts compartilhados
+
+evidence.json                # TechniqueEvidence por métrica e estrato (contextmap.technique-evidence/v1)
+decision.json                # TechniqueDecision, presa ao digest da evidência (…-decision/v1)
+```
+
+- `ReferenceSetManifest` amarra fontes, amostras (por `SourceObservationId`, nunca por saída de percepção), calibrações, anotações com `trust` e proveniência declarados, estratos e splits; a versão muda quando o conteúdo muda.
+- Um arm indisponível ou com resultado inconsistente é registrado como tal e não tem `report.json`; a comparação fica `complete: false`.
+- Reexecutar um experimento cria outro diretório de run; nunca sobrescreve.
+- Há um subconjunto sintético de CI versionado em `tests/fixtures/ci_subset/<versão>/` (manifesto, anotações e catálogo). Não existe reference set real versionado nem execução real de experimento registrada.
+
+Detalhes: [reference set](../src/contextmap/evaluation/docs/reference-set.md), [experimentos](../src/contextmap/evaluation/docs/experiments.md) e [técnicas opcionais](../src/contextmap/evaluation/docs/optional-techniques.md).
 
 ## Immutability
 
