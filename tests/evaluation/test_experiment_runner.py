@@ -34,6 +34,8 @@ from contextmap.evaluation.experiments import (
     ExperimentError,
     ExperimentManifest,
     ExperimentPurpose,
+    decode_experiment,
+    encode_experiment,
     experiment_artifact_identity,
 )
 from contextmap.evaluation.metrics import EvaluationStage, MetricKind
@@ -474,6 +476,23 @@ def test_an_experiment_of_another_reference_set_version_is_refused_before_runnin
 
     with pytest.raises(ExperimentError, match="reference set"):
         _run(validated, tmp_path / "run", manifest, executor)
+
+    assert calls == []
+    assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("digest", ["", "not-a-hash"])
+def test_a_pinned_artifact_with_a_malformed_digest_is_refused_before_running(
+    validated: ValidatedReferenceSet, tmp_path: Path, digest: str
+) -> None:
+    document = json.loads(json.dumps(encode_experiment(backend_experiment(validated.manifest))))
+    for arm in document["arms"]:
+        pinned_stage = next(item for item in arm["topology"]["stages"] if item["artifact"])
+        pinned_stage["artifact"]["digest"] = digest
+    executor, calls = make_executor(BACKEND_VALUES)
+
+    with pytest.raises(ExperimentError, match="artifact digest"):
+        _run(validated, tmp_path / "run", decode_experiment(document), executor)
 
     assert calls == []
     assert not (tmp_path / "run").exists()

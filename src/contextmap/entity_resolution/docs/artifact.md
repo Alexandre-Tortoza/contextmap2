@@ -44,7 +44,9 @@ As **políticas não são passadas ao escritor: são derivadas dos registros**, 
 
 ## Consistência checada antes de escrever
 
-O escritor recusa (`RunArtifactError`), sem deixar nada no disco: par comparado que **não é candidato** (só candidatos são comparados, nunca all-pairs), par resolvido duas vezes, mais de uma política para um papel, entidades resolvidas de outro run, entidade fora dos mapas da linhagem ou sobre outro mapa geométrico, e entidade resolvida que cita uma decisão que não foi escrita.
+O escritor recusa (`RunArtifactError`), sem deixar nada no disco: par comparado que **não é candidato** (só candidatos são comparados, nunca all-pairs), par resolvido duas vezes, mais de uma política para um papel, entidades resolvidas de outro run, entidade fora dos mapas da linhagem ou sobre outro mapa geométrico, entidade resolvida que cita uma decisão que não foi escrita e contradição de transitividade cuja decisão `DISTINCT` ou cuja cadeia de `MATCH` não foi escrita.
+
+O universo de entidades de origem é o que a materialização realmente tem (todo membro de toda entidade resolvida). Os conjuntos de candidatos são checados contra esse universo antes de tudo o mais: falta um conjunto para alguma entidade de origem, uma entidade de origem tem mais de um conjunto, um conjunto nomeia uma entidade de origem que a materialização não tem, ou um candidato de algum conjunto nomeia uma entidade fora desse universo — os quatro são recusados, nunca publicados em silêncio.
 
 ## Leitura (`EntityResolutionRunReader`)
 

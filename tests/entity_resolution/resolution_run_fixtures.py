@@ -111,6 +111,36 @@ def build_inputs() -> RunInputs:
     return RunInputs(entities, sets, resolutions, materialization)
 
 
+def build_contradicted_inputs() -> RunInputs:
+    """A chain a~b~c~d of MATCH decisions cut by two DISTINCT decisions, a!=c and b!=d.
+
+    One component holds two transitivity contradictions, so nothing in it is merged.
+    """
+    entities = {
+        name: entity_at(
+            name, (index * 1.0, 0.0, 0.0), support_number=index + 1, spatial=(f"spatial--{name}",)
+        )
+        for index, name in enumerate("abcd")
+    }
+    sets = retrieve_candidate_sets(
+        entities.values(), CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+    )
+    resolutions = tuple(
+        resolution_of(entities[x], entities[y], outcome)
+        for x, y, outcome in (
+            ("a", "b", MATCH),
+            ("b", "c", MATCH),
+            ("c", "d", MATCH),
+            ("a", "c", DISTINCT),
+            ("b", "d", DISTINCT),
+        )
+    )
+    materialization = materialize_resolved_entities(
+        entities.values(), [item.decision for item in resolutions], resolution_run_id=RUN
+    )
+    return RunInputs(entities, sets, resolutions, materialization)
+
+
 def write_run(
     output_dir: Path, inputs: RunInputs | None = None, **writer_kwargs: object
 ) -> tuple[RunInputs, object]:

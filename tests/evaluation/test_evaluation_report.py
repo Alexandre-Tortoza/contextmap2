@@ -207,6 +207,33 @@ def test_a_metric_result_appears_once_per_stratum() -> None:
         _value(strata=(("range_band", "near"), ("range_band", "far")))
 
 
+@pytest.mark.parametrize(
+    "digest",
+    ["", " ", "not-a-hash", "sha256:abc", "a" * 64, "SHA256:" + "a" * 64, "sha256:" + "g" * 64],
+)
+def test_an_artifact_digest_that_is_not_a_sha256_is_rejected(digest: str) -> None:
+    with pytest.raises(ValueError, match="artifact digest"):
+        ArtifactIdentity(kind="perception_run", artifact_id="run-0001", digest=digest)
+
+
+def test_an_artifact_digest_is_a_sha256_or_absent_and_survives_the_round_trip() -> None:
+    pinned = ArtifactIdentity(
+        kind="perception_run", artifact_id="run-0001", digest="sha256:" + "a" * 64
+    )
+    unpinned = ArtifactIdentity(kind="perception_run", artifact_id="run-0001", digest=None)
+
+    assert ArtifactIdentity.from_record(pinned.to_record()) == pinned
+    assert ArtifactIdentity.from_record(unpinned.to_record()) == unpinned
+
+
+def test_a_decoded_artifact_identity_revalidates_its_digest() -> None:
+    document = encode_evaluation_report(_report())
+    document["reproducibility"]["input_artifacts"][0]["digest"] = "not-a-hash"  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="artifact digest"):
+        decode_evaluation_report(document, REGISTRY)
+
+
 def test_decoding_revalidates_against_the_registry() -> None:
     document = encode_evaluation_report(_report())
     document["quality_metrics"][0]["value"] = 9.0  # type: ignore[index]

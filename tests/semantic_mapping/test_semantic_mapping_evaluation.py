@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from mapping_builders import (
+    CODE_DIGEST,
     SEMANTIC_MAP_ID,
     SUMMARY_POLICY,
     make_semantic_state,
@@ -23,6 +24,7 @@ from contextmap.evaluation.semantic_mapping import EVALUATOR_VERSION
 from contextmap.geometric_mapping import MapId
 from contextmap.semantic_fusion import FusionSupportId, SemanticFusionRunReader
 from contextmap.semantic_mapping import (
+    ENTITY_SCHEMA_VERSION,
     Entity,
     EntityId,
     EntityMaterializationPolicy,
@@ -118,10 +120,23 @@ class TestACleanRun:
         assert lineage.geometric_map_id == fusion.manifest.lineage.geometric_map_id
         assert lineage.materialization_policy_id == "one-support-one-entity-v1"
         assert lineage.identity_policy_id == "support-derived-entity-id-v1"
-        assert lineage.entity_schema_version == "0.1.0"
+        assert lineage.entity_schema_version == ENTITY_SCHEMA_VERSION
+        assert lineage.code_digest == CODE_DIGEST
         assert lineage.configuration_fingerprint == POLICY.fingerprint()
         assert lineage.code_version == "test"
         assert lineage.evaluator_version == EVALUATOR_VERSION
+
+    def test_the_report_names_the_entity_schema_and_not_the_artifact_schema(
+        self, tmp_path: Path, fusion: FusionRun, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("contextmap.semantic_mapping.run_artifact.SCHEMA_VERSION", "9.9.9")
+
+        report = _evaluate(tmp_path, fusion)
+
+        assert report.lineage.entity_schema_version == ENTITY_SCHEMA_VERSION
+        encoded = encode_semantic_mapping_report(report)["lineage"]
+        assert encoded["entity_schema_version"] == ENTITY_SCHEMA_VERSION
+        assert encoded["code_digest"] == CODE_DIGEST
 
     def test_the_report_is_deterministic_and_encodes_without_a_composite_score(
         self, tmp_path: Path, fusion: FusionRun
@@ -262,6 +277,28 @@ class TestDetectsRealDefects:
         report = _evaluate(tmp_path, fusion, tamper=move_centroid)
 
         assert "geometry_valid_and_authoritative" in _failed(report)
+
+    def test_an_entity_that_names_another_sequence_than_the_lineage_breaks_provenance(
+        self, tmp_path: Path, fusion: FusionRun
+    ) -> None:
+        run_dir = write_mapping_run(tmp_path / "mapping", fusion, _entities(fusion))
+        table = run_dir / "outputs" / "entities.jsonl"
+        # Mesmo comprimento, para que os deslocamentos do índice continuem válidos.
+        table.write_text(
+            table.read_text(encoding="utf-8").replace(
+                '"sequence_artifact_id":"sequence-0001"', '"sequence_artifact_id":"sequence-0002"'
+            ),
+            encoding="utf-8",
+        )
+
+        report = evaluate_semantic_mapping(
+            SemanticMappingRunReader(run_dir),
+            fusion=SemanticFusionRunReader(fusion.run_dir),
+            geometry=fusion.geometry,
+            policy=POLICY,
+        )
+
+        assert "provenance_complete" in _failed(report)
 
     def test_evaluating_with_another_policy_than_the_one_used_is_detected(
         self, tmp_path: Path, fusion: FusionRun

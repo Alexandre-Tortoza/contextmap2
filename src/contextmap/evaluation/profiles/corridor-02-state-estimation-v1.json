@@ -1,0 +1,17 @@
+{
+  "schema": "contextmap.state_estimation_reference_profile/1",
+  "profile_id": "reference-profile:corridor-02@1",
+  "reference_role": "evaluation_reference",
+  "reference_source": "datasets/corridor-02/corridor-02-gt.txt",
+  "reference_source_sha256": "sha256:cddb6739230ded86c57412e768e071e5cd6d62a5de5ff310618032ca2e38be0a",
+  "thresholds": {
+    "max_linear_speed_mps": 5.8,
+    "max_angular_speed_radps": 2.5
+  },
+  "comparison": {
+    "alignment": "se3",
+    "max_time_difference_ns": 10000000,
+    "relative_interval_ns": 1000000000,
+    "relative_interval_tolerance_ns": 50000000
+  }
+}

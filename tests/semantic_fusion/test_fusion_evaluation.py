@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from fusion_eval_fixtures import PROFILE, EvalFixture, make_eval_fixture
+from fusion_run_fixtures import LINEAGE, make_multi_region_run_fixture
 
 from contextmap.evaluation import (
     FusionArmRole,
@@ -19,7 +20,11 @@ from contextmap.evaluation import (
     encode_semantic_fusion_report,
     evaluate_semantic_fusion,
 )
-from contextmap.semantic_fusion import SemanticFusionRunReader
+from contextmap.semantic_fusion import (
+    SemanticFusionRunId,
+    SemanticFusionRunReader,
+    SemanticFusionRunWriter,
+)
 
 FORBIDDEN_KEYS = {
     "score",
@@ -84,7 +89,7 @@ def test_the_report_carries_the_complete_lineage_of_the_run(fixture: EvalFixture
     assert lineage.support_policy_id == "geometry-jaccard-support-v1"
     assert lineage.fusion_policy_id == "quality-aware-evidence-accumulation-v1"
     assert (lineage.fusion_configuration_fingerprint or "").startswith("sha256:")
-    assert report.evaluator_version == "1"
+    assert report.evaluator_version == "2"
     assert report.profile == PROFILE
 
 
@@ -100,6 +105,36 @@ def test_repeated_inference_is_reported_apart_from_physical_observations(
     assert correlation.supports_with_repeated_inference == 1
     assert correlation.max_inference_results_per_physical_observation == 2
     assert correlation.hypotheses_with_repeated_inference_support == 1
+
+
+def test_a_result_that_reaches_several_supports_is_counted_once_in_the_report(
+    tmp_path: Path,
+) -> None:
+    # Mesmo defeito da execução real: o relatório somava os resultados por suporte e comparava
+    # esse total com frames físicos distintos, duas grandezas com denominadores diferentes.
+    multi_region = make_multi_region_run_fixture()
+    SemanticFusionRunWriter(
+        workspace_root=tmp_path,
+        sequence_name="sequence-0001",
+        run_id=SemanticFusionRunId("fusion-run-0001"),
+        run_index=1,
+        selection_label="all-frames",
+        policy_label="baseline",
+        lineage=LINEAGE,
+        code_version="test",
+    ).write(multi_region.outcomes, excluded=multi_region.excluded)
+    run_dir = tmp_path / "runs" / "semantic-fusion" / "sequence-0001"
+
+    report = evaluate_semantic_fusion(
+        SemanticFusionRunReader(run_dir / "run-0001__all-frames__baseline"),
+        arm_id="baseline",
+        arm_role=FusionArmRole.BASELINE_CONTROL,
+        profile=PROFILE,
+    )
+
+    assert report.support_count == 2
+    assert report.physical_observation_count == 1
+    assert report.inference_result_count == 2
 
 
 def test_no_correlation_or_duplication_violation_exists_in_a_valid_run(
@@ -470,6 +505,22 @@ def test_a_comparison_rejects_anything_but_the_fusion_configuration_changing(
     )
     with pytest.raises(SemanticFusionEvaluationError, match="support_policy_id"):
         compare_semantic_fusion_reports([baseline, other_map])
+
+
+def test_an_arm_that_lists_no_point_representation_run_is_not_comparable_with_one_that_does(
+    fixture: EvalFixture,
+) -> None:
+    # A linhagem registra a seleção de runs, não o uso: numa ablação de canais todo braço lista as
+    # mesmas runs de Point Representation. A execução real montou os sete braços assim.
+    baseline = _report(fixture, "baseline")
+    unlisted = dataclasses.replace(
+        _report(fixture, "with_visual_and_3d"),
+        lineage=dataclasses.replace(baseline.lineage, point_representation_run_ids=()),
+    )
+
+    assert baseline.lineage.point_representation_run_ids
+    with pytest.raises(SemanticFusionEvaluationError, match="point_representation_run_ids"):
+        compare_semantic_fusion_reports([baseline, unlisted])
 
 
 def test_the_stratification_profile_has_no_defaults_and_rejects_impossible_edges() -> None:

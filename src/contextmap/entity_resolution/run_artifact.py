@@ -567,6 +567,7 @@ class _Records:
         ordered_sets = tuple(
             sorted(candidate_sets, key=lambda item: reference_order(item.source_entity_ref))
         )
+        _require_candidate_set_integrity(ordered_sets, materialization)
         ordered = tuple(
             sorted(
                 resolutions,
@@ -596,6 +597,14 @@ class _Records:
                 raise RunArtifactError(
                     f"resolved entity {entity.resolved_entity_id!r} cites decisions that were not "
                     f"written: {unknown[:3]!r}"
+                )
+        for contradiction in materialization.contradictions:
+            cited = (contradiction.distinct_decision_id, *contradiction.match_path)
+            unknown = [ref for ref in cited if ref not in known]
+            if unknown:
+                raise RunArtifactError(
+                    f"contradiction {contradiction.contradiction_id!r} cites decisions that were "
+                    f"not written: {unknown[:3]!r}"
                 )
         return cls(
             run_id=run_id,
@@ -733,6 +742,53 @@ def _summary(values: Iterable[int]) -> dict[str, Any]:
 def _require_unique(items: Sequence[object], message: str) -> None:
     if len(set(items)) != len(items):
         raise RunArtifactError(message)
+
+
+def _require_candidate_set_integrity(
+    candidate_sets: Sequence[EntityCandidateSet], materialization: ResolvedEntityMaterialization
+) -> None:
+    """Require exactly one candidate set per source entity, and no reference outside that universe.
+
+    The universe of source entities is the one the materialization actually has (every member of
+    every resolved entity): a candidate set for an entity the run does not have, two candidate sets
+    for the same entity, a source entity with none, or a candidate that names an entity outside
+    that universe would silently corrupt what retrieval reproduces, so all four are refused here
+    instead of reaching disk.
+
+    Raises:
+        RunArtifactError: If a source entity has no candidate set, more than one, a set names a
+            source outside the materialized universe, or a candidate is outside it.
+    """
+    source_refs = {
+        reference
+        for entity in materialization.resolved.entities
+        for reference in entity.member_entity_refs
+    }
+    _require_unique(
+        [item.source_entity_ref for item in candidate_sets],
+        "a source entity has more than one candidate set",
+    )
+    named = {item.source_entity_ref for item in candidate_sets}
+    missing = sorted(source_refs - named, key=reference_order)
+    if missing:
+        raise RunArtifactError(
+            f"{len(missing)} source entities have no candidate set: "
+            f"{[ref.entity_id for ref in missing[:3]]!r}"
+        )
+    foreign_sources = sorted(named - source_refs, key=reference_order)
+    if foreign_sources:
+        raise RunArtifactError(
+            "candidate sets name entities the materialization does not have: "
+            f"{[ref.entity_id for ref in foreign_sources[:3]]!r}"
+        )
+    for item in candidate_sets:
+        foreign_candidates = [ref for ref in item.candidate_entity_refs if ref not in source_refs]
+        if foreign_candidates:
+            names = [ref.entity_id for ref in foreign_candidates[:3]]
+            raise RunArtifactError(
+                f"the candidate set of {item.source_entity_ref.entity_id!r} names candidates the "
+                f"materialization does not have: {names!r}"
+            )
 
 
 def _require_lineage(

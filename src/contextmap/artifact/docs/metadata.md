@@ -31,13 +31,17 @@ Nenhum metadado ausente é omitido: o que não se sabe é `None` **explícito**,
 | `AnchorKind` | Significado | `reference_frame_id` |
 | --- | --- | --- |
 | `ESTIMATOR_LOCAL` | a origem é definida por onde um run de estimador começou; as coordenadas só têm significado dentro deste artifact | deve ser `None` |
-| `EXTERNALLY_ANCHORED` | a origem está amarrada a um frame externo nomeado, por um alinhamento explícito | obrigatório |
+| `EXTERNALLY_ANCHORED` | as coordenadas do mapa **já estão expressas exatamente** no frame externo nomeado, sem base local própria | obrigatório, e **igual a `frame.frame_id`** |
 
-`origin_definition` descreve, em texto, como a origem é definida e, para uma âncora externa, como o alinhamento foi estabelecido.
+`origin_definition` descreve, em texto, como a origem é definida e, para uma âncora externa, como o alinhamento que colocou as coordenadas no frame de referência foi estabelecido a montante. Esse texto é só documentação de histórico: **não é ele** que garante comparabilidade, porque texto livre pode divergir do dado sem que isso seja detectável.
+
+### Invariante: `frame_id` igual a `reference_frame_id`
+
+Quando `anchor.kind` é `EXTERNALLY_ANCHORED`, o `MapFrame` exige que `frame_id` seja **exatamente** `anchor.reference_frame_id`. Essa igualdade é o que torna a âncora externa uma garantia estrutural, não apenas uma citação em texto: o frame do mapa **é** o frame de referência, e nenhuma base local separada pode existir para divergir dele. Sem essa igualdade, dois mapas poderiam citar o mesmo `reference_frame_id` com bases locais diferentes (`frame_id` diferentes) e ainda assim parecer comparáveis, sem que nenhum transform provasse que seus XYZ estão no mesmo frame.
 
 ### Comparabilidade entre mapas
 
-`MapFrame.is_comparable_with(other)` implementa a regra "nunca implicar comparabilidade quando não existe alinhamento": só é `True` quando **os dois** frames são ancorados externamente à **mesma** referência e concordam em unidade e lateralidade. Dois frames locais de estimador não são comparáveis nem quando ambos se chamam `map`, e um frame local nunca é comparável a um ancorado.
+`MapFrame.is_comparable_with(other)` implementa a regra "nunca implicar comparabilidade quando não existe alinhamento verificável": só é `True` quando **os dois** frames são ancorados externamente à **mesma** referência e concordam em unidade e lateralidade. Isso é seguro, e não uma coincidência de nomes, porque a igualdade `frame_id == reference_frame_id` acima garante que `reference_frame_id` igual implica `frame_id` igual: os dois frames têm a **mesma identidade**, sem base local própria em que pudessem divergir. Dois frames locais de estimador não são comparáveis nem quando ambos se chamam `map`, e um frame local nunca é comparável a um ancorado.
 
 ## Extensão espacial e temporal
 
@@ -72,6 +76,7 @@ A declaração é canônica (ordenada por valor e única) e é checada contra o 
 | `frame_id` vazio | `ValueError` (`frame_id`) |
 | `up_direction` nulo, não unitário ou não finito | `ValueError` (`up_direction`) |
 | âncora local com referência externa, ou externa sem referência | `ValueError` (`reference_frame_id`) |
+| âncora externa cujo `reference_frame_id` difere do `frame_id` do mapa | `ValueError` (`reference_frame_id`) |
 | origem sem definição | `ValueError` (`origin_definition`) |
 | bounds em outro frame | `ValueError` |
 | janela temporal com relógios distintos ou fim antes do início | `ValueError` |

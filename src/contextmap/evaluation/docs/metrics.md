@@ -55,7 +55,7 @@ As definições de Entity Resolution e Spatial Relations existem para que os rel
 
 `EvaluationReport` traz o estágio, os `ReproducibilityMetadata`, as métricas de **qualidade** e as de **performance** em campos separados, e o relatório do próprio estágio (`stage_report`) intocado.
 
-`ReproducibilityMetadata` reúne: evaluator e versão, identidade do reference set (`id`, `version`, `digest`), schemas de anotação disponíveis, artifacts de entrada, digest da configuração, versão do código e identidade do registro de métricas.
+`ReproducibilityMetadata` reúne: evaluator e versão, identidade do reference set (`id`, `version`, `digest`), schemas de anotação disponíveis, artifacts de entrada, digest da configuração, versão do código e identidade do registro de métricas. Cada artifact de entrada é um `ArtifactIdentity` (`kind`, `artifact_id`, `digest`); o `digest`, quando presente, é `sha256:<64 hex>` e é validado na construção, porque a topologia e o runner de experimentos o tratam como prova de que o artifact é o mesmo imutável. `None` significa que o artifact não foi fixado por conteúdo.
 
 Cada `MetricResult` tem `status`:
 
@@ -82,7 +82,7 @@ Um resultado que não é `value` não carrega valor. `sample_count` é o tamanho
 Os avaliadores por capability continuam calculando suas métricas. Os adaptadores só as expressam no envelope, sem recalcular:
 
 - `region_discovery_evaluation_report()` — `region.iou.mean`, `region.recall.mean`, `region.duplicate_rate.mean` sobre os frames anotados (frames sem anotação saem da população, não valem zero) e `runtime.wall_time`/`runtime.peak_memory`;
-- `semantic_interpretation_evaluation_report()` — taxas sobre claims, `semantic.ambiguity_preservation_rate` não aplicável quando nenhuma requisição tinha anotação ambígua, e o custo;
+- `semantic_interpretation_evaluation_report()` — `semantic.acceptable_claim_rate`/`semantic.unsupported_claim_rate` sobre a população **avaliada** (`quality.assessed_claim_count`), nunca sobre o total de claims: um run pode ter claims reais e nenhuma anotação humana, e essas claims ficam não avaliadas, não erradas, então a métrica fica `NOT_APPLICABLE` em vez de levantar erro. `semantic.ambiguity_preservation_rate` é contada só sobre as requisições do run primário (`repeat_index == 0`) com anotação ambígua; repeats medem estabilidade, não evidência física adicional, e nunca inflam essa população. O `stage_report` é o relatório semântico inteiro (samples, failures, quality, cost, outcomes, consistency e qualidade por estrato) via `encode_semantic_evaluation_report()`, que já converte enums (por exemplo `SemanticStratum.source`) para valores JSON-seguros;
 - `wrap_stage_report()` — qualquer relatório de estágio (State Estimation, Sensor Association, Semantic Fusion, Geometric Mapping, Feature Extraction, Point Representation) segue dentro do envelope, com os metadados comuns, sem métricas tipadas. Adaptadores específicos para esses estágios podem substituir a chamada sem alterar o relatório do estágio.
 
 ## O que este módulo não faz

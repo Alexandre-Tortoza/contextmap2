@@ -44,16 +44,19 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `evaluate_semantic_interpretation()` — avaliação por request/evidence variant
   com matching policy versionada.
 - `MATCHING_POLICY`, `SemanticBackendComparison` e
-  `compare_semantic_backends()` — exigem exatamente os mesmos requests e
-  variants para Qwen, Gemini e Florence-2.
+  `compare_semantic_backends()` — exigem exatamente os mesmos requests sobre as
+  mesmas observações, regiões, modos e variants (falhas incluídas, com identidade
+  física completa) e o mesmo reference-set, seleção, run de percepção, versão do
+  evaluator e matching policy, para Qwen, Gemini e Florence-2.
 
 ### State Estimation
 
 - `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
 - `MotionThresholds` — limiares de movimento fornecidos pelo perfil de referência; não há valores padrão.
 - `ReferenceTrajectory`/`ReferenceRole`/`ReferenceComparisonConfig`/`AlignmentMethod` — referência com papel declarado e protocolo de comparação explícito (associação, alinhamento, ATE, RPE).
+- `StateEstimationReferenceProfile`/`decode_reference_profile()`/`encode_reference_profile()` — perfil de referência de um dataset: papel declarado da referência, amarrado ao hash do arquivo (e `declare_reference()` só aceita uma trajetória cujas poses são amostras desse arquivo), limiares de movimento e protocolo de comparação. O perfil do `corridor-02` está em `profiles/`.
 - `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
-- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
+- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, referência ou protocolo, ou duas calibrações diferentes (um backend que não consome calibração não conflita com um que consome).
 - `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
 
 ### Semantic Fusion
@@ -78,7 +81,7 @@ Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
 - `evaluate_spatial_relations()`/`SpatialRelationsEvaluationReport` — avaliação de um run de relações persistido contra um `RelationAnnotationSet`, **por predicado canônico** e sem score agregado: verdadeiros positivos, relações perdidas (não resolvidas, rejeitadas ou nunca recuperadas pelo estágio de candidatos), falsos positivos (violação de negativos), negativos corretos e não resolvidos, previsões sem anotação, com precisão, revocação, F1, taxa de falsa relação, de relação perdida, de não resolvidas e recall de recuperação de candidatos.
 - `RelationPredicateEvaluation`, `RelationConsistencyViolation`, `RelationUnmatchedReport` — os contadores por predicado, as contradições estruturais das relações persistidas (inverso, simetria e suporte mútuo) e o que não pôde ser comparado e de quem é a falha (referência sem entidade casada, identidade com várias entidades, predicados sem mapeamento, estados ambíguos e desconhecidos).
 - `spatial_relations_evaluation_report()` — relatório comum com `relations.f1` e `relations.negative_violation.rate` por predicado, a linhagem (run de relações e de resolução), as políticas efetivas e o reference set.
-- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION`, `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia.
+- `SPATIAL_RELATIONS_EVALUATOR_ID`, `SPATIAL_RELATIONS_EVALUATOR_VERSION` (`"2"`), `SpatialRelationsEvaluationError` — a identidade e a versão do avaliador e a recusa de uma referência que contradiz a taxonomia, de uma `identity`/`identity_reproducibility` cujo `run_id` ou `resolution_artifact_digest` não é o do run de resolução da linhagem das relações, ou de uma `IdentityEvaluation` que nomeia entidade resolvida de outro run mesmo com `identity_reproducibility` correto.
 
 Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
 
@@ -86,7 +89,7 @@ Detalhes: [avaliação de Spatial Relations](spatial_relations.md).
 
 - `evaluate_entity_resolution()`/`EntityResolutionEvaluationReport` — validação de um run de resolução persistido em três camadas (`ResolutionValidationLayer`) e avaliação de identidade contra uma `IdentityAnnotationSet` explícita: `entity.false_merge.rate` e `entity.duplicate.rate` do registro, mais cada classe de falha em separado (fusão falsa, fusão perdida por causa, `DISTINCT` errado, abstenção); sem score composto.
 - `OccurrenceLink` — vínculo explícito entre uma ocorrência anotada (amostra, observação, região) e a entidade de origem; nunca adivinhado.
-- `IdentityEvaluation.identity_of_resolved_entity` — identidade anotada de cada entidade resolvida, para quem avalia saídas construídas sobre elas (Spatial Relations).
+- `IdentityEvaluation.identity_of_resolved_entity` — identidade anotada de cada entidade resolvida, para quem avalia saídas construídas sobre elas (Spatial Relations); a proveniência dessa avaliação (run e digest) vem de `EvaluationReproducibility`, nunca dos refs presentes no mapeamento.
 - `EvaluationReproducibility` — versão de schema e digest do run avaliado (`resolution_artifact_digest`), referência, políticas e código.
 - `evaluate_splits()`/`SplitReference` — diagnóstico de divisão à parte da qualidade de fusão.
 - `evaluate_channel_ablation()`/`ResolutionArm`/`ArmEvaluation` — braços por conjunto de canais sobre as mesmas entidades, candidatos e referência.
@@ -148,7 +151,7 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 
 - `generate_ci_fixture_subset()`/`build_synthetic_sequence()` — gera, só com fórmulas, uma sequência sintética canônica (RGB, LiDAR, pose, calibração), o reference set do subconjunto e o catálogo; commitado em `tests/fixtures/ci_subset/<versão>/`.
 - `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
-- O subconjunto protege contra regressões e não substitui a avaliação com dados reais.
+- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A regressão entre módulos que ele sustenta é parcial: a cadeia "da ingestão até o artifact final" (#172) depende de fusão multi-vista, do `ContextMapArtifact` e de Entity Resolution/Spatial Relations.
 
 ### Registro de métricas e relatório comum
 
@@ -172,6 +175,8 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 - `check_evaluator_reproducibility()`/`compare_evaluation_reports()`/`NondeterministicField` — rodam um evaluator repetidamente sobre as mesmas entradas e recusam qualquer diferença não declarada; valores de recursos são excluídos explicitamente e o não determinismo inevitável exige motivo.
 
 ### Avaliação de técnicas opcionais
+
+Protocolo e harness apenas: não há execução real nem evidência, e nenhuma decisão foi tomada (#197 segue aberta para a execução e a decisão).
 
 - `build_feature_resolution_protocol()`/`build_quality_aware_fusion_protocol()`/`TechniqueProtocol` — os dois experimentos controlados (features nativas × melhoradas; fusão uniforme × ciente de qualidade) como um manifesto por estágio avaliado, com o mesmo artifact upstream pinado nos dois arms, os estratos do protocolo e as métricas de qualidade e de custo separadas.
 - `build_technique_evidence()`/`TechniqueEvidence`/`EffectPolicy` — efeito por métrica **e por estrato** (inclusive regressões escondidas por um ganho global), custos à parte, estágios não avaliados e arms indisponíveis explícitos, artifacts compartilhados e disponibilidade dos estratos; sem score geral.
@@ -208,7 +213,7 @@ pipeline principal.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
-- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
+- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), perfil de referência, limiares por perfil, o baseline `ExternalPose` e o relatório do FAST-LIO.
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

@@ -5,10 +5,13 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
+from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import pytest
 from mapping_builders import make_hypothesis, make_semantic_state, timestamp
+from mapping_fusion import ClaimSpec, View, entity_from_outcome, outcomes_for, write_run
 from resolution_builders import decision_between
 from resolution_entity_builders import (
     attribute,
@@ -52,6 +55,7 @@ from contextmap.semantic_mapping import (
     EntityReference,
     EntityTemporalState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticMapId,
 )
 
@@ -237,6 +241,107 @@ def test_only_the_contradictory_component_is_withheld() -> None:
     assert result.resolved.resolved_of(entities["d"].reference).contradiction_ids == ()
 
 
+# --- several contradictions in one component ----------------------------------------------------
+# Regressão de uma execução real: um componente de MATCH com DOIS pares DISTINCT levantava
+# ValueError, porque cada entidade guardava um único id de contradição.
+
+
+def chain_with_distinct(
+    names: str, distinct: tuple[str, ...]
+) -> tuple[dict[str, Entity], list[ResolutionDecision], list[ResolutionDecision]]:
+    """A chain of MATCH decisions over ``names`` and the DISTINCT decisions named by pairs."""
+    entities = boxes(*names)
+    matches = [
+        decide(entities[first], entities[second], MATCH) for first, second in pairwise(names)
+    ]
+    distincts = [decide(entities[pair[0]], entities[pair[1]], DISTINCT) for pair in distinct]
+    return entities, matches, distincts
+
+
+def test_two_contradictions_in_one_component_are_both_recorded_and_nothing_is_merged() -> None:
+    entities, matches, distincts = chain_with_distinct("abcd", ("ac", "bd"))
+    ab, bc, cd = matches
+    ac, bd = distincts
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"]]
+    by_distinct = {item.distinct_decision_id: item for item in result.contradictions}
+    assert set(by_distinct) == {ac.decision_id, bd.decision_id}
+    assert by_distinct[ac.decision_id].match_path == (ab.decision_id, bc.decision_id)
+    assert by_distinct[bd.decision_id].match_path == (bc.decision_id, cd.decision_id)
+    everyone = tuple(entities[name].reference for name in "abcd")
+    assert all(item.component == everyone for item in result.contradictions)
+    expected = tuple(sorted(item.contradiction_id for item in result.contradictions))
+    assert len(expected) == 2
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+        assert entity.resolution_decision_refs == ()
+
+
+def test_three_contradictions_in_one_component_are_all_recorded() -> None:
+    entities, matches, distincts = chain_with_distinct("abcde", ("ac", "bd", "ce"))
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"], ["e"]]
+    expected = tuple(sorted(contradiction_id_for(item.decision_id) for item in distincts))
+    assert tuple(item.contradiction_id for item in result.contradictions) == expected
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+
+
+def test_two_contradicted_pairs_that_share_an_entity_are_both_recorded() -> None:
+    entities, matches, distincts = chain_with_distinct("abcd", ("ac", "ad"))
+
+    result = materialize(entities, *matches, *distincts)
+
+    assert members_of(result) == [["a"], ["b"], ["c"], ["d"]]
+    assert {item.distinct_pair for item in result.contradictions} == {
+        (entities["a"].reference, entities["c"].reference),
+        (entities["a"].reference, entities["d"].reference),
+    }
+    expected = tuple(sorted(contradiction_id_for(item.decision_id) for item in distincts))
+    for entity in result.resolved.entities:
+        assert entity.contradiction_ids == expected
+
+
+def test_the_contradictions_of_one_component_never_reach_another() -> None:
+    entities = boxes("a", "b", "c", "d", "e", "f", "g", "h")
+    decisions = [
+        decide(entities[x], entities[y], outcome)
+        for x, y, outcome in (
+            ("a", "b", MATCH),
+            ("b", "c", MATCH),
+            ("c", "d", MATCH),
+            ("a", "c", DISTINCT),
+            ("b", "d", DISTINCT),
+            ("e", "f", MATCH),
+            ("f", "g", MATCH),
+            ("e", "g", DISTINCT),
+            ("g", "h", MATCH),
+        )
+    ]
+
+    result = materialize(entities, *decisions)
+
+    counts = {
+        name: len(result.resolved.resolved_of(entities[name].reference).contradiction_ids)
+        for name in "abcdefgh"
+    }
+    assert counts == {"a": 2, "b": 2, "c": 2, "d": 2, "e": 1, "f": 1, "g": 1, "h": 1}
+    assert len(result.contradictions) == 3
+
+
+def test_several_contradictions_do_not_depend_on_the_order_of_the_decisions() -> None:
+    entities, matches, distincts = chain_with_distinct("abcde", ("ac", "bd", "ce"))
+    decisions = [*matches, *distincts]
+    shuffled = list(decisions)
+    random.Random(7).shuffle(shuffled)
+
+    assert materialize(entities, *shuffled) == materialize(entities, *decisions)
+
+
 # --- geometry -----------------------------------------------------------------------------------
 
 
@@ -376,6 +481,93 @@ def test_attributes_keep_their_origin_and_are_deduplicated() -> None:
         ("material", "wood", AttributeOrigin.OBSERVED),
         ("weight", "heavy", AttributeOrigin.EXTERNAL_KNOWLEDGE),
     ]
+
+
+# --- regression: independent evidence for the same attribute must not be a conflict -------------
+# Duas entidades independentes classificadas com o mesmo rótulo (o caso mais comum de resolução:
+# duas observações do mesmo objeto) recebem o mesmo atributo `class`, mas com evidência própria.
+# Isso não é um conflito: as duas provenances devem ser preservadas, e o MATCH não deve levantar.
+
+
+def test_independent_evidence_for_the_same_attribute_is_unioned_not_a_conflict() -> None:
+    shared = attribute("class", "chair", derivation_id="primary-hypothesis-label-v1")
+    own = attribute(
+        "class",
+        "chair",
+        derivation_id="primary-hypothesis-label-v1",
+        contribution="contribution--support-000002--spatial-b",
+        claim="claim-0002",
+    )
+    first = with_labels("a", 1, "chair", attributes=(shared,))
+    second = with_labels("b", 2, "chair", attributes=(own,))
+
+    (merged,) = materialize(
+        {"a": first, "b": second}, decide(first, second, MATCH)
+    ).resolved.entities
+
+    (class_attribute,) = [item for item in merged.semantic_state.attributes if item.name == "class"]
+    assert class_attribute.value == "chair"
+    assert set(class_attribute.evidence) == set(shared.evidence) | set(own.evidence)
+    assert len(class_attribute.evidence) == 2
+
+
+def test_external_knowledge_of_the_same_identity_from_different_sources_is_refused() -> None:
+    """external_source is not part of the grouping key, so it must not be silently dropped."""
+    one_source = attribute(
+        "weight",
+        "heavy",
+        origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+        external_source=ExternalKnowledgeSource(
+            source_id="warehouse-ontology", source_version="2026.1", entry_id="weight/heavy"
+        ),
+    )
+    other_source = attribute(
+        "weight",
+        "heavy",
+        origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+        external_source=ExternalKnowledgeSource(
+            source_id="supplier-catalog", source_version="2025.9", entry_id="sku-0042"
+        ),
+    )
+    first = with_labels("a", 1, "chair", attributes=(one_source,))
+    second = with_labels("b", 2, "chair", attributes=(other_source,))
+
+    with pytest.raises(MaterializationError, match="external_source"):
+        materialize({"a": first, "b": second}, decide(first, second, MATCH))
+
+
+def test_a_match_between_two_independently_classified_real_entities_materializes(
+    tmp_path: Path,
+) -> None:
+    """Integration regression: entities built by the real Semantic Mapping path, not the fakes.
+
+    Two independent supports are each classified ``chair`` by ``semantic_state_from_fused_evidence``
+    (through ``materialize_entities``), so their ``class`` attribute has the same value but its own
+    evidence. This is the common real-object-resolution case, and it must materialize.
+    """
+    outcomes = outcomes_for(
+        [
+            View("run-a", "frame-0120", (ClaimSpec("chair"),), geometry=range(0, 20)),
+            View("run-a", "frame-0130", (ClaimSpec("chair"),), geometry=range(20, 40)),
+        ]
+    )
+    run = write_run(tmp_path, outcomes)
+    first, second = (entity_from_outcome(outcome, run) for outcome in outcomes)
+    assert first.semantic_state.attributes != second.semantic_state.attributes  # evidência própria
+
+    result = materialize_resolved_entities(
+        [first, second],
+        [decision_between(first.reference, second.reference, MATCH)],
+        resolution_run_id=RUN,
+    )
+
+    (merged,) = result.resolved.entities
+    (class_attribute,) = [item for item in merged.semantic_state.attributes if item.name == "class"]
+    assert class_attribute.value == "chair"
+    assert len(class_attribute.evidence) == 2
+    assert set(class_attribute.evidence) == set(first.semantic_state.attributes[0].evidence) | set(
+        second.semantic_state.attributes[0].evidence
+    )
 
 
 def test_two_members_that_disagree_about_one_record_are_refused() -> None:

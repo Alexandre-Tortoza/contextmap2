@@ -235,7 +235,10 @@ configuration_fingerprint
 
 Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
 `outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
-quando aplicável. Features opcionais preservam `feature_id`,
+quando aplicável. O SHA-256 identifica os bytes exatos entregues ao modelo: os
+runtimes o verificam antes de abrir a imagem ou enviar bytes a um provider, e um
+payload divergente é falha explícita, não inferência sobre outra evidência.
+Features opcionais preservam `feature_id`,
 `embedding_space_id`, scope e região. Evidência não suportada por um backend é
 rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
 descartada silenciosamente.
@@ -553,7 +556,7 @@ Não assume identidade automática entre mapas reconstruídos independentemente.
 
 ### Implementação
 
-Implementado em `contextmap.semantic_mapping` ([contratos](../src/contextmap/semantic_mapping/docs/contracts.md)). A referência estável é `EntityReference(semantic_map_id, entity_id)`, e `EntitySet.resolve` recusa uma referência de **outro** semantic map mesmo quando o `entity_id` existe. O contrato implementado agrupa `evidence_refs[]`, `visual_feature_refs[]` e `point_representation_refs[]` em `Entity.evidence` (`EntityEvidenceLinks`, que também carrega a identidade, a versão e o digest do artifact de fusão e as observações espaciais e físicas), e `properties[]` são `semantic_state.attributes`, com evidência e regra de derivação. A identidade é alocada pela política de materialização (`entity--<fusion_support_id>`), não pela geometria.
+Implementado em `contextmap.semantic_mapping` ([contratos](../src/contextmap/semantic_mapping/docs/contracts.md)). A referência estável é `EntityReference(semantic_map_id, entity_id)`, e `EntitySet.resolve` recusa uma referência de **outro** semantic map mesmo quando o `entity_id` existe. O contrato implementado agrupa `evidence_refs[]`, `visual_feature_refs[]` e `point_representation_refs[]` em `Entity.evidence` (`EntityEvidenceLinks`, que também carrega a identidade, a versão, o digest e a sequência canônica do artifact de fusão e as observações espaciais e físicas), e `properties[]` são `semantic_state.attributes`, com evidência e regra de derivação. A identidade é alocada pela política de materialização (`entity--<fusion_support_id>`), não pela geometria.
 
 ## 21. `EntityGeometry`
 
@@ -573,7 +576,7 @@ EntityGeometry
 
 Centroid e bounds são resumos derivados. Geometry references continuam autoritativas.
 
-Implementado: além desses campos, o contrato traz `SupportStatistics` (pontos, volume, densidade, componentes conexos), diagnósticos explícitos (esparso, desconectado, extensão degenerada, orientação não justificada) e a proveniência dos resumos (algoritmo versionado, conjunto de entrada por digest, frame, convenções numéricas e política). Suporte vazio não vira uma geometria válida, e a orientação só é derivada quando a política pede e os eixos são bem definidos ([detalhes](../src/contextmap/semantic_mapping/docs/geometry.md)).
+Implementado: além desses campos, o contrato traz `SupportStatistics` (pontos, volume, densidade, componentes conexos), diagnósticos explícitos (esparso, desconectado, extensão degenerada, orientação não justificada e conectividade não calculada quando o suporte excede o limite de custo da política) e a proveniência dos resumos (algoritmo versionado, conjunto de entrada por digest, frame, convenções numéricas e política). Suporte vazio não vira uma geometria válida, e a orientação só é derivada quando a política pede e os eixos são bem definidos ([detalhes](../src/contextmap/semantic_mapping/docs/geometry.md)).
 
 ## 22. `EntitySemanticState`
 
@@ -685,7 +688,7 @@ contradiction_ids[]
 provenance
 ```
 
-Toda entidade de origem pertence a **exatamente uma** entidade resolvida (uma entidade que nada casou vira uma resolvida de um membro), e Spatial Relations consome só entidades resolvidas. Um componente ligado por `MATCH` que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction`: um falso merge é pior que uma duplicata visível e rastreada. Source entities não são mutadas ou apagadas.
+Toda entidade de origem pertence a **exatamente uma** entidade resolvida (uma entidade que nada casou vira uma resolvida de um membro), e Spatial Relations consome só entidades resolvidas. Um componente ligado por `MATCH` que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction` por par `DISTINCT` (um componente pode ter várias, e cada entidade retida guarda todos os seus `contradiction_ids`): um falso merge é pior que uma duplicata visível e rastreada. Source entities não são mutadas ou apagadas.
 
 ### Escopo de identidade
 

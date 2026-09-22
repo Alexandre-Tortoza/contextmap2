@@ -38,9 +38,13 @@ Todas as listas são ordenadas e sem duplicatas (o contrato recusa uma referênc
 
 Identifica a evidência dentro de um `SemanticFusionRunArtifact` e carrega a **identidade e a versão** do artifact: `fusion_run_id`, `fusion_schema_version`, `fused_evidence_id`, `fusion_support_id` e `fusion_artifact_digest`, o digest de `fusion_artifact_digest(manifest)` (identidade, versão do schema e tamanho e hash de cada arquivo contratual). O digest independe do layout interno do run e muda se qualquer coisa de que a entidade foi materializada mudar.
 
+O digest **não cobre a linhagem** do manifest. Por isso a referência carrega também `sequence_artifact_id`, a sequência canônica sobre a qual o run foi construído quando a entidade foi materializada, e `validate_entity_evidence` a compara explicitamente com `manifest.lineage.sequence_artifact_id` (o mapa geométrico é comparado com o da geometria da entidade). Trocar só a sequência do run, mantendo mapa, identidade e inventário, é portanto um `incompatible_lineage` explícito e não passa despercebido.
+
 ### `EntityFeatureRef`
 
 `perception_run_id`, `perception_result_id`, `feature_id`, `embedding_space_id`, `scope` e `region_id` (presente exatamente para features de região). O vetor continua no feature store de Visual Perception; só a identidade viaja, junto do espaço de embedding, para que espaços diferentes nunca sejam misturados por acidente.
+
+A identidade da feature é a tripla **`(perception_run_id, perception_result_id, feature_id)`**, nessa ordem: um `PerceptionResultId` é local ao `PerceptionRun` e um `FeatureId` é local ao resultado, então dois runs podem reutilizar o mesmo par e só o run os distingue. A deduplicação em `feature_refs_of`, a ordem canônica de `visual_feature_refs` e a recusa de duplicatas usam essa tripla; uma referência nunca sobrescreve a de outro run.
 
 ### Construção
 
@@ -59,7 +63,7 @@ Uma representação 3D ancorada **fora** do suporte geométrico da entidade é r
 | `stale_reference` | O conteúdo do run mudou desde que a entidade foi materializada (digest). |
 | `corrupt_artifact` | O run falha na própria verificação de integridade. |
 | `missing_reference` | A evidência fundida não está no run, ou o suporte guarda outra. |
-| `incompatible_lineage` | O run foi construído sobre outro mapa geométrico que o da entidade. |
+| `incompatible_lineage` | O run foi construído sobre outro mapa geométrico que o da entidade, ou sobre outra sequência que a de que a entidade foi materializada (`sequence_artifact_id` da referência × linhagem do manifest). |
 | `observation_mismatch` | As observações listadas diferem das que a evidência fundida traz. |
 | `feature_mismatch`, `point_representation_mismatch` | As features ou representações 3D listadas diferem das que a evidência fundida traz. |
 | `geometry_outside_support` | A evidência fundida enxerga geometria fora do suporte da entidade. |
@@ -71,7 +75,7 @@ A fonte é a porta estrutural `FusedEvidenceSource` (`manifest`, `fused_evidence
 
 ## Travessia
 
-- `trace_entity_evidence(entity, fusion_runs=...)` percorre a entidade até as vistas: cada `ContributionTrace` traz a observação espacial, o run e o resultado de percepção, a região, as claims e o frame físico. `EntityEvidenceTrace.physical_observation_ids` lista os frames distintos. Levanta `EvidenceTraceError` se o run ou a evidência não podem ser lidos.
+- `trace_entity_evidence(entity, fusion_runs=...)` percorre a entidade até as vistas: cada `ContributionTrace` traz a observação espacial, o run e o resultado de percepção, a região, as claims, as referências dos scorers (`score_refs`: a claim pontuada e o scorer, sem o valor do score) e o frame físico. `EntityEvidenceTrace.physical_observation_ids` lista os frames distintos. Levanta `EvidenceTraceError` se o run ou a evidência não podem ser lidos.
 - `trace_geometry_sources(geometry, source=...)` percorre a geometria até as observações LiDAR de origem: uma `GeometrySourceTrace` por observação, com a contagem de pontos e o intervalo de aquisição.
 
 ## Sobrevive à reabertura

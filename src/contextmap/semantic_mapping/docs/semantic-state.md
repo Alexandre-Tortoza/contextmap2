@@ -12,7 +12,7 @@ Uma entidade preserva a evidência semântica acumulada a montante em vez de col
 | alternativa × contradição | Alternativas competem entre si; uma contradição (`UncertaintyKind.CONTRADICTION`) é observações físicas distintas apoiando hipóteses incompatíveis. |
 | desconhecido/abstenção × evidência negativa | `EvidenceStance.ABSTAINING` não é apoio nem evidência contra. |
 | sem score × score baixo | `SupportSignal.value` `None` (não pontuado) é diferente de `0.0`. |
-| propriedade observada × conhecimento externo | `AttributeOrigin.OBSERVED`/`DERIVED` exigem evidência; `EXTERNAL_KNOWLEDGE` é rotulado e exige uma derivação documentada. |
+| propriedade observada × conhecimento externo | `AttributeOrigin.OBSERVED`/`DERIVED` exigem evidência; `EXTERNAL_KNOWLEDGE` é rotulado, exige uma derivação documentada e uma `ExternalKnowledgeSource` (fonte, versão e entrada), única forma de nomeá-la. |
 
 ## Contratos
 
