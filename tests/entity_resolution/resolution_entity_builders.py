@@ -193,15 +193,20 @@ def attribute(
     *,
     origin: AttributeOrigin = AttributeOrigin.OBSERVED,
     derivation_id: str = "observed-attribute-v1",
+    contribution: str = "contribution--support-000001--spatial-a",
+    claim: str = "claim-0001",
 ) -> EntityAttribute:
-    """An attribute citing one claim, unless it is external knowledge, which cites nothing."""
+    """An attribute citing one claim, unless it is external knowledge, which cites nothing.
+
+    ``contribution``/``claim`` let two independent members claim the same property from their own,
+    distinct evidence, as two real observations of the same object do.
+    """
     evidence = (
         ()
         if origin is AttributeOrigin.EXTERNAL_KNOWLEDGE
         else (
             EvidenceReference(
-                contribution_id=EvidenceContributionId("contribution--support-000001--spatial-a"),
-                claim_id=ClaimId("claim-0001"),
+                contribution_id=EvidenceContributionId(contribution), claim_id=ClaimId(claim)
             ),
         )
     )

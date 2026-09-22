@@ -6,10 +6,12 @@ import dataclasses
 import json
 import random
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import pytest
 from mapping_builders import make_hypothesis, make_semantic_state, timestamp
+from mapping_fusion import ClaimSpec, View, entity_from_outcome, outcomes_for, write_run
 from resolution_builders import decision_between
 from resolution_entity_builders import (
     attribute,
@@ -478,6 +480,68 @@ def test_attributes_keep_their_origin_and_are_deduplicated() -> None:
         ("material", "wood", AttributeOrigin.OBSERVED),
         ("weight", "heavy", AttributeOrigin.EXTERNAL_KNOWLEDGE),
     ]
+
+
+# --- regression: independent evidence for the same attribute must not be a conflict -------------
+# Duas entidades independentes classificadas com o mesmo rótulo (o caso mais comum de resolução:
+# duas observações do mesmo objeto) recebem o mesmo atributo `class`, mas com evidência própria.
+# Isso não é um conflito: as duas provenances devem ser preservadas, e o MATCH não deve levantar.
+
+
+def test_independent_evidence_for_the_same_attribute_is_unioned_not_a_conflict() -> None:
+    shared = attribute("class", "chair", derivation_id="primary-hypothesis-label-v1")
+    own = attribute(
+        "class",
+        "chair",
+        derivation_id="primary-hypothesis-label-v1",
+        contribution="contribution--support-000002--spatial-b",
+        claim="claim-0002",
+    )
+    first = with_labels("a", 1, "chair", attributes=(shared,))
+    second = with_labels("b", 2, "chair", attributes=(own,))
+
+    (merged,) = materialize(
+        {"a": first, "b": second}, decide(first, second, MATCH)
+    ).resolved.entities
+
+    (class_attribute,) = [item for item in merged.semantic_state.attributes if item.name == "class"]
+    assert class_attribute.value == "chair"
+    assert set(class_attribute.evidence) == set(shared.evidence) | set(own.evidence)
+    assert len(class_attribute.evidence) == 2
+
+
+def test_a_match_between_two_independently_classified_real_entities_materializes(
+    tmp_path: Path,
+) -> None:
+    """Integration regression: entities built by the real Semantic Mapping path, not the fakes.
+
+    Two independent supports are each classified ``chair`` by ``semantic_state_from_fused_evidence``
+    (through ``materialize_entities``), so their ``class`` attribute has the same value but its own
+    evidence. This is the common real-object-resolution case, and it must materialize.
+    """
+    outcomes = outcomes_for(
+        [
+            View("run-a", "frame-0120", (ClaimSpec("chair"),), geometry=range(0, 20)),
+            View("run-a", "frame-0130", (ClaimSpec("chair"),), geometry=range(20, 40)),
+        ]
+    )
+    run = write_run(tmp_path, outcomes)
+    first, second = (entity_from_outcome(outcome, run) for outcome in outcomes)
+    assert first.semantic_state.attributes != second.semantic_state.attributes  # evidência própria
+
+    result = materialize_resolved_entities(
+        [first, second],
+        [decision_between(first.reference, second.reference, MATCH)],
+        resolution_run_id=RUN,
+    )
+
+    (merged,) = result.resolved.entities
+    (class_attribute,) = [item for item in merged.semantic_state.attributes if item.name == "class"]
+    assert class_attribute.value == "chair"
+    assert len(class_attribute.evidence) == 2
+    assert set(class_attribute.evidence) == set(first.semantic_state.attributes[0].evidence) | set(
+        second.semantic_state.attributes[0].evidence
+    )
 
 
 def test_two_members_that_disagree_about_one_record_are_refused() -> None:

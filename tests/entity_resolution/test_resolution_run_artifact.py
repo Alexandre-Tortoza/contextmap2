@@ -639,6 +639,74 @@ def test_an_empty_run_is_valid_and_reads_back_empty(tmp_path: Path) -> None:
     assert reader.verify_integrity() == []
 
 
+# --- candidate-set integrity ---------------------------------------------------------------------
+
+
+def test_a_candidate_set_missing_for_a_source_entity_is_refused(tmp_path: Path) -> None:
+    inputs = build_inputs()
+    without_f = tuple(
+        item
+        for item in inputs.candidate_sets
+        if item.source_entity_ref != inputs.entities["f"].reference
+    )
+    incomplete = dataclasses.replace(inputs, candidate_sets=without_f)
+
+    with pytest.raises(RunArtifactError, match="no candidate set"):
+        write_run(tmp_path / "artifact", incomplete)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_source_entity_with_two_candidate_sets_is_refused(tmp_path: Path) -> None:
+    inputs = build_inputs()
+    duplicated = dataclasses.replace(
+        inputs, candidate_sets=(*inputs.candidate_sets, inputs.candidate_sets[0])
+    )
+
+    with pytest.raises(RunArtifactError, match="more than one candidate set"):
+        write_run(tmp_path / "artifact", duplicated)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_candidate_set_for_an_entity_outside_the_materialization_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_inputs()
+    foreign = entity_at("z", (100.0, 0.0, 0.0), support_number=99, spatial=("spatial--z",))
+    foreign_sets = retrieve_candidate_sets(
+        [foreign], CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+    )
+    extended = dataclasses.replace(inputs, candidate_sets=inputs.candidate_sets + foreign_sets)
+
+    with pytest.raises(RunArtifactError, match="does not have"):
+        write_run(tmp_path / "artifact", extended)
+
+    assert not (tmp_path / "artifact").exists()
+
+
+def test_a_candidate_naming_an_entity_outside_the_materialization_is_refused(
+    tmp_path: Path,
+) -> None:
+    inputs = build_inputs()
+    # z fica bem perto de a: aparece como candidata de todo mundo, mas nunca é materializada.
+    foreign = entity_at("z", (0.0, 0.0, 0.0), support_number=99, spatial=("spatial--z",))
+    combined = retrieve_candidate_sets(
+        [*inputs.entities.values(), foreign],
+        CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1),
+    )
+    contaminated_sets = tuple(
+        item for item in combined if item.source_entity_ref != foreign.reference
+    )
+    assert any(foreign.reference in item.candidate_entity_refs for item in contaminated_sets)
+    contaminated = dataclasses.replace(inputs, candidate_sets=contaminated_sets)
+
+    with pytest.raises(RunArtifactError, match="does not have"):
+        write_run(tmp_path / "artifact", contaminated)
+
+    assert not (tmp_path / "artifact").exists()
+
+
 # --- several contradictions in one component ----------------------------------------------------
 
 

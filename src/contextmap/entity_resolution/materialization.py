@@ -17,6 +17,12 @@ every one of them, so a consumer sees why a probable match was not honored. An `
 decision never merges, and is recorded as an unresolved
 neighbor of both entities.
 
+Two members that independently propose the *same* attribute (same name, value, origin and
+derivation, the common case of two observations of one object) are not a conflict: their evidence
+and support are unioned instead of compared for equality, so their separate provenances are kept.
+A hypothesis, an uncertainty record or an attribute whose identity matches but whose remaining
+content still disagrees is a real aggregation error.
+
 An entity in a group must share the geometric map and frame of the others (their supports are
 unioned as references and their bounds are unioned), and a group must share one clock domain;
 anything else is an explicit error, never a silent merge.
@@ -28,7 +34,7 @@ import hashlib
 import json
 from collections import defaultdict, deque
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 
 from contextmap.entity_resolution.decision import (
@@ -380,14 +386,10 @@ def _geometry(members: tuple[Entity, ...]) -> ResolvedGeometry:
 
 def _semantic_state(members: tuple[Entity, ...]) -> ResolvedSemanticState:
     hypotheses: dict[tuple[str, str], EntityHypothesis] = {}
-    attributes: dict[tuple[str, str, str, str], EntityAttribute] = {}
     uncertainty: dict[tuple[str, ...], EntityUncertainty] = {}
     for member in members:
         for hypothesis in member.semantic_state.hypotheses:
             _put(hypotheses, (hypothesis.fused_evidence_id, hypothesis.hypothesis_id), hypothesis)
-        for attribute in member.semantic_state.attributes:
-            key = (attribute.name, attribute.value, attribute.origin.value, attribute.derivation_id)
-            _put(attributes, key, attribute)
         for item in member.semantic_state.uncertainty:
             _put(uncertainty, uncertainty_key(item), item)
     ambiguity = tuple(
@@ -399,10 +401,59 @@ def _semantic_state(members: tuple[Entity, ...]) -> ResolvedSemanticState:
     union = tuple(hypotheses[key] for key in sorted(hypotheses))
     return ResolvedSemanticState(
         hypotheses=union,
-        attributes=tuple(attributes[key] for key in sorted(attributes)),
+        attributes=_attributes(members),
         uncertainty=tuple(uncertainty[key] for key in sorted(uncertainty)),
         member_ambiguity=ambiguity,
         ambiguity_state=derive_resolved_ambiguity(ambiguity, union),
+    )
+
+
+def _attributes(members: tuple[Entity, ...]) -> tuple[EntityAttribute, ...]:
+    """Union the evidence and support of attributes that are the same semantic property.
+
+    Two independent members classified the same way (for example, both ``class=chair`` from
+    ``primary-hypothesis-label-v1``) carry their own, distinct evidence for it: that is two
+    observations of the same property, not a conflict, and materializing their ``MATCH`` must
+    not raise. ``evidence`` and ``support`` are unioned the same way every other per-member
+    evidence link is (see :func:`_evidence`), keyed exactly as
+    :class:`~contextmap.semantic_mapping.EntityAttribute` itself requires them to be canonical.
+    An attribute that still disagrees after that union (the same identity, a real conflict at the
+    level of one evidence reference or one support signal) is still an aggregation error: nothing
+    is silently dropped or averaged.
+    """
+    grouped: dict[tuple[str, str, str, str], list[EntityAttribute]] = defaultdict(list)
+    for member in members:
+        for attribute in member.semantic_state.attributes:
+            key = (attribute.name, attribute.value, attribute.origin.value, attribute.derivation_id)
+            grouped[key].append(attribute)
+    merged: dict[tuple[str, str, str, str], EntityAttribute] = {}
+    for key, group in grouped.items():
+        evidence: dict[tuple[str, str], Any] = {}
+        support: dict[tuple[str, ...], Any] = {}
+        for attribute in group:
+            for ref in attribute.evidence:
+                _put(evidence, (ref.contribution_id, ref.claim_id or ""), ref)
+            for signal in attribute.support:
+                _put(support, _support_signal_key(signal), signal)
+        merged[key] = replace(
+            group[0],
+            evidence=tuple(evidence[item] for item in sorted(evidence)),
+            support=tuple(support[item] for item in sorted(support)),
+        )
+    return tuple(merged[key] for key in sorted(merged))
+
+
+def _support_signal_key(signal: Any) -> tuple[str, ...]:
+    """The canonical identity of a support signal, mirroring ``EntityAttribute``'s own rule."""
+    producer = signal.producer
+    return (
+        signal.kind.value,
+        producer.backend_id,
+        producer.capability,
+        producer.provider,
+        producer.model,
+        producer.version,
+        producer.configuration_fingerprint or "",
     )
 
 
