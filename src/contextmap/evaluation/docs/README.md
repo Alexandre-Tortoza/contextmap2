@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) e Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais).
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip).
 
 ## O que este módulo explicitamente não possui
 
@@ -52,8 +52,9 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `evaluate_state_estimation()`/`StateEstimationEvaluationReport` — relatório comum a qualquer backend, com seções independentes: `StructuralReport`, `MotionReport`, `TransformTraceReport`, `AccuracyReport` e `CostReport`.
 - `MotionThresholds` — limiares de movimento fornecidos pelo perfil de referência; não há valores padrão.
 - `ReferenceTrajectory`/`ReferenceRole`/`ReferenceComparisonConfig`/`AlignmentMethod` — referência com papel declarado e protocolo de comparação explícito (associação, alinhamento, ATE, RPE).
+- `StateEstimationReferenceProfile`/`decode_reference_profile()`/`encode_reference_profile()` — perfil de referência de um dataset: papel declarado da referência, amarrado ao hash do arquivo (e `declare_reference()` só aceita uma trajetória cujas poses são amostras desse arquivo), limiares de movimento e protocolo de comparação. O perfil do `corridor-02` está em `profiles/`.
 - `trace_transform_chain()` — cadeia `T_reference_sensor(t)` reconstruível com erro numérico de composição e de round trip.
-- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, calibração, referência ou protocolo.
+- `compare_state_estimation_reports()`/`StateEstimationComparison` — comparação controlada entre backends que rejeita drift de sequência, seleção, referência ou protocolo, ou duas calibrações diferentes (um backend que não consome calibração não conflita com um que consome).
 - `encode_state_estimation_report()` — representação JSON do relatório com todas as identidades.
 
 ### Semantic Fusion
@@ -63,6 +64,15 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
 - `ReferenceAnnotation` — rótulo de referência por observação espacial; ausência é "não aplicável".
 - `FusionArmRole`, `compare_semantic_fusion_reports()`/`SemanticFusionComparison` — comparação controlada de braços (baseline, ciente de qualidade e ablações de canais) sobre a mesma base de evidência, sem vencedor nem escore.
 - `encode_semantic_fusion_report()`/`encode_semantic_fusion_comparison()` — representação JSON com todas as identidades.
+
+### Semantic Mapping
+
+- `evaluate_semantic_mapping()`/`SemanticMappingEvaluationReport` — validação de um run de mapeamento persistido contra o run de fusão e o mapa geométrico de origem, em seis camadas (`SemanticMappingValidationLayer`), cada `SemanticMappingValidationCheck` com o que examinou e as falhas exatas; sem score composto.
+- `SemanticMappingEvaluationLineage` — identidades do run de fusão, do mapa geométrico, da política e versão de materialização, do schema das entidades, do código e do avaliador.
+- `SemanticMappingEvaluationError` — recusa a avaliação quando o upstream oferecido não é o da linhagem.
+- `encode_semantic_mapping_report()` — representação JSON com todas as identidades.
+
+Detalhes: [validação de Semantic Mapping](semantic_mapping.md).
 
 ### Sensor Association
 
@@ -111,9 +121,10 @@ pipeline principal.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — convenção
   open-vocabulary, ablações, qualidade, custo e falhas sem fusion.
 - [`semantic_fusion.md`](semantic_fusion.md) — seções do relatório, anotações, estratificação, comparação controlada e ablações da avaliação de Semantic Fusion.
+- [`semantic_mapping.md`](semantic_mapping.md) — as seis camadas de validação de Semantic Mapping, a linhagem do relatório e a robustez a upstream corrompido.
 - [`sensor_association.md`](sensor_association.md) — estratificação, denominadores explícitos, caminhos de features, linhagem e comparação controlada da avaliação de Sensor Association.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
-- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), limiares por perfil e o baseline `ExternalPose`.
+- [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), perfil de referência, limiares por perfil, o baseline `ExternalPose` e o relatório do FAST-LIO.
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

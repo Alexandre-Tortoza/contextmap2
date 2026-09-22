@@ -65,7 +65,7 @@ Um corredor sintético (duas paredes e um piso) é observado de dez poses de uma
 
 ## Execução real de referência (ad hoc)
 
-Não há trajetória FAST-LIO real nesta milestone; a execução usa a trajetória de referência do dataset como entrada `ExternalPose` (corpo = IMU, extrínseco `laser_to_imu` do próprio dataset, mesmo clock de cabeçalho dos scans). Ela **não** é uma verdade absoluta do mapa: o que se mede é a consistência interna e a numérica. Dois trechos de `corridor-02` (120 scans cada), lookup interpolado com tolerância de 400 ms:
+A trajetória real do FAST-LIO agora existe em State Estimation, mas esta execução de referência de Geometric Mapping é anterior e não foi refeita sobre ela. Esta avaliação usa a trajetória de referência do dataset como entrada `ExternalPose` (corpo = IMU, extrínseco `laser_to_imu` do próprio dataset, mesmo clock de cabeçalho dos scans). Ela **não** é uma verdade absoluta do mapa: o que se mede é a consistência interna e a numérica. Dois trechos de `corridor-02` (120 scans cada), lookup interpolado com tolerância de 400 ms:
 
 | | Trecho reto (170–182 s, ≈ 1,4 m/s) | Trecho com curva (366–378 s, 141° em 12 s) |
 | --- | --- | --- |
@@ -103,4 +103,4 @@ Avaliar o trecho reto (3 milhões de pontos) leva ≈ 31 s com `structure_point_
 - O harness não tem CLI; a integração pelo `runtime` vem na milestone de Runtime.
 - O custo de verificação é linear no número de pontos (Python puro por ponto); `structure_point_stride` evita ler os pontos que pula.
 - Nenhuma referência de geometria confiável está declarada para `corridor-02` (`corridor-02.pcd` não tem papel nem frame declarados), então a comparação com referência foi exercitada só com fixtures sintéticas.
-- Uma referência real do FAST-LIO e a medida do ganho de um deskew dependem de trabalho fora desta milestone.
+- Refazer esta avaliação de Geometric Mapping sobre a trajetória real do FAST-LIO e medir o ganho de um deskew dependem de trabalho fora desta milestone.

@@ -479,3 +479,32 @@ def test_runtime_rejects_misaligned_rgb_and_alpha_batches_before_inference() -> 
 
     with pytest.raises(AlphaClipInferenceError, match="RGB and alpha batch geometry"):
         _validate_batch_geometry(image_batch, alpha_batch)
+
+
+def test_missing_transitive_dependency_of_official_package_is_named(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The official alpha_clip package imports loralib and pkg_resources at import time."""
+
+    def import_module(name: str) -> Any:
+        if name == "alpha_clip":
+            raise ModuleNotFoundError("No module named 'loralib'", name="loralib")
+        return object()
+
+    monkeypatch.setattr(
+        "contextmap.visual_perception.backends.alphaclip.importlib.import_module",
+        import_module,
+    )
+    runtime = OfficialAlphaClipRuntime(
+        config=AlphaClipConfig(
+            model_name="ViT-B/16",
+            base_checkpoint_path="base.pt",
+            alpha_checkpoint_path="alpha.pth",
+            checkpoint_fingerprint="sha256:abc",
+        ),
+        prepared_image_root=tmp_path,
+        checkpoint_root=tmp_path,
+    )
+
+    with pytest.raises(AlphaClipDependencyError, match="loralib"):
+        runtime.encode(_image(), ())
