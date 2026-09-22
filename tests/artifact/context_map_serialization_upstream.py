@@ -17,6 +17,7 @@ directories on ``sys.path`` (the Spatial Relations wiring tests do the same).
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import sys
 from pathlib import Path
 
@@ -122,6 +123,10 @@ def write_resolution_run(
         ER_LINEAGE,
         geometric_map_id=MapId(geometric_map_id),
         semantic_map_ids=(SemanticMapId(semantic_map_id),),
+        # ER_LINEAGE traz um placeholder de digest que não é um sha256 real (só os testes de
+        # Entity Resolution o consomem, e nenhum valida o formato); a montagem do ContextMap
+        # deriva dele uma UpstreamArtifact real e exige o formato "sha256:<64 hex>".
+        semantic_mapping_artifact_digest=f"sha256:{hashlib.sha256(semantic_map_id.encode()).hexdigest()}",
     )
     EntityResolutionRunWriter(
         output_dir=output_dir, run_id=resolution_run, lineage=lineage, code_version="test"

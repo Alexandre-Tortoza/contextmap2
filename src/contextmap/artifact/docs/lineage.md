@@ -22,7 +22,7 @@ ContextMap
 | `SENSOR_OBSERVED` | ancorada diretamente em observação de sensor ou em geometria medida a partir dela | `SEQUENCE`, `GEOMETRIC_MAP` (e mais nada) | opcional |
 | `MODEL_INFERRED` | produzida por um modelo de percepção, linguagem ou scorer | pelo menos um `PERCEPTION_RUN` que **nomeia o modelo** | opcional |
 | `GEOMETRY_DERIVED` | derivada de forma determinística da geometria por uma regra versionada | pelo menos um `GEOMETRIC_MAP` ou `SPATIAL_RELATIONS_RUN` | **obrigatória** |
-| `MULTIVIEW_FUSED` | acumulada a partir de várias contribuições de evidência | pelo menos um `SEMANTIC_FUSION_RUN` | **obrigatória** |
+| `MULTIVIEW_FUSED` | acumulada a partir de várias contribuições de evidência | pelo menos um `SEMANTIC_FUSION_RUN` **ou** `ENTITY_RESOLUTION_RUN` | **obrigatória** |
 | `HUMAN_ANNOTATED` | anotação humana explícita, fornecida como entrada do pipeline | pelo menos um `HUMAN_ANNOTATION_SET` | opcional |
 | `PRIOR_KNOWLEDGE` | reservada para raciocínio sobre conhecimento prévio explícito | qualquer artifact da linhagem | **obrigatória** |
 
@@ -35,6 +35,7 @@ A categoria é **metadado de proveniência**, não uma pontuação: não ordena 
 - **anotação usada só para avaliação não entra silenciosamente**: um conjunto de anotações só aparece em uma origem `HUMAN_ANNOTATED`; citá-lo sob qualquer outra categoria é rejeitado, e **não existe** `ArtifactKind` para conjunto de referência de avaliação nem para saída de debug, então nenhum dos dois pode ser citado;
 - **a categoria sozinha não explica um resultado**: `derived_from` lista **toda** a evidência de origem, ordenada e única, com pelo menos um registro;
 - `PRIOR_KNOWLEDGE` é representável (com política e evidência), sem mudar a semântica das demais origens, e nenhum estágio da v0.1.0 a emite: o schema apenas preserva a distinção.
+- `ENTITY_RESOLUTION_RUN` foi acrescentado a `MULTIVIEW_FUSED` para a montagem real do `ContextMap` (`serialization/assembly.py`, [#537](https://github.com/Alexandre-Tortoza/contextmap2/issues/537)): a materialização de Entity Resolution também é uma regra versionada que acumula várias contribuições de evidência — a de cada membro fundido — e é o único artifact que a montagem (que nunca abre um run de Semantic Fusion) tem de fato aberto para citar essa derivação com honestidade. `SEMANTIC_FUSION_RUN` continua a citação correta para um resultado fundido a partir de uma leitura real desse run (a fixture representativa em `validation.md` continua usando-o).
 
 ## Artifacts a montante e o fechamento
 
