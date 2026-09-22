@@ -319,6 +319,37 @@ def test_read_calibration_rejects_intrinsics_that_change_during_sequence(
         adapter.read_calibration()
 
 
+def test_read_calibration_scans_the_bag_only_once_per_adapter_instance(
+    bag_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão do #506: calibração é lida uma única vez, não uma por chamada.
+
+    ``read_observations()`` já chama ``read_calibration()`` internamente
+    (para resolver ``calibration_id`` de cada observação); o runtime
+    (``ingestion_service._read``) chama ``read_calibration()`` de novo
+    depois de exaurir as observações. Sem cache, isso decodifica o mesmo
+    ``camera_info`` duas vezes — um scan completo do bag cada vez.
+    """
+    config = SourceAdapterConfig(source_type="ros1_bag", path=str(bag_path), topics=_TOPICS)
+    adapter = Ros1BagSourceAdapter(config)
+    calls: list[Any] = []
+    real_entry = Ros1BagSourceAdapter._camera_calibration_entry
+
+    def counting_entry(self: Ros1BagSourceAdapter, message: Any, topic: str) -> CalibrationEntry:
+        calls.append(message)
+        return real_entry(self, message, topic)
+
+    monkeypatch.setattr(Ros1BagSourceAdapter, "_camera_calibration_entry", counting_entry)
+
+    list(adapter.read_observations())  # calls read_calibration() internally
+    second_call_result = adapter.read_calibration()  # mirrors the runtime's second call
+
+    assert len(calls) == 1, (
+        f"camera_info must be decoded once per adapter instance, not {len(calls)} times"
+    )
+    assert second_call_result is not None
+
+
 def test_missing_required_topic_raises_before_any_observation(bag_path: Path) -> None:
     config = SourceAdapterConfig(
         source_type="ros1_bag",

@@ -67,6 +67,8 @@ class Ros1BagSourceAdapter:
         self._typestore = get_typestore(Stores.ROS1_NOETIC)
         self._warnings: list[SourceAdapterWarning] = []
         self._content_hash = _ros_common.StreamingContentHash()
+        self._calibration_cache: CalibrationSet | None = None
+        self._calibration_read = False
 
     def capabilities(self) -> SourceAdapterCapabilities:
         """Report which configured modalities are actually present in the bag.
@@ -96,7 +98,11 @@ class Ros1BagSourceAdapter:
         #506) — and each configured topic's ``observation_id`` counter
         starts at zero relative to the window, not to the bag's start;
         correlating across two different windows' observations must use
-        their physical ``timestamp``, never ``observation_id``.
+        their physical ``timestamp``, never ``observation_id``. This cost
+        guarantee covers the configured modality topics (rgb/lidar/imu/pose)
+        and :meth:`content_hash`; it does not extend to
+        :meth:`read_calibration`, which is global source metadata read once
+        regardless of the window (see :meth:`read_calibration`).
 
         Yields:
             One :data:`~contextmap.ingestion.models.SourceObservation` per
@@ -185,10 +191,26 @@ class Ros1BagSourceAdapter:
         the sequence. Static extrinsics supplied in
         ``SourceAdapterConfig.calibration`` are preserved in the result.
 
+        Calibration is deliberately NOT bounded by ``config.window``: unlike
+        ``read_observations()``/``content_hash()`` (issue #506, cost
+        proportional to the window), ``camera_info`` is treated as global,
+        source-wide metadata that describes the whole bag, not a per-window
+        artifact — see ``docs/adapters.md``. The scan is performed at most
+        once per adapter instance and the result cached, so calling this
+        method again (as ``read_observations()`` does internally, and as the
+        runtime does again afterwards) never re-scans the bag.
+
         Returns:
             The merged calibration, or ``None`` when neither configuration
             nor the source provides calibration.
         """
+        if not self._calibration_read:
+            self._calibration_cache = self._discover_calibration()
+            self._calibration_read = True
+        return self._calibration_cache
+
+    def _discover_calibration(self) -> CalibrationSet | None:
+        """Scan the whole bag's ``camera_info`` topic once; never windowed."""
         topic = self._config.topics.camera_info
         discovered: list[CalibrationEntry] = []
         if topic is not None:
