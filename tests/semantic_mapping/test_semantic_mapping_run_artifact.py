@@ -38,7 +38,6 @@ from contextmap.semantic_mapping import (
     SemanticMappingRunReader,
     SemanticMappingRunWriter,
     UnknownEntityError,
-    allocate_mapping_run_index,
     lineage_from_fusion_manifest,
     materialize_entities,
 )
@@ -77,12 +76,10 @@ def _writer(
     code_digest: str = CODE_DIGEST,
 ) -> SemanticMappingRunWriter:
     return SemanticMappingRunWriter(
-        workspace_root=workspace,
+        output_dir=_run_dir(workspace, run_index),
         sequence_name="sequence-0001",
         run_id=SemanticMappingRunId(f"mapping-run-{run_index:04d}"),
         run_index=run_index,
-        selection_label="fusion-run-0001",
-        policy_label="one-support-one-entity",
         semantic_map_id=semantic_map_id,
         lineage=lineage or lineage_from_fusion_manifest(fusion.manifest),
         code_version="test",
@@ -92,13 +89,8 @@ def _writer(
 
 
 def _run_dir(workspace: Path, run_index: int = 1) -> Path:
-    return (
-        workspace
-        / "runs"
-        / "semantic-mapping"
-        / "sequence-0001"
-        / f"run-{run_index:04d}__fusion-run-0001__one-support-one-entity"
-    )
+    """Onde o writer grava: o chamador decide o diretório final, o writer não calcula caminho."""
+    return workspace / f"run-{run_index:04d}"
 
 
 def _write(
@@ -134,12 +126,6 @@ def mapped(tmp_path: Path) -> Mapped:
 
 def _rows(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
-
-
-def _next_index(mapped: Mapped) -> int:
-    return allocate_mapping_run_index(
-        workspace_root=mapped.workspace, sequence_name="sequence-0001"
-    )
 
 
 def _partial() -> InMemoryGeometrySource:
@@ -657,43 +643,48 @@ class TestWriterRefusals:
         with pytest.raises(RuntimeError, match="interrupted"):
             _writer(tmp_path / "m", fusion).write(interrupted())
 
-        sequence = tmp_path / "m" / "runs" / "semantic-mapping" / "sequence-0001"
+        parent = _run_dir(tmp_path / "m").parent
         assert not _run_dir(tmp_path / "m").exists()
-        assert [item for item in sequence.iterdir() if not item.name.startswith(".tmp-")] == []
+        assert [item for item in parent.iterdir() if not item.name.startswith(".tmp-")] == []
 
 
-class TestRunIndex:
-    def test_indexes_are_monotonic_and_computed_from_valid_runs(self, tmp_path: Path) -> None:
-        mapped = _write(tmp_path)
-
-        assert (
-            allocate_mapping_run_index(
-                workspace_root=mapped.workspace, sequence_name="sequence-0001"
-            )
-            == 2
+class TestOutputDirectory:
+    def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+        self, tmp_path: Path
+    ) -> None:
+        fusion = write_fusion_run(tmp_path / "fusion")
+        result = _materialize(fusion)
+        target = tmp_path / "ws" / "corridor-02" / "run-0001" / "semantic_mapping"
+        writer = SemanticMappingRunWriter(
+            output_dir=target,
+            sequence_name="sequence-0001",
+            run_id=SemanticMappingRunId("mapping-run"),
+            run_index=1,
+            semantic_map_id=SEMANTIC_MAP_ID,
+            lineage=lineage_from_fusion_manifest(fusion.manifest),
+            code_version="test",
+            code_digest=CODE_DIGEST,
         )
 
-    def test_a_corrupt_run_is_not_counted(self, tmp_path: Path) -> None:
-        mapped = _write(tmp_path)
-        (mapped.run_dir / "outputs" / "entities.jsonl").write_bytes(b"corrupt")
+        writer.write(result.entities, rejections=result.rejections)
 
-        assert (
-            allocate_mapping_run_index(
-                workspace_root=mapped.workspace, sequence_name="sequence-0001"
-            )
-            == 1
+        assert SemanticMappingRunReader(target).manifest.run_id == SemanticMappingRunId(
+            "mapping-run"
         )
+        # Sem registro `runs.json` e sem `runs/<capability>/...`: só o diretório do artifact.
+        assert sorted(path.name for path in target.parent.iterdir()) == ["semantic_mapping"]
 
-    def test_the_registry_is_a_rebuildable_convenience(self, tmp_path: Path) -> None:
-        mapped = _write(tmp_path)
-        registry = mapped.run_dir.parent / "runs.json"
-        assert json.loads(registry.read_text())["runs"][0]["run_id"] == "mapping-run-0001"
+    def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+        self, tmp_path: Path
+    ) -> None:
+        fusion = write_fusion_run(tmp_path / "fusion")
+        result = _materialize(fusion)
 
-        registry.unlink()
+        _writer(tmp_path / "m", fusion, run_index=7).write(result.entities)
 
-        assert (
-            allocate_mapping_run_index(
-                workspace_root=mapped.workspace, sequence_name="sequence-0001"
-            )
-            == 2
+        manifest = SemanticMappingRunReader(_run_dir(tmp_path / "m", 7)).manifest
+        assert (manifest.run_id, manifest.run_index) == (
+            SemanticMappingRunId("mapping-run-0007"),
+            7,
         )
+        assert not _run_dir(tmp_path / "m", 1).exists()

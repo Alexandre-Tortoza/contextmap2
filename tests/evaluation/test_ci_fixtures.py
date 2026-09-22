@@ -199,8 +199,9 @@ def test_ingestion_round_trips_the_synthetic_sequence(tmp_path: Path) -> None:
     case = _case("ingestion-canonical-sequence")
     sequence = build_synthetic_sequence()
 
+    output_dir = tmp_path / "ingestion"
     with SequenceArtifactWriter(
-        workspace_root=tmp_path,
+        output_dir=output_dir,
         sequence_name=sequence.name,
         artifact_id=SequenceArtifactId("ci-fixture"),
     ) as writer:
@@ -208,7 +209,7 @@ def test_ingestion_round_trips_the_synthetic_sequence(tmp_path: Path) -> None:
         for observation in sequence.observations:
             writer.add_observation(observation)
         writer.finalize()
-    reader = SequenceArtifactReader(tmp_path / "sequences" / sequence.name / "ci-fixture")
+    reader = SequenceArtifactReader(output_dir)
     restored = reader.list_observations()
 
     assert reader.verify_integrity() == []

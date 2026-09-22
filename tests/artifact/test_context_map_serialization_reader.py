@@ -262,7 +262,7 @@ def test_a_moved_artifact_opens_and_reads_everything_that_needs_no_geometry(
     elsewhere = tmp_path / "another-machine" / "copy"
     shutil.copytree(artifact, elsewhere)
     for directory in (
-        world.geometry_dir.parents[3],
+        world.geometry_dir,
         world.resolution_dir,
         world.relations_dir,
         world.fusion_dir,
@@ -286,7 +286,7 @@ def test_a_moved_artifact_finds_its_geometry_when_told_where_it_is(
     shutil.copytree(artifact, elsewhere)
     moved_geometry = tmp_path / "another-machine" / "maps" / "geometry"
     shutil.copytree(world.geometry_dir, moved_geometry)
-    shutil.rmtree(world.geometry_dir.parents[3])
+    shutil.rmtree(world.geometry_dir)
 
     with ContextMapArtifactReader.open(elsewhere, dependency_paths={MAP_ID: moved_geometry}) as r:
         assert r.geometry(_reference(3)).reference == _reference(3)

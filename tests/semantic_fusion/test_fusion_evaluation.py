@@ -113,20 +113,18 @@ def test_a_result_that_reaches_several_supports_is_counted_once_in_the_report(
     # Mesmo defeito da execução real: o relatório somava os resultados por suporte e comparava
     # esse total com frames físicos distintos, duas grandezas com denominadores diferentes.
     multi_region = make_multi_region_run_fixture()
+    run_dir = tmp_path / "run-0001"
     SemanticFusionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=run_dir,
         sequence_name="sequence-0001",
         run_id=SemanticFusionRunId("fusion-run-0001"),
         run_index=1,
-        selection_label="all-frames",
-        policy_label="baseline",
         lineage=LINEAGE,
         code_version="test",
     ).write(multi_region.outcomes, excluded=multi_region.excluded)
-    run_dir = tmp_path / "runs" / "semantic-fusion" / "sequence-0001"
 
     report = evaluate_semantic_fusion(
-        SemanticFusionRunReader(run_dir / "run-0001__all-frames__baseline"),
+        SemanticFusionRunReader(run_dir),
         arm_id="baseline",
         arm_role=FusionArmRole.BASELINE_CONTROL,
         profile=PROFILE,

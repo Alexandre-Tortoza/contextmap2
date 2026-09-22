@@ -361,7 +361,7 @@ def test_persisted_required_metrics_rebuild_the_dense_map_and_reproduce_pooling(
     feature = extraction.dense_map.feature
     sampling = extraction.dense_map.sampling
     writer = PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "run-0001",
         sequence_name="corridor",
         run_id=PerceptionRunId("run-0001"),
         run_index=1,
@@ -370,8 +370,6 @@ def test_persisted_required_metrics_rebuild_the_dense_map_and_reproduce_pooling(
         enabled_capabilities=frozenset({"feature_extractor"}),
         pipeline_preset=CANONICAL_PRESET_V1,
         configuration_digest="sha256:pipeline",
-        selection_label="frame-0001",
-        profile_label="dinov3",
         feature_debug_level=FeatureDebugLevel.NONE,
     )
     writer.add_feature_payload(feature, _image().source_observation_id, extraction.array)
@@ -418,7 +416,7 @@ def test_persisted_required_metrics_rebuild_the_dense_map_and_reproduce_pooling(
     )
     writer.finalize()
 
-    run_dir = tmp_path / "runs" / "visual-perception" / "corridor" / "run-0001__frame-0001__dinov3"
+    run_dir = tmp_path / "run-0001"
     assert not (run_dir / "debug").exists()
     record = json.loads(
         (run_dir / "metrics" / "feature-extraction.jsonl").read_text(encoding="utf-8")
