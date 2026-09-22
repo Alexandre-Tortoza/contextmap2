@@ -53,7 +53,7 @@ O writer recusa, com `FusionRunArtifactError` e sem deixar run visível, quando:
 
 ## Linhagem (manifest)
 
-`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se usadas, as de Point Representation. Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
+`FusionRunLineage` é a seleção **explícita** das runs a montante: a sequência canônica, o `GeometricMapArtifact`, as runs de Sensor Association, as runs de percepção e, se selecionadas, as de Point Representation (a seleção, não o uso: numa ablação de canais todo braço lista as mesmas). Nunca se mescla automaticamente tudo o que existe. O manifest também registra:
 
 - as políticas: agrupamento por observação física, construção de suporte (com fingerprint) e fusão (com fingerprint);
 - as identidades que alimentaram cada canal (interpretadores, scorers, espaços de embedding, versão das definições de qualidade, espaços de representação, mapa);
@@ -65,12 +65,23 @@ Um run sem suportes é válido e explícito (as políticas ficam `null`).
 
 Separadas, sem um escalar único:
 
-- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência (contados à parte), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
+- `counts.json`: suportes, contribuições, hipóteses, frames físicos e resultados de inferência, ambos **distintos no run inteiro** e contados à parte (um resultado de percepção com várias regiões em suportes diferentes conta uma vez; o valor por suporte está em `distributions.json`), claims (total, pontuadas, não pontuadas, sem hipótese), sinais de scorer, claims em abstenção, stances, incerteza por tipo, suportes com incerteza, observações excluídas e avisos;
 - `distributions.json`: por suporte, frames físicos, resultados de inferência, contribuições e hipóteses (contagem, mínimo, mediana, máximo);
 - `payload.json`: o tamanho de cada arquivo contratual;
 - `runtime.json`: tempo e memória, **só** quando quem chama os mediu, e nunca misturados às métricas de qualidade.
 
 Uma claim de um suporte sem nenhuma hipótese (só abstenções) não tem sinais persistidos em hipótese alguma; por isso aparece em `without_hypothesis`, e sua referência fica nos registros de `INSUFFICIENT_EVIDENCE`.
+
+## Versão do schema
+
+`schema_version` do manifest é `0.2.0`. `metrics/` é contratual e inventariada, então **o significado de um campo de métrica pertence à versão do schema**:
+
+| Versão | `counts.json` → `inference_results` |
+| --- | --- |
+| `0.1.0` | soma, sobre os suportes, dos resultados de cada suporte: um resultado com regiões em vários suportes era contado uma vez por suporte |
+| `0.2.0` | resultados **distintos no run inteiro**, o mesmo denominador de `physical_observations` |
+
+Na execução real de `corridor-02` (ver [avaliação](../../evaluation/docs/semantic_fusion.md)) os dois significados deram 604 e 51 sobre a mesma evidência, ambos sob `schema_version = 0.1.0`. Por isso o leitor **recusa** um run `0.1.0` com `FusionRunArtifactError` (`unsupported run artifact schema_version`), em vez de devolver o mesmo campo com outro denominador. Pré-1.0 não há leitor de compatibilidade: nenhum código do repositório consome runs `0.1.0` além deste leitor e do avaliador, e um run de fusão se refaz sobre as mesmas runs a montante, sem nova inferência (a acumulação levou de 0,5 a 0,6 s por braço na execução real). O `EVALUATOR_VERSION = "2"` versiona a definição das métricas do **relatório** do avaliador; a `schema_version` do artifact versiona o layout e a semântica do **run persistido**. As duas mudaram juntas aqui porque a mesma definição de `inference_results` alimenta as duas, mas são versões distintas.
 
 ## Leitura
 

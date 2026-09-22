@@ -1,0 +1,35 @@
+{
+ "calibration_identity": "sha256:92248ec97bcefb72ed1be0b38b79996e34e74dfad29a458a3a8412ffbed3721f",
+ "calibration_record": {
+  "camera_entry_content_hash_after": "sha256:48840f61617fb425d509eaad88c364ec45b1e5d31549a05b0b52d4f80764c057",
+  "camera_entry_content_hash_before": "sha256:3b0e26e640e3e79dd935f29f40058e45edba296efbe94c8625dd7ad2a33b6c2b",
+  "mei": {
+   "cx": 317.73997456826834,
+   "cy": 233.50210820810244,
+   "distortion_coefficients": [
+    -0.07083665039247518,
+    0.3094574364801575,
+    0.0004607746627279861,
+    0.00015704097191542886
+   ],
+   "fx": 761.6791126513665,
+   "fy": 678.7676595096547,
+   "height": 480,
+   "width": 640,
+   "xi": 1.5629934283981157
+  },
+  "source_file": "datasets/corridor-02/corridor-02-Intrinsics.yaml",
+  "source_sha256": "8d47e98aed48cf941c8ee642136514b50ea7e6dd0bd26de9266081bd8693fe12"
+ },
+ "consumed": 684,
+ "estimate_seconds": 0.005,
+ "integrity_problems": [],
+ "label": "real (ExternalPose from dataset ground truth; not a FAST-LIO run)",
+ "peak_rss_mb": 347,
+ "poses": 684,
+ "preflight": "READY",
+ "rejected": 0,
+ "run_dir": "<VALIDATION_DIR>/state_estimation/runs/state-estimation/corridor-02/run-0001__ts-w336-90s__external-pose",
+ "run_id": "se-corridor-02-extpose-w336-mei",
+ "total_seconds": 0.9
+}

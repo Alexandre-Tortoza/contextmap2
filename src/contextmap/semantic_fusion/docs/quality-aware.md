@@ -61,6 +61,10 @@ fused = accumulate_quality_aware_evidence(
 
 As mesmas entradas rodam no baseline e na política ciente de qualidade sem regenerar nada a montante.
 
+## Estado da evidência
+
+A política continua **opcional**. A primeira execução real (`corridor-02`, 20 frames; ver [avaliação](../../evaluation/docs/semantic_fusion.md)) não tem claims e não tem anotações, então não existe medida de que o peso ajude ou piore a semântica: o que ela mostra é o peso, inspecionável, variando com a distância e a borda. Duas lições de dado real para quem declarar rampas: (1) `visible_share` é muito baixa numa parte grande das regiões porque a pegada inclui os pontos ocluídos atrás da superfície de um mapa acumulado, então uma rampa sobre ela zera a maioria das vistas; (2) as rampas não têm valor padrão e devem ser declaradas antes de olhar qualquer saída de fusão.
+
 ## O que não faz
 
 - não usa modelo aprendido de ponderação: toda regra e todo número estão versionados na política;

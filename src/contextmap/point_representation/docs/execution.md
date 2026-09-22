@@ -39,7 +39,7 @@ Antes de extrair qualquer suporte ou chamar o encoder, `represent` rejeita com `
 | valor não finito em componente não declarado indefinido | `FailedSupport(NON_FINITE_OUTPUT)`; a execução continua |
 | número de valores diferente da dimensão do espaço | `ValueError`; a execução para |
 | `undefined_components` fora da dimensão ou fora de ordem | `ValueError`; a execução para |
-| qualquer outra exceção do backend (por exemplo, falta de memória de GPU) | propaga; a execução para |
+| qualquer outra exceção do backend, inclusive uma falta de memória de GPU que ele não traduziu em `UnencodableSupportError` (o PTv3 a traduz, por suporte; ver [`ptv3.md`](ptv3.md)) | propaga; a execução para |
 | centro ausente do mapa | `KeyError` da porta `GeometrySource`; erro do chamador |
 
 Nada disso vira um vetor nulo ou padrão. Componentes declarados indefinidos são armazenados como placeholder zero e listados em `undefined_components`; nunca devem ser interpretados.

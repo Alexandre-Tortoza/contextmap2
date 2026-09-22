@@ -64,10 +64,11 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 
 ## Módulos que consomem este
 
-Hoje, `sensor_association`, `point_representation`, `semantic_fusion` e
-`evaluation`, sempre através de `contextmap.geometric_mapping`. Os módulos
-planejados `semantic_mapping`, `entity_resolution`, `spatial_relations` e
-`artifact` também deverão consumir essa API pública quando forem materializados.
+Hoje, `sensor_association`, `point_representation`, `semantic_fusion`,
+`semantic_mapping` e `evaluation` consomem esta capability, sempre através de
+`contextmap.geometric_mapping`. Os módulos planejados `entity_resolution`,
+`spatial_relations` e `artifact` também deverão consumir essa API pública quando
+forem materializados.
 
 ## Onde estão os documentos detalhados
 

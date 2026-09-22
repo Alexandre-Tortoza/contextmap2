@@ -28,7 +28,13 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.visual_perception.dense_region_association import (
+    DenseFeatureMap,
+    DenseFeatureSampling,
+)
+from contextmap.visual_perception.embedding_space import embedding_space_fingerprint
 from contextmap.visual_perception.feature_diagnostics import (
+    DenseFeatureDiagnostic,
     FeatureDebugLevel,
     FeatureDiagnosticPreview,
     FeatureExtractionDiagnostic,
@@ -372,13 +378,16 @@ class PerceptionRunWriter:
 
         Raises:
             RunArtifactError: If already finalized, if a run already
-                exists at ``output_dir``, or if writing fails.
+                exists at ``output_dir``, if a queued feature payload or a
+                ``SUCCEEDED``/``WARNING`` feature diagnostic does not describe
+                exactly one feature of this run's results, or if writing fails.
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
         if self._final_dir.exists():
             raise RunArtifactError(f"perception run artifact already exists: {self._final_dir}")
         self._validate_feature_payload_references()
+        self._validate_feature_diagnostics()
         self._validate_semantic_execution_materialization()
         self._validate_semantic_view_payloads()
 
@@ -398,13 +407,20 @@ class PerceptionRunWriter:
         self._finalized = True
         return manifest
 
-    def _validate_feature_payload_references(self) -> None:
-        """Require each queued payload to match one feature in its owning result."""
+    def _result_features_by_key(
+        self,
+    ) -> dict[tuple[SourceObservationId, FeatureId], list[VisualFeature]]:
+        """Index every result feature by ``(source_observation_id, feature_id)``."""
         features_by_key: dict[tuple[SourceObservationId, FeatureId], list[VisualFeature]] = {}
         for result in self._results:
             for feature in result.features:
                 key = (result.source_observation_id, feature.feature_id)
                 features_by_key.setdefault(key, []).append(feature)
+        return features_by_key
+
+    def _validate_feature_payload_references(self) -> None:
+        """Require each queued payload to match one feature in its owning result."""
+        features_by_key = self._result_features_by_key()
 
         metadata_fields = (
             "scope",
@@ -436,6 +452,119 @@ class PerceptionRunWriter:
                         f"source_observation_id={source_observation_id!r}, "
                         f"feature_id={feature.feature_id!r}"
                     )
+
+    def _validate_feature_diagnostics(self) -> None:
+        """Require each produced feature diagnostic to describe one persisted result feature.
+
+        ``metrics/feature-extraction.jsonl`` is contractual: its ``dense`` record rebuilds the
+        feature-to-image mapping after the run is reopened. A record that only hashes correctly
+        could belong to another payload, so every ``SUCCEEDED``/``WARNING`` diagnostic is bound
+        to exactly one ``VisualFeature`` of this run (same observation and feature identity),
+        and to at most one diagnostic per feature so the geometry is unambiguous.
+        """
+        features_by_key = self._result_features_by_key()
+        described: set[tuple[SourceObservationId, FeatureId]] = set()
+        for diagnostic in self._feature_diagnostics:
+            feature_id = diagnostic.feature_id
+            # FeatureExtractionDiagnostic garante feature_id nos eventos produzidos; o teste
+            # de None só estreita o tipo para o índice.
+            if not diagnostic.produced_feature or feature_id is None:
+                continue
+            key = (diagnostic.source_observation_id, feature_id)
+            matches = features_by_key.get(key, [])
+            if len(matches) != 1:
+                raise RunArtifactError(
+                    "feature diagnostic does not resolve to exactly one result feature: "
+                    f"event_id={diagnostic.event_id!r}, "
+                    f"source_observation_id={diagnostic.source_observation_id!r}, "
+                    f"feature_id={feature_id!r}, matches={len(matches)}"
+                )
+            if key in described:
+                raise RunArtifactError(
+                    "more than one feature diagnostic describes the same result feature: "
+                    f"source_observation_id={diagnostic.source_observation_id!r}, "
+                    f"feature_id={feature_id!r}"
+                )
+            described.add(key)
+            self._validate_diagnostic_matches_feature(diagnostic, matches[0])
+
+    def _validate_diagnostic_matches_feature(
+        self, diagnostic: FeatureExtractionDiagnostic, feature: VisualFeature
+    ) -> None:
+        """Compare a produced diagnostic with its result feature and, for dense, its geometry."""
+        space = diagnostic.embedding_space
+        comparisons = (
+            ("scope", diagnostic.scope, feature.scope),
+            ("output_shape", diagnostic.output_shape, feature.shape),
+            ("dtype", diagnostic.dtype, feature.dtype),
+            ("normalization", diagnostic.normalization, feature.normalization),
+            ("payload_reference", diagnostic.payload_reference, feature.payload_reference),
+            ("backend provenance", diagnostic.backend, feature.provenance),
+            (
+                "embedding_space fingerprint",
+                embedding_space_fingerprint(space) if space is not None else None,
+                feature.embedding_space_id,
+            ),
+        )
+        context = (
+            f"event_id={diagnostic.event_id!r}, "
+            f"source_observation_id={diagnostic.source_observation_id!r}, "
+            f"feature_id={feature.feature_id!r}"
+        )
+        for name, declared, persisted in comparisons:
+            if declared != persisted:
+                raise RunArtifactError(
+                    "feature diagnostic disagrees with its result feature: "
+                    f"{name} {declared!r} != {persisted!r} for {context}"
+                )
+        region = diagnostic.region
+        if region is not None and region.region_id != feature.region_id:
+            raise RunArtifactError(
+                "feature diagnostic disagrees with its result feature: "
+                f"region_id {region.region_id!r} != {feature.region_id!r} for {context}"
+            )
+        if diagnostic.dense is not None:
+            self._validate_dense_geometry(diagnostic, diagnostic.dense, feature, context)
+
+    def _validate_dense_geometry(
+        self,
+        diagnostic: FeatureExtractionDiagnostic,
+        dense: DenseFeatureDiagnostic,
+        feature: VisualFeature,
+        context: str,
+    ) -> None:
+        """Require the persisted dense geometry to rebuild the feature's ``DenseFeatureMap``."""
+        if dense.source_artifact_id != str(self._run_id):
+            raise RunArtifactError(
+                "dense feature diagnostic source_artifact_id does not point to the run that "
+                f"owns the feature: {dense.source_artifact_id!r} != {str(self._run_id)!r} "
+                f"for {context}"
+            )
+        # Reconstrói o mapa como um consumidor de metrics/ o faria: assim shape 3-D e
+        # (grid_height, grid_width) == feature.shape[:2] são as mesmas regras de DenseFeatureMap.
+        try:
+            DenseFeatureMap(
+                feature=feature,
+                sampling=DenseFeatureSampling(
+                    grid_width=dense.grid_width,
+                    grid_height=dense.grid_height,
+                    source_image_width=diagnostic.source_image_width,
+                    source_image_height=diagnostic.source_image_height,
+                    origin_x=dense.origin_x,
+                    origin_y=dense.origin_y,
+                    stride_x=dense.stride_x,
+                    stride_y=dense.stride_y,
+                    support_width=dense.support_width,
+                    support_height=dense.support_height,
+                    coordinate_transform_id=dense.coordinate_transform_id,
+                ),
+                source_artifact_id=dense.source_artifact_id,
+            )
+        except ValueError as error:
+            raise RunArtifactError(
+                f"dense feature diagnostic does not rebuild a valid DenseFeatureMap: {error} "
+                f"for {context}"
+            ) from error
 
     def _validate_semantic_execution_materialization(self) -> None:
         """Require every semantic execution to match canonical persisted evidence."""

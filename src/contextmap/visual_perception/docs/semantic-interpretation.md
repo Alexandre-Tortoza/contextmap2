@@ -56,6 +56,47 @@ o backend aceita features/contexto e quais views são obrigatórias.
 qualquer chamada local ou remota. Evidência não suportada causa erro explícito;
 ela não é descartada silenciosamente.
 
+## Integridade das views na inferência
+
+O `sha256` de cada `SemanticVisualView` identifica os bytes exatos que o request
+declara ter fornecido ao modelo. Validar só a forma do request não basta: se o
+arquivo mudar depois que o request foi construído, o backend inferiria sobre
+bytes diferentes dos registrados. A verificação por `add_semantic_view_payload()`
+acontece na persistência do run, depois da inferência, e continua existindo como
+segunda barreira do artifact; ela não substitui a verificação abaixo.
+
+Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime` e
+`GeminiClient`) recebem a **identidade completa das views**
+(`visual_views: tuple[SemanticVisualView, ...]`) em vez de apenas
+`payload_reference`. A leitura e a validação dos bytes são centralizadas em
+`read_view_payload(view_root, view)` (`backends/_semantic_views.py`, interno à
+capability, fora da API pública):
+
+1. resolve a referência dentro de `view_root`, seguindo links simbólicos, e
+   rejeita o que escapa dele (`ValueError`) ou não existe (`FileNotFoundError`);
+2. lê o arquivo **uma única vez** e calcula o SHA-256 dos bytes lidos;
+3. rejeita, com `ValueError` que mostra o hash esperado e o encontrado, um payload
+   cujo hash difere de `SemanticVisualView.sha256`;
+4. devolve os próprios bytes verificados.
+
+Cada runtime decodifica ou transmite **somente esses bytes**: Qwen e Florence-2
+abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
+parte inline. Assim, o que foi verificado é exatamente o que é consumido, sem
+janela entre a checagem e o uso, e a verificação precede a abertura da imagem e
+o envio ao provider. No Gemini, todas as views são verificadas antes da primeira
+chamada de rede, então um payload divergente nunca sai da máquina.
+
+Um payload divergente é uma falha explícita e terminal (`QwenInferenceError`,
+`Florence2InferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
+inferência parcial. Quem implementa esses seams com outro runtime, gateway ou
+fake precisa usar `read_view_payload` (ou uma checagem equivalente); o contrato
+está registrado nas docstrings dos protocolos.
+
+A troca de `visual_payload_references` por `visual_views` altera apenas esses
+seams internos, que não são exportados por `contextmap.visual_perception`; os
+contratos públicos (`SemanticVisualView`, request, execution) não mudam. Em
+`v0.x` não há consumidor externo dos seams, então não há camada de compatibilidade.
+
 ## Rastreabilidade
 
 `evidence_references()` deriva referências canônicas para cada view, feature e
@@ -169,10 +210,48 @@ Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito
 Métricas de tokens, latência, memória e warnings são registradas quando o
 runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
 diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
-registrada para `scene_context` omitido (#340), mas não usou um reference set
-versionado nem o protocolo completo de avaliação. Uma execução de referência
-continua exigindo ambiente compatível e deve ser registrada pelo protocolo de
-avaliação.
+registrada para `scene_context` omitido (#340).
+
+### Runtime Transformers (`HuggingFaceQwenRuntime`)
+
+`HuggingFaceQwenRuntime` implementa `QwenRuntime` com `AutoProcessor` e
+`AutoModelForImageTextToText`, de modo que a mesma classe carrega Qwen2.5-VL e
+Qwen3-VL. As importações de `torch`, `transformers` e `PIL` são lazy: sem elas o
+runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
+
+- **Identidade imutável.** O runtime exige `QwenSemanticConfig.revision`, um SHA
+  de commit completo do Hugging Face. O campo é opcional no seam (fakes e
+  gateways não precisam dele), mas entra no fingerprint quando presente, e o
+  runtime recusa `revision=None`. Por padrão só lê o cache local
+  (`local_files_only=True`).
+- **Quantização realmente aplicada.** `quantization="4bit"` carrega com
+  `BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+  bnb_4bit_compute_dtype=<precision>)` e `"8bit"` com `load_in_8bit=True`
+  (LLM.int8). Depois do load, o runtime confere que o modelo reporta
+  `quantization_config`; um modelo que ignorou o pedido causa
+  `QwenModelLoadError` em vez de rodar silenciosamente em precisão plena.
+  Quantização exige device CUDA. Como ela altera saída e custo, faz parte da
+  configuração efetiva e do fingerprint.
+- **Decoding explícito.** `temperature=0` usa decoding guloso e anula
+  `top_p`/`top_k` herdados do `generation_config` do checkpoint; um valor
+  positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
+  pela revisão).
+- **Evidência e prompt.** As views chegam como imagens, na ordem do request,
+  seguidas do prompt canônico renderizado (`region/v1` ou `scene/v1`). O runtime
+  não acrescenta instrução própria. As referências são resolvidas dentro de
+  `view_root` e não podem escapar dele, e cada imagem é decodificada dos bytes
+  cujo SHA-256 foi verificado contra `SemanticVisualView.sha256`
+  ([Integridade das views](#integridade-das-views-na-inferência)).
+- **Diagnóstico.** Cada resposta traz tokens de entrada/saída e
+  `peak_memory_bytes`, o pico de memória alocada na GPU pelo processo (pesos
+  mais ativações, não a memória de outras sessões). Atingir `max_new_tokens`
+  gera um warning, porque o JSON provavelmente foi truncado e essa falha de
+  parsing não é falha semântica do modelo. `load()` permite carregar antes de
+  medir latência, para que o load único não seja atribuído à primeira request.
+
+O runtime não corrige nem reinterpreta a resposta: o texto gerado segue para o
+parser canônico, e uma resposta fora do schema continua sendo falha explícita de
+parsing.
 
 ## Adapter Gemini
 
@@ -184,6 +263,57 @@ limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
 erro explícito, sem substituição por outro backend. Usage, latência, warnings e
 identidade do provider permanecem auditáveis.
 
+`GeminiSemanticConfig` também registra `structured_output` (pede
+`response_mime_type=application/json`; o schema continua no prompt canônico
+versionado, porque a API aceita só um subconjunto de JSON Schema e não há como
+validá-lo sem chamada real) e `retry_backoff_s`, a base do backoff exponencial
+entre tentativas (tentativa `n` espera `retry_backoff_s * 2**(n-1)`, limitada a
+60 s). Sem `retry_wait` injetado, o adapter dorme esse tempo, para que um 429
+não seja repetido imediatamente.
+
+### Cliente `google-genai` (`GoogleGenAIGeminiClient`)
+
+`GoogleGenAIGeminiClient` implementa `GeminiClient` com o SDK oficial
+`google-genai`, importado de forma lazy (`GeminiDependencyError` se ausente; não
+há extra em `pyproject.toml`, seguindo o padrão de torch/transformers). Construí-lo
+não contata o serviço; **`generate` envia os bytes das views e o prompt para a
+API do Google**, então quem o chama precisa ter decidido que aqueles frames
+podem sair da máquina.
+
+- **Credencial.** Chave explícita ou variável `GEMINI_API_KEY` (nome
+  configurável). Sem chave, `GeminiCredentialError` na construção. A chave é
+  privada, não aparece em `repr`, e é removida de toda mensagem levantada; as
+  exceções do provedor não são encadeadas (`from None`), pois o texto delas
+  poderia ecoar a chave. Nada da credencial entra no fingerprint, na
+  configuração efetiva, nos outputs nem no debug.
+- **Requisição.** As views seguem em ordem como partes inline (`png`, `jpeg` ou
+  `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
+  `thinking_budget`, `structured_output` e o timeout por tentativa
+  (`timeout_s`, em milissegundos no SDK) vêm da configuração.
+- **Views verificadas antes do envio.** O cliente lê e confere o SHA-256 de todas
+  as views contra `SemanticVisualView.sha256` antes de entregar o primeiro byte
+  ao SDK. Um payload divergente, ausente, fora de `view_root` ou de formato não
+  aceito é `GeminiSemanticError` terminal e nenhuma requisição é feita: bytes
+  enviados a um serviço remoto não podem ser recolhidos
+  ([Integridade das views](#integridade-das-views-na-inferência)).
+- **Falhas.** Timeout, falha de transporte, HTTP 408/429 e 5xx são
+  `GeminiTransientError` e entram nos retries do adapter. Demais erros HTTP
+  (400/401/403/404), exceções inesperadas, prompt bloqueado, resposta sem
+  candidatos, `finish_reason` diferente de `STOP`/`MAX_TOKENS` e texto vazio são
+  `GeminiSemanticError` terminais e nunca são repetidos nem substituídos por outro
+  backend. `MAX_TOKENS` devolve o texto com warning de truncamento. Saída
+  malformada continua sendo `SemanticResponseParseError` do parser
+  compartilhado, sem retry.
+- **Usage.** `input_tokens` vem de `prompt_token_count`; `output_tokens` soma
+  `candidates_token_count` e `thoughts_token_count`, porque os tokens de
+  raciocínio são faturados como saída. Ausência de metadata vira `None`, não zero.
+
+Não existe execução real do Gemini: `GEMINI_API_KEY` não está configurada e
+enviar frames a um serviço externo exige consentimento explícito. A validação é
+fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
+SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
+fixam o formato da requisição e o mapeamento dos erros reais sem rede.
+
 ## Adapter Florence-2
 
 `Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
@@ -191,8 +321,79 @@ quando ambos compartilham lifecycle/modelo no composition root. Sua
 `Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
 suportados, device, precision e geração. A task e o mode entram em
 `task_identity`; checkpoint, revisão e configuração entram na provenance e no
-fingerprint. O runtime retorna somente texto/diagnostics SDK-neutral, e a saída
-passa pelo mesmo prompt/parser canônico com `UNSCORED_ONLY`.
+fingerprint. A saída passa pelo mesmo parser canônico com `UNSCORED_ONLY`.
+
+### Decisão de design: task token versus JSON canônico
+
+Florence-2 é dirigido por *task tokens* e responde texto puro (por exemplo,
+`<REGION_TO_CATEGORY>` devolve `door`). O boundary canônico exige JSON
+`semantic-response/1`, e o prompt canônico (instruções mais JSON Schema) não é
+algo que o modelo entenda. A decisão foi:
+
+1. **O adapter é dono do mapeamento, não o runtime.** O `Florence2SemanticRuntime`
+   devolve o texto nativo da task, após o parser oficial do processor. A regra
+   `florence2-task-envelope/1` (`_canonical_response_json`) é uma função pura,
+   testável sem transformers: o texto vira **exatamente uma claim `primary`**,
+   com `hypothesis` igual ao texto, sem `category`, `region_kind`, atributos nem
+   confidence (`null`). Nunca há alternativas. No modo `scene`, a claim fica em
+   um `scene_context` vazio, porque nenhum campo de cena (tipo, ambiente,
+   iluminação, navegabilidade) pode ser derivado do texto sem heurística. Texto
+   vazio vira `abstained=true`, uma abstenção explícita com warning, e nunca uma
+   claim inventada.
+2. **O texto só é publicado como claim depois do parser compartilhado.** O JSON
+   intermediário é serializado com `json.dumps`, então um texto que pareça JSON
+   não consegue acrescentar claims, alternativas ou campos, e passa por
+   `parse_semantic_response` como qualquer outro backend.
+3. **O raw response é o texto do modelo.** `execution.raw_response` e o hash
+   `raw_response_sha256` referem-se ao texto nativo da task; o envelope é
+   reconstruível pela política e sua aplicação fica registrada no diagnostic
+   `wrapped_task_text` do parsing.
+4. **O prompt canônico não é input do modelo.** Ele continua renderizado no
+   `SemanticInterpretationExecution` (o request o exige), mas o modelo recebe só
+   o task token e a imagem. Um warning constante em cada execução registra isso,
+   para que o fingerprint do prompt não sugira uma instrução que o Florence-2
+   nunca viu.
+5. **Tasks declaradas.** `FLORENCE2_SEMANTIC_TASKS` lista as tasks de texto:
+   `<CAPTION>`, `<DETAILED_CAPTION>` e `<MORE_DETAILED_CAPTION>` (modo `scene`,
+   view `FULL_FRAME`) e `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>` (modo
+   `region`). As tasks que produzem geometria (`<OD>`, `<REGION_PROPOSAL>`, ...)
+   ficam de fora de propósito: pertencem a `Florence2RegionDiscovery`, e seus
+   rótulos não são claims semânticas. Uma task serve um único modo, e
+   `supported_modes` precisa coincidir com ele.
+6. **Views aceitas.** Uma task de região recebe a view inteira como região
+   (`<loc_0><loc_0><loc_999><loc_999>`), pois o request não carrega a caixa da
+   região dentro de um frame completo ou de um crop contextual. Por isso só
+   `TIGHT_CROP` e `MASKED_SUBJECT` são aceitos; qualquer outra view é rejeitada
+   antes do modelo, assim como requests com mais de uma view.
+
+**Trade-offs aceitos.**
+
+- Nada é fabricado e o mapeamento é determinístico e auditável, ao custo de
+  claims pobres: uma legenda vira uma frase em `hypothesis`, não um conceito, e
+  `casefold-exact/1` quase nunca a casa com um conceito anotado. O relatório
+  deve ler isso como limitação do output do Florence-2, não como alucinação.
+- Sem alternativas, a preservação de ambiguidade é impossível para este backend.
+  A abstenção só acontece por texto vazio.
+- `scene_context` não é estruturado, então as métricas de campos de cena do
+  Florence-2 são vazias por construção.
+- Alternativas rejeitadas: extrair substantivos ou atributos da legenda
+  (fabricação por NLP ad hoc); usar `<OD>` para claims de cena (mistura Region
+  Discovery); pedir JSON ao modelo (não suportado); devolver o JSON no runtime
+  (mistura regra de domínio com o SDK e impede testar sem transformers).
+
+### Runtime Transformers (`HuggingFaceFlorence2SemanticRuntime`)
+
+Carrega o port transformers-nativo (`florence-community/Florence-2-*`) na
+revisão fixada, com `Florence2ForConditionalGeneration` e `AutoProcessor`, sem
+`trust_remote_code` e somente do cache local por padrão. Aplica o parser oficial
+`post_process_generation` da task e remove os tokens `<loc_*>` que ecoam a caixa
+de entrada nas tasks de região, pois repetem o input e não fazem parte da
+resposta. Registra tokens, pico de memória de GPU e o mesmo `load()` explícito
+do runtime Qwen. A imagem é decodificada dos bytes cujo SHA-256 foi verificado
+contra `SemanticVisualView.sha256`, e um payload divergente é
+`Florence2InferenceError` antes da inferência
+([Integridade das views](#integridade-das-views-na-inferência)). Sem SDK, device
+ou checkpoint disponível, falha com erro explícito.
 
 ## Avaliação
 
@@ -201,7 +402,10 @@ Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
 artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
 região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
 custo permanecem em blocos distintos. O baseline usa a policy versionada
-`casefold-exact/1`.
+`casefold-exact/1`. A comparação entre backends alinha os reports pela
+identidade física de cada request (observação, região, modo e variante), não só
+pelo `request_id`; ver
+[Avaliação de Semantic Interpretation](../../evaluation/docs/semantic-interpretation.md).
 
 
 ## Estado do milestone
@@ -217,15 +421,36 @@ O branch de integração materializa:
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
 - Florence-2 implementa o mesmo boundary por adapter separado de Region
   Discovery;
+- os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
+  SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
-- o harness de avaliação compara qualidade e custo sem Semantic Fusion;
+- o harness de avaliação compara qualidade e custo sem Semantic Fusion, e só
+  compara backends que interpretaram as mesmas observações, regiões, modos e
+  variantes de evidência;
 - testes determinísticos cobrem parsing, abstention, retries, materialização no
   `PerceptionResult` e reabertura do run artifact.
 
-Uma execução diagnóstica real limitada de Qwen3-VL-4B já ocorreu para o fix
-#340: três respostas REGION omitiram a chave nula, duas passaram a ser aceitas
-após a normalização e a terceira permaneceu corretamente rejeitada por atributo
-não escalar. Ainda não existe execução controlada sobre reference set versionado
-para Qwen, Gemini ou Florence-2. O ambiente de CI valida seams, contratos,
-parsing, provenance, falhas e report schema com doubles determinísticos; isso não
-é registrado como comparação científica dos backends.
+### Validação real e fake/contract
+
+- **Real.** Qwen3-VL-4B (nf4 e int8, aplicados e verificados) e Florence-2
+  (`florence-community/Florence-2-large`, tasks `<DETAILED_CAPTION>`,
+  `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>`) foram executados com os
+  runtimes transformers do repositório sobre os 20 frames de corridor-02 (uma
+  request de cena por frame e as 5 maiores regiões SAM2), com repetições. Os
+  números estão em
+  [Avaliação de Semantic Interpretation](../../evaluation/docs/semantic-interpretation.md):
+  por exemplo, o Qwen3-VL-4B nf4 interpretou 17 de 20 cenas e 53 de 100 regiões
+  (as demais falharam no parser, principalmente por omitir `confidence`), e o
+  Florence-2 interpretou todas, com decoding determinístico e repetições
+  idênticas.
+- **Fake/contract.** O Gemini tem cliente `google-genai` validado apenas com
+  transporte simulado; não há credencial nem consentimento para enviar frames.
+  Runtime e adapters também têm testes com módulos SDK falsos, e o harness de
+  avaliação usa execuções canônicas construídas em teste. Isso valida contratos,
+  mapeamentos, falhas, redação de segredos e a aritmética do avaliador, não a
+  qualidade de um backend.
+
+Não há anotações semânticas humanas para a amostra, então correção,
+alucinação, abstenção esperada, campos de cena e visibilidade são N/A e nenhum
+resultado sustenta que um backend é melhor que outro. A execução de referência
+do Gemini e a avaliação com anotações continuam pendentes.

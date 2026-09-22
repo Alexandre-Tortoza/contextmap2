@@ -60,8 +60,16 @@ from contextmap.shared import (
 )
 from contextmap.visual_perception import PerceptionRunId
 
-SCHEMA_VERSION = "0.1.0"
-"""Semantic Fusion run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Semantic Fusion run artifact schema version written and understood by this module.
+
+Bumped to ``0.2.0`` when ``metrics/counts.json`` redefined ``inference_results``: ``0.1.0``
+summed the results of every support, so a result whose regions fall in several supports was
+counted once per support; ``0.2.0`` counts the distinct results of the whole run, like
+``physical_observations``. The metrics are contractual and inventoried, so the same field with
+two denominators must not share a version. This is a pre-1.0 schema: no compatibility reader
+for ``0.1.0`` is kept and such a run is refused when opened.
+"""
 
 SemanticFusionRunId = NewType("SemanticFusionRunId", str)
 """Identity of one Semantic Fusion run."""
@@ -118,8 +126,10 @@ class FusionRunLineage:
         association_run_ids: The selected Sensor Association runs, sorted and unique.
         perception_run_ids: The selected perception runs whose claims were fused, sorted and
             unique.
-        point_representation_run_ids: The Point Representation runs whose structure was
-            referenced, sorted and unique; empty when none was used.
+        point_representation_run_ids: The Point Representation runs selected for the run, whose
+            structure a declared channel may reference, sorted and unique; empty when none was
+            selected. It records the selection, not the use: in a channel ablation every arm
+            lists the same runs, so that the arms see identical upstream artifacts.
     """
 
     sequence_artifact_id: str
@@ -645,7 +655,7 @@ class _Tally:
         self.fusion_fingerprint: str | None = None
         self._previous: FusionSupportId | None = None
         self._physical: set[str] = set()
-        self._inference = 0
+        self._results: set[str] = set()
         self._per_support: dict[str, list[int]] = {
             "physical_observations_per_support": [],
             "inference_results_per_support": [],
@@ -737,9 +747,16 @@ class _Tally:
         self.support_count += 1
         self.contribution_count += len(evidence.contributions)
         self._hypotheses += len(evidence.hypotheses)
-        self._inference += evidence.inference_result_count
         self._physical.update(
             str(g.physical_observation_id) for g in evidence.physical_observation_groups
+        )
+        # Um resultado de percepção tem várias regiões e cada uma pode cair em um suporte diferente:
+        # somar `inference_result_count` por suporte contaria o mesmo resultado várias vezes e
+        # deixaria de ser comparável com os frames físicos distintos acima.
+        self._results.update(
+            str(result)
+            for g in evidence.physical_observation_groups
+            for result in g.perception_result_ids
         )
         counts = self._per_support
         counts["physical_observations_per_support"].append(evidence.physical_observation_count)
@@ -848,7 +865,7 @@ class _Tally:
             "contributions": self.contribution_count,
             "hypotheses": self._hypotheses,
             "physical_observations": len(self._physical),
-            "inference_results": self._inference,
+            "inference_results": len(self._results),
             "claims": {
                 "total": self._claims_total,
                 "scored": scored,
@@ -999,7 +1016,8 @@ def _load_manifest(run_dir: Path) -> SemanticFusionRunManifest:
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise FusionRunArtifactError(
-            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}"
+            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}; "
+            f"this reader understands {SCHEMA_VERSION!r}"
         )
     lineage = raw["lineage"]
     policies = raw["policies"]
