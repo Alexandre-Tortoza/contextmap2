@@ -38,6 +38,7 @@ from contextmap.runtime.composition import (
     FeatureBuildScope,
     RuntimeProvider,
     compose,
+    compose_executors,
 )
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
@@ -252,6 +253,7 @@ __all__ = [
     "check_resumable",
     "check_selection",
     "compose",
+    "compose_executors",
     "load_catalog",
     "parse_override",
     "predict_reuse",

@@ -8,9 +8,18 @@ backend-specific branch and no scientific rule: configuration is resolved by
 :func:`~contextmap.runtime.pipeline.run_plan`. Every flag is translated into a
 configuration override, so the CLI never becomes a second place that decides what runs.
 
-Stage executors are not bundled: the executors of the real capabilities are supplied by
-the caller of :func:`main` (tests, or a future entry point). Without one, a real run is
-blocked by preflight with an explicit message and nothing runs; a dry run needs none.
+Stage executors: for every command that runs or previews a plan, the executors that
+:func:`~contextmap.runtime.composition.compose_executors` can build from the resolved
+configuration (``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
+``semantic_fusion`` today) are composed automatically, so the installed ``contextmap``
+binary executes them with no Python wrapper. Executors supplied by the caller of
+:func:`main` (tests, or a future embedder) are merged on top and always win, so an
+explicit injection can override or extend what was composed -- including ``ingestion``,
+whose :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor` needs a
+concrete request that is never part of a configuration (see ``contextmap ingest``).
+``visual_perception`` and ``point_representation`` have no real executor yet: without an
+injection, a real run of those stages is blocked by preflight with an explicit message; a
+dry run needs none.
 
 Exit codes: ``0`` success, ``1`` the request was understood but cannot be satisfied
 (invalid configuration, blocked preflight, failed stage, failed integrity check), ``2``
@@ -31,7 +40,7 @@ from typing import Any, TextIO
 from contextmap import __version__
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import CANONICAL_PROFILE_ID
-from contextmap.runtime.composition import compose
+from contextmap.runtime.composition import compose, compose_executors
 from contextmap.runtime.config import (
     DEBUG_LEVELS,
     ConfigProblem,
@@ -164,8 +173,13 @@ def main(
 
     Args:
         argv: Arguments after the program name; defaults to ``sys.argv[1:]``.
-        executors: One executor per stage this process can execute. There is no default:
-            a real run without them is blocked by preflight.
+        executors: Executors to use in addition to, and in preference over, the ones
+            :func:`~contextmap.runtime.composition.compose_executors` builds automatically
+            from the resolved configuration for ``run``, ``stage`` and their dry runs. Pass
+            an entry here to override a composed stage (for example with a test double) or
+            to supply one composition cannot build on its own, such as ``ingestion``'s
+            :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`. A stage
+            with neither a composed nor a supplied executor is blocked by preflight.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
@@ -520,11 +534,29 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
     reuse = _reuse_policy(session)
+    executors = _executors_for(session, effective)
     if args.dry_run:
-        return _dry_run(session, effective, plan, execution, resolved, reuse)
+        return _dry_run(session, effective, plan, execution, resolved, reuse, executors)
     assert workspace is not None  # exigido acima
     _dataset_directory(effective, workspace)  # recusa cedo um run sem dataset
-    return _execute(session, effective, execution, Path(workspace), reuse)
+    return _execute(session, effective, execution, Path(workspace), reuse, executors)
+
+
+def _executors_for(session: _Session, effective: EffectiveConfig) -> Mapping[str, StageExecutor]:
+    """Merge the executors composed from ``effective`` with the ones the caller injected.
+
+    ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
+    ``geometric_mapping``, ``sensor_association`` and ``semantic_fusion``) from the resolved
+    configuration alone, so the installed CLI runs them with no Python wrapper; a stage it
+    cannot build for any reason is simply absent, never raised (see its own docstring).
+    Whatever the caller of :func:`main` passed in ``session.executors`` (tests, a stage
+    composition cannot build such as ``ingestion``, or an explicit override) is layered on
+    top and always wins.
+    """
+    composed = compose_executors(
+        effective, environ=session.environ, module_available=session.module_available
+    )
+    return {**composed, **session.executors}
 
 
 def _dry_run(
@@ -534,13 +566,14 @@ def _dry_run(
     execution: ExecutionPlan,
     resolved: ResolvedSelections | None,
     reuse: ReusePolicy | None,
+    executors: Mapping[str, StageExecutor],
 ) -> int:
     """Show what the configuration resolves to, without loading, running or writing anything."""
-    # Um dry-run não confere executores: mostra o que a configuração resolve.
+    # Um dry-run não confere executores no preflight: mostra o que a configuração resolve.
     report = preflight(
         execution, environ=session.environ, module_available=session.module_available, reuse=reuse
     )
-    missing = [s.stage_id for s in execution.stages if s.stage_id not in session.executors]
+    missing = [s.stage_id for s in execution.stages if s.stage_id not in executors]
     predicted = {} if reuse is None else predict_reuse(execution, reuse)
     document = {
         "effective_config": effective.to_document(),
@@ -555,7 +588,7 @@ def _dry_run(
         "selections": None if resolved is None else resolved.to_document(),
         "reuse": {stage: decision.to_document() for stage, decision in predicted.items()},
         "preflight": {"ok": report.ok, "problems": _problem_documents(report.problems)},
-        "executors": {"registered": sorted(session.executors), "missing": missing},
+        "executors": {"registered": sorted(executors), "missing": missing},
     }
     lines = [
         *_config_lines(effective),
@@ -588,6 +621,7 @@ def _execute(
     execution: ExecutionPlan,
     workspace: Path,
     reuse: ReusePolicy | None,
+    executors: Mapping[str, StageExecutor],
 ) -> int:
     """Run for real, journaling every step of the lifecycle into a fresh run directory."""
     args = session.args
@@ -606,7 +640,7 @@ def _execute(
             record = resume_plan(
                 previous,
                 execution,
-                session.executors,
+                executors,
                 reuse=reuse,
                 environ=session.environ,
                 module_available=session.module_available,
@@ -616,7 +650,7 @@ def _execute(
         else:
             record = run_plan(
                 execution,
-                session.executors,
+                executors,
                 environ=session.environ,
                 module_available=session.module_available,
                 reuse=reuse,

@@ -26,7 +26,12 @@ Um estágio produz **exatamente um** artifact, e um executor consome **exatament
 
 Para que os executores tenham o que precisam, o DAG `canonical/1` dá `sequence` à fusão: os instantes de aquisição das observações físicas vêm da sequência.
 
+## Como um executor chega a existir
+
+Construir um destes executores manualmente (juntar backend, políticas e classe do executor) é trabalho da [composition root](composition.md). `compose_executors(effective, ...)`, em `contextmap.runtime.composition`, faz exatamente isso a partir de uma `EffectiveConfig`: monta `StateEstimationExecutor`, `GeometricMappingExecutor`, `SensorAssociationExecutor` e `SemanticFusionExecutor` (nessa ordem de dependência) e devolve um `dict[str, StageExecutor]` indexado por `stage_id`, sem fabricar nada para o que não pode compor de verdade. `IngestionStageExecutor` fica de fora dessa composição automática: ele precisa de um `IngestionRequest` concreto, que é entrada de uma execução (os flags de `contextmap ingest`), não parte de uma configuração — continua sendo construído e injetado explicitamente por quem chama (`main(executors=...)` ou `Runtime(executors=...)`), que é como o comando `ingest` e os testes deste módulo já o exercitam.
+
 ## O que ainda não existe
 
 - **`visual_perception`** não tem executor: a percepção usa modelos e GPU e entra por **referência** a um run existente (`provided` ou `inputs.selections`). Um executor real de percepção é um trabalho à parte.
+- **`point_representation`** também não tem executor, pelo mesmo motivo (backend dependente de modelo); é o único estágio opcional do canônico, então um run que não o habilita nunca sente essa lacuna.
 - **Estágios depois de `semantic_fusion`** (`semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map`) não fazem parte de `canonical/1`: as capabilities ainda não estão em `dev`. Um preset versionado posterior os declara, com os executores correspondentes.

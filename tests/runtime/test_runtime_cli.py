@@ -127,6 +127,65 @@ class TestDryRun:
         assert code == 0
         assert _json(out)["executors"]["missing"]
 
+    def test_the_installed_entrypoint_composes_real_executors_with_no_python_injection(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #1 of the PR #387 review, reproduced exactly: no ``executors=`` at all.
+
+        ``main()`` used to default to ``executors=executors or {}``, so every capability-backed
+        stage was unconditionally reported as missing an executor -- the installed
+        ``contextmap`` binary could never run the DAG without a Python wrapper injecting
+        executors by hand. With ``compose_executors`` wired into the CLI, the stages a
+        configuration alone can build (``state_estimation``, ``geometric_mapping``,
+        ``sensor_association``, ``semantic_fusion``) are no longer missing; ``ingestion`` (needs
+        a concrete ``IngestionRequest``, not part of any configuration) and
+        ``visual_perception`` (no real executor yet) honestly remain so.
+        """
+        code, out, err = cli(
+            "run", "-c", str(_config(tmp_path)), "--stage", "semantic_fusion", "--dry-run", "--json"
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert set(executors["missing"]) == {"ingestion", "visual_perception"}
+        assert {
+            "state_estimation",
+            "geometric_mapping",
+            "sensor_association",
+            "semantic_fusion",
+        }.issubset(executors["registered"])
+
+    def test_an_injected_executor_overrides_the_one_composed_from_configuration(
+        self, tmp_path: Path
+    ) -> None:
+        """A caller-supplied executor always wins over the automatically composed one.
+
+        ``state_estimation`` is fully selected in the configuration, so ``compose_executors``
+        would build a real ``StateEstimationExecutor`` for it -- one that reads a real
+        ``SequenceArtifact`` and would fail against the lightweight fake ``ingestion`` output
+        below. That the run succeeds and the fake stage is the one that actually executed
+        proves the injected override, not the composed executor, ran.
+        """
+        log: list[str] = []
+        executors = {
+            "ingestion": Stage("ingestion", "SequenceArtifact", log),
+            "state_estimation": Stage("state_estimation", "StateEstimationRunArtifact", log),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "state_estimation",
+            "--workspace",
+            str(tmp_path / "ws"),
+            executors=executors,
+        )
+
+        assert code == 0, out + err
+        assert log == ["ingestion", "state_estimation"]
+
     @pytest.mark.usefixtures("unavailable_context_map")
     def test_the_complete_pipeline_is_blocked_with_the_reason_per_stage(
         self, tmp_path: Path

@@ -57,6 +57,40 @@ def selected_document() -> dict[str, Any]:
                     "external_pose": {"reference_frame": "map", "body_frame": "base"},
                 }
             },
+            "geometric_mapping": {
+                "pose_lookup": {
+                    "backend": "lookup-policy-v1",
+                    "lookup-policy-v1": {"mode": "exact"},
+                },
+                "motion_correction": {
+                    "backend": "motion-correction-v1",
+                    "motion-correction-v1": {"raw": "accept", "unknown": "warn"},
+                },
+            },
+            "sensor_association": {
+                "occlusion": {
+                    "backend": "conservative-depth-support-v1",
+                    "conservative-depth-support-v1": {
+                        "cell_size_px": 4,
+                        "neighborhood_radius_cells": 2,
+                        "depth_margin_m": 0.1,
+                        "depth_margin_ratio": 0.02,
+                    },
+                },
+                "tolerances": {
+                    "backend": "diagnostic-tolerances-v1",
+                    "diagnostic-tolerances-v1": {
+                        "max_pose_time_delta_ns": 20_000_000,
+                        "max_map_window_offset_ns": 10_000_000,
+                        "max_reprojection_p95_px": 5.0,
+                        "max_reprojection_invalid_rate": 0.25,
+                    },
+                },
+                "pose_policy": {
+                    "backend": "lookup-policy-v1",
+                    "lookup-policy-v1": {"mode": "exact"},
+                },
+            },
             "point_representation": {
                 "encoder": {
                     "backend": "geometric_descriptor",
