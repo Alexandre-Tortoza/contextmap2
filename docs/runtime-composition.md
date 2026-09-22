@@ -414,7 +414,7 @@ A divisão arquitetural materializada na `dev` é:
 - **State Estimation**, publica `PoseEstimate`/`Trajectory`, lookup temporal, preflight, backends `ExternalPose` e FAST-LIO e `StateEstimationRunArtifact`;
 - **Geometric Mapping**, transforma e acumula geometria persistente, publica `GeometrySource` e persiste `GeometricMapArtifact`;
 - **Sensor Association**, ancora evidência 2D na geometria 3D, publica `SpatialObservation`/`ObservationQuality` e persiste `SensorAssociationRunArtifact`;
-- **Point Representation**, opcional, publica representações 3D locais e persiste `PointRepresentationRunArtifact`;
+- **Point Representation**, opcional, publica representações 3D locais, possui o descritor determinístico e o runtime real `PointceptPTv3Runtime` atrás do port `PointEncoder`, e persiste `PointRepresentationRunArtifact`; o PTv3 foi medido em geometria real e continua não canônico enquanto a ablação downstream permanece pendente;
 - **Semantic Fusion**, acumula evidência multi-view sem criar identidade de objeto e persiste `SemanticFusionRunArtifact`;
 - **Semantic Mapping**, materializa a evidência fundida como entidades persistentes, sem resolução entre suportes, persiste `SemanticMappingRunArtifact` e já valida deterministicamente contratos, lineage e round-trip; essa validação ainda é sintética;
 - **Runtime & Configuration**, ainda planejado, deverá compor esse conjunto em um DAG end-to-end, resolver configuração, reuse/recompute, CLI e lifecycle entre capabilities.
