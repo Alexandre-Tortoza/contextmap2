@@ -55,6 +55,7 @@ from contextmap.semantic_mapping import (
     EntityReference,
     EntityTemporalState,
     EntityUncertainty,
+    ExternalKnowledgeSource,
     SemanticMapId,
 )
 
@@ -508,6 +509,31 @@ def test_independent_evidence_for_the_same_attribute_is_unioned_not_a_conflict()
     assert class_attribute.value == "chair"
     assert set(class_attribute.evidence) == set(shared.evidence) | set(own.evidence)
     assert len(class_attribute.evidence) == 2
+
+
+def test_external_knowledge_of_the_same_identity_from_different_sources_is_refused() -> None:
+    """external_source is not part of the grouping key, so it must not be silently dropped."""
+    one_source = attribute(
+        "weight",
+        "heavy",
+        origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+        external_source=ExternalKnowledgeSource(
+            source_id="warehouse-ontology", source_version="2026.1", entry_id="weight/heavy"
+        ),
+    )
+    other_source = attribute(
+        "weight",
+        "heavy",
+        origin=AttributeOrigin.EXTERNAL_KNOWLEDGE,
+        external_source=ExternalKnowledgeSource(
+            source_id="supplier-catalog", source_version="2025.9", entry_id="sku-0042"
+        ),
+    )
+    first = with_labels("a", 1, "chair", attributes=(one_source,))
+    second = with_labels("b", 2, "chair", attributes=(other_source,))
+
+    with pytest.raises(MaterializationError, match="external_source"):
+        materialize({"a": first, "b": second}, decide(first, second, MATCH))
 
 
 def test_a_match_between_two_independently_classified_real_entities_materializes(

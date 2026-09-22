@@ -196,11 +196,13 @@ def attribute(
     derivation_id: str = "observed-attribute-v1",
     contribution: str = "contribution--support-000001--spatial-a",
     claim: str = "claim-0001",
+    external_source: ExternalKnowledgeSource | None = None,
 ) -> EntityAttribute:
     """An attribute citing one claim, unless it is external knowledge, which cites a source.
 
     ``contribution``/``claim`` let two independent members claim the same property from their own,
-    distinct evidence, as two real observations of the same object do.
+    distinct evidence, as two real observations of the same object do. ``external_source`` lets two
+    members claim external knowledge of the same identity from different sources.
     """
     if origin is AttributeOrigin.EXTERNAL_KNOWLEDGE:
         return EntityAttribute(
@@ -208,7 +210,8 @@ def attribute(
             value=value,
             origin=origin,
             derivation_id=derivation_id,
-            external_source=ExternalKnowledgeSource(
+            external_source=external_source
+            or ExternalKnowledgeSource(
                 source_id="warehouse-ontology", source_version="2026.1", entry_id=f"{name}/{value}"
             ),
         )

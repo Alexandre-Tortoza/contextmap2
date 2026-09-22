@@ -418,8 +418,11 @@ def _attributes(members: tuple[Entity, ...]) -> tuple[EntityAttribute, ...]:
     evidence link is (see :func:`_evidence`), keyed exactly as
     :class:`~contextmap.semantic_mapping.EntityAttribute` itself requires them to be canonical.
     An attribute that still disagrees after that union (the same identity, a real conflict at the
-    level of one evidence reference or one support signal) is still an aggregation error: nothing
-    is silently dropped or averaged.
+    level of one evidence reference, one support signal or, for external knowledge, the source
+    itself) is still an aggregation error: nothing is silently dropped or averaged.
+    ``external_source`` is not part of the grouping key and carries no evidence to union, so it is
+    checked separately: the schema has no way to represent more than one external source on one
+    attribute, and picking one over another would discard a member's provenance.
     """
     grouped: dict[tuple[str, str, str, str], list[EntityAttribute]] = defaultdict(list)
     for member in members:
@@ -428,6 +431,11 @@ def _attributes(members: tuple[Entity, ...]) -> tuple[EntityAttribute, ...]:
             grouped[key].append(attribute)
     merged: dict[tuple[str, str, str, str], EntityAttribute] = {}
     for key, group in grouped.items():
+        sources = {attribute.external_source for attribute in group}
+        if len(sources) > 1:
+            raise MaterializationError(
+                f"two members disagree about the external_source of attribute {key!r}"
+            )
         evidence: dict[tuple[str, str], Any] = {}
         support: dict[tuple[str, ...], Any] = {}
         for attribute in group:
