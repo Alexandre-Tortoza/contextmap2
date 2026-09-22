@@ -41,6 +41,7 @@ from contextmap.semantic_mapping import (
     EntityId,
     EntityLifecycle,
     EntityTemporalState,
+    ExternalKnowledgeSource,
     GeometrySummaryPolicy,
     ObservationRef,
     SemanticMapId,
@@ -196,22 +197,31 @@ def attribute(
     contribution: str = "contribution--support-000001--spatial-a",
     claim: str = "claim-0001",
 ) -> EntityAttribute:
-    """An attribute citing one claim, unless it is external knowledge, which cites nothing.
+    """An attribute citing one claim, unless it is external knowledge, which cites a source.
 
     ``contribution``/``claim`` let two independent members claim the same property from their own,
     distinct evidence, as two real observations of the same object do.
     """
-    evidence = (
-        ()
-        if origin is AttributeOrigin.EXTERNAL_KNOWLEDGE
-        else (
+    if origin is AttributeOrigin.EXTERNAL_KNOWLEDGE:
+        return EntityAttribute(
+            name=name,
+            value=value,
+            origin=origin,
+            derivation_id=derivation_id,
+            external_source=ExternalKnowledgeSource(
+                source_id="warehouse-ontology", source_version="2026.1", entry_id=f"{name}/{value}"
+            ),
+        )
+    return EntityAttribute(
+        name=name,
+        value=value,
+        origin=origin,
+        derivation_id=derivation_id,
+        evidence=(
             EvidenceReference(
                 contribution_id=EvidenceContributionId(contribution), claim_id=ClaimId(claim)
             ),
-        )
-    )
-    return EntityAttribute(
-        name=name, value=value, origin=origin, derivation_id=derivation_id, evidence=evidence
+        ),
     )
 
 

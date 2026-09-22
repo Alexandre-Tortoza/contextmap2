@@ -311,11 +311,13 @@ def test_the_lineage_is_derived_from_the_semantic_mapping_manifest() -> None:
         identity_policy_id="support-derived-entity-id-v1",
         configuration_fingerprint="sha256:cfg",
         code_version="test",
+        code_digest="sha256:code",
         entity_count=6,
         rejected_count=0,
         warnings=(),
         debug_level="none",
         schema_version="0.1.0",
+        entity_schema_version="0.1.0",
         created_at="2026-09-21T00:00:00+00:00",
         file_inventory=(
             FileEntry(path="outputs/entities.jsonl", size_bytes=10, content_hash="sha256:a"),
