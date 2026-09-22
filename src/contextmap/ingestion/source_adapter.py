@@ -23,6 +23,7 @@ and per-adapter guidance.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -78,7 +79,11 @@ class SourceWindow:
             :meth:`SourceAdapterConfig.resolved_window_clock_id`, so a
             caller never silently mixes this with the header clock domain.
         start_seconds: Inclusive lower bound, in the source's recording time.
-        end_seconds: Exclusive upper bound.
+            Must be finite.
+        end_seconds: Exclusive upper bound. Must be finite and strictly
+            greater than ``start_seconds``; a zero-width window
+            (``start_seconds == end_seconds``) is rejected as invalid
+            configuration rather than accepted as a legitimate empty read.
     """
 
     clock_id: str
@@ -88,11 +93,25 @@ class SourceWindow:
     def __post_init__(self) -> None:
         """Validate the range.
 
+        A window is always rejected explicitly instead of silently resolving
+        to an empty read (see ``docs/adapters.md``): ``end_seconds`` at or
+        before ``start_seconds`` gives a half-open interval containing no
+        instant at all, which is treated as invalid configuration rather
+        than a legitimate zero-length read. ``NaN``/``+-inf`` bounds are
+        rejected here so a bad configuration fails with this explicit error
+        instead of a generic exception later, deep inside the nanosecond
+        conversion in :func:`~contextmap.ingestion.adapters._ros_common.resolve_window_bounds`.
+
         Raises:
-            ValueError: If ``end_seconds`` is before ``start_seconds``.
+            ValueError: If either bound is not finite, or if ``end_seconds``
+                does not come strictly after ``start_seconds``.
         """
-        if self.end_seconds < self.start_seconds:
-            raise ValueError("end_seconds must be >= start_seconds")
+        if not math.isfinite(self.start_seconds):
+            raise ValueError(f"start_seconds must be finite, got {self.start_seconds!r}")
+        if not math.isfinite(self.end_seconds):
+            raise ValueError(f"end_seconds must be finite, got {self.end_seconds!r}")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be > start_seconds (a window must not be empty)")
 
 
 @dataclass(frozen=True, kw_only=True)

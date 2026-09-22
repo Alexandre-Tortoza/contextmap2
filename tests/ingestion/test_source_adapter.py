@@ -203,10 +203,30 @@ def test_source_window_rejects_end_before_start() -> None:
         SourceWindow(clock_id="clock-a", start_seconds=5.0, end_seconds=2.0)
 
 
-def test_source_window_accepts_equal_start_and_end() -> None:
-    window = SourceWindow(clock_id="clock-a", start_seconds=1.0, end_seconds=1.0)
+def test_source_window_rejects_equal_start_and_end() -> None:
+    """[t, t) não tem nenhum instante dentro; tratamos como configuração inválida.
 
-    assert window.start_seconds == window.end_seconds
+    Uma janela sempre errou pelo lado explícito (ver
+    ``InvalidSourceWindowError`` para não-sobreposição): resolver
+    silenciosamente para uma leitura vazia é o comportamento que
+    ``docs/adapters.md`` proíbe. Uma janela de largura zero é sintoma do
+    mesmo problema — quase sempre um erro de configuração (dois limites
+    iguais por engano), não uma leitura vazia intencional.
+    """
+    with pytest.raises(ValueError, match="end_seconds"):
+        SourceWindow(clock_id="clock-a", start_seconds=1.0, end_seconds=1.0)
+
+
+@pytest.mark.parametrize("start_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_source_window_rejects_non_finite_start(start_seconds: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        SourceWindow(clock_id="clock-a", start_seconds=start_seconds, end_seconds=2.0)
+
+
+@pytest.mark.parametrize("end_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_source_window_rejects_non_finite_end(end_seconds: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        SourceWindow(clock_id="clock-a", start_seconds=0.0, end_seconds=end_seconds)
 
 
 def test_resolved_window_clock_id_is_deterministic_from_source_type_and_path() -> None:
