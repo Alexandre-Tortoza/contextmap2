@@ -12,13 +12,13 @@ flowchart LR
     CM --> CON["Consumidores externos<br/>viewers, busca, navegação, agentes"]
 ```
 
-A capability é **somente schema**. Ela não depende do layout em disco, de um serializador, de ROS nem de bibliotecas de modelo: importar `contextmap.artifact` não importa `torch`, `transformers`, `rclpy` nem `rosbags`, e há um teste que garante isso.
+O **schema** não depende do layout em disco, de um serializador, de ROS nem de bibliotecas de modelo: importar `contextmap.artifact` não importa `torch`, `transformers`, `rclpy` nem `rosbags`, e há um teste que garante isso. A persistência do mapa (layout, formatos, escrita atômica, leitura preguiçosa, validação e exportação portátil) vive em módulos separados do mesmo pacote e não altera o significado de nenhum campo; ela está documentada em [`storage-layout.md`](storage-layout.md).
 
 ## O que este módulo explicitamente não possui
 
 - inferência de domínio: percepção, fusão, resolução de entidades e relações continuam nas capabilities donas;
 - geometria e suas coordenadas: o mapa **referencia** o `GeometricMapArtifact`, nunca copia pontos;
-- o layout de arquivos, o formato de armazenamento, a escrita atômica e a leitura preguiçosa: pertencem ao serializador (milestone Context Map Serialization);
+- o layout de arquivos, o formato de armazenamento, a escrita atômica e a leitura preguiçosa: não fazem parte do schema; são decididos à parte em [`storage-layout.md`](storage-layout.md);
 - busca semântica, linguagem natural, planejamento, navegação, viewers e comportamento de ROS: consumidores externos ao Solution 1.
 
 ## Estado implementado
@@ -66,6 +66,11 @@ Nenhum dentro do Solution 1 hoje. O serializador (Context Map Serialization) e a
 - [`lineage.md`](lineage.md) — linhagem, referências de evidência, categorias de derivação e fechamento de proveniência.
 - [`versioning.md`](versioning.md) — versão do schema, compatibilidade, evolução, descontinuação, migração e impressão digital.
 - [`validation.md`](validation.md) — invariantes do schema, integridade de referências e a fixture representativa.
+- [`storage-layout.md`](storage-layout.md) — layout do `ContextMapArtifact` em disco, formatos escolhidos, manifest, identidade e dependências.
+- [`writer.md`](writer.md) — escrita determinística e publicação atômica.
+- [`reader.md`](reader.md) — leitor leve, acesso preguiçoso, resolução de referências e dependências.
+- [`integrity-validation.md`](integrity-validation.md) — validação de integridade do artifact em disco, níveis, relatório legível por máquina.
+- [`bundle.md`](bundle.md) — bundle portátil e fechamento explícito de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `ContextMap` no contexto global de contratos.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — o `ContextMapArtifact` no fluxo de artifacts.
 - [`docs/PIPELINE.md`](../../../../docs/PIPELINE.md) — a etapa de Context Map Assembly.
