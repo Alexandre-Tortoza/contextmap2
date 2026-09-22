@@ -30,11 +30,14 @@ def _pose_file(tmp_path: Path, text: str = _TUM_TEXT) -> Path:
     return path
 
 
-def _config(path: Path, **extra: object) -> SourceAdapterConfig:
+def _config(
+    path: Path, *, timestamp_clock_id: str = "corridor-02-gt:tum-header-stamp", **extra: object
+) -> SourceAdapterConfig:
     return SourceAdapterConfig(
         source_type="pose_file",
         path=str(path),
         topics=SourceTopicMapping(),
+        timestamp_clock_id=timestamp_clock_id,
         extra={
             "format": "tum",
             "parent_frame": "map",
@@ -126,6 +129,7 @@ def test_missing_format_raises_config_error_before_reading_the_file(tmp_path: Pa
         source_type="pose_file",
         path=str(path),
         topics=SourceTopicMapping(),
+        timestamp_clock_id="corridor-02-gt:tum-header-stamp",
         extra={"parent_frame": "map", "body_frame": "epson"},
     )
 
@@ -139,6 +143,7 @@ def test_missing_parent_frame_raises_config_error(tmp_path: Path) -> None:
         source_type="pose_file",
         path=str(path),
         topics=SourceTopicMapping(),
+        timestamp_clock_id="corridor-02-gt:tum-header-stamp",
         extra={"format": "tum", "body_frame": "epson"},
     )
 
@@ -152,6 +157,7 @@ def test_missing_body_frame_raises_config_error(tmp_path: Path) -> None:
         source_type="pose_file",
         path=str(path),
         topics=SourceTopicMapping(),
+        timestamp_clock_id="corridor-02-gt:tum-header-stamp",
         extra={"format": "tum", "parent_frame": "map"},
     )
 
@@ -164,6 +170,26 @@ def test_unsupported_format_raises_config_error(tmp_path: Path) -> None:
 
     with pytest.raises(PoseFileConfigError, match="format"):
         PoseFileSourceAdapter(_config(path, format="csv"))
+
+
+def test_missing_timestamp_clock_id_raises_config_error(tmp_path: Path) -> None:
+    """Regressão do #376: um pose file TUM não carrega clock algum.
+
+    ``resolved_timestamp_clock_id()`` sintetizaria silenciosamente
+    ``"pose_file:<path>:header"`` quando ``timestamp_clock_id`` não é
+    declarado — exatamente o fallback silencioso que o #376 proíbe, já
+    que o arquivo TUM não expressa nenhuma informação de clock própria.
+    """
+    path = _pose_file(tmp_path)
+    config = SourceAdapterConfig(
+        source_type="pose_file",
+        path=str(path),
+        topics=SourceTopicMapping(),
+        extra={"format": "tum", "parent_frame": "map", "body_frame": "epson"},
+    )
+
+    with pytest.raises(PoseFileConfigError, match="timestamp_clock_id"):
+        PoseFileSourceAdapter(config)
 
 
 def test_malformed_line_becomes_a_warning_not_a_crash(tmp_path: Path) -> None:

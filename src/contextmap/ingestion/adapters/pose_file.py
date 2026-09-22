@@ -83,9 +83,10 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
         The validated settings.
 
     Raises:
-        PoseFileConfigError: If ``format`` is not a supported value, or
+        PoseFileConfigError: If ``format`` is not a supported value, if
             ``parent_frame``/``body_frame`` is missing or not a non-empty
-            string. Nothing is inferred from the file name or content.
+            string, or if ``config.timestamp_clock_id`` is not declared.
+            Nothing is inferred from the file name or content.
     """
     extra = config.extra
     format_name = extra.get("format")
@@ -106,6 +107,16 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
             "pose_file adapter requires a non-empty extra['body_frame']; "
             "a pose file never declares which frame its pose reports"
         )
+    if config.timestamp_clock_id is None:
+        # Um arquivo TUM não carrega clock algum (nem sequer um implícito no
+        # próprio formato): sintetizar um id de clock aqui seria exatamente o
+        # fallback silencioso que o #376 proíbe. O chamador deve declarar
+        # explicitamente com qual clock os timestamps decodificados se relacionam.
+        raise PoseFileConfigError(
+            "pose_file adapter requires an explicit config.timestamp_clock_id; "
+            "a TUM pose file carries no clock information of its own, so none "
+            "is synthesized"
+        )
     sensor_id = extra.get("sensor_id", _DEFAULT_SENSOR_ID)
     if not isinstance(sensor_id, str) or not sensor_id:
         raise PoseFileConfigError("extra['sensor_id'], when given, must be a non-empty string")
@@ -125,13 +136,16 @@ class PoseFileSourceAdapter:
 
         Args:
             config: Adapter configuration; ``config.extra`` must declare
-                ``format``, ``parent_frame`` and ``body_frame`` (see module
-                docs). By convention ``config.source_type`` is
+                ``format``, ``parent_frame`` and ``body_frame``, and
+                ``config.timestamp_clock_id`` must be set explicitly (see
+                module docs). By convention ``config.source_type`` is
                 ``"pose_file"``, but this is not validated here.
 
         Raises:
             PoseFileConfigError: If required ``extra`` settings are missing
-                or invalid.
+                or invalid, or if ``config.timestamp_clock_id`` is not
+                declared — a TUM pose file carries no clock information of
+                its own, so none is synthesized.
         """
         self._config = config
         self._settings = _settings_from_config(config)
