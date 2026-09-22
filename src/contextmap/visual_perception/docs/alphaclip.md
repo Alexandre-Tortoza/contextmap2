@@ -17,6 +17,8 @@ A máscara local é posicionada explicitamente no canvas da `PreparedImage`. Reg
 
 Máscara sempre usa nearest-neighbor para não fabricar valores intermediários antes da normalização alpha esperada pelo modelo.
 
+Zero regiões aceitas é um resultado legítimo de Region Discovery (um frame sem nada saliente), não um erro (#380): `extract()`/`extract_masked()` retornam zero features sem invocar o runtime nem exigir máscara, `AlphaClipExtraction.embedding_space` fica `None` (nenhum request foi codificado) e `array` fica com shape `(0, 0)`.
+
 ## Políticas de view
 
 - `full_image`: RGB e máscara permanecem no contexto completo da imagem;
