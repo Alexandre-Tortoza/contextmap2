@@ -901,9 +901,10 @@ descrevem artifacts **planejados**, exceto pelo trecho de entidade
 SourceObservation`), que o `SemanticMappingRunArtifact` já persiste e que
 `trace_entity_evidence` percorre por identidade, e pelo de resolução
 (`ResolvedEntity → ResolutionDecision → Source Entity`), que o
-`EntityResolutionRunArtifact` já persiste (`merge-lineage.jsonl`). A
-capability `artifact` ainda não existe; `spatial_relations` já persiste o
-`SpatialRelationsRunArtifact`.
+`EntityResolutionRunArtifact` já persiste (`merge-lineage.jsonl`).
+`spatial_relations` já persiste o `SpatialRelationsRunArtifact`. Da
+capability `artifact` existe apenas o **schema** `ContextMap` (sem escrita,
+leitura nem artifact persistido).
 
 ```mermaid
 flowchart RL
@@ -966,6 +967,8 @@ ContextMap
 ```
 
 Ele deve permanecer legível sem model runtimes.
+
+O schema `ContextMap` ([contratos](../src/contextmap/artifact/docs/contracts.md), [linhagem](../src/contextmap/artifact/docs/lineage.md)) já define esse fechamento: `lineage` lista todo artifact a montante que o mapa cita, com identidade de conteúdo, configuração, código e modelos, e cada referência do mapa resolve a essa tabela com o tipo certo. `GEOMETRIC_MAP`, `ENTITY_RESOLUTION_RUN` e `SPATIAL_RELATIONS_RUN` são dependências estruturais; os demais são evidência opcional; saída de debug e conjuntos de referência de avaliação não têm tipo e nunca podem ser citados. O layout em disco, os hashes do inventário e a escrita atômica são do serializador, ainda planejado.
 
 Um consumidor que só precisa de entidades/relações não deve precisar baixar raw bags, checkpoints ou debug artifacts.
 
