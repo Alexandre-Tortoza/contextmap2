@@ -569,6 +569,31 @@ class TestComposeExecutors:
         assert "point_representation" not in executors
         assert "semantic_mapping" not in executors
 
+    def test_spatial_relations_executor_reads_geometry_summary_only_from_its_policies(
+        self, tmp_path: Path
+    ) -> None:
+        """P2 provenance finding of the PR #540 review, second round.
+
+        ``SpatialRelationsExecutor`` used to also accept a separate ``geometry_summary``
+        keyword, independent of ``policies.geometry_summary`` -- the one persisted in the run's
+        own provenance. Two independent values could diverge, making the artifact record a
+        different policy than the one that actually produced its evidence. There is now only
+        one place to supply it.
+        """
+        from contextmap.runtime.executors import SpatialRelationsExecutor
+
+        executors = compose_executors(
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        spatial_relations = executors["spatial_relations"]
+        assert isinstance(spatial_relations, SpatialRelationsExecutor)
+
+        # Argumento removido: a assinatura não aceita mais um segundo valor independente.
+        with pytest.raises(TypeError):
+            SpatialRelationsExecutor(policies=None, geometry_summary=object())  # type: ignore[call-arg,arg-type]
+
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
     ) -> None:

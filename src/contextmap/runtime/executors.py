@@ -71,7 +71,7 @@ from contextmap.semantic_fusion import (
     build_fusion_supports,
     group_by_physical_observation,
 )
-from contextmap.semantic_mapping import GeometrySummaryPolicy, SemanticMappingRunReader
+from contextmap.semantic_mapping import SemanticMappingRunReader
 from contextmap.sensor_association import (
     AssociationFrameInput,
     DiagnosticTolerances,
@@ -482,12 +482,17 @@ class SpatialRelationsExecutor:
         self,
         *,
         policies: RelationsRunPolicies,
-        geometry_summary: GeometrySummaryPolicy,
         code_version: str | None = None,
     ) -> None:
-        """Bind the executor to the frame conventions, the predicate policies and the summary."""
+        """Bind the executor to the frame conventions and the predicate policies.
+
+        ``policies.geometry_summary`` is the only source of the summary policy: it is also
+        what gets persisted in the run's own provenance (see
+        ``contextmap.spatial_relations.run_artifact``), so there is exactly one place that can
+        say which policy actually produced the evidence, never a second parameter that could
+        name a different one (review of PR #540, second round).
+        """
         self._policies = policies
-        self._geometry_summary = geometry_summary
         self._code_version = code_version
 
     def execute(self, request: StageRequest) -> ArtifactRef:
@@ -498,7 +503,9 @@ class SpatialRelationsExecutor:
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
             source = geometry.geometry()
             entities = resolved_entity_geometries(
-                resolution.resolved_entities(), source=source, policy=self._geometry_summary
+                resolution.resolved_entities(),
+                source=source,
+                policy=self._policies.geometry_summary,
             )
             candidates = generate_relation_candidates(
                 entities, policy=self._policies.candidate, conventions=conventions

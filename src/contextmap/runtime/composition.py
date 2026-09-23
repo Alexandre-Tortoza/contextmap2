@@ -63,7 +63,6 @@ if TYPE_CHECKING:
         GeometryOverlapSupportPolicy,
         QualityAwareAccumulationPolicy,
     )
-    from contextmap.semantic_mapping import GeometrySummaryPolicy
     from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
     from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
@@ -145,11 +144,12 @@ class ComposedRuntime:
         entity_comparison_channels: The evidence channels Entity Resolution evaluates; geometry
             is always present, every other channel is ``None`` when not selected.
         entity_resolution_policy: Entity Resolution's conservative decision policy.
-        spatial_relations_policies: Spatial Relations' effective policies: frame conventions and
-            candidate generation are always present, the predicate evaluators are ``None`` when
-            not selected.
-        spatial_relations_geometry_summary: Policy Spatial Relations uses to summarize a resolved
-            entity's geometry before generating candidates.
+        spatial_relations_policies: Spatial Relations' effective policies: frame conventions,
+            candidate generation and the geometry-summary policy are always present, the
+            predicate evaluators are ``None`` when not selected. ``geometry_summary`` here is
+            the only source ``SpatialRelationsExecutor`` reads it from, so the policy it uses
+            to summarize geometry and the one persisted in the run's own provenance can never
+            diverge (review of PR #540, second round).
     """
 
     effective: EffectiveConfig
@@ -173,7 +173,6 @@ class ComposedRuntime:
     entity_comparison_channels: ComparisonChannels | None = None
     entity_resolution_policy: ConservativeResolutionPolicy | None = None
     spatial_relations_policies: RelationsRunPolicies | None = None
-    spatial_relations_geometry_summary: GeometrySummaryPolicy | None = None
 
 
 def compose(
@@ -984,18 +983,14 @@ def _compose_entity_resolution(context: _Context) -> dict[str, object]:
 def _compose_spatial_relations(context: _Context) -> dict[str, object]:
     from contextmap.spatial_relations import RelationsRunPolicies
 
-    geometry_summary = _construct(context, "spatial_relations.geometry_summary")
     policies = RelationsRunPolicies(
         frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
         candidate=_construct(context, "spatial_relations.candidate"),
-        geometry_summary=geometry_summary,
+        geometry_summary=_construct(context, "spatial_relations.geometry_summary"),
         geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
         contact=_construct_optional(context, "spatial_relations.contact_predicate"),
     )
-    return {
-        "spatial_relations_policies": policies,
-        "spatial_relations_geometry_summary": geometry_summary,
-    }
+    return {"spatial_relations_policies": policies}
 
 
 _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
@@ -1159,10 +1154,8 @@ def compose_executors(
     spatial_relations = _compose_stage("spatial_relations")
     if spatial_relations is not None:
         assert spatial_relations.spatial_relations_policies is not None
-        assert spatial_relations.spatial_relations_geometry_summary is not None
         executors["spatial_relations"] = SpatialRelationsExecutor(
             policies=spatial_relations.spatial_relations_policies,
-            geometry_summary=spatial_relations.spatial_relations_geometry_summary,
         )
 
     return executors
