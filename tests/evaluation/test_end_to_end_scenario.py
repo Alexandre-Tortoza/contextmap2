@@ -357,6 +357,49 @@ def test_blocked_and_not_evaluated_gates_are_unmet_and_explained() -> None:
     assert all(gate.reason for gate in unmet)
 
 
+def test_release_blocking_filter_excludes_report_gates_without_hiding_invariants() -> None:
+    scenario = canonical_real_scenario()
+    results = _all_passed(scenario.gates, evidence_class=EvidenceClass.REAL)
+    quality_index = next(
+        index
+        for index, r in enumerate(results)
+        if r.gate_id == "entity_resolution.identity_quality"
+    )
+    frame_index = next(
+        index
+        for index, r in enumerate(results)
+        if r.gate_id == "geometric_mapping.map_frame_consistency"
+    )
+    assert scenario.gates[quality_index].kind is GateKind.REPORT
+    assert scenario.gates[frame_index].kind is GateKind.INVARIANT
+    results[quality_index] = GateResult.blocked(
+        "entity_resolution.identity_quality",
+        blocked_by=("entity_resolution",),
+        detail="identity annotations not available",
+    )
+    results[frame_index] = GateResult.failed(
+        "geometric_mapping.map_frame_consistency",
+        evidence_class=EvidenceClass.REAL,
+        evidence_refs=("artifact:map-0001",),
+        failing_capabilities=("geometric_mapping",),
+        detail="map frame differs from the trajectory frame",
+    )
+    report = assemble_acceptance_report(
+        scenario, report_id="r", run_id="run", code_version="c", results=results
+    )
+
+    unfiltered = unmet_required_gates(scenario, report)
+    assert {gate.gate_id for gate in unfiltered} == {
+        "entity_resolution.identity_quality",
+        "geometric_mapping.map_frame_consistency",
+    }
+
+    release_blocking = unmet_required_gates(scenario, report, kinds=frozenset({GateKind.INVARIANT}))
+    assert [gate.gate_id for gate in release_blocking] == [
+        "geometric_mapping.map_frame_consistency"
+    ]
+
+
 def test_contract_evidence_alone_never_satisfies_a_gate() -> None:
     scenario = canonical_ci_scenario()
     report = assemble_acceptance_report(

@@ -752,7 +752,12 @@ class UnmetGate:
     reason: str
 
 
-def unmet_required_gates(scenario: E2EScenario, report: AcceptanceReport) -> tuple[UnmetGate, ...]:
+def unmet_required_gates(
+    scenario: E2EScenario,
+    report: AcceptanceReport,
+    *,
+    kinds: frozenset[GateKind] | None = None,
+) -> tuple[UnmetGate, ...]:
     """Return every required gate the report does not show as met.
 
     A gate is met only when it passed with ``real`` evidence. Contract evidence over
@@ -762,13 +767,22 @@ def unmet_required_gates(scenario: E2EScenario, report: AcceptanceReport) -> tup
     Args:
         scenario: The scenario the report was assembled against.
         report: The report.
+        kinds: Restrict which :class:`GateKind` values count as required. ``None``
+            (the default) keeps every gate required, exactly as before this parameter
+            existed. Pass ``frozenset({GateKind.INVARIANT})`` for a release-readiness
+            check: a :attr:`GateKind.REPORT` gate has no pass threshold by design (its
+            own semantics are metrics-only), so it should never gate a release by
+            itself -- only a structural :attr:`GateKind.INVARIANT` gate should.
 
     Returns:
-        The unmet gates in matrix order; empty only when every gate is met.
+        The unmet gates in matrix order; empty only when every required gate is met.
     """
     owner = {gate.gate_id: gate.capability for gate in scenario.gates}
+    gate_kind = {gate.gate_id: gate.kind for gate in scenario.gates}
     unmet: list[UnmetGate] = []
     for result in report.results:
+        if kinds is not None and gate_kind[result.gate_id] not in kinds:
+            continue
         capabilities = result.failing_capabilities or (owner[result.gate_id],)
         if result.status is not GateStatus.PASSED:
             reason = f"{result.status.value}: {result.detail}"
