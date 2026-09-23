@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from runtime_documents import effective_from, selected_document
@@ -13,6 +13,7 @@ from runtime_ingestion import FakeAdapter, factory, image, sequence
 from runtime_ingestion import request as make_request
 
 from contextmap.ingestion import (
+    ConstantOffsetCorrection,
     MissingRequiredTopicError,
     SequenceArtifactError,
     SequenceArtifactReader,
@@ -20,6 +21,7 @@ from contextmap.ingestion import (
     SourceTopicMapping,
     SourceWindow,
     SynchronizationConfig,
+    TimestampPolicy,
     compute_source_content_hash,
 )
 from contextmap.runtime import (
@@ -446,6 +448,140 @@ class TestSuccessfulRun:
         )
 
         assert result.status == "completed" and result.metrics.observations_read == 49
+
+
+class TestTimestampPolicy:
+    """Issue #554: dataset-scoped timestamp normalization through the real request/service path."""
+
+    def test_the_default_policy_is_recorded_and_changes_nothing(self, tmp_path: Path) -> None:
+        result = _service().run(make_request(tmp_path))
+        assert result.artifact_path is not None
+
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        assert provenance.ingestion_config["timestamp_policy"] == {
+            "event_clock": "header_stamp",
+            "window_clock": "recording_time",
+            "correction": {"type": "none"},
+        }
+        first = reader.list_observations()[0]
+        assert "source_time_before_correction_seconds" not in first.provenance.raw_metadata
+
+    def test_a_configured_constant_offset_corrects_the_published_observations(
+        self, tmp_path: Path
+    ) -> None:
+        wrong_epoch_start = 1_000_000_000  # somewhere in 2001, in the source's own clock
+        observations = [image(index, float(wrong_epoch_start + index)) for index in range(1, 4)]
+        correction = ConstantOffsetCorrection.from_offset_seconds(789_004_800.0)  # ~25 years
+        policy = TimestampPolicy(correction=correction)
+
+        result = IngestionService(factory(observations=observations)).run(
+            make_request(
+                tmp_path,
+                topics=SourceTopicMapping(rgb="/camera"),
+                reference="image",
+                timestamp_policy=policy,
+            )
+        )
+
+        assert result.status == "completed" and result.failure is None
+        assert result.artifact_path is not None
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        published = sorted(reader.list_observations(), key=lambda o: str(o.observation_id))
+        assert [obs.timestamp.seconds for obs in published] == [
+            wrong_epoch_start + index + 789_004_800 for index in range(1, 4)
+        ]
+        raw_metadata = published[0].provenance.raw_metadata
+        assert raw_metadata["source_time_before_correction_seconds"] == wrong_epoch_start + 1
+
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        timestamp_policy_document = cast(
+            dict[str, Any], provenance.ingestion_config["timestamp_policy"]
+        )
+        correction_document = cast(dict[str, Any], timestamp_policy_document["correction"])
+        assert correction_document["type"] == "constant_offset"
+        assert correction_document["offset_seconds"] == pytest.approx(789_004_800.0)
+
+    def test_a_sibling_request_without_a_policy_does_not_inherit_the_correction(
+        self, tmp_path: Path
+    ) -> None:
+        corrected_policy = TimestampPolicy(
+            correction=ConstantOffsetCorrection.from_offset_seconds(1_000.0)
+        )
+        corrected_result = _service().run(
+            make_request(tmp_path, name="corridor-a", timestamp_policy=corrected_policy)
+        )
+        default_result = _service().run(make_request(tmp_path, name="corridor-b"))
+
+        assert corrected_result.status == default_result.status == "completed"
+        assert corrected_result.artifact_path is not None
+        assert default_result.artifact_path is not None
+        corrected_first = SequenceArtifactReader(
+            Path(corrected_result.artifact_path)
+        ).list_observations()[0]
+        default_first = SequenceArtifactReader(
+            Path(default_result.artifact_path)
+        ).list_observations()[0]
+        assert corrected_first.timestamp.seconds - default_first.timestamp.seconds == 1_000
+
+    def test_a_non_monotonic_source_clock_produces_an_actionable_provenance_warning(
+        self, tmp_path: Path
+    ) -> None:
+        observations = [image(1, 10.0), image(2, 11.0), image(3, 5.0)]  # reset partway through
+
+        result = IngestionService(factory(observations=observations)).run(
+            make_request(
+                tmp_path,
+                topics=SourceTopicMapping(rgb="/camera"),
+                reference="image",
+                validation=ValidationPolicy(on_problems="warn"),
+            )
+        )
+
+        assert result.status == "completed"
+        assert result.artifact_path is not None
+        provenance = SequenceArtifactReader(Path(result.artifact_path)).read_provenance()
+        assert provenance is not None
+        assert any("non-monotonic" in warning for warning in provenance.warnings)
+
+    def test_a_window_and_a_correction_apply_independently_in_the_same_request(
+        self, tmp_path: Path
+    ) -> None:
+        # Window selection stays on recording_time (the adapter's own clock, untouched by #554)
+        # while the header/event clock is normalized -- the two mechanisms must not interfere.
+        built: list[FakeAdapter] = []
+        base_request = make_request(
+            tmp_path,
+            timestamp_policy=TimestampPolicy(
+                correction=ConstantOffsetCorrection.from_offset_seconds(500.0)
+            ),
+        )
+        window = SourceWindow(
+            clock_id=f"{base_request.source_type}:{base_request.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=10.0,
+        )
+        request = dataclasses.replace(base_request, window=window)
+
+        result = IngestionService(factory(built=built)).run(request)
+
+        assert result.status == "completed"
+        assert result.artifact_path is not None
+        assert built and all(adapter.config.window == window for adapter in built)
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        window_document = cast(dict[str, Any], provenance.ingestion_config["window"])
+        assert window_document["clock_id"] == window.clock_id
+        timestamp_policy_document = cast(
+            dict[str, Any], provenance.ingestion_config["timestamp_policy"]
+        )
+        correction_document = cast(dict[str, Any], timestamp_policy_document["correction"])
+        assert correction_document["type"] == "constant_offset"
+        corrected_seconds = sorted({obs.timestamp.seconds for obs in reader.list_observations()})
+        assert corrected_seconds == [501, 502, 503]
 
 
 class TestExpectedFailures:

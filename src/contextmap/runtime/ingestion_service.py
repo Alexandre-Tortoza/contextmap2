@@ -31,6 +31,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from contextmap.ingestion import (
+    DEFAULT_TIMESTAMP_POLICY,
     MODALITY_NAMES,
     CalibrationError,
     CalibrationSet,
@@ -49,9 +50,14 @@ from contextmap.ingestion import (
     SourceTopicMapping,
     SourceWindow,
     SynchronizationConfig,
+    TimestampPolicy,
+    apply_timestamp_policy,
     compute_configuration_hash,
     compute_source_content_hash,
     current_code_version,
+    decode_timestamp_policy,
+    diagnose_source_clock,
+    encode_timestamp_policy,
     observation_modality,
     synchronize,
     validate_frame_references,
@@ -136,6 +142,11 @@ class IngestionRequest:
         required_topics: Topic names that must exist in the source.
         timestamp_clock_id: Identity of the header clock shared by the topics; derived from
             the source when omitted.
+        timestamp_policy: Dataset-scoped selection of clocks and correction applied to every
+            observation's timestamp before it is validated, synchronized and published (issue
+            #554). The default applies no correction: behavior is unchanged from before this
+            field existed, and only a source explicitly configured otherwise is affected — a
+            live/streaming request never inherits another dataset's correction.
         window: An explicit temporal window of the source to ingest (issue #506), or
             ``None`` to ingest the whole source. See
             :class:`~contextmap.ingestion.SourceWindow`; an adapter that does not support
@@ -160,6 +171,7 @@ class IngestionRequest:
     synchronization: SynchronizationConfig
     required_topics: frozenset[str] = frozenset()
     timestamp_clock_id: str | None = None
+    timestamp_policy: TimestampPolicy = DEFAULT_TIMESTAMP_POLICY
     window: SourceWindow | None = None
     calibration: CalibrationSet | None = None
     validation: ValidationPolicy = field(default_factory=ValidationPolicy)
@@ -191,6 +203,7 @@ class IngestionRequest:
             "topics": dataclasses.asdict(self.topics),
             "required_topics": sorted(self.required_topics),
             "timestamp_clock_id": self.timestamp_clock_id,
+            "timestamp_policy": encode_timestamp_policy(self.timestamp_policy),
             "window": _window_document(self.window),
             "synchronization": {
                 "reference_modality": self.synchronization.reference_modality,
@@ -228,7 +241,8 @@ class IngestionRequest:
         Args:
             document: A mapping with ``source_path``, ``sequence_name``, ``topics``,
                 ``synchronization`` and optionally ``required_topics``, ``timestamp_clock_id``,
-                ``window``, ``validation``, ``hash_source`` and ``config_identity``.
+                ``timestamp_policy``, ``window``, ``validation``, ``hash_source`` and
+                ``config_identity``.
             output_dir: The final directory of the sequence artifact.
             source_type: The adapter family, when the document does not carry it.
             artifact_id: The identity to publish under, when the caller fixes it.
@@ -255,6 +269,7 @@ class IngestionRequest:
                 synchronization=synchronization,
                 required_topics=frozenset(document.get("required_topics", ())),
                 timestamp_clock_id=document.get("timestamp_clock_id"),
+                timestamp_policy=decode_timestamp_policy(document.get("timestamp_policy")),
                 window=_window_from_document(document.get("window")),
                 validation=validation,
                 hash_source=document.get("hash_source", True),
@@ -688,6 +703,7 @@ class IngestionService:
                 observation = next(iterator)
             except StopIteration:
                 break
+            observation = apply_timestamp_policy(observation, run.request.timestamp_policy)
             run.content_problems.extend(_content_problems(observation))
             try:
                 writer.add_observation(observation)
@@ -704,6 +720,9 @@ class IngestionService:
         except Exception as error:
             raise run.abort_source(error) from error
         run.adapter_warnings = tuple(warning.reason for warning in adapter.warnings())
+        run.timestamp_diagnostics = diagnose_source_clock(
+            run.metadata, correction=run.request.timestamp_policy.correction
+        )
         return calibration
 
     def _validate(self, run: _Run, calibration: CalibrationSet | None) -> None:
@@ -755,7 +774,10 @@ class IngestionService:
         run.check_cancelled()
         run.begin("writing-artifact")
         request = run.request
-        warnings = (*run.adapter_warnings, *run.validation_problems)
+        timestamp_warnings = (
+            run.timestamp_diagnostics.warnings() if run.timestamp_diagnostics else ()
+        )
+        warnings = (*run.adapter_warnings, *run.validation_problems, *timestamp_warnings)
         run.warnings = warnings
         try:
             if calibration is not None:
@@ -815,6 +837,7 @@ class _Run:
         self.content_problems: list[str] = []
         self.validation_problems: tuple[str, ...] = ()
         self.adapter_warnings: tuple[str, ...] = ()
+        self.timestamp_diagnostics: Any = None
         self.warnings: tuple[str, ...] = ()
         self.processing = 0
         self.dropped = 0
@@ -1093,6 +1116,7 @@ def _provenance(
         "topics": dataclasses.asdict(request.topics),
         "required_topics": sorted(request.required_topics),
         "timestamp_clock_id": request.timestamp_clock_id,
+        "timestamp_policy": encode_timestamp_policy(request.timestamp_policy),
         "window": _window_document(request.window),
         "synchronization": request.to_document()["synchronization"],
         "validation": dataclasses.asdict(request.validation),
