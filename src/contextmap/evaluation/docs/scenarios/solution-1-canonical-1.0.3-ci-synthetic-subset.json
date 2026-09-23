@@ -51,7 +51,7 @@
       "reason": "The baseline resolves on geometry; extra evidence is an ablation."
     }
   ],
-  "digest": "sha256:dbb87241b245a7e96cbb2c9923dbceb78e702021e5f38159c6a4259be323d0c1",
+  "digest": "sha256:94727665769c99ec54b3d0d12d202865af6db342baa7d8809f65b51f6b74229c",
   "gates": [
     {
       "capability": "ingestion",
@@ -572,5 +572,5 @@
     "sequence_manifest_digest": null,
     "subject_id": "ci-synthetic-subset"
   },
-  "version": "1.0.2"
+  "version": "1.0.3"
 }

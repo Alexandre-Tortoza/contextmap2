@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -39,6 +39,10 @@ CANONICAL_ORDER = [
     "geometric_mapping",
     "sensor_association",
     "semantic_fusion",
+    "semantic_mapping",
+    "entity_resolution",
+    "spatial_relations",
+    "context_map",
 ]
 IMPLEMENTED = CANONICAL_ORDER
 
@@ -139,13 +143,13 @@ class TestCanonicalDag:
         )
         assert changed.digest != base.digest
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_unavailable_stages_stay_in_the_topology_with_their_reason(
         self, tmp_path: Path
     ) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
 
-        stage = plan.stage("context_map")
+        stage = plan.stage("scene_graph")
 
         assert not stage.available
         assert "milestone" in stage.unavailable_reason
@@ -378,7 +382,7 @@ class TestScopeAndExecution:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []
         executors = _executors(plan, log)
-        scope = plan.scope(targets=["semantic_fusion"])
+        scope = plan.scope(targets=["context_map"])
 
         record = run_plan(
             scope, executors, environ={}, module_available=_ready, provided_runtimes=_ALL_PROVIDED
@@ -458,7 +462,7 @@ class TestScopeAndExecution:
 
         assert any("nope" in problem.message for problem in report.problems)
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_preflight_blocks_before_any_stage_runs(self, tmp_path: Path) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []
@@ -466,7 +470,7 @@ class TestScopeAndExecution:
 
         with pytest.raises(PreflightError) as error:
             run_plan(
-                plan.scope(targets=["context_map"]),
+                plan.scope(targets=["scene_graph"]),
                 executors,
                 environ={},
                 module_available=_ready,
@@ -474,7 +478,7 @@ class TestScopeAndExecution:
             )
 
         assert log == []
-        assert any("context_map" in problem.path for problem in error.value.report.problems)
+        assert any("scene_graph" in problem.path for problem in error.value.report.problems)
 
     def test_preflight_reports_missing_executors_backends_and_secrets_together(
         self, tmp_path: Path

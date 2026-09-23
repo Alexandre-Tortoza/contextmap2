@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from chain import canned_perception_results
 
+from contextmap.artifact import ContextMapArtifactReader
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     ComparisonChannels,
@@ -56,6 +57,7 @@ from contextmap.runtime import (
     run_plan,
 )
 from contextmap.runtime.executors import (
+    ContextMapExecutor,
     EntityResolutionExecutor,
     GeometricMappingExecutor,
     SemanticFusionExecutor,
@@ -119,6 +121,7 @@ STAGES = [
     "semantic_mapping",
     "entity_resolution",
     "spatial_relations",
+    "context_map",
 ]
 PROVIDED = (
     "visual_perception.region_discovery",
@@ -205,6 +208,10 @@ def _executors() -> dict[str, Any]:
     estimator = ExternalPoseEstimator(
         ExternalPoseConfig(reference_frame=FrameId("odom"), body_frame=FrameId("base_link"))
     )
+    # O mapa sintético está expresso no referencial odom, com +z como eixo vertical; context_map
+    # reaproveita exatamente o mesmo up_axis que spatial_relations já declara abaixo, nunca um
+    # valor derivado de novo.
+    up_axis = AxisDirection.POSITIVE_Z
     return {
         "ingestion": _Ingestion(),
         "visual_perception": _Perception(),
@@ -225,6 +232,7 @@ def _executors() -> dict[str, Any]:
             motion_correction=MotionCorrectionPolicy(
                 raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.WARN
             ),
+            code_version="test",
         ),
         "sensor_association": SensorAssociationExecutor(
             occlusion=OcclusionPolicy(
@@ -240,12 +248,14 @@ def _executors() -> dict[str, Any]:
                 max_reprojection_invalid_rate=None,
             ),
             pose_policy=LookupPolicy.exact(),
+            code_version="test",
         ),
         "semantic_fusion": SemanticFusionExecutor(
             support_policy=GeometryOverlapSupportPolicy(min_geometry_count=1, min_overlap=0.5),
             accumulation_policy=BaselineAccumulationPolicy(
                 abstention_labels=frozenset({"unknown"})
             ),
+            code_version="test",
         ),
         "semantic_mapping": SemanticMappingExecutor(
             policy=EntityMaterializationPolicy(
@@ -253,6 +263,7 @@ def _executors() -> dict[str, Any]:
             ),
             semantic_map_id=SemanticMapId("semantic-map-ci"),
             code_digest="sha256:" + "cd" * 32,
+            code_version="test",
         ),
         "entity_resolution": EntityResolutionExecutor(
             retrieval=CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1),
@@ -270,12 +281,14 @@ def _executors() -> dict[str, Any]:
             resolution=ConservativeResolutionPolicy(
                 use_channels=(MatchChannel.GEOMETRY,), min_supporting_channels=1
             ),
+            code_version="test",
         ),
         "spatial_relations": SpatialRelationsExecutor(
+            code_version="test",
             policies=RelationsRunPolicies(
                 frame_conventions=FrameConventions(
-                    map_frame="odom",  # o mapa sintético está expresso no referencial odom
-                    up_axis=AxisDirection.POSITIVE_Z,
+                    map_frame="odom",
+                    up_axis=up_axis,
                     forward_axis=AxisDirection.POSITIVE_X,
                 ),
                 candidate=CandidatePolicy(
@@ -306,6 +319,7 @@ def _executors() -> dict[str, Any]:
                 ),
             ),
         ),
+        "context_map": ContextMapExecutor(up_axis=up_axis),
     }
 
 
@@ -331,7 +345,7 @@ def _scope(tmp_path: Path) -> tuple[Any, ExecutionPlan]:
     path = tmp_path / "canonical.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     effective = resolve_effective_config(files=[path])
-    return effective, resolve_plan(effective).scope(targets=["spatial_relations"])
+    return effective, resolve_plan(effective).scope(targets=["context_map"])
 
 
 def _run(
@@ -388,6 +402,9 @@ def test_every_stage_writes_its_artifact_into_its_own_directory_of_the_run(
     assert resolution.verify_integrity() == []
     relations = SpatialRelationsRunReader(run / "spatial_relations")
     assert relations.verify_integrity() == []
+    with ContextMapArtifactReader.open(run / "context_map") as context_map_reader:
+        context_map = context_map_reader.context_map()
+    assert len(context_map.entities) == 2  # a palete e o poste, sem fusão entre suportes
 
 
 def test_no_stage_writes_outside_the_directory_the_runtime_gave_it(tmp_path: Path) -> None:

@@ -1199,11 +1199,10 @@ def compose_executors(
     - ``spatial_relations`` always applies the required frame conventions, candidate policy
       and geometry summary; the geometric and contact predicate evaluators run only when
       their own component is selected.
-    - ``context_map`` composes only under a preset that declares it (``canonical/3`` and later,
-      never ``canonical/1``/``canonical/2``); it has no variation point of its own, so once its
-      preset is selected it always composes. Its ``up_axis`` comes from the same
-      ``spatial_relations`` ``FrameConventions`` this function already composed above, when
-      available -- never re-derived independently -- and stays unknown otherwise.
+    - ``context_map`` has no variation point of its own, so composing it never fails once the
+      preset declares it. Its ``up_axis`` comes from the same ``spatial_relations``
+      ``FrameConventions`` this function already composed above, when available -- never
+      re-derived independently -- and stays unknown otherwise.
 
     Args:
         effective: The resolved configuration.

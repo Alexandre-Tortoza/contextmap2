@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 from contextmap.runtime import (
     CANONICAL_PROFILE_ID,
     CONFIG_SCHEMA_VERSION,
-    EXTENDED_PROFILE_ID,
     ConfigurationError,
     ConfigurationSource,
     EffectiveConfig,
@@ -65,14 +63,10 @@ class TestCanonicalProfile:
         assert stages["ingestion"] is True
         assert stages["semantic_fusion"] is True
         assert stages["point_representation"] is False
-        # O preset canônico (canonical/1) só declara o que executa hoje; os estágios
-        # seguintes vêm em canonical/2 (ver TestExtendedProfile).
-        assert not {
-            "semantic_mapping",
-            "entity_resolution",
-            "spatial_relations",
-            "context_map",
-        } & set(stages)
+        assert stages["semantic_mapping"] is True
+        assert stages["entity_resolution"] is True
+        assert stages["spatial_relations"] is True
+        assert stages["context_map"] is True
 
     def test_makes_no_backend_choice_on_the_users_behalf(self) -> None:
         config = resolve_effective_config().config
@@ -83,29 +77,6 @@ class TestCanonicalProfile:
     def test_unknown_profile_is_rejected_with_the_known_ones(self) -> None:
         with pytest.raises(ConfigurationError, match="canonical/1"):
             resolve_effective_config(profile="canonical/99")
-
-
-class TestExtendedProfile:
-    """canonical/2 extends canonical/1 with semantic_mapping, entity_resolution and
-    spatial_relations."""
-
-    def test_lists_the_three_extra_stages_enabled_by_default(self) -> None:
-        stages = resolve_effective_config(profile=EXTENDED_PROFILE_ID).config.pipeline.stages
-
-        assert stages["ingestion"] is True
-        assert stages["semantic_fusion"] is True
-        assert stages["semantic_mapping"] is True
-        assert stages["entity_resolution"] is True
-        assert stages["spatial_relations"] is True
-        assert "context_map" not in stages
-
-    def test_resolves_deterministically_and_keeps_the_profile_identity(self) -> None:
-        first = resolve_effective_config(profile=EXTENDED_PROFILE_ID)
-        second = resolve_effective_config(profile=EXTENDED_PROFILE_ID)
-
-        assert first.digest == second.digest
-        assert first.config == second.config
-        assert first.config.pipeline.preset == EXTENDED_PROFILE_ID
 
 
 class TestPrecedence:
@@ -509,12 +480,10 @@ class TestSelectionCompleteness:
     ) -> None:
         """The geometry-only path is a complete selection, not an incomplete one.
 
-        ``_all_selected_extended()`` (``canonical/2``, the profile that declares Entity
-        Resolution and Spatial Relations) never chooses a backend for the optional Entity
-        Resolution channels or Spatial Relations predicates: their absence must not surface
-        as a problem.
+        ``_all_selected()`` never chooses a backend for the optional Entity Resolution channels
+        or Spatial Relations predicates: their absence must not surface as a problem.
         """
-        file = _write(tmp_path / "a.json", _all_selected_extended())
+        file = _write(tmp_path / "a.json", _all_selected())
 
         effective = resolve_effective_config(files=[file])
 
@@ -556,25 +525,19 @@ def _all_selected() -> dict[str, object]:
                 "support": {"backend": "geometry-jaccard-support-v1"},
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
             },
+            "semantic_mapping": {"geometry_summary": {"backend": "entity-geometry-summary-v1"}},
+            "entity_resolution": {
+                "retrieval": {"backend": "entity-candidate-retrieval-v1"},
+                "resolution": {"backend": "conservative-staged-resolution-v1"},
+                "geometry_comparison": {"backend": "entity-geometry-comparison-v1"},
+            },
+            "spatial_relations": {
+                "frame_conventions": {"backend": "map-frame-conventions-v1"},
+                "candidate": {"backend": "bounds-neighborhood-candidates-v1"},
+                "geometry_summary": {"backend": "entity-geometry-summary-v1"},
+            },
         }
     }
-
-
-def _all_selected_extended() -> dict[str, object]:
-    """``_all_selected()`` under ``canonical/2``, with Entity Resolution/Spatial Relations too."""
-    document = _all_selected()
-    components = dict(cast("dict[str, object]", document["components"]))
-    components["entity_resolution"] = {
-        "retrieval": {"backend": "entity-candidate-retrieval-v1"},
-        "resolution": {"backend": "conservative-staged-resolution-v1"},
-        "geometry_comparison": {"backend": "entity-geometry-comparison-v1"},
-    }
-    components["spatial_relations"] = {
-        "frame_conventions": {"backend": "map-frame-conventions-v1"},
-        "candidate": {"backend": "bounds-neighborhood-candidates-v1"},
-        "geometry_summary": {"backend": "entity-geometry-summary-v1"},
-    }
-    return {"pipeline": {"preset": EXTENDED_PROFILE_ID}, "components": components}
 
 
 class TestAvailability:

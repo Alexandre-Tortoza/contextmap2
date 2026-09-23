@@ -26,8 +26,6 @@ from contextmap.runtime.api import (
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
     CANONICAL_PROFILE_ID,
-    CONTEXT_PROFILE_ID,
-    EXTENDED_PROFILE_ID,
     BackendSpec,
     ComponentSpec,
     Interception,
@@ -156,11 +154,9 @@ from contextmap.runtime.selection import (
 __all__ = [
     "CANONICAL_PROFILE_ID",
     "CONFIG_SCHEMA_VERSION",
-    "CONTEXT_PROFILE_ID",
     "DEBUG_LEVELS",
     "EFFECTIVE_CONFIG_FILENAME",
     "EVENT_KINDS",
-    "EXTENDED_PROFILE_ID",
     "LATEST",
     "NAMED_PREFIX",
     "RUN_SCHEMA_VERSION",

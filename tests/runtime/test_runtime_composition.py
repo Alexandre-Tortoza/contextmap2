@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 import runtime_provider_fixtures
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import CONTEXT_PROFILE_ID, EXTENDED_PROFILE_ID, ConfigurationError
+from contextmap.runtime import ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -90,25 +90,6 @@ def _compose(
     options.setdefault("module_available", lambda _name: True)
     options.setdefault("environ", {})
     return compose(effective_from(tmp_path, document), providers=_providers(recorder), **options)
-
-
-def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``selected_document()`` (or ``document``) resolved against ``canonical/2``.
-
-    ``canonical/1``, the default profile, ends at ``semantic_fusion``: Entity Resolution and
-    Spatial Relations only exist under the extended topology (see the P1 fix of the PR #540
-    review, ``docs/runtime-composition.md``).
-    """
-    document = selected_document() if document is None else document
-    document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
-    return document
-
-
-def _context_map_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``selected_document()`` (or ``document``) resolved against ``canonical/3``."""
-    document = selected_document() if document is None else document
-    document.setdefault("pipeline", {})["preset"] = CONTEXT_PROFILE_ID
-    return document
 
 
 # Mesmas coordenadas que ``runtime_entities.InMemoryGeometrySource`` deriva para os índices
@@ -810,19 +791,19 @@ class TestStagesAndExtensionPoints:
         assert composed.point_encoder is None
         assert "point_representation" not in composed.stages
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_stages_without_an_implemented_capability_are_listed_not_simulated(
         self, tmp_path: Path
     ) -> None:
         composed = _compose(tmp_path)
 
-        assert set(composed.unavailable_stages) == {"context_map"}
-        assert "milestone" in composed.unavailable_stages["context_map"]
+        assert set(composed.unavailable_stages) == {"scene_graph"}
+        assert "milestone" in composed.unavailable_stages["scene_graph"]
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_asking_explicitly_for_an_unavailable_stage_fails_clearly(self, tmp_path: Path) -> None:
-        with pytest.raises(StageUnavailableError, match="context_map"):
-            _compose(tmp_path, stages=["context_map"])
+        with pytest.raises(StageUnavailableError, match="scene_graph"):
+            _compose(tmp_path, stages=["scene_graph"])
 
     def test_a_subset_of_stages_builds_only_those(self, tmp_path: Path) -> None:
         recorder = _Recorder()
@@ -851,12 +832,9 @@ class TestCatalogAgreement:
         assert composable_backends() == declared
 
     def test_every_available_stage_of_the_catalog_has_a_composer(self) -> None:
-        from contextmap.runtime.catalog import CONTEXT_PRESET
+        from contextmap.runtime.catalog import CANONICAL_PRESET
 
-        # CONTEXT_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
-        # canonical/2 adiciona + o context_map que só canonical/3 adiciona), então cobre todo
-        # estágio que precisaria de um composer.
-        available = {stage.stage_id for stage in CONTEXT_PRESET.stages if stage.available}
+        available = {stage.stage_id for stage in CANONICAL_PRESET.stages if stage.available}
 
         assert composed_stages() == available
 
@@ -874,6 +852,7 @@ class TestComposeExecutors:
         self, tmp_path: Path
     ) -> None:
         from contextmap.runtime.executors import (
+            ContextMapExecutor,
             EntityResolutionExecutor,
             GeometricMappingExecutor,
             SemanticFusionExecutor,
@@ -883,7 +862,7 @@ class TestComposeExecutors:
         )
 
         executors = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
         )
@@ -895,6 +874,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
         assert isinstance(executors["state_estimation"], StateEstimationExecutor)
         assert isinstance(executors["geometric_mapping"], GeometricMappingExecutor)
@@ -902,6 +882,7 @@ class TestComposeExecutors:
         assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
         assert isinstance(executors["entity_resolution"], EntityResolutionExecutor)
         assert isinstance(executors["spatial_relations"], SpatialRelationsExecutor)
+        assert isinstance(executors["context_map"], ContextMapExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
         # visual_perception fica de fora aqui porque a seleção padrão usa sam3, que não tem
         # loader embutido (precisa de um provider) -- não porque falte um VisualPerceptionExecutor
@@ -919,14 +900,14 @@ class TestComposeExecutors:
         from contextmap.semantic_mapping import SemanticMapId
 
         without_identity = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
         )
         assert "semantic_mapping" not in without_identity
 
         with_identity = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
             semantic_map_id=SemanticMapId("semantic-map--test"),
@@ -948,7 +929,7 @@ class TestComposeExecutors:
         from contextmap.runtime.executors import SpatialRelationsExecutor
 
         executors = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
         )
@@ -962,7 +943,7 @@ class TestComposeExecutors:
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = _extended_document()
+        document = selected_document()
         del document["components"]["geometric_mapping"]
         del document["components"]["sensor_association"]
 
@@ -975,6 +956,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
 
     def test_a_broken_backend_in_one_stage_never_costs_another_stage_its_executor(
@@ -986,7 +968,7 @@ class TestComposeExecutors:
         (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
         other stages, whose own configuration is unrelated, still compose normally.
         """
-        document = _extended_document()
+        document = selected_document()
         document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
             "max_reprojection_invalid_rate"
         ] = 2.0
@@ -1001,6 +983,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
 
     def test_an_unselected_optional_channel_leaves_it_none_never_a_default_policy(
@@ -1012,7 +995,7 @@ class TestComposeExecutors:
         compatibility``, ``appearance``, ``representation``, ``geometric_predicate`` or
         ``contact_predicate``: the stages still compose, with the geometry-only path.
         """
-        composed = _compose(tmp_path, document=_extended_document())
+        composed = _compose(tmp_path, document=selected_document())
 
         channels = composed.entity_comparison_channels
         assert channels is not None
@@ -1032,7 +1015,7 @@ class TestComposeExecutors:
     def test_an_incomplete_required_selection_leaves_the_stage_absent_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = _extended_document()
+        document = selected_document()
         del document["components"]["entity_resolution"]["geometry_comparison"]
 
         executors = compose_executors(
@@ -1172,7 +1155,7 @@ class TestComposeExecutors:
             content_hash=inventory_digest(manifest.file_inventory),
             location="corridor-02/run-0001/semantic_mapping",
         )
-        effective = effective_from(tmp_path, _extended_document())
+        effective = effective_from(tmp_path, selected_document())
         executors = compose_executors(effective, module_available=lambda _name: True, environ={})
         output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
         request = StageRequest(
@@ -1234,7 +1217,7 @@ class TestComposeExecutors:
         # está em "map". A escolha do nome do frame é um detalhe de configuração deste teste, não
         # uma invariante do domínio -- então o documento local é ajustado para concordar com a
         # geometria real, em vez de forçar a geometria a se chamar "odom".
-        document = _extended_document()
+        document = selected_document()
         document["components"]["spatial_relations"]["frame_conventions"][
             "map-frame-conventions-v1"
         ]["map_frame"] = "map"
@@ -1360,11 +1343,9 @@ class TestComposeExecutors:
 
         Chains the same real entity_resolution -> spatial_relations construction as
         ``test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts``,
-        one hop further: ``context_map`` only composes under ``canonical/3``, so this uses
-        ``_context_map_document`` instead of ``_extended_document``, and feeds the composed
-        executor the real geometric map, the real spatial-relations run it just produced, and a
-        minimal stand-in sequence directory (only its manifest identity matters to
-        ``artifact_digest``).
+        one hop further, feeding the composed executor the real geometric map, the real
+        spatial-relations run it just produced, and a minimal stand-in sequence directory (only
+        its manifest identity matters to ``artifact_digest``).
         """
         import json
 
@@ -1384,7 +1365,7 @@ class TestComposeExecutors:
         from contextmap.visual_perception import PerceptionRunId
 
         workspace = tmp_path / "ws"
-        document = _context_map_document()
+        document = selected_document()
         document["components"]["spatial_relations"]["frame_conventions"][
             "map-frame-conventions-v1"
         ]["map_frame"] = "map"

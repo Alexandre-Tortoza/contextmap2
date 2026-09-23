@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from runtime_documents import selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 import contextmap.runtime as public
 from contextmap.runtime import (
@@ -74,7 +74,7 @@ def _summary(result: RuntimeExecutionResult) -> dict[str, str]:
     return {stage.stage_id: stage.outcome for stage in result.record.stages}
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     tmp_path: Path,
 ) -> None:
@@ -87,8 +87,8 @@ def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     probe = Runtime(workspace=workspace, module_available=lambda _name: True, environ={})
     capabilities = probe.capabilities()
     not_implemented = {c.stage_id: c.reason for c in capabilities if not c.implemented}
-    assert probe.status().profiles == ("canonical/1", "canonical/2", "canonical/3")
-    assert set(not_implemented) == {"context_map"}
+    assert probe.status().profiles == ("canonical/1",)
+    assert set(not_implemented) == {"scene_graph"}
 
     # 2. Configuração e topologia: o frontend nunca infere o DAG, ele o lê.
     config = probe.resolve_config(files=[config_file], overrides=["policies.debug_level=standard"])

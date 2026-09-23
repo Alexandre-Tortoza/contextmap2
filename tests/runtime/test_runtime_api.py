@@ -17,12 +17,11 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory, request
 from runtime_worlds import World, world_executors
 
 from contextmap.runtime import (
-    EXTENDED_PROFILE_ID,
     ArtifactRef,
     BackendUnavailableError,
     CancellationToken,
@@ -51,12 +50,18 @@ PLAN_ORDER = (
     "sensor_association",
     "point_representation",
     "semantic_fusion",
+    "semantic_mapping",
+    "entity_resolution",
+    "spatial_relations",
+    "context_map",
 )
-RUN_ORDER = PLAN_ORDER
-# `canonical/1`'s own topology, extended by the ``unavailable_context_map`` fixture with a
-# ``context_map`` stage marked unavailable -- it never joins ``run_stages`` because it is not
-# a dependency of any real target.
-PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP = (*PLAN_ORDER, "context_map")
+# The order a run scoped to ``TARGET`` (``semantic_fusion``) actually executes: ``PLAN_ORDER``'s
+# prefix up to and including it, since nothing after it is a dependency of that target.
+RUN_ORDER = PLAN_ORDER[: PLAN_ORDER.index("semantic_fusion") + 1]
+# `canonical/1`'s own topology, extended by the ``unavailable_future_stage`` fixture with a
+# fictional ``scene_graph`` stage marked unavailable -- it never joins ``run_stages`` because it
+# is not a dependency of any real target.
+PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE = (*PLAN_ORDER, "scene_graph")
 
 
 def _ready(_name: str) -> bool:
@@ -134,26 +139,26 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     bare = Runtime().status()
 
     assert status.workspace == str(tmp_path / "ws")
-    assert status.profiles == ("canonical/1", "canonical/2", "canonical/3")
+    assert status.profiles == ("canonical/1",)
     assert set(status.schemas) == {"configuration", "plan", "run", "reuse", "catalog"}
     assert status.verifier_configured is True
     assert status.executors == tuple(sorted(PLAN_ORDER))
     assert (bare.workspace, bare.executors, bare.verifier_configured) == (None, (), False)
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> None:
     capabilities = Runtime(module_available=_ready, environ={}).capabilities()
     by_stage = {capability.stage_id: capability for capability in capabilities}
 
-    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
+    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
     ingestion = by_stage["ingestion"]
     assert ingestion.implemented
     assert [component.component_id for component in ingestion.components] == [
         "ingestion.source_adapter"
     ]
     assert [b.backend_id for b in ingestion.components[0].backends] == ["ros1_bag", "ros2_bag"]
-    unimplemented = by_stage["context_map"]
+    unimplemented = by_stage["scene_graph"]
     assert not unimplemented.implemented
     assert "not implemented yet" in unimplemented.reason
     assert unimplemented.components == ()
@@ -175,20 +180,15 @@ def test_an_optional_component_round_trips_through_discovery_edit_and_validation
     component_id = "entity_resolution.semantic_compatibility"
 
     # Discovery: o componente se declara opcional.
-    capability = next(
-        c
-        for c in runtime.capabilities(profile=EXTENDED_PROFILE_ID)
-        if c.stage_id == "entity_resolution"
-    )
+    capability = next(c for c in runtime.capabilities() if c.stage_id == "entity_resolution")
     component = next(c for c in capability.components if c.component_id == component_id)
     assert component.optional
 
     document = selected_document()
-    document["pipeline"]["preset"] = EXTENDED_PROFILE_ID
     document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
     path = tmp_path / "experiment.json"
     path.write_text(json.dumps(document), encoding="utf-8")
-    config = runtime.resolve_config(profile=EXTENDED_PROFILE_ID, files=[path])
+    config = runtime.resolve_config(files=[path])
 
     # Edição: "sem backend" é um valor aceito, não só o que `current` descreve.
     plan = runtime.resolve_plan(config)
@@ -198,9 +198,7 @@ def test_an_optional_component_round_trips_through_discovery_edit_and_validation
     assert None in edit.allowed
 
     # Validação: aplicar explicitamente "sem backend" continua uma seleção completa.
-    validated = runtime.resolve_config(
-        profile=EXTENDED_PROFILE_ID, files=[path], overrides=[f"{edit.path}=null"]
-    )
+    validated = runtime.resolve_config(files=[path], overrides=[f"{edit.path}=null"])
     assert validated.config.components[component_id].backend is None
     assert check_selection(validated.config) == ()
 
@@ -368,7 +366,7 @@ def test_an_unsupported_stage_or_backend_is_refused_at_resolution(
         _config(runtime, tmp_path, override)
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
@@ -377,8 +375,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
 
     by_stage = {stage.stage_id: stage for stage in plan.stages}
     assert plan.preset == "canonical/1"
-    assert plan.order == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
-    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
+    assert plan.order == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
+    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
     assert plan.run_stages == RUN_ORDER
     assert (plan.config_digest, plan.disabled_stages, plan.problems) == (config.digest, (), ())
     association = by_stage["sensor_association"]
@@ -394,8 +392,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
     assert by_stage["point_representation"].optional
     assert by_stage["point_representation"].output == "PointRepresentationRunArtifact"
     assert by_stage["ingestion"].in_scope
-    assert not by_stage["context_map"].available
-    assert not by_stage["context_map"].in_scope
+    assert not by_stage["scene_graph"].available
+    assert not by_stage["scene_graph"].in_scope
     assert by_stage["ingestion"].config_digest
 
 
@@ -449,7 +447,7 @@ def test_supplied_upstream_artifacts_take_the_place_of_their_stages(tmp_path: Pa
     assert [problem.path for problem in refused.problems] == ["provided.ingestion"]
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_value(
     tmp_path: Path,
 ) -> None:
@@ -463,7 +461,7 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
     assert "components.ingestion.source_adapter.backend" in edits
     assert edits["components.ingestion.source_adapter.backend"].allowed == ("ros1_bag", "ros2_bag")
     assert edits["policies.debug_level"].allowed == ("none", "standard", "full")
-    assert "inputs.selections.context_map" not in edits  # capability ainda inexistente
+    assert "inputs.selections.scene_graph" not in edits  # capability ainda inexistente
     for edit in plan.editable:
         if edit.current is None:
             continue
@@ -572,7 +570,6 @@ def test_a_provider_given_to_runtime_reaches_an_optional_entity_resolution_chann
     channel silently dropped the whole ``entity_resolution`` executor instead of composing it.
     """
     document = selected_document()
-    document["pipeline"]["preset"] = EXTENDED_PROFILE_ID
     document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
     document["components"]["entity_resolution"]["appearance"] = {
         "backend": "entity-appearance-comparison-v1",
@@ -593,7 +590,7 @@ def test_a_provider_given_to_runtime_reaches_an_optional_entity_resolution_chann
         module_available=_ready,
         environ={},
     )
-    config = runtime.resolve_config(profile=EXTENDED_PROFILE_ID, files=[path])
+    config = runtime.resolve_config(files=[path])
 
     report = runtime.preflight(config, targets=["entity_resolution"])
 
@@ -617,18 +614,18 @@ def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Pa
     assert world.runs == []
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     runtime, _ = _runtime(
         tmp_path, executors=False, module_available=lambda name: name != "rosbags"
     )
     config = _config(runtime, tmp_path)
 
-    report = runtime.preflight(config, targets=[*TARGET, "context_map", "nonexistent"])
+    report = runtime.preflight(config, targets=[*TARGET, "scene_graph", "nonexistent"])
 
     paths = [problem.path for problem in report.problems]
     assert not report.ok
-    assert "stages.context_map" in paths  # capability ainda inexistente
+    assert "stages.scene_graph" in paths  # capability ainda inexistente
     assert "targets.nonexistent" in paths
     assert "components.ingestion.source_adapter" in paths  # módulo opcional ausente
     assert any(
@@ -636,7 +633,7 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
         for problem in report.problems
     )
     assert "ingestion" in report.missing_executors
-    assert "context_map" not in report.missing_executors
+    assert "scene_graph" not in report.missing_executors
 
 
 def test_preflight_names_a_missing_secret_without_any_value(tmp_path: Path) -> None:
@@ -830,16 +827,16 @@ def test_a_blocked_run_is_a_result_and_nothing_executed(tmp_path: Path) -> None:
     assert set(_outcomes(result.record).values()) == {"pending"}
 
 
-@pytest.mark.usefixtures("unavailable_context_map")
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_an_unimplemented_stage_blocks_the_run_explicitly(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
 
-    result = runtime.run(_config(runtime, tmp_path), targets=["context_map"])
+    result = runtime.run(_config(runtime, tmp_path), targets=["scene_graph"])
 
     assert result.status == "blocked"
     assert world.runs == []
     assert any(
-        problem.path == "stages.context_map" and "not implemented yet" in problem.message
+        problem.path == "stages.scene_graph" and "not implemented yet" in problem.message
         for problem in result.record.blocked_problems
     )
 

@@ -18,6 +18,7 @@ flowchart TD
     SM["semantic_mapping<br/>SemanticEntityArtifact"]
     ER["entity_resolution<br/>EntityResolutionRunArtifact"]
     SR["spatial_relations<br/>SpatialRelationsRunArtifact"]
+    CM["context_map<br/>ContextMapArtifact"]
 
     ING --> VP
     ING --> ST
@@ -38,6 +39,10 @@ flowchart TD
     SM --> ER
     ER --> SR
     GM --> SR
+    ING --> CM
+    GM --> CM
+    ER --> CM
+    SR --> CM
 ```
 
 Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente quando o estágio de origem participa.
@@ -54,8 +59,9 @@ Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente qu
 | `semantic_mapping` | `fusion` ← `semantic_fusion`, `geometry` ← `geometric_mapping` | `SemanticEntityArtifact` |
 | `entity_resolution` | `entities` ← `semantic_mapping` | `EntityResolutionRunArtifact` |
 | `spatial_relations` | `entities` ← `entity_resolution`, `geometry` ← `geometric_mapping` | `SpatialRelationsRunArtifact` |
+| `context_map` | `sequence` ← `ingestion`, `geometry` ← `geometric_mapping`, `entities` ← `entity_resolution`, `relations` ← `spatial_relations` | `ContextMapArtifact` |
 
-Dois presets declaram esta topologia, cada um com sua própria identidade versionada -- uma versão nunca muda de topologia (ver `RuntimePreset` em `catalog.py`). `canonical/1` termina em `semantic_fusion`: é a topologia histórica, inalterada por este milestone. `canonical/2` é exatamente `canonical/1`, estendida com `semantic_mapping`, `entity_resolution` e `spatial_relations`; é a topologia mais completa executável hoje, e passa no preflight. `semantic_mapping` faz parte de `canonical/2` mas não tem executor automático (ver [`executors.md`](executors.md)): seu artifact precisa ser suprido para que `entity_resolution` rode no mesmo run. Só a montagem do `ContextMapArtifact` (`context_map`) continua fora de ambos, tratada por outro milestone; um preset versionado posterior a declara, sem mudar a topologia de `canonical/1` nem de `canonical/2`. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
+Um preset declara esta topologia (ver `RuntimePreset` em `catalog.py`): `canonical/1`, do recorded source ao `ContextMapArtifact`. Antes do v0.1.0 sair não existe consumidor publicado a proteger de uma mudança de topologia, então esta identidade continua livre para evoluir junto com o pipeline; a disciplina de nunca mudar a topologia de um preset já publicado (e de abrir uma nova identidade versionada em vez disso) começa a valer a partir do release, não antes. `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` já têm executor automático (ver [`executors.md`](executors.md)); nenhum estágio da topologia precisa de artifact suprido manualmente hoje. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
 
 ## Estágios opcionais
 

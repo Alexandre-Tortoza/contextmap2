@@ -254,11 +254,11 @@
   "report_id": "e2e-real-partial-20260921",
   "run_id": "validation-e2e-20260921",
   "scenario": {
-    "digest": "sha256:33e1969498d11b55d808f5a816cb4d826a99441001e1b4df5b60287c34c0ab18",
+    "digest": "sha256:c96634be0bda5ca29b820851630188406da580614781fa1c498bc9dd25f3ddd9",
     "evidence_class": "real",
     "matrix_digest": "sha256:ac91ea8697efb77692584b839a81c00cdf179fa1016a4e850d9c6bdab1ed9e6a",
     "scenario_id": "solution-1-canonical",
-    "version": "1.0.2"
+    "version": "1.0.3"
   },
   "schema": "contextmap.e2e.acceptance-report/v1",
   "stage_artifacts": {

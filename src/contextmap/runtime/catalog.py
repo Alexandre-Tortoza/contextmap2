@@ -19,29 +19,12 @@ from dataclasses import dataclass
 CANONICAL_PROFILE_ID = "canonical/1"
 """Versioned identity of the canonical Solution 1 topology and profile.
 
-Its topology ends at ``semantic_fusion``: any configuration, run or experiment that already
-recorded this identity keeps meaning exactly that. See :data:`EXTENDED_PROFILE_ID` for the
-topology that adds ``semantic_mapping``, ``entity_resolution`` and ``spatial_relations``.
-"""
-
-EXTENDED_PROFILE_ID = "canonical/2"
-"""Versioned identity of the topology that extends :data:`CANONICAL_PROFILE_ID`.
-
-It is ``canonical/1``'s stages, unchanged and in the same order, plus ``semantic_mapping``,
-``entity_resolution`` and ``spatial_relations``. A version identifier is never reused for a
-different topology (see :class:`RuntimePreset`), so the extended topology is a new profile, not
-a mutation of ``canonical/1``. See :data:`CONTEXT_PROFILE_ID` for the topology that adds the
-``ContextMapArtifact`` itself.
-"""
-
-CONTEXT_PROFILE_ID = "canonical/3"
-"""Versioned identity of the topology that extends :data:`EXTENDED_PROFILE_ID` to the final
-``ContextMapArtifact``.
-
-It is ``canonical/2``'s stages, unchanged and in the same order, plus ``context_map``: the
-repository's public product, assembled from the Entity Resolution and Spatial Relations runs it
-already composed. Neither ``canonical/1`` nor ``canonical/2`` ever gains this stage -- a preset's
-topology is fixed for good (see :class:`RuntimePreset`).
+Before v0.1.0 ships, this is the repository's one and only topology, end to end: ingestion
+through ``context_map``. There is no released consumer yet to protect from a topology change, so
+this identity is free to keep evolving with the pipeline itself until the release. Once v0.1.0
+ships, a topology change starts a new versioned identity instead (``canonical/2`` and so on,
+never a silent mutation of a published one) -- that discipline begins at the release, not before
+it.
 """
 
 _ROSBAGS_HINT = "pip install 'contextmap[ros1]'"
@@ -409,10 +392,9 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
-        "The Solution 1 topology that is executable today, from a recorded source to "
-        "semantic fusion. Semantic mapping, entity resolution, spatial relations and the "
-        "ContextMapArtifact are not part of it: see EXTENDED_PROFILE_ID for the preset that "
-        "adds the first three, and this identity never changes topology."
+        "The Solution 1 topology, end to end: from a recorded source to the ContextMapArtifact. "
+        "Pre-v0.1.0, this is the repository's only topology and it is free to grow with the "
+        "pipeline; a topology change starts a new versioned identity only once the release ships."
     ),
     stages=(
         StageDeclaration(
@@ -516,94 +498,62 @@ CANONICAL_PRESET = RuntimePreset(
             ),
             output=FUSION,
         ),
-    ),
-)
-
-_EXTENDED_STAGES: tuple[StageDeclaration, ...] = (
-    StageDeclaration(
-        stage_id="semantic_mapping",
-        capability="semantic_mapping",
-        components=("semantic_mapping.geometry_summary",),
-        inputs=(
-            StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
-            StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+        StageDeclaration(
+            stage_id="semantic_mapping",
+            capability="semantic_mapping",
+            components=("semantic_mapping.geometry_summary",),
+            inputs=(
+                StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
+            output=ENTITIES,
         ),
-        output=ENTITIES,
-    ),
-    StageDeclaration(
-        stage_id="entity_resolution",
-        capability="entity_resolution",
-        components=(
-            "entity_resolution.retrieval",
-            "entity_resolution.resolution",
-            "entity_resolution.geometry_comparison",
-            "entity_resolution.semantic_compatibility",
-            "entity_resolution.temporal_compatibility",
-            "entity_resolution.appearance",
-            "entity_resolution.representation",
+        StageDeclaration(
+            stage_id="entity_resolution",
+            capability="entity_resolution",
+            components=(
+                "entity_resolution.retrieval",
+                "entity_resolution.resolution",
+                "entity_resolution.geometry_comparison",
+                "entity_resolution.semantic_compatibility",
+                "entity_resolution.temporal_compatibility",
+                "entity_resolution.appearance",
+                "entity_resolution.representation",
+            ),
+            inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
+            output=RESOLUTION,
         ),
-        inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
-        output=RESOLUTION,
-    ),
-    StageDeclaration(
-        stage_id="spatial_relations",
-        capability="spatial_relations",
-        components=(
-            "spatial_relations.frame_conventions",
-            "spatial_relations.candidate",
-            "spatial_relations.geometry_summary",
-            "spatial_relations.geometric_predicate",
-            "spatial_relations.contact_predicate",
+        StageDeclaration(
+            stage_id="spatial_relations",
+            capability="spatial_relations",
+            components=(
+                "spatial_relations.frame_conventions",
+                "spatial_relations.candidate",
+                "spatial_relations.geometry_summary",
+                "spatial_relations.geometric_predicate",
+                "spatial_relations.contact_predicate",
+            ),
+            inputs=(
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
+            output=RELATIONS,
         ),
-        inputs=(
-            StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
-            StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+        StageDeclaration(
+            stage_id="context_map",
+            capability="artifact",
+            inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
+            ),
+            output=CONTEXT_MAP,
         ),
-        output=RELATIONS,
     ),
-)
-"""The three stages :data:`EXTENDED_PROFILE_ID` adds on top of :data:`CANONICAL_PROFILE_ID`."""
-
-EXTENDED_PRESET = RuntimePreset(
-    preset_id=EXTENDED_PROFILE_ID,
-    description=(
-        "canonical/1's topology, unchanged, extended to semantic mapping, entity resolution "
-        "and spatial relations. Semantic mapping has no automatic executor of its own yet: "
-        "its artifact must be supplied for entity resolution to consume, never computed by "
-        "this composition root. The ContextMapArtifact is not part of it: a later versioned "
-        "preset declares it once the artifact-assembly capability composes automatically, "
-        "and this identity never changes topology."
-    ),
-    stages=CANONICAL_PRESET.stages + _EXTENDED_STAGES,
-)
-
-_CONTEXT_MAP_STAGE = StageDeclaration(
-    stage_id="context_map",
-    capability="artifact",
-    inputs=(
-        StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
-        StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
-        StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
-        StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
-    ),
-    output=CONTEXT_MAP,
-)
-"""The stage :data:`CONTEXT_PROFILE_ID` adds on top of :data:`EXTENDED_PROFILE_ID`."""
-
-CONTEXT_PRESET = RuntimePreset(
-    preset_id=CONTEXT_PROFILE_ID,
-    description=(
-        "canonical/2's topology, unchanged, extended to the ContextMapArtifact: the "
-        "repository's public product, assembled by reference from the Entity Resolution and "
-        "Spatial Relations runs this preset already composes. No new scientific inference "
-        "happens here -- assembly only translates decisions those two capabilities already made."
-    ),
-    stages=(*EXTENDED_PRESET.stages, _CONTEXT_MAP_STAGE),
 )
 
 PRESETS: Mapping[str, RuntimePreset] = {
     CANONICAL_PRESET.preset_id: CANONICAL_PRESET,
-    EXTENDED_PRESET.preset_id: EXTENDED_PRESET,
-    CONTEXT_PRESET.preset_id: CONTEXT_PRESET,
 }
 """Known presets. A profile of the same identity starts from each of them."""

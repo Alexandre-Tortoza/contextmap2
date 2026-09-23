@@ -30,7 +30,7 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 SCENARIO_SCHEMA = "contextmap.e2e.scenario/v1"
 ACCEPTANCE_REPORT_SCHEMA = "contextmap.e2e.acceptance-report/v1"
 SCENARIO_ID = "solution-1-canonical"
-SCENARIO_VERSION = "1.0.2"
+SCENARIO_VERSION = "1.0.3"
 """Version of the frozen scenario; any change to a frozen decision needs a new one.
 
 1.0.1 fixed the runtime-selection completeness bug that #540's real catalog wiring for
@@ -39,13 +39,19 @@ components ``geometric_mapping``/``sensor_association`` already had, now declare
 components and therefore need an explicit backend selected (the runtime never chooses one on
 the caller's behalf, even when a policy has a single option). The profile also started
 resolving against ``canonical/2`` instead of ``canonical/1``, since that is the preset whose
-topology actually includes semantic mapping, entity resolution and spatial relations.
+topology actually included semantic mapping, entity resolution and spatial relations.
 
-1.0.2 fixes the same class of gap for ``semantic_mapping``: it now declares a real catalog
+1.0.2 fixed the same class of gap for ``semantic_mapping``: it declared a real catalog
 component (``semantic_mapping.geometry_summary``, needed to compose a
-``SemanticMappingExecutor`` automatically, see :data:`contextmap.runtime.catalog.
-CONTEXT_PROFILE_ID`), so the profile needs an explicit selection for it too. Neither this nor
-1.0.1 alters the dataset, the gates, the ablation-only list or any stage's scientific rationale.
+``SemanticMappingExecutor`` automatically), so the profile needed an explicit selection for it
+too.
+
+1.0.3: before v0.1.0 ships there is no released consumer to protect from a runtime topology
+change, so ``canonical/2``/``canonical/3`` were collapsed back into ``canonical/1`` -- one single
+topology, end to end through ``context_map``, free to keep evolving until the release (see
+:data:`contextmap.runtime.catalog.CANONICAL_PROFILE_ID`). ``RUNTIME_PRESET`` now reads
+``canonical/1``. No version in this history alters the dataset, the gates, the ablation-only
+list or any stage's scientific rationale.
 """
 
 CROSS_STAGE = "cross_stage"
@@ -463,13 +469,13 @@ def scenario_snapshot_name(scenario: E2EScenario) -> str:
     return f"{scenario.scenario_id}-{scenario.version}-{scenario.subject.subject_id}.json"
 
 
-RUNTIME_PRESET = "canonical/2"
+RUNTIME_PRESET = "canonical/1"
 """Runtime topology preset the scenario's profile is expressed against.
 
-``canonical/2`` is ``canonical/1`` extended to semantic mapping, entity resolution and spatial
-relations (see :data:`contextmap.runtime.catalog.EXTENDED_PROFILE_ID`); the scenario's
-``context_map`` stage is not part of either preset's DAG and is assembled as an explicit step
-after the run, not selected here.
+Pre-v0.1.0, ``canonical/1`` is the repository's one and only topology, end to end through
+``context_map`` (see :data:`contextmap.runtime.catalog.CANONICAL_PROFILE_ID`); there is no
+released consumer yet to protect from a topology change, so this identity is free to keep
+evolving with the pipeline until the release.
 """
 
 _OPTIONAL_STAGES_OFF = ("point_representation",)
