@@ -30,7 +30,7 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 SCENARIO_SCHEMA = "contextmap.e2e.scenario/v1"
 ACCEPTANCE_REPORT_SCHEMA = "contextmap.e2e.acceptance-report/v1"
 SCENARIO_ID = "solution-1-canonical"
-SCENARIO_VERSION = "1.0.3"
+SCENARIO_VERSION = "1.0.4"
 """Version of the frozen scenario; any change to a frozen decision needs a new one.
 
 1.0.1 fixed the runtime-selection completeness bug that #540's real catalog wiring for
@@ -52,6 +52,17 @@ topology, end to end through ``context_map``, free to keep evolving until the re
 :data:`contextmap.runtime.catalog.CANONICAL_PROFILE_ID`). ``RUNTIME_PRESET`` now reads
 ``canonical/1``. No version in this history alters the dataset, the gates, the ablation-only
 list or any stage's scientific rationale.
+
+1.0.4 re-freezes the real subject on a new, immutable ``SequenceArtifact``
+(``720a486de8d44c16a9d3d2ff9fa7b1a4``) produced through issue #554's dataset-scoped timestamp
+policy: the RGB calibration now carries a real ``MeiCameraModel`` instead of the previous
+artifact's ``camera_model=None``, and every observation's header timestamp carries an explicit,
+auditable constant-offset correction instead of the recording gap simply being ignored. The
+90 s window, its pose-gap/path/yaw rationale and the pose side file are unchanged (same physical
+segment); only the artifact identity, its selection identity and its observation IDs/timestamps
+shifted by the correction's offset. Resolved observation counts inside the window are bit-for-bit
+identical to the previous artifact (2160 images, 892 LiDAR scans, 17983 IMU samples), which is
+itself evidence that the correction changed no data, only its clock.
 """
 
 CROSS_STAGE = "cross_stage"

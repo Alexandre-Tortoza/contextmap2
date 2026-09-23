@@ -14,16 +14,16 @@ O código está em `contextmap.evaluation.end_to_end` (tipos, relatório) e `con
 
 ## O cenário congelado
 
-`solution-1-canonical` versão `1.0.0` tem dois **sujeitos** que compartilham perfil e matriz (mesmo `matrix_digest`):
+`solution-1-canonical` (versão corrente em `SCENARIO_VERSION`) tem dois **sujeitos** que compartilham perfil e matriz (mesmo `matrix_digest`):
 
 | Sujeito | Evidência | O que é |
 |---|---|---|
-| `corridor-02-sample` | `real` | Janela de 90 s da sequência `corridor-02` (artifact `e145f73f…`), 20 imagens, 892 scans LiDAR, 17 983 amostras IMU, relógio único `corridor-02-header`. |
+| `corridor-02-sample` | `real` | Janela de 90 s da sequência `corridor-02` (artifact `720a486d…`, issue #554: `MeiCameraModel` real e timestamps com correção de offset explícita), 20 imagens, 892 scans LiDAR, 17 983 amostras IMU, relógio único `corridor-02-header`. |
 | `ci-synthetic-subset` | `fake_contract` | O subconjunto sintético `contextmap-ci-subset` 1.0.1 (3 frames, sem GPU, rede ou modelo). |
 
 ### Sujeito real
 
-A janela vem de uma regra de seleção, registrada antes de qualquer resultado final: janelas de 90 s (passo de 1 s) mantidas se a maior lacuna de pose ≤ 605 ms, a maior lacuna de LiDAR ≤ 250 ms, o percurso ≥ 40 m e a guinada acumulada ≥ 60° (trecho reto mais curvas, para que erros de montagem e de tempo sejam observáveis); as imagens são as mais próximas de alvos espaçados de 4,5 s, mantidas só com um scan a menos de 60 ms e lacuna de pose ≤ 450 ms. O cenário grava a janela, as 20 imagens com o scan mais próximo, a `selection_identity` (`sha256:dc641b34…`) e o digest do manifesto do artifact de sequência.
+A janela vem de uma regra de seleção, registrada antes de qualquer resultado final: janelas de 90 s (passo de 1 s) mantidas se a maior lacuna de pose ≤ 605 ms, a maior lacuna de LiDAR ≤ 250 ms, o percurso ≥ 40 m e a guinada acumulada ≥ 60° (trecho reto mais curvas, para que erros de montagem e de tempo sejam observáveis); as imagens são as mais próximas de alvos espaçados de 4,5 s, mantidas só com um scan a menos de 60 ms e lacuna de pose ≤ 450 ms. O cenário grava a janela, as 20 imagens com o scan mais próximo, a `selection_identity` (`sha256:67ddf342…`) e o digest do manifesto do artifact de sequência.
 
 A sequência **não tem observações de pose**: a trajetória vem de `corridor-02-gt.txt` (ordem TUM, relógio do header), declarada como entrada `pose_source` com `sha256`. Por isso o gate de acurácia da trajetória é **não aplicável** para o `ExternalPose`: comparar a trajetória com o arquivo de que ela veio daria erro zero por construção.
 

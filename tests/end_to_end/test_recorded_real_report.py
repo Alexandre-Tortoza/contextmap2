@@ -26,14 +26,22 @@ def _report() -> dict[str, Any]:
 
 
 def test_the_recorded_report_is_about_the_frozen_real_scenario() -> None:
+    # This report is real evidence recorded on 2026-09-21 against scenario 1.0.3's real subject,
+    # whose SequenceArtifact had camera_model=None (see the "camera model" limitation below).
+    # Issue #554 re-froze the real subject on a new artifact with a real MeiCameraModel in
+    # 1.0.4, so this report's pinned scenario identity is no longer reproducible from the live
+    # canonical_real_scenario() -- correctly so: it is evidence about the old artifact, and
+    # relabeling it as evidence about the new one would misstate what was actually run (AGENTS.md
+    # #8, immutability). Only matrix_digest (gates/stages/ablation-only, subject-independent) is
+    # still expected to match live code, since #554 changed no gate, stage or ablation decision.
     scenario = canonical_real_scenario()
     document = _report()
 
     assert document["schema"] == ACCEPTANCE_REPORT_SCHEMA
     assert document["scenario"] == {
-        "scenario_id": scenario.scenario_id,
-        "version": scenario.version,
-        "digest": scenario.digest,
+        "scenario_id": "solution-1-canonical",
+        "version": "1.0.3",
+        "digest": "sha256:c96634be0bda5ca29b820851630188406da580614781fa1c498bc9dd25f3ddd9",
         "matrix_digest": scenario.matrix_digest,
         "evidence_class": "real",
     }

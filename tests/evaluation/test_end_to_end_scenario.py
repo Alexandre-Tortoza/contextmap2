@@ -134,10 +134,10 @@ def test_the_real_scenario_pins_the_corridor_02_sample_it_was_frozen_from() -> N
     subject = canonical_real_scenario().subject
 
     assert subject.dataset_id == "corridor-02"
-    assert subject.sequence_artifact_id == "e145f73f8d894f18b96ef1f55ca308c2"
+    assert subject.sequence_artifact_id == "720a486de8d44c16a9d3d2ff9fa7b1a4"
     assert subject.selection.clock_id == "corridor-02-header"
     assert subject.selection.selection_identity == (
-        "sha256:dc641b345ffc142cbc50452bbaacef2433990478295f4720feb0f165ee4ed1c4"
+        "sha256:67ddf34212bdcc782e2223c501d1c4a822edff149efb41a39af7034dab488c7e"
     )
     assert subject.selection.end_ns - subject.selection.start_ns == 90_000_000_000
     assert len(subject.selection.selected_images) == 20

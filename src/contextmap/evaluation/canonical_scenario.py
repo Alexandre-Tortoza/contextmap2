@@ -31,30 +31,36 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 _RUNTIME = "runtime"
 
 _GT_POSE_DIGEST = "sha256:cddb6739230ded86c57412e768e071e5cd6d62a5de5ff310618032ca2e38be0a"
+# Manifesto de outputs/ingest-real/sequences/corridor-02/720a486de8d44c16a9d3d2ff9fa7b1a4
+# (issue #554: MeiCameraModel real na calibração da câmera, timestamps corrigidos por offset
+# constante explícito). Ver src/contextmap/evaluation/end_to_end.py, nota da versão 1.0.4.
 _CORRIDOR_MANIFEST_DIGEST = (
-    "sha256:74d39984385d63de00480249d1fe9d774f639e6172c89f5ceb0eafa078cc468d"
+    "sha256:aacd638f3304d8ec13cb0f3d09534151000d04349f4b7f997e735ff6fd513620"
 )
+# Mesmas 20 imagens físicas de antes (mesmo bag, mesma janela de 90 s), remapeadas para os
+# observation_id/timestamp do novo artifact: o timestamp de cada uma é o valor antigo somado ao
+# offset exato de correção do artifact (mesma mensagem física, apenas outro clock).
 _CORRIDOR_SELECTED_IMAGES: tuple[tuple[str, int, str], ...] = (
-    ("camera_1_image_raw-008026", 1646000064964188570, "velodyne_points-003358"),
-    ("camera_1_image_raw-008134", 1646000069486096762, "velodyne_points-003403"),
-    ("camera_1_image_raw-008242", 1646000073967267474, "velodyne_points-003447"),
-    ("camera_1_image_raw-008350", 1646000078489180274, "velodyne_points-003492"),
-    ("camera_1_image_raw-008458", 1646000082970349730, "velodyne_points-003537"),
-    ("camera_1_image_raw-008566", 1646000087492300082, "velodyne_points-003582"),
-    ("camera_1_image_raw-008674", 1646000091973457570, "velodyne_points-003626"),
-    ("camera_1_image_raw-008783", 1646000096495447267, "velodyne_points-003671"),
-    ("camera_1_image_raw-008890", 1646000100976737607, "velodyne_points-003715"),
-    ("camera_1_image_raw-008999", 1646000105498635220, "velodyne_points-003760"),
-    ("camera_1_image_raw-009106", 1646000109979812590, "velodyne_points-003804"),
-    ("camera_1_image_raw-009215", 1646000114501684605, "velodyne_points-003849"),
-    ("camera_1_image_raw-009322", 1646000118982863445, "velodyne_points-003894"),
-    ("camera_1_image_raw-009430", 1646000123464043605, "velodyne_points-003938"),
-    ("camera_1_image_raw-009538", 1646000127985987661, "velodyne_points-003983"),
-    ("camera_1_image_raw-009646", 1646000132467167757, "velodyne_points-004027"),
-    ("camera_1_image_raw-009754", 1646000136989077333, "velodyne_points-004072"),
-    ("camera_1_image_raw-009862", 1646000141470196866, "velodyne_points-004117"),
-    ("camera_1_image_raw-009970", 1646000145991985178, "velodyne_points-004162"),
-    ("camera_1_image_raw-010078", 1646000150473153922, "velodyne_points-004206"),
+    ("camera_1_image_raw-000215", 1724621423376620705, "velodyne_points-000088"),
+    ("camera_1_image_raw-000323", 1724621427898528897, "velodyne_points-000133"),
+    ("camera_1_image_raw-000431", 1724621432379699609, "velodyne_points-000177"),
+    ("camera_1_image_raw-000539", 1724621436901612409, "velodyne_points-000222"),
+    ("camera_1_image_raw-000647", 1724621441382781865, "velodyne_points-000267"),
+    ("camera_1_image_raw-000755", 1724621445904732217, "velodyne_points-000312"),
+    ("camera_1_image_raw-000863", 1724621450385889705, "velodyne_points-000356"),
+    ("camera_1_image_raw-000972", 1724621454907879402, "velodyne_points-000401"),
+    ("camera_1_image_raw-001079", 1724621459389169742, "velodyne_points-000445"),
+    ("camera_1_image_raw-001188", 1724621463911067355, "velodyne_points-000490"),
+    ("camera_1_image_raw-001295", 1724621468392244725, "velodyne_points-000534"),
+    ("camera_1_image_raw-001404", 1724621472914116740, "velodyne_points-000579"),
+    ("camera_1_image_raw-001511", 1724621477395295580, "velodyne_points-000624"),
+    ("camera_1_image_raw-001619", 1724621481876475740, "velodyne_points-000668"),
+    ("camera_1_image_raw-001727", 1724621486398419796, "velodyne_points-000713"),
+    ("camera_1_image_raw-001835", 1724621490879599892, "velodyne_points-000757"),
+    ("camera_1_image_raw-001943", 1724621495401509468, "velodyne_points-000802"),
+    ("camera_1_image_raw-002051", 1724621499882629001, "velodyne_points-000847"),
+    ("camera_1_image_raw-002159", 1724621504404417313, "velodyne_points-000892"),
+    ("camera_1_image_raw-002267", 1724621508885586057, "velodyne_points-000936"),
 )
 # Digest do manifesto do reference set sintético commitado em tests/fixtures/ci_subset/1.0.1.
 _CI_REFERENCE_SET = ReferenceSetIdentity(
@@ -69,15 +75,15 @@ def _real_subject() -> ScenarioSubject:
         subject_id="corridor-02-sample",
         evidence_class=EvidenceClass.REAL,
         dataset_id="corridor-02",
-        sequence_artifact_id="e145f73f8d894f18b96ef1f55ca308c2",
+        sequence_artifact_id="720a486de8d44c16a9d3d2ff9fa7b1a4",
         sequence_manifest_digest=_CORRIDOR_MANIFEST_DIGEST,
         selection=SourceSelection(
             clock_id="corridor-02-header",
             selection_identity=(
-                "sha256:dc641b345ffc142cbc50452bbaacef2433990478295f4720feb0f165ee4ed1c4"
+                "sha256:67ddf34212bdcc782e2223c501d1c4a822edff149efb41a39af7034dab488c7e"
             ),
-            start_ns=1646000062984117000,
-            end_ns=1646000152984117000,
+            start_ns=1724621421396549135,
+            end_ns=1724621511396549135,
             image_count=2160,
             lidar_scan_count=892,
             imu_count=17983,
@@ -97,10 +103,13 @@ def _real_subject() -> ScenarioSubject:
         reference_set=None,
         note=(
             "Real recorded 90 s window of corridor-02 (a straight run plus turns, pose gaps "
-            "<= 605 ms). The sequence artifact holds no pose observations, so the trajectory is "
-            "read from the dataset trajectory file as a declared pose input, which makes "
-            "trajectory accuracy against that same file not applicable. No annotated reference "
-            "set exists for it yet: gates that need annotations are blocked, not scored."
+            "<= 605 ms), ingested through issue #554's dataset-scoped timestamp policy: every "
+            "header timestamp carries an explicit, auditable constant-offset correction, and "
+            "the RGB calibration uses a real MeiCameraModel. The sequence artifact holds no "
+            "pose observations, so the trajectory is read from the dataset trajectory file as a "
+            "declared pose input, which makes trajectory accuracy against that same file not "
+            "applicable. No annotated reference set exists for it yet: gates that need "
+            "annotations are blocked, not scored."
         ),
     )
 
