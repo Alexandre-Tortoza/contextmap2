@@ -653,8 +653,11 @@ def _translate_resolution_policy(policy: ResolutionPolicyRef) -> PolicyRef:
     ``configuration_fingerprint`` is one execution's effective parameters. Two different
     configurations of the *same* rule version are two different executions, not two different
     rules, so ``configuration_fingerprint`` must not become this ``PolicyRef``'s ``version``
-    (issue #541, blocker 3) — it is cited instead on the run's own lineage entry, see
-    :func:`_resolution_upstream_artifact`.
+    (issue #541, blocker 3). It is not represented in the map's lineage either: a single role's
+    fingerprint (materialization) does not represent the whole Entity Resolution run's effective
+    configuration, which has several independently-configured roles — see
+    :func:`_resolution_upstream_artifact`, which leaves ``configuration_fingerprint`` ``None``
+    for exactly this reason (issue #541, second review round).
     """
     return _policy_ref(policy.policy_id)
 
