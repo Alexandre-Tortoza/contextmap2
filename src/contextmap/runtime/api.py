@@ -37,7 +37,7 @@ from contextmap.runtime.catalog import (
     PRESETS,
     StageDeclaration,
 )
-from contextmap.runtime.composition import compose, compose_executors
+from contextmap.runtime.composition import RuntimeProvider, compose, compose_executors
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
     DEBUG_LEVELS,
@@ -138,16 +138,22 @@ class RuntimeComponent:
     Attributes:
         component_id: ``"<capability>.<slot>"``.
         backends: The selectable backends.
+        optional: Whether the stage that owns this component still runs with no backend
+            selected for it (see :class:`~contextmap.runtime.catalog.ComponentSpec`). A
+            consumer must treat "no backend" as one legitimate, explicit state for such a
+            component, never as an incomplete one.
     """
 
     component_id: str
     backends: tuple[RuntimeBackend, ...]
+    optional: bool
 
     def to_document(self) -> dict[str, Any]:
         """Return the JSON-compatible form."""
         return {
             "component_id": self.component_id,
             "backends": [backend.to_document() for backend in self.backends],
+            "optional": self.optional,
         }
 
 
@@ -667,6 +673,12 @@ class Runtime:
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
             configuration when omitted.
+        providers: Model runtimes or clients for backends :func:`~contextmap.runtime.
+            composition.compose_executors` cannot load on its own, keyed by component
+            identity (``"<capability>.<slot>"``); see :data:`~contextmap.runtime.composition.
+            RuntimeProvider`. Without an entry here, a component that needs one (for example
+            ``entity_resolution.appearance``) is composed as absent, exactly like an
+            incomplete selection, never with a substitute.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed; defaults
             to a metadata lookup that never imports the module.
@@ -680,6 +692,7 @@ class Runtime:
         executors: Mapping[str, StageExecutor] | None = None,
         verifier: Callable[[ArtifactRef], bool] | None = None,
         adapter_factory: SourceAdapterFactory | None = None,
+        providers: Mapping[str, RuntimeProvider] | None = None,
         environ: Mapping[str, str] | None = None,
         module_available: Callable[[str], bool] | None = None,
         clock: Callable[[], str] | None = None,
@@ -689,6 +702,7 @@ class Runtime:
         self._executors = dict(executors or {})
         self._verifier = verifier
         self._adapter_factory = adapter_factory
+        self._providers = dict(providers or {})
         self._environ = environ
         self._module_available = module_available
         self._clock = clock
@@ -1084,6 +1098,7 @@ class Runtime:
                         self._backend(component_id, backend_id)
                         for backend_id in sorted(COMPONENTS[component_id].backends)
                     ),
+                    optional=COMPONENTS[component_id].optional,
                 )
                 for component_id in stage.components
             ),
@@ -1216,7 +1231,10 @@ class Runtime:
         override) is layered on top and always wins.
         """
         composed = compose_executors(
-            config, environ=self._environ, module_available=self._module_available
+            config,
+            providers=self._providers,
+            environ=self._environ,
+            module_available=self._module_available,
         )
         return {**composed, **self._executors}
 
@@ -1285,11 +1303,17 @@ def _editable(
             continue
         for component_id in stage.components:
             component = config.config.components[component_id]
+            spec = COMPONENTS[component_id]
+            backend_choices: tuple[Any, ...] = tuple(sorted(spec.backends))
+            if spec.optional:
+                # Componente genuinamente opcional: "nenhum backend" é um estado válido e
+                # explícito, então precisa aparecer em `allowed`, nunca só em `current`.
+                backend_choices = (*backend_choices, None)
             edits.append(
                 RuntimeEdit(
                     path=f"components.{component_id}.backend",
                     kind="choice",
-                    allowed=tuple(sorted(COMPONENTS[component_id].backends)),
+                    allowed=backend_choices,
                     current=component.backend,
                 )
             )

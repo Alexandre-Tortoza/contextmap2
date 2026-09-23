@@ -47,6 +47,7 @@ from contextmap.ingestion import (
     SourceAdapterError,
     SourceObservation,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
     compute_configuration_hash,
     compute_source_content_hash,
@@ -135,6 +136,11 @@ class IngestionRequest:
         required_topics: Topic names that must exist in the source.
         timestamp_clock_id: Identity of the header clock shared by the topics; derived from
             the source when omitted.
+        window: An explicit temporal window of the source to ingest (issue #506), or
+            ``None`` to ingest the whole source. See
+            :class:`~contextmap.ingestion.SourceWindow`; an adapter that does not support
+            windowing rejects a configured window explicitly instead of silently ignoring
+            it (e.g. :class:`~contextmap.ingestion.adapters.pose_file.PoseFileSourceAdapter`).
         calibration: An externally supplied calibration merged with what the source holds.
         validation: What to do with structural problems.
         hash_source: Whether to hash the source bytes for its content identity. It is
@@ -154,6 +160,7 @@ class IngestionRequest:
     synchronization: SynchronizationConfig
     required_topics: frozenset[str] = frozenset()
     timestamp_clock_id: str | None = None
+    window: SourceWindow | None = None
     calibration: CalibrationSet | None = None
     validation: ValidationPolicy = field(default_factory=ValidationPolicy)
     hash_source: bool = True
@@ -184,6 +191,7 @@ class IngestionRequest:
             "topics": dataclasses.asdict(self.topics),
             "required_topics": sorted(self.required_topics),
             "timestamp_clock_id": self.timestamp_clock_id,
+            "window": _window_document(self.window),
             "synchronization": {
                 "reference_modality": self.synchronization.reference_modality,
                 "tolerance_nanoseconds": self.synchronization.tolerance_nanoseconds,
@@ -220,7 +228,7 @@ class IngestionRequest:
         Args:
             document: A mapping with ``source_path``, ``sequence_name``, ``topics``,
                 ``synchronization`` and optionally ``required_topics``, ``timestamp_clock_id``,
-                ``validation``, ``hash_source`` and ``config_identity``.
+                ``window``, ``validation``, ``hash_source`` and ``config_identity``.
             output_dir: The final directory of the sequence artifact.
             source_type: The adapter family, when the document does not carry it.
             artifact_id: The identity to publish under, when the caller fixes it.
@@ -247,6 +255,7 @@ class IngestionRequest:
                 synchronization=synchronization,
                 required_topics=frozenset(document.get("required_topics", ())),
                 timestamp_clock_id=document.get("timestamp_clock_id"),
+                window=_window_from_document(document.get("window")),
                 validation=validation,
                 hash_source=document.get("hash_source", True),
                 config_identity=document.get("config_identity"),
@@ -752,7 +761,9 @@ class IngestionService:
             if calibration is not None:
                 writer.set_calibration(calibration)
             writer.set_provenance(
-                _provenance(request, calibration, run.policy, warnings, source_hash(request))
+                _provenance(
+                    request, calibration, run.policy, warnings, source_hash(request, adapter)
+                )
             )
             writer.set_diagnostics(warnings=warnings, synchronization=diagnostics)
             return writer.finalize()
@@ -992,6 +1003,29 @@ def _adapter_config(request: IngestionRequest) -> SourceAdapterConfig:
         timestamp_clock_id=request.timestamp_clock_id,
         calibration=request.calibration,
         required_topics=request.required_topics,
+        window=request.window,
+    )
+
+
+def _window_document(window: SourceWindow | None) -> dict[str, object] | None:
+    """Return the JSON-compatible form of a configured window, or ``None``."""
+    if window is None:
+        return None
+    return {
+        "clock_id": window.clock_id,
+        "start_seconds": window.start_seconds,
+        "end_seconds": window.end_seconds,
+    }
+
+
+def _window_from_document(document: Mapping[str, Any] | None) -> SourceWindow | None:
+    """Decode a window from its JSON-compatible form, or ``None``."""
+    if document is None:
+        return None
+    return SourceWindow(
+        clock_id=document["clock_id"],
+        start_seconds=document["start_seconds"],
+        end_seconds=document["end_seconds"],
     )
 
 
@@ -1028,9 +1062,24 @@ def _without_payload(observation: SourceObservation) -> SourceObservation:
     return observation
 
 
-def source_hash(request: IngestionRequest) -> str | None:
-    """Hash the source's bytes, when the request asks for it."""
-    return compute_source_content_hash(Path(request.source_path)) if request.hash_source else None
+def source_hash(request: IngestionRequest, adapter: SourceAdapter) -> str | None:
+    """Return the source's content identity, when the request asks for it.
+
+    When ``request.window`` restricts what is actually read, the adapter's
+    own :meth:`~contextmap.ingestion.SourceAdapter.content_hash` is used
+    instead of a separate full-source pass: it was already accumulated for
+    free while :meth:`~contextmap.ingestion.SourceAdapter.read_observations`
+    ran, and covers only the window, never the whole source (issue #506).
+    Hashing the whole source regardless of the window would defeat the
+    O(window) cost guarantee windowed ingestion is meant to provide.
+    Without a window, a full pass over the source is still used, matching
+    the identity semantics of unwindowed ingestion.
+    """
+    if not request.hash_source:
+        return None
+    if request.window is not None:
+        return adapter.content_hash()
+    return compute_source_content_hash(Path(request.source_path))
 
 
 def _provenance(
@@ -1044,6 +1093,7 @@ def _provenance(
         "topics": dataclasses.asdict(request.topics),
         "required_topics": sorted(request.required_topics),
         "timestamp_clock_id": request.timestamp_clock_id,
+        "window": _window_document(request.window),
         "synchronization": request.to_document()["synchronization"],
         "validation": dataclasses.asdict(request.validation),
         "hash_source": request.hash_source,

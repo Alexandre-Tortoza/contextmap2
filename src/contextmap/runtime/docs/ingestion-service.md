@@ -28,6 +28,7 @@ Composto com os tipos da própria capability (`SourceTopicMapping`, `Synchroniza
 | `output_dir` | o diretório final do artifact (num run, `<run>/ingestion`); não pode existir, porque um artifact publicado nunca é substituído |
 | `artifact_id` | a identidade sob a qual publicar; se omitida, uma nova é gerada. Um run a deriva da identidade do estágio (`StageRequest.identity()`), então uma execução idêntica publica a mesma identidade |
 | `topics`, `required_topics`, `timestamp_clock_id` | o que ler e a identidade do clock de header |
+| `window` | janela temporal explícita da fonte a ingerir (`SourceWindow \| None`, issue #506); repassada para `SourceAdapterConfig.window` — um adapter sem suporte a janela (`PoseFileSourceAdapter`) recusa explicitamente em vez de ignorar |
 | `synchronization` | modalidade de referência e tolerância |
 | `calibration` | calibração externa, mesclada pelo adapter com a da fonte |
 | `validation` | `ValidationPolicy(allow_duplicate_timestamps, on_problems="fail"\|"warn")` |
@@ -55,7 +56,8 @@ O preflight nunca troca o adapter, a política de sincronização nem a calibra�
 `preflight` → adapter → leitura → validação → sincronização → provenance → **publicação atômica** → checagem de integridade do que foi publicado.
 
 - **Streaming.** Cada observação é validada (imagem/LiDAR) e escrita no artifact temporário assim que é lida; só metadados sem payload ficam na memória, para a validação entre observações (ordem de timestamp, frames) e para `synchronize()`. Uma gravação maior que a memória pode ser ingerida.
-- **Provenance** (`SequenceProvenance`): família e caminho da fonte, hash do conteúdo da fonte, configuração do pedido e seu hash (com a identidade do pedido e a identidade da configuração do runtime), identidade da calibração, política de sincronização, versão do código, avisos. Nada de segredo.
+- **Provenance** (`SequenceProvenance`): família e caminho da fonte, hash do conteúdo da fonte, configuração do pedido e seu hash (com a identidade do pedido, a identidade da configuração do runtime e a janela declarada quando uma é configurada), identidade da calibração, política de sincronização, versão do código, avisos. Nada de segredo.
+- **Hash de fonte com janela** (`source_hash()`). Quando `request.window` é `None`, o hash da fonte continua sendo uma passada O(tamanho da fonte) sobre o arquivo inteiro (`compute_source_content_hash`). Quando uma janela é configurada, `source_hash()` usa `adapter.content_hash()` (parte do `Protocol` `SourceAdapter`, issue #506) em vez disso — o hash acumulado de graça durante a própria leitura, cobrindo só a janela — para que declarar a identidade de conteúdo de um pedido com janela nunca custe uma passada sobre a fonte inteira.
 - **Falhas esperadas viram resultado** (`IngestionResult` com `status="failed"`), com `IngestionFailure(category, phase, message, exception_type)`; **nada é publicado**. Uma exceção inesperada emite `ingestion.failed` (categoria `unexpected`) e é relevantada, para um bug não ser engolido.
 - **Cancelamento cooperativo** (`CancellationToken`) checado entre observações e fases; `KeyboardInterrupt` emite `ingestion.cancelled` e propaga. Um run falho ou cancelado **aborta o writer**: nem artifact final, nem diretório temporário.
 

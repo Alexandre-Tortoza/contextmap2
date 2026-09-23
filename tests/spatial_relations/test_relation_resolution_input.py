@@ -48,7 +48,10 @@ CANDIDATES = CandidatePolicy(
     predicates=(RelationPredicate.NEXT_TO,), proximity_radius_m=0.6, directional_radius_m=1.0
 )
 POLICIES = RelationsRunPolicies(
-    frame_conventions=CONVENTIONS, candidate=CANDIDATES, geometric=GEOMETRIC
+    frame_conventions=CONVENTIONS,
+    candidate=CANDIDATES,
+    geometry_summary=CONNECTED_POLICY,
+    geometric=GEOMETRIC,
 )
 
 

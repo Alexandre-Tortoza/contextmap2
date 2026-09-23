@@ -77,6 +77,7 @@ from contextmap.ingestion.sequence_selection import (
     selection_identity,
 )
 from contextmap.ingestion.source_adapter import (
+    InvalidSourceWindowError,
     MissingRequiredTopicError,
     SourceAdapter,
     SourceAdapterCapabilities,
@@ -84,6 +85,7 @@ from contextmap.ingestion.source_adapter import (
     SourceAdapterError,
     SourceAdapterWarning,
     SourceTopicMapping,
+    SourceWindow,
     UnsupportedSourceMessageError,
 )
 from contextmap.ingestion.synchronization import (
@@ -126,6 +128,7 @@ __all__ = [
     "ImageObservation",
     "ImuObservation",
     "IncompleteSequenceArtifactError",
+    "InvalidSourceWindowError",
     "LidarObservation",
     "MeiCameraModel",
     "MissingRequiredTopicError",
@@ -158,6 +161,7 @@ __all__ = [
     "SourceObservationId",
     "SourceProvenance",
     "SourceTopicMapping",
+    "SourceWindow",
     "SynchronizationConfig",
     "SynchronizationDecision",
     "SynchronizationDiagnostics",

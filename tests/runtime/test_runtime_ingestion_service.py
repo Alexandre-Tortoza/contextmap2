@@ -18,7 +18,9 @@ from contextmap.ingestion import (
     SequenceArtifactReader,
     SourceAdapterCapabilities,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
+    compute_source_content_hash,
 )
 from contextmap.runtime import (
     ArtifactRef,
@@ -233,6 +235,40 @@ class TestRequestIdentity:
         assert json.loads(json.dumps(document)) == document
         assert "output_dir" not in document
 
+    def test_a_configured_window_changes_the_identity(self, tmp_path: Path) -> None:
+        base = make_request(tmp_path)
+        window = SourceWindow(
+            clock_id=f"{base.source_type}:{base.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=1.0,
+        )
+
+        windowed = make_request(tmp_path, window=window)
+
+        assert windowed.identity != base.identity
+        assert base.window is None
+        assert windowed.window == window
+
+    def test_the_window_round_trips_through_the_document(self, tmp_path: Path) -> None:
+        window = SourceWindow(
+            clock_id="ros1_bag:recording.bag:recording_time", start_seconds=1.0, end_seconds=2.0
+        )
+        original = make_request(tmp_path, window=window)
+
+        document = original.to_document()
+        rebuilt = IngestionRequest.from_document(
+            document, output_dir=original.output_dir, source_type=None
+        )
+
+        assert document["window"] == {
+            "clock_id": window.clock_id,
+            "start_seconds": 1.0,
+            "end_seconds": 2.0,
+        }
+        assert rebuilt.window == window
+        assert rebuilt.identity == original.identity
+        assert json.loads(json.dumps(document)) == document
+
     def test_an_invalid_document_is_refused(self, tmp_path: Path) -> None:
         good = make_request(tmp_path).to_document()
 
@@ -308,6 +344,52 @@ class TestSuccessfulRun:
 
         assert provenance is not None and provenance.source_content_hash is None
         assert provenance.ingestion_config["hash_source"] is False
+
+    def test_a_configured_window_reaches_the_adapter_and_the_persisted_provenance(
+        self, tmp_path: Path
+    ) -> None:
+        """#506: a janela deve ser alcançável pelo caminho canônico, não só pelos adapters.
+
+        Exercita o caminho real ``IngestionRequest`` -> ``IngestionService.run()``
+        (não um script adapter->writer->provenance montado à mão): o pedido
+        carrega ``window``, a config construída para o adapter carrega
+        ``window`` (`_adapter_config()`), e a proveniência publicada declara
+        a janela realmente usada, com um hash de conteúdo derivado do que o
+        adapter efetivamente leu (`adapter.content_hash()`), nunca de uma
+        passada separada sobre a fonte inteira.
+        """
+        built: list[FakeAdapter] = []
+        base_request = make_request(tmp_path)
+        window = SourceWindow(
+            clock_id=f"{base_request.source_type}:{base_request.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=10.0,
+        )
+        request = dataclasses.replace(base_request, window=window)
+
+        result = _service(built=built).run(request)
+
+        assert result.status == "completed" and result.failure is None
+        # preflight() constructs its own adapter to inspect capabilities(), and _execute()
+        # builds a second, separate one for the actual read -- both must carry the window.
+        assert built and all(adapter.config.window == window for adapter in built)
+        read_adapter = next(adapter for adapter in built if adapter.read_calls > 0)
+        assert result.artifact_path is not None
+        provenance = SequenceArtifactReader(Path(result.artifact_path)).read_provenance()
+        assert provenance is not None
+        assert provenance.ingestion_config["window"] == {
+            "clock_id": window.clock_id,
+            "start_seconds": 0.0,
+            "end_seconds": 10.0,
+        }
+        assert provenance.source_content_hash == read_adapter.content_hash()
+        assert provenance.source_content_hash is not None
+        # Uma janela configurada nunca deve custar uma passada de hash sobre a
+        # fonte inteira: o hash persistido é o do adapter (só o que foi lido),
+        # não igual ao hash do arquivo inteiro no disco.
+        assert provenance.source_content_hash != compute_source_content_hash(
+            Path(request.source_path)
+        )
 
     def test_adapter_warnings_reach_the_result_and_the_artifact(self, tmp_path: Path) -> None:
         result = _service(warnings=["skipped a malformed message"]).run(make_request(tmp_path))

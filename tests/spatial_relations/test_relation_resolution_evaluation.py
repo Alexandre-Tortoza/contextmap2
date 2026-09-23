@@ -161,7 +161,10 @@ def _relations_run(directory: Path, resolution_dir: Path) -> SpatialRelationsRun
         run_id=SpatialRelationsRunId("relations-run-0001"),
         lineage=lineage_from_resolution_manifest(resolution.manifest),
         policies=RelationsRunPolicies(
-            frame_conventions=CONVENTIONS, candidate=CANDIDATES, geometric=GEOMETRIC
+            frame_conventions=CONVENTIONS,
+            candidate=CANDIDATES,
+            geometry_summary=CONNECTED_POLICY,
+            geometric=GEOMETRIC,
         ),
         code_version="test",
     ).write(
