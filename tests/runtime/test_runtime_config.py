@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from contextmap.runtime import (
     CANONICAL_PROFILE_ID,
     CONFIG_SCHEMA_VERSION,
+    EXTENDED_PROFILE_ID,
     ConfigurationError,
     ConfigurationSource,
     EffectiveConfig,
@@ -63,7 +65,14 @@ class TestCanonicalProfile:
         assert stages["ingestion"] is True
         assert stages["semantic_fusion"] is True
         assert stages["point_representation"] is False
-        assert "context_map" in stages
+        # O preset canônico (canonical/1) só declara o que executa hoje; os estágios
+        # seguintes vêm em canonical/2 (ver TestExtendedProfile).
+        assert not {
+            "semantic_mapping",
+            "entity_resolution",
+            "spatial_relations",
+            "context_map",
+        } & set(stages)
 
     def test_makes_no_backend_choice_on_the_users_behalf(self) -> None:
         config = resolve_effective_config().config
@@ -74,6 +83,29 @@ class TestCanonicalProfile:
     def test_unknown_profile_is_rejected_with_the_known_ones(self) -> None:
         with pytest.raises(ConfigurationError, match="canonical/1"):
             resolve_effective_config(profile="canonical/99")
+
+
+class TestExtendedProfile:
+    """canonical/2 extends canonical/1 with semantic_mapping, entity_resolution and
+    spatial_relations."""
+
+    def test_lists_the_three_extra_stages_enabled_by_default(self) -> None:
+        stages = resolve_effective_config(profile=EXTENDED_PROFILE_ID).config.pipeline.stages
+
+        assert stages["ingestion"] is True
+        assert stages["semantic_fusion"] is True
+        assert stages["semantic_mapping"] is True
+        assert stages["entity_resolution"] is True
+        assert stages["spatial_relations"] is True
+        assert "context_map" not in stages
+
+    def test_resolves_deterministically_and_keeps_the_profile_identity(self) -> None:
+        first = resolve_effective_config(profile=EXTENDED_PROFILE_ID)
+        second = resolve_effective_config(profile=EXTENDED_PROFILE_ID)
+
+        assert first.digest == second.digest
+        assert first.config == second.config
+        assert first.config.pipeline.preset == EXTENDED_PROFILE_ID
 
 
 class TestPrecedence:
@@ -247,6 +279,81 @@ class TestBackendScoping:
         assert component.parameters["device"] == "cpu"
 
 
+class TestResourceProviders:
+    """``resources.providers``: declarative ``RuntimeProvider`` targets (#507's real gap)."""
+
+    def test_parses_a_declared_target_per_component(self, tmp_path: Path) -> None:
+        document = _sam3_document()
+        document["resources"] = {
+            "providers": {REGION: "pkg.loaders:load_sam3", INTERPRETER: "pkg.loaders:load_qwen"}
+        }
+        file = _write(tmp_path / "a.json", document)
+
+        resources = resolve_effective_config(files=[file]).config.resources
+
+        assert dict(resources.providers) == {
+            REGION: "pkg.loaders:load_sam3",
+            INTERPRETER: "pkg.loaders:load_qwen",
+        }
+
+    def test_defaults_to_an_empty_mapping(self) -> None:
+        assert dict(resolve_effective_config().config.resources.providers) == {}
+
+    def test_rejects_a_non_string_or_empty_target(self, tmp_path: Path) -> None:
+        document = {"resources": {"providers": {REGION: "", INTERPRETER: 3}}}
+        file = _write(tmp_path / "a.json", document)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            resolve_effective_config(files=[file])
+
+        paths = {problem.path for problem in excinfo.value.problems}
+        assert paths == {f"resources.providers.{REGION}", f"resources.providers.{INTERPRETER}"}
+
+    def test_a_later_file_adds_to_the_declared_targets_without_wiping_earlier_ones(
+        self, tmp_path: Path
+    ) -> None:
+        first = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        second = _write(tmp_path / "b.json", {"resources": {"providers": {INTERPRETER: "pkg:b"}}})
+
+        resources = resolve_effective_config(files=[first, second]).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:a", INTERPRETER: "pkg:b"}
+
+    def test_an_override_replaces_the_whole_declared_providers_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        # component_id já contém um ponto ("visual_perception.region_discovery"), então um
+        # override pontual não consegue nomear uma única chave sem ambiguidade com o próprio
+        # separador de caminho: o override substitui o mapa inteiro, como em qualquer outro
+        # valor JSON (a fusão chave a chave é exclusiva de camadas de arquivo).
+        file = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        replacement = json.dumps({REGION: "pkg:b"})
+
+        resources = resolve_effective_config(
+            files=[file], overrides=[f"resources.providers={replacement}"]
+        ).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:b"}
+
+    def test_round_trips_through_to_document(self) -> None:
+        target = {"visual_perception.region_discovery": "pkg:load"}
+
+        config = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps(target)}"]
+        ).config
+
+        assert config.to_document()["resources"]["providers"] == target
+
+    def test_changes_the_digest(self) -> None:
+        base = resolve_effective_config().digest
+
+        changed = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps({REGION: 'pkg:a'})}"]
+        ).digest
+
+        assert changed != base
+
+
 class TestStructuralValidation:
     @pytest.mark.parametrize(
         ("document", "fragment"),
@@ -397,6 +504,33 @@ class TestSelectionCompleteness:
 
         assert check_selection(effective.config) == ()
 
+    def test_an_unselected_optional_evidence_channel_is_never_reported_as_incomplete(
+        self, tmp_path: Path
+    ) -> None:
+        """The geometry-only path is a complete selection, not an incomplete one.
+
+        ``_all_selected_extended()`` (``canonical/2``, the profile that declares Entity
+        Resolution and Spatial Relations) never chooses a backend for the optional Entity
+        Resolution channels or Spatial Relations predicates: their absence must not surface
+        as a problem.
+        """
+        file = _write(tmp_path / "a.json", _all_selected_extended())
+
+        effective = resolve_effective_config(files=[file])
+
+        paths = {
+            problem.path.removeprefix("components.")
+            for problem in check_selection(effective.config)
+        }
+        assert not paths & {
+            "entity_resolution.semantic_compatibility",
+            "entity_resolution.temporal_compatibility",
+            "entity_resolution.appearance",
+            "entity_resolution.representation",
+            "spatial_relations.geometric_predicate",
+            "spatial_relations.contact_predicate",
+        }
+
 
 def _all_selected() -> dict[str, object]:
     return {
@@ -424,6 +558,23 @@ def _all_selected() -> dict[str, object]:
             },
         }
     }
+
+
+def _all_selected_extended() -> dict[str, object]:
+    """``_all_selected()`` under ``canonical/2``, with Entity Resolution/Spatial Relations too."""
+    document = _all_selected()
+    components = dict(cast("dict[str, object]", document["components"]))
+    components["entity_resolution"] = {
+        "retrieval": {"backend": "entity-candidate-retrieval-v1"},
+        "resolution": {"backend": "conservative-staged-resolution-v1"},
+        "geometry_comparison": {"backend": "entity-geometry-comparison-v1"},
+    }
+    components["spatial_relations"] = {
+        "frame_conventions": {"backend": "map-frame-conventions-v1"},
+        "candidate": {"backend": "bounds-neighborhood-candidates-v1"},
+        "geometry_summary": {"backend": "entity-geometry-summary-v1"},
+    }
+    return {"pipeline": {"preset": EXTENDED_PROFILE_ID}, "components": components}
 
 
 class TestAvailability:

@@ -24,6 +24,7 @@ or service locator: the table of factories below is explicit and closed.
 
 from __future__ import annotations
 
+import importlib
 import os
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -45,10 +46,16 @@ from contextmap.runtime.errors import (
     BackendRuntimeMissingError,
     BackendUnavailableError,
     CompositionError,
+    ProviderConfigurationError,
     StageUnavailableError,
 )
 
 if TYPE_CHECKING:
+    from contextmap.entity_resolution import (
+        CandidateRetrievalPolicy,
+        ComparisonChannels,
+        ConservativeResolutionPolicy,
+    )
     from contextmap.geometric_mapping import MotionCorrectionPolicy
     from contextmap.ingestion import SourceAdapter, SourceAdapterConfig
     from contextmap.point_representation import PointEncoder
@@ -59,6 +66,7 @@ if TYPE_CHECKING:
         QualityAwareAccumulationPolicy,
     )
     from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
+    from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
         FeatureExtractor,
@@ -75,6 +83,58 @@ that backend declares (and only those), and returns whatever runtime the backend
 adapter expects (for example a SAM3 runtime or a Gemini client). Loading the model is the
 provider's business, so heavy SDKs stay out of the runtime package.
 """
+
+
+def resolve_provider(component_id: str, target: str) -> RuntimeProvider:
+    """Resolve a ``"resources.providers"`` target into the :data:`RuntimeProvider` it names.
+
+    This is the declarative counterpart of passing a :data:`RuntimeProvider` in Python: a
+    configuration names, instead of embeds, the callable the composition root asks for a
+    model runtime. The imported attribute *is* the provider -- there is no intermediate
+    factory or wrapper, so it must already accept ``(config, secrets)`` and return the
+    runtime, exactly like a provider supplied through ``compose(providers=...)``.
+
+    Security posture: only the ``"module:attribute"`` syntax is accepted, never ``eval``;
+    no module is ever installed automatically; and this is called lazily, by
+    :meth:`_Context.runtime`/:meth:`_Context.optional_runtime`, only for a component that is
+    actually being composed -- never eagerly for every target a document declares. A
+    ``resources.providers`` target is Python code that is imported and then called at
+    runtime, the same trust boundary as any other configuration that names executable code:
+    configuration from an untrusted source must never be resolved this way.
+
+    Args:
+        component_id: Variation point the target was declared for, used only to build an
+            actionable error.
+        target: ``"module_name:attribute"``.
+
+    Returns:
+        The imported attribute, already verified callable.
+
+    Raises:
+        ProviderConfigurationError: If ``target`` is malformed, its module cannot be
+            imported, the attribute does not exist on it, or the attribute is not callable.
+    """
+    module_name, separator, attribute_name = target.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ProviderConfigurationError(
+            component_id, target, "must look like 'module:attribute' with both parts non-empty"
+        )
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as error:
+        raise ProviderConfigurationError(
+            component_id, target, f"module {module_name!r} could not be imported: {error}"
+        ) from error
+    try:
+        attribute = getattr(module, attribute_name)
+    except AttributeError as error:
+        raise ProviderConfigurationError(
+            component_id, target, f"module {module_name!r} has no attribute {attribute_name!r}"
+        ) from error
+    if not callable(attribute):
+        raise ProviderConfigurationError(component_id, target, "is not callable")
+    return cast("RuntimeProvider", attribute)
+
 
 FeatureFactory = Callable[["FeatureBuildScope"], "FeatureExtractor"]
 SourceAdapterFactory = Callable[["SourceAdapterConfig"], "SourceAdapter"]
@@ -134,6 +194,16 @@ class ComposedRuntime:
         occlusion_policy: Sensor Association visibility rule.
         association_tolerances: Sensor Association diagnostic tolerances.
         association_pose_policy: Pose lookup rule Sensor Association uses per frame.
+        entity_retrieval_policy: Entity Resolution candidate retrieval policy.
+        entity_comparison_channels: The evidence channels Entity Resolution evaluates; geometry
+            is always present, every other channel is ``None`` when not selected.
+        entity_resolution_policy: Entity Resolution's conservative decision policy.
+        spatial_relations_policies: Spatial Relations' effective policies: frame conventions,
+            candidate generation and the geometry-summary policy are always present, the
+            predicate evaluators are ``None`` when not selected. ``geometry_summary`` here is
+            the only source ``SpatialRelationsExecutor`` reads it from, so the policy it uses
+            to summarize geometry and the one persisted in the run's own provenance can never
+            diverge (review of PR #540, second round).
     """
 
     effective: EffectiveConfig
@@ -153,6 +223,10 @@ class ComposedRuntime:
     occlusion_policy: OcclusionPolicy | None = None
     association_tolerances: DiagnosticTolerances | None = None
     association_pose_policy: LookupPolicy | None = None
+    entity_retrieval_policy: CandidateRetrievalPolicy | None = None
+    entity_comparison_channels: ComparisonChannels | None = None
+    entity_resolution_policy: ConservativeResolutionPolicy | None = None
+    spatial_relations_policies: RelationsRunPolicies | None = None
 
 
 def compose(
@@ -162,6 +236,7 @@ def compose(
     stages: Iterable[str] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
+    on_provider_override: Callable[[str], None] | None = None,
 ) -> ComposedRuntime:
     """Construct the implementations an effective configuration selects.
 
@@ -169,12 +244,21 @@ def compose(
         effective: The resolved configuration.
         providers: Model runtimes or clients supplied by the caller, keyed by component
             identity (``"<capability>.<slot>"``), for backends without a bundled loader
-            and to override a bundled one.
+            and to override a bundled one. For a component this leaves unset, a
+            ``resources.providers`` target declared in ``effective`` is resolved instead,
+            lazily, only if that component is actually being composed; see
+            :func:`resolve_provider`.
         stages: The stages to compose, or ``None`` for every enabled stage whose
             capability is implemented.
         environ: Environment to read secrets from; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed;
             defaults to an :mod:`importlib` lookup.
+        on_provider_override: Called with a component identity when ``providers`` supplies
+            an entry for it that wins over a ``resources.providers`` target ``effective``
+            also declares for the same component -- the only case where a caller-embedded
+            provider silently takes precedence over what the configuration itself names.
+            Never called when the two never disagree, in particular on every ordinary run
+            through the installed CLI, which never passes ``providers``.
 
     Returns:
         The composed implementations. No model has been loaded.
@@ -185,7 +269,10 @@ def compose(
         StageUnavailableError: If a requested stage has no implemented capability.
         BackendConfigurationError: If a capability rejects its backend's parameters.
         BackendUnavailableError: If a backend needs a module or secret that is missing.
-        BackendRuntimeMissingError: If a backend needs a runtime nobody supplied.
+        BackendRuntimeMissingError: If a backend needs a runtime nobody supplied and the
+            configuration declares no ``resources.providers`` target for it either.
+        ProviderConfigurationError: If a ``resources.providers`` target this component needs
+            is malformed or cannot be resolved into a callable.
     """
     preset = PRESETS[effective.config.pipeline.preset]
     enabled = effective.config.pipeline.stages
@@ -224,6 +311,7 @@ def compose(
         providers=dict(providers or {}),
         environ=os.environ if environ is None else environ,
         module_available=module_available,
+        on_provider_override=on_provider_override,
     )
     attributes: dict[str, object] = {}
     for stage in selected:
@@ -269,6 +357,7 @@ class _Context:
     providers: Mapping[str, RuntimeProvider]
     environ: Mapping[str, str]
     module_available: Callable[[str], bool] | None
+    on_provider_override: Callable[[str], None] | None = None
 
     def component(self, component_id: str) -> ComponentConfig:
         return self.effective.config.components[component_id]
@@ -316,13 +405,22 @@ class _Context:
         return config, extra_values
 
     def ensure_available(self, component_id: str) -> None:
-        """Fail when a bundled code path needs a module or secret that is missing."""
+        """Fail when a bundled code path needs a module or secret that is missing.
+
+        A component whose runtime a provider supplies -- explicitly, or through a declared
+        ``resources.providers`` target -- never needs its own bundled module: that heavy
+        import is the provider's business, never ``contextmap.runtime``'s (see the module
+        docstring). Only the module check is skipped this way; a missing secret is still
+        reported, since a provider is not necessarily what reads it.
+        """
+        declared = self._declared_provider_target(component_id)
+        provider_expected = component_id in self.providers or declared is not None
         problems = check_component_availability(
             component_id,
             self.component(component_id),
             environ=self.environ,
             module_available=self.module_available,
-            check_modules=component_id not in self.providers,
+            check_modules=not provider_expected,
         )
         if problems:
             raise BackendUnavailableError(problems)
@@ -333,17 +431,47 @@ class _Context:
         names = COMPONENTS[component_id].backends[backend].secrets
         return ResolvedSecrets(names, {n: self.environ[n] for n in names if self.environ.get(n)})
 
+    def _declared_provider_target(self, component_id: str) -> str | None:
+        """Read the ``resources.providers`` target the configuration declares, if any."""
+        return self.effective.config.resources.providers.get(component_id)
+
+    def _resolved_provider(self, component_id: str) -> RuntimeProvider | None:
+        """Resolve this component's provider, or ``None`` when nobody supplies one.
+
+        Precedence: an explicit ``providers=`` entry always wins, even over a
+        ``resources.providers`` target the configuration declares for the same component --
+        and that override is reported through ``on_provider_override`` exactly when it
+        actually happens (both exist for the same component). Otherwise, a declared target
+        is resolved lazily, right here, only because this component is genuinely being
+        composed; the target is never resolved for a component nobody asked to build.
+        """
+        explicit = self.providers.get(component_id)
+        target = self._declared_provider_target(component_id)
+        if explicit is not None:
+            if target is not None and self.on_provider_override is not None:
+                self.on_provider_override(component_id)
+            return explicit
+        if target is not None:
+            return resolve_provider(component_id, target)
+        return None
+
     def runtime(self, component_id: str, config: Any, protocol: str) -> Any:
-        """Ask the caller's provider for the runtime of a backend without a bundled loader."""
-        provider = self.providers.get(component_id)
+        """Ask the caller's or the configuration's provider for a backend's runtime.
+
+        Raises:
+            BackendRuntimeMissingError: If neither an explicit provider nor a declared
+                ``resources.providers`` target supplies one.
+            ProviderConfigurationError: If a declared target cannot be resolved.
+        """
+        provider = self._resolved_provider(component_id)
         if provider is None:
             backend = self.component(component_id).backend or ""
             raise BackendRuntimeMissingError(component_id, backend, protocol)
         return provider(config, self.secrets(component_id))
 
     def optional_runtime(self, component_id: str, config: Any) -> Any:
-        """Return the caller's runtime for a backend that also bundles a loader, or ``None``."""
-        provider = self.providers.get(component_id)
+        """Return the resolved runtime for a backend that also bundles a loader, or ``None``."""
+        provider = self._resolved_provider(component_id)
         return None if provider is None else provider(config, self.secrets(component_id))
 
 
@@ -650,6 +778,103 @@ def _diagnostic_tolerances(context: _Context, component_id: str) -> Any:
     return policy
 
 
+# --- entity resolution ---------------------------------------------------------------
+
+
+def _entity_retrieval_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import CandidateRetrievalPolicy
+
+    policy, _ = context.build(component_id, CandidateRetrievalPolicy)
+    return policy
+
+
+def _entity_resolution_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import ConservativeResolutionPolicy
+
+    policy, _ = context.build(component_id, ConservativeResolutionPolicy)
+    return policy
+
+
+def _entity_geometry_comparison(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import GeometryComparisonPolicy
+
+    policy, _ = context.build(component_id, GeometryComparisonPolicy)
+    return policy
+
+
+def _entity_semantic_compatibility(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import SemanticCompatibilityPolicy
+
+    policy, _ = context.build(component_id, SemanticCompatibilityPolicy)
+    return policy
+
+
+def _entity_temporal_compatibility(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import TemporalCompatibilityPolicy
+
+    policy, _ = context.build(component_id, TemporalCompatibilityPolicy)
+    return policy
+
+
+def _entity_appearance(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import AppearanceComparator, AppearanceComparisonPolicy
+
+    config, _ = context.build(component_id, AppearanceComparisonPolicy)
+    context.ensure_available(component_id)
+    source = context.runtime(component_id, config, "FeatureVectorSource")
+    return AppearanceComparator(source=source, policy=config)
+
+
+def _entity_representation(context: _Context, component_id: str) -> Any:
+    from contextmap.entity_resolution import (
+        RepresentationComparator,
+        RepresentationComparisonPolicy,
+    )
+
+    config, _ = context.build(component_id, RepresentationComparisonPolicy)
+    context.ensure_available(component_id)
+    source = context.runtime(component_id, config, "RepresentationVectorSource")
+    return RepresentationComparator(source=source, policy=config)
+
+
+# --- spatial relations -----------------------------------------------------------------
+
+
+def _frame_conventions(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import FrameConventions
+
+    policy, _ = context.build(component_id, FrameConventions)
+    return policy
+
+
+def _candidate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import CandidatePolicy
+
+    policy, _ = context.build(component_id, CandidatePolicy)
+    return policy
+
+
+def _geometry_summary_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.semantic_mapping import GeometrySummaryPolicy
+
+    policy, _ = context.build(component_id, GeometrySummaryPolicy)
+    return policy
+
+
+def _geometric_predicate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import GeometricPredicatePolicy
+
+    policy, _ = context.build(component_id, GeometricPredicatePolicy)
+    return policy
+
+
+def _contact_predicate_policy(context: _Context, component_id: str) -> Any:
+    from contextmap.spatial_relations import ContactPredicatePolicy
+
+    policy, _ = context.build(component_id, ContactPredicatePolicy)
+    return policy
+
+
 # --- point representation ----------------------------------------------------------
 
 
@@ -746,6 +971,32 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "baseline-evidence-accumulation-v1": _baseline_accumulation,
         "quality-aware-evidence-accumulation-v1": _quality_aware_accumulation,
     },
+    "entity_resolution.retrieval": {"entity-candidate-retrieval-v1": _entity_retrieval_policy},
+    "entity_resolution.resolution": {
+        "conservative-staged-resolution-v1": _entity_resolution_policy
+    },
+    "entity_resolution.geometry_comparison": {
+        "entity-geometry-comparison-v1": _entity_geometry_comparison
+    },
+    "entity_resolution.semantic_compatibility": {
+        "entity-semantic-compatibility-v1": _entity_semantic_compatibility
+    },
+    "entity_resolution.temporal_compatibility": {
+        "entity-temporal-compatibility-v1": _entity_temporal_compatibility
+    },
+    "entity_resolution.appearance": {"entity-appearance-comparison-v1": _entity_appearance},
+    "entity_resolution.representation": {
+        "entity-representation-comparison-v1": _entity_representation
+    },
+    "spatial_relations.frame_conventions": {"map-frame-conventions-v1": _frame_conventions},
+    "spatial_relations.candidate": {"bounds-neighborhood-candidates-v1": _candidate_policy},
+    "spatial_relations.geometry_summary": {"entity-geometry-summary-v1": _geometry_summary_policy},
+    "spatial_relations.geometric_predicate": {
+        "bounds-geometric-predicates-v1": _geometric_predicate_policy
+    },
+    "spatial_relations.contact_predicate": {
+        "point-contact-predicates-v1": _contact_predicate_policy
+    },
 }
 
 
@@ -754,6 +1005,19 @@ def _construct(context: _Context, component_id: str) -> Any:
     backend = context.component(component_id).backend
     assert backend is not None  # a seleção completa já foi exigida em compose().
     return _FACTORIES[component_id][backend](context, component_id)
+
+
+def _construct_optional(context: _Context, component_id: str) -> Any | None:
+    """Build a genuinely optional variation point, or ``None`` when it was not selected.
+
+    Unlike :func:`_construct`, a missing backend here is not a configuration error: the
+    catalog marks the component ``optional`` (see :class:`~contextmap.runtime.catalog.
+    ComponentSpec`), so :func:`~contextmap.runtime.config.check_component_selection` never
+    requires it, and its absence must never be replaced by a default policy.
+    """
+    if context.component(component_id).backend is None:
+        return None
+    return _construct(context, component_id)
 
 
 # --- stages ------------------------------------------------------------------------
@@ -803,8 +1067,38 @@ def _compose_semantic_fusion(context: _Context) -> dict[str, object]:
 
 
 def _compose_nothing(context: _Context) -> dict[str, object]:
-    """Stages with no variation point yet: their services are stateless capability code."""
+    """Compose a stage with no variation point yet: its service is stateless capability code."""
     return {}
+
+
+def _compose_entity_resolution(context: _Context) -> dict[str, object]:
+    from contextmap.entity_resolution import ComparisonChannels
+
+    channels = ComparisonChannels(
+        geometry=_construct(context, "entity_resolution.geometry_comparison"),
+        semantic=_construct_optional(context, "entity_resolution.semantic_compatibility"),
+        temporal=_construct_optional(context, "entity_resolution.temporal_compatibility"),
+        appearance=_construct_optional(context, "entity_resolution.appearance"),
+        representation=_construct_optional(context, "entity_resolution.representation"),
+    )
+    return {
+        "entity_retrieval_policy": _construct(context, "entity_resolution.retrieval"),
+        "entity_comparison_channels": channels,
+        "entity_resolution_policy": _construct(context, "entity_resolution.resolution"),
+    }
+
+
+def _compose_spatial_relations(context: _Context) -> dict[str, object]:
+    from contextmap.spatial_relations import RelationsRunPolicies
+
+    policies = RelationsRunPolicies(
+        frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
+        candidate=_construct(context, "spatial_relations.candidate"),
+        geometry_summary=_construct(context, "spatial_relations.geometry_summary"),
+        geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
+        contact=_construct_optional(context, "spatial_relations.contact_predicate"),
+    )
+    return {"spatial_relations_policies": policies}
 
 
 _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
@@ -816,9 +1110,8 @@ _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "point_representation": _compose_point_representation,
     "semantic_fusion": _compose_semantic_fusion,
     "semantic_mapping": _compose_nothing,
-    "entity_resolution": _compose_nothing,
-    "spatial_relations": _compose_nothing,
-    "context_map": _compose_nothing,
+    "entity_resolution": _compose_entity_resolution,
+    "spatial_relations": _compose_spatial_relations,
 }
 
 
@@ -837,6 +1130,7 @@ def compose_executors(
     providers: Mapping[str, RuntimeProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
+    on_provider_override: Callable[[str], None] | None = None,
 ) -> dict[str, StageExecutor]:
     """Compose the real :class:`~contextmap.runtime.pipeline.StageExecutor` a DAG run needs.
 
@@ -850,9 +1144,10 @@ def compose_executors(
     existing ``missing_executors``/"no executor is registered" preflight reporting already
     explains why such a stage will not run; this function never hides that behind a guess.
 
-    Only ``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
-    ``semantic_fusion`` can be composed this way: each needs only the effective
-    configuration and the upstream artifacts the DAG already carries.
+    ``state_estimation``, ``geometric_mapping``, ``sensor_association``, ``semantic_fusion``,
+    ``visual_perception``, ``entity_resolution`` and ``spatial_relations`` can be composed
+    this way: each needs only the effective configuration and the upstream artifacts the DAG
+    already carries.
 
     - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
       IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
@@ -862,12 +1157,26 @@ def compose_executors(
       still injects an :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`
       explicitly; the ordinary canonical path is to run ``contextmap ingest`` first and
       feed its published artifact to ``run``/``stage`` as a provided or selected input.
-    - ``visual_perception`` and ``point_representation`` have no real executor yet (their
-      backends are GPU/model dependent): they stay absent, exactly as before.
+    - ``visual_perception`` is composed only when all four of its variation points
+      (``region_discovery``, ``dense_features``, ``region_features``,
+      ``semantic_interpretation``) are genuinely selected and available -- a partially
+      configured capability never gets a partial executor (#507).
+    - ``point_representation`` has no real executor yet (its backend is GPU/model
+      dependent): it stays absent, exactly as before.
     - ``semantic_fusion`` is composed only when the selected accumulation backend is the
       one :class:`~contextmap.runtime.executors.SemanticFusionExecutor` actually runs
       (``baseline-evidence-accumulation-v1``); the quality-aware accumulation backend has
       no executor yet, so it is left out rather than run through the wrong policy.
+    - ``semantic_mapping`` has no catalog component and no executor of its own yet: it stays
+      absent here, and its artifact must be supplied (``provided``/``selections``) for
+      ``entity_resolution`` to consume, never computed automatically by this function.
+    - ``entity_resolution`` always evaluates the required geometry channel; every other
+      channel (``semantic``, ``temporal``, ``appearance``, ``representation``) is evaluated
+      only when its own component is selected, and is ``None`` -- never a default policy --
+      when it is not.
+    - ``spatial_relations`` always applies the required frame conventions, candidate policy
+      and geometry summary; the geometric and contact predicate evaluators run only when
+      their own component is selected.
 
     Args:
         effective: The resolved configuration.
@@ -875,18 +1184,26 @@ def compose_executors(
             :func:`compose`.
         environ: Environment to read secrets from; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
+        on_provider_override: Called with a component identity whenever ``providers``
+            overrides a ``resources.providers`` target ``effective`` also declares for it;
+            see :func:`compose`.
 
     Returns:
         One executor per stage that could genuinely be composed from ``effective``. Never
         raises: a stage this cannot build for any reason (incomplete selection, a rejected
-        parameter, a missing module or secret) is simply absent from the result, one stage
-        at a time, so one broken stage never costs the others their real executor.
+        parameter, a missing module or secret, or an unresolvable declared provider target)
+        is simply absent from the result, one stage at a time, so one broken stage never
+        costs the others their real executor.
     """
+    from contextmap.entity_resolution import MatchEvidenceBuilder
     from contextmap.runtime.executors import (
+        EntityResolutionExecutor,
         GeometricMappingExecutor,
         SemanticFusionExecutor,
         SensorAssociationExecutor,
+        SpatialRelationsExecutor,
         StateEstimationExecutor,
+        VisualPerceptionExecutor,
     )
     from contextmap.semantic_fusion import BaselineAccumulationPolicy
 
@@ -898,6 +1215,7 @@ def compose_executors(
                 providers=providers,
                 environ=environ,
                 module_available=module_available,
+                on_provider_override=on_provider_override,
             )
         except (ConfigurationError, CompositionError):
             # Seleção incompleta, estágio desabilitado, ou backend selecionado que rejeita seus
@@ -906,6 +1224,19 @@ def compose_executors(
             return None
 
     executors: dict[str, StageExecutor] = {}
+
+    visual_perception = _compose_stage("visual_perception")
+    if visual_perception is not None:
+        assert visual_perception.region_discovery is not None
+        assert visual_perception.dense_features is not None
+        assert visual_perception.region_features is not None
+        assert visual_perception.semantic_interpreter is not None
+        executors["visual_perception"] = VisualPerceptionExecutor(
+            region_discovery=visual_perception.region_discovery,
+            dense_features=visual_perception.dense_features,
+            region_features=visual_perception.region_features,
+            semantic_interpreter=visual_perception.semantic_interpreter,
+        )
 
     state_estimation = _compose_stage("state_estimation")
     if state_estimation is not None:
@@ -941,5 +1272,23 @@ def compose_executors(
                 support_policy=semantic_fusion.support_policy,
                 accumulation_policy=semantic_fusion.accumulation_policy,
             )
+
+    entity_resolution = _compose_stage("entity_resolution")
+    if entity_resolution is not None:
+        assert entity_resolution.entity_retrieval_policy is not None
+        assert entity_resolution.entity_comparison_channels is not None
+        assert entity_resolution.entity_resolution_policy is not None
+        executors["entity_resolution"] = EntityResolutionExecutor(
+            retrieval=entity_resolution.entity_retrieval_policy,
+            builder=MatchEvidenceBuilder(entity_resolution.entity_comparison_channels),
+            resolution=entity_resolution.entity_resolution_policy,
+        )
+
+    spatial_relations = _compose_stage("spatial_relations")
+    if spatial_relations is not None:
+        assert spatial_relations.spatial_relations_policies is not None
+        executors["spatial_relations"] = SpatialRelationsExecutor(
+            policies=spatial_relations.spatial_relations_policies,
+        )
 
     return executors

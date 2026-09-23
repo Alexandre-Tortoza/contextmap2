@@ -66,6 +66,30 @@ class BackendRuntimeMissingError(CompositionError):
         )
 
 
+class ProviderConfigurationError(CompositionError):
+    """Raised when a ``resources.providers`` target cannot be resolved into a provider.
+
+    A declared target is the ``"module:attribute"`` string a configuration names instead
+    of a Python caller passing a :data:`~contextmap.runtime.composition.RuntimeProvider`
+    directly. This is raised only while resolving that one target, lazily, for the
+    component actually being composed -- never while merely parsing configuration.
+
+    Attributes:
+        component_id: Variation point the target was declared for, ``"<capability>.<slot>"``.
+        target: The malformed or unresolvable ``"module:attribute"`` string.
+        reason: Why it could not be resolved into a callable.
+    """
+
+    def __init__(self, component_id: str, target: str, reason: str) -> None:
+        """Explain which declared provider target failed and why."""
+        self.component_id = component_id
+        self.target = target
+        self.reason = reason
+        super().__init__(
+            f"{component_id}: resources.providers target {target!r} is invalid: {reason}"
+        )
+
+
 class StageUnavailableError(CompositionError):
     """Raised when a stage is requested whose capability is not implemented.
 

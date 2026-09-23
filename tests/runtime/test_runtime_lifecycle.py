@@ -189,6 +189,27 @@ class TestSuccessfulRun:
         assert completed.data["artifact"]["artifact_id"] == "geometric_mapping-run4"
         assert completed.data["elapsed_s"] >= 0
 
+    def test_run_planned_records_provider_overrides_when_they_happen(self, tmp_path: Path) -> None:
+        """A caller-supplied provider that wins over a declared ``resources.providers``
+        target is visible in the run's own trail, not just silently applied (#507)."""
+        journal, _ = _run(
+            tmp_path, World(), provider_overrides=["visual_perception.region_discovery"]
+        )
+        assert journal is not None
+
+        planned = read_run(journal.directory).events[0]
+
+        assert planned.kind == "run_planned"
+        assert planned.data["provider_overrides"] == ["visual_perception.region_discovery"]
+
+    def test_run_planned_reports_no_overrides_on_an_ordinary_run(self, tmp_path: Path) -> None:
+        journal, _ = _run(tmp_path, World())
+        assert journal is not None
+
+        planned = read_run(journal.directory).events[0]
+
+        assert planned.data["provider_overrides"] == []
+
     def test_a_reused_stage_is_an_event_naming_the_prior_artifact(self, tmp_path: Path) -> None:
         world = World()
         _run(tmp_path, world, reuse=_policy(tmp_path, world), workspace="ws1")

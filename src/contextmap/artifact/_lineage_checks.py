@@ -38,7 +38,14 @@ _GROUNDING: Mapping[DerivationKind, frozenset[ArtifactKind]] = {
     DerivationKind.GEOMETRY_DERIVED: frozenset(
         {ArtifactKind.GEOMETRIC_MAP, ArtifactKind.SPATIAL_RELATIONS_RUN}
     ),
-    DerivationKind.MULTIVIEW_FUSED: frozenset({ArtifactKind.SEMANTIC_FUSION_RUN}),
+    # SEMANTIC_FUSION_RUN é a fusão multi-vista de uma entidade de origem; ENTITY_RESOLUTION_RUN
+    # é acrescentado porque a materialização de Entity Resolution também acumula, por uma regra
+    # versionada (a política de materialização), várias contribuições de evidência — as dos
+    # membros que fundiu — e é o único artifact que a montagem do ContextMap (que nunca abre um
+    # run de Semantic Fusion) tem de fato aberto para citar essa derivação com honestidade.
+    DerivationKind.MULTIVIEW_FUSED: frozenset(
+        {ArtifactKind.SEMANTIC_FUSION_RUN, ArtifactKind.ENTITY_RESOLUTION_RUN}
+    ),
     DerivationKind.HUMAN_ANNOTATED: frozenset({ArtifactKind.HUMAN_ANNOTATION_SET}),
 }
 

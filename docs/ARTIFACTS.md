@@ -957,8 +957,11 @@ SourceObservation`), que o `SemanticMappingRunArtifact` já persiste e que
 (`ResolvedEntity → ResolutionDecision → Source Entity`), que o
 `EntityResolutionRunArtifact` já persiste (`merge-lineage.jsonl`).
 `spatial_relations` já persiste o `SpatialRelationsRunArtifact`. Da
-capability `artifact` existe apenas o **schema** `ContextMap` (sem escrita,
-leitura nem artifact persistido).
+capability `artifact` já existem o **schema** `ContextMap`, a montagem real a
+partir de runs de Entity Resolution e Spatial Relations
+(`assemble_context_map`) e o `ContextMapArtifact` persistido (escrita,
+leitura, validação de integridade e bundle) — ver [`ContextMapArtifact`
+atual](#contextmapartifact-atual) abaixo.
 
 ```mermaid
 flowchart RL

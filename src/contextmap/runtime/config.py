@@ -176,10 +176,22 @@ class ResourcesConfig:
         device: Device handed to every backend that declares a device parameter and
             does not set one itself, or ``None`` to leave each backend's own choice.
         workspace: Directory that holds this execution's artifacts, when chosen.
+        providers: Declared :data:`~contextmap.runtime.composition.RuntimeProvider` targets
+            for backends without a bundled model loader, keyed by component identity
+            (``"<capability>.<slot>"``). Each value is a ``"module:attribute"`` string,
+            resolved lazily -- only for a component actually being composed -- by
+            :func:`~contextmap.runtime.composition.resolve_provider`. This is a deployment
+            decision (which process supplies which model runtime), never a backend's own
+            scientific parameter, so it lives here and not under a backend's own
+            ``components.<capability>.<slot>`` parameters. An explicit ``providers=``
+            argument to :func:`~contextmap.runtime.composition.compose` still wins over a
+            declared target for the same component. See ``docs/composition.md`` for the
+            security posture of resolving a configured target.
     """
 
     device: str | None
     workspace: str | None
+    providers: Mapping[str, str]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -248,6 +260,7 @@ class RuntimeConfig:
             "resources": {
                 "device": self.resources.device,
                 "workspace": self.resources.workspace,
+                "providers": dict(self.resources.providers),
             },
             "policies": {"debug_level": self.policies.debug_level},
         }
@@ -405,14 +418,18 @@ def check_component_selection(
 ) -> ConfigProblem | None:
     """Report a variation point that has no backend selected.
 
+    A component the catalog marks ``optional`` (see :class:`~contextmap.runtime.catalog.
+    ComponentSpec`) is never reported for having no backend: its absence is a valid,
+    explicit configuration, not an incomplete one.
+
     Args:
         component_id: Identity of the variation point, ``"<capability>.<slot>"``.
         component: Its resolved configuration.
 
     Returns:
-        The problem, or ``None`` when a backend is selected.
+        The problem, or ``None`` when a backend is selected or the component is optional.
     """
-    if component.backend is not None:
+    if component.backend is not None or COMPONENTS[component_id].optional:
         return None
     supported = ", ".join(sorted(COMPONENTS[component_id].backends))
     capability, slot = component_id.split(".", 1)
@@ -702,7 +719,7 @@ def _profile_document(profile: str) -> dict[str, Any]:
         },
         "components": components,
         "inputs": {"sequence": None, "selections": {}, "named": {}},
-        "resources": {"device": None, "workspace": None},
+        "resources": {"device": None, "workspace": None, "providers": {}},
         "policies": {"debug_level": "none"},
     }
 
@@ -1062,11 +1079,32 @@ def _references(raw: object, path: str, problems: list[ConfigProblem]) -> tuple[
 
 def _parse_resources(value: object, problems: list[ConfigProblem]) -> ResourcesConfig:
     section = _mapping(value, "resources", problems)
-    _reject_unknown(section, {"device", "workspace"}, "resources", problems)
+    _reject_unknown(section, {"device", "workspace", "providers"}, "resources", problems)
     return ResourcesConfig(
         device=_optional_text(section.get("device"), "resources.device", problems),
         workspace=_optional_text(section.get("workspace"), "resources.workspace", problems),
+        providers=_parse_providers(section.get("providers", {}), problems),
     )
+
+
+def _parse_providers(value: object, problems: list[ConfigProblem]) -> Mapping[str, str]:
+    """Read the declared ``component_id -> "module:attribute"`` provider targets.
+
+    Validation here is only structural (each target is a non-empty string): resolving a
+    target into a callable is deferred to
+    :func:`~contextmap.runtime.composition.resolve_provider`, lazily, only for a component
+    actually being composed. A target need not name a known component: an entry for a
+    component that is never composed simply never resolves, exactly like an unused
+    ``components.<capability>.<slot>`` selection.
+    """
+    providers: dict[str, str] = {}
+    for component_id, target in _mapping(value, "resources.providers", problems).items():
+        path = f"resources.providers.{component_id}"
+        if not isinstance(target, str) or not target:
+            problems.append(ConfigProblem(path=path, message="must be a non-empty string"))
+            continue
+        providers[component_id] = target
+    return MappingProxyType(providers)
 
 
 def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesConfig:

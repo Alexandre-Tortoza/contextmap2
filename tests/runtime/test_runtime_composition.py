@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import runtime_provider_fixtures
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
 from runtime_fixtures import unavailable_context_map  # noqa: F401
 
+from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import ConfigurationError
+from contextmap.runtime import EXTENDED_PROFILE_ID, ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -20,11 +22,13 @@ from contextmap.runtime.composition import (
     compose,
     compose_executors,
     composed_stages,
+    resolve_provider,
 )
 from contextmap.runtime.errors import (
     BackendConfigurationError,
     BackendRuntimeMissingError,
     BackendUnavailableError,
+    ProviderConfigurationError,
     StageUnavailableError,
 )
 from contextmap.semantic_fusion import (
@@ -45,6 +49,8 @@ from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDis
 
 REGION = "visual_perception.region_discovery"
 INTERPRETER = "visual_perception.semantic_interpretation"
+DENSE_FEATURES = "visual_perception.dense_features"
+REGION_FEATURES = "visual_perception.region_features"
 
 
 class _Recorder:
@@ -84,6 +90,165 @@ def _compose(
     options.setdefault("module_available", lambda _name: True)
     options.setdefault("environ", {})
     return compose(effective_from(tmp_path, document), providers=_providers(recorder), **options)
+
+
+def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``selected_document()`` (or ``document``) resolved against ``canonical/2``.
+
+    ``canonical/1``, the default profile, ends at ``semantic_fusion``: Entity Resolution and
+    Spatial Relations only exist under the extended topology (see the P1 fix of the PR #540
+    review, ``docs/runtime-composition.md``).
+    """
+    document = selected_document() if document is None else document
+    document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
+    return document
+
+
+# Mesmas coordenadas que ``runtime_entities.InMemoryGeometrySource`` deriva para os índices
+# 0..7 (``(0.1 * i, 0.2 * (i % 3), 0.05 * (i % 5))``): oito pontos bastam para dois ``make_entity``
+# de quatro índices cada, e são o único jeito de um ``GeometricMapArtifact`` real concordar, ponto
+# a ponto, com a geometria que ``make_entity`` já resume sozinho a partir daquele fixture.
+_ALIGNED_MAP_POINTS: tuple[tuple[float, float, float], ...] = tuple(
+    (0.1 * index, 0.2 * (index % 3), 0.05 * (index % 5)) for index in range(8)
+)
+
+
+def _write_aligned_geometric_map(output_dir: Path) -> GeometricMapArtifactManifest:
+    """Persist a real, tiny ``GeometricMapArtifact`` whose points are ``make_entity``'s own support.
+
+    Uma única captura LiDAR, uma única pose e um extrínseco identidade: o ponto do mapa fica
+    numericamente igual ao ponto bruto do "scan" (``P_map = T_map_body · T_body_lidar · P_source``
+    com translação zero e rotação identidade nos dois fatores), então os oito pontos persistidos
+    aqui caem exatamente sobre a geometria que ``runtime_entities.make_entity`` resume por conta
+    própria a partir do seu próprio ``InMemoryGeometrySource`` -- mesmos índices (via
+    ``geometry_id_for``, uma função pura de ``map_id`` e índice), mesmas coordenadas. É o que
+    permite ``resolved_entity_geometries`` recomputar bounds e frame idênticos aos que a resolução
+    persistiu, sem precisar hackear identidades de geometria.
+
+    O ``MapId`` final é o que ``GeometricMapArtifactWriter`` deriva (``sequence_name--run_id``);
+    o chamador lê ``manifest.map_id`` e passa exatamente esse valor a ``make_entity``.
+    """
+    import struct
+
+    from contextmap.geometric_mapping import (
+        GeometricMapArtifactWriter,
+        GeometricMapRunId,
+        MotionCorrectionPolicy,
+        ScanDisposition,
+        assemble_geometry_inputs,
+    )
+    from contextmap.ingestion import (
+        CalibrationSet,
+        FrameId,
+        FullSequenceSelection,
+        LidarObservation,
+        PointFieldDataType,
+        PointFieldDescriptor,
+        RigidTransform,
+        SensorId,
+        SequenceArtifactId,
+        SequenceSelectionResult,
+        SourceObservationId,
+        SourceProvenance,
+        selection_identity,
+    )
+    from contextmap.shared import SourceTimestamp
+    from contextmap.state_estimation import (
+        EstimatorProvenance,
+        LookupPolicy,
+        PoseEstimate,
+        PoseProvenance,
+        PoseValidity,
+        Trajectory,
+        TrajectoryId,
+        TrajectoryProvenance,
+        calibration_identity,
+        pose_estimate_id_for,
+    )
+
+    stamp = SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:aligned-map")
+    sequence_artifact_id = SequenceArtifactId("aligned-sequence")
+    trajectory_id = TrajectoryId("aligned--trajectory")
+    calibration = CalibrationSet(
+        entries={},
+        static_transforms=(
+            RigidTransform(
+                parent_frame=FrameId("body"),
+                child_frame=FrameId("lidar"),
+                translation=(0.0, 0.0, 0.0),
+                rotation=(0.0, 0.0, 0.0, 1.0),
+            ),
+        ),
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        reference_frame=FrameId("map"),
+        body_frame=FrameId("body"),
+        poses=(
+            PoseEstimate(
+                estimate_id=pose_estimate_id_for(trajectory_id=trajectory_id, index=0),
+                timestamp=stamp,
+                parent_frame=FrameId("map"),
+                child_frame=FrameId("body"),
+                translation_m=(0.0, 0.0, 0.0),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+                validity=PoseValidity.VALID,
+                provenance=PoseProvenance(source_observation_ids=(SourceObservationId("pose-0"),)),
+            ),
+        ),
+        gaps=(),
+        provenance=TrajectoryProvenance(
+            estimator=EstimatorProvenance(backend_id="fixture_estimator", backend_version="0"),
+            sequence_artifact_id=sequence_artifact_id,
+            selection_id="full-sequence",
+            calibration_identity=calibration_identity(calibration),
+            code_version="test",
+        ),
+    )
+    # Precisão dupla: ``InMemoryGeometrySource`` (usado por ``make_entity``) guarda coordenadas
+    # float64 exatas. Empacotar em float32 arredondaria os pontos do "scan" e o mapa recomputado
+    # nunca bateria, bit a bit, com os bounds que a resolução persistiu.
+    fields = tuple(
+        PointFieldDescriptor(
+            name=name, offset_bytes=index * 8, data_type=PointFieldDataType.FLOAT64
+        )
+        for index, name in enumerate(("x", "y", "z"))
+    )
+    scan = LidarObservation(
+        observation_id=SourceObservationId("scan-aligned-0000"),
+        sensor_id=SensorId("velodyne"),
+        frame_id=FrameId("lidar"),
+        timestamp=stamp,
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/lidar"),
+        point_count=len(_ALIGNED_MAP_POINTS),
+        point_step_bytes=24,
+        fields=fields,
+        data=b"".join(struct.pack("<3d", *point) for point in _ALIGNED_MAP_POINTS),
+        is_dense=True,
+    )
+    selection = FullSequenceSelection()
+    plan = assemble_geometry_inputs(
+        sequence=SequenceSelectionResult(
+            sequence_artifact_id=sequence_artifact_id,
+            selection=selection,
+            selection_id=selection_identity(sequence_artifact_id, selection),
+            observations=(scan,),
+        ),
+        calibration=calibration,
+        trajectory=trajectory,
+        pose_lookup=LookupPolicy.exact(),
+        motion_correction_policy=MotionCorrectionPolicy(
+            raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.ACCEPT
+        ),
+        motion_correction=None,
+        state_estimation_run_id=None,
+    )
+    return GeometricMapArtifactWriter(
+        output_dir=output_dir,
+        sequence_name="aligned-map",
+        run_id=GeometricMapRunId("run-0001"),
+        run_index=1,
+    ).finalize(plan=plan, aggregation=None, code_version="test")
 
 
 class TestCanonicalComposition:
@@ -450,6 +615,184 @@ class TestExplicitFailures:
             _compose(tmp_path, document=document)
 
 
+class TestResolveProvider:
+    """Unit tests for resolving a ``"module:attribute"`` string into a callable."""
+
+    def test_resolves_a_real_importable_target(self) -> None:
+        provider = resolve_provider(REGION, "runtime_provider_fixtures:load_region_discovery")
+
+        assert provider is runtime_provider_fixtures.load_region_discovery
+
+    @pytest.mark.parametrize(
+        "target",
+        ["no-colon-at-all", ":load_region_discovery", "runtime_provider_fixtures:", ":"],
+    )
+    def test_rejects_a_malformed_target(self, target: str) -> None:
+        with pytest.raises(ProviderConfigurationError) as error:
+            resolve_provider(REGION, target)
+
+        assert error.value.component_id == REGION
+        assert error.value.target == target
+
+    def test_rejects_a_module_that_cannot_be_imported(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="could not be imported"):
+            resolve_provider(REGION, "no_such_package_exists_for_contextmap:load")
+
+    def test_rejects_an_attribute_the_module_does_not_have(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="no attribute"):
+            resolve_provider(REGION, "runtime_provider_fixtures:does_not_exist")
+
+    def test_rejects_an_attribute_that_is_not_callable(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="not callable"):
+            resolve_provider(REGION, "runtime_provider_fixtures:not_callable")
+
+
+class TestDeclaredProviderTargets:
+    """``resources.providers``: a declared target resolved lazily by the composition root.
+
+    This is the config-driven counterpart of ``providers=``: a caller of the installed
+    ``contextmap`` binary, which never passes ``providers=`` at all, still gets a real
+    backend composed when the effective configuration names a ``"module:attribute"``
+    target for it (#507's real, previously unmet acceptance criterion).
+    """
+
+    def test_a_declared_target_supplies_the_runtime_with_no_explicit_provider(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},  # isola o slot sob teste
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert isinstance(composed.region_discovery, Sam3RegionDiscovery)
+
+    def test_ensure_available_skips_the_module_check_for_a_declared_target(
+        self, tmp_path: Path
+    ) -> None:
+        """dense_features' own bundled loader needs torch/transformers/PIL -- but a
+        declared provider supplies the runtime instead, so composing it must never demand
+        those modules be importable (composition.py's own module docstring)."""
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            DENSE_FEATURES: "runtime_provider_fixtures:load_dense_features",
+            REGION_FEATURES: "runtime_provider_fixtures:load_region_features",
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers=_providers(recorder),  # region_discovery e semantic_interpretation
+            module_available=lambda _name: False,  # nada está instalado
+            environ={},
+        )
+
+        assert composed.dense_features is not None
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        composed.dense_features(scope)
+        assert runtime_provider_fixtures.CALLS[-1][0] == "dense_features"
+
+    def test_an_explicit_provider_wins_over_a_declared_target_and_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        explicit = recorder.provider("explicit-sam3")
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={REGION: explicit, INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert composed.region_discovery is not None
+        assert overrides == [REGION]
+        # o provider explícito de fato construiu o backend, não o alvo declarado.
+        assert recorder.calls[0][0] is not None
+
+    def test_no_override_is_reported_when_only_a_declared_target_exists(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert overrides == []
+
+    def test_an_unresolvable_declared_target_raises_a_provider_configuration_error(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {REGION: "not-a-valid-target"}
+
+        with pytest.raises(ProviderConfigurationError) as error:
+            compose(
+                effective_from(tmp_path, document),
+                stages=["visual_perception"],
+                providers={INTERPRETER: recorder.provider("qwen")},
+                module_available=lambda _name: True,
+                environ={},
+            )
+
+        assert error.value.component_id == REGION
+
+    def test_compose_executors_reports_the_override_through_its_own_callback(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert "visual_perception" in executors
+        assert overrides == [REGION]
+
+
 class TestStagesAndExtensionPoints:
     def test_a_stage_that_is_not_selected_is_not_built(self, tmp_path: Path) -> None:
         document = selected_document()
@@ -501,9 +844,11 @@ class TestCatalogAgreement:
         assert composable_backends() == declared
 
     def test_every_available_stage_of_the_catalog_has_a_composer(self) -> None:
-        from contextmap.runtime.catalog import CANONICAL_PRESET
+        from contextmap.runtime.catalog import EXTENDED_PRESET
 
-        available = {stage.stage_id for stage in CANONICAL_PRESET.stages if stage.available}
+        # EXTENDED_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
+        # só canonical/2 adiciona), então cobre todo estágio que precisaria de um composer.
+        available = {stage.stage_id for stage in EXTENDED_PRESET.stages if stage.available}
 
         assert composed_stages() == available
 
@@ -521,14 +866,18 @@ class TestComposeExecutors:
         self, tmp_path: Path
     ) -> None:
         from contextmap.runtime.executors import (
+            EntityResolutionExecutor,
             GeometricMappingExecutor,
             SemanticFusionExecutor,
             SensorAssociationExecutor,
+            SpatialRelationsExecutor,
             StateEstimationExecutor,
         )
 
         executors = compose_executors(
-            effective_from(tmp_path), module_available=lambda _name: True, environ={}
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
         )
 
         assert set(executors) == {
@@ -536,20 +885,53 @@ class TestComposeExecutors:
             "geometric_mapping",
             "sensor_association",
             "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
         }
         assert isinstance(executors["state_estimation"], StateEstimationExecutor)
         assert isinstance(executors["geometric_mapping"], GeometricMappingExecutor)
         assert isinstance(executors["sensor_association"], SensorAssociationExecutor)
         assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
+        assert isinstance(executors["entity_resolution"], EntityResolutionExecutor)
+        assert isinstance(executors["spatial_relations"], SpatialRelationsExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
+        # visual_perception fica de fora aqui porque a seleção padrão usa sam3, que não tem
+        # loader embutido (precisa de um provider) -- não porque falte um VisualPerceptionExecutor
+        # (#507); ver TestComposeVisualPerceptionExecutor para composição bem-sucedida.
         assert "ingestion" not in executors
         assert "visual_perception" not in executors
         assert "point_representation" not in executors
+        assert "semantic_mapping" not in executors
+
+    def test_spatial_relations_executor_reads_geometry_summary_only_from_its_policies(
+        self, tmp_path: Path
+    ) -> None:
+        """P2 provenance finding of the PR #540 review, second round.
+
+        ``SpatialRelationsExecutor`` used to also accept a separate ``geometry_summary``
+        keyword, independent of ``policies.geometry_summary`` -- the one persisted in the run's
+        own provenance. Two independent values could diverge, making the artifact record a
+        different policy than the one that actually produced its evidence. There is now only
+        one place to supply it.
+        """
+        from contextmap.runtime.executors import SpatialRelationsExecutor
+
+        executors = compose_executors(
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        spatial_relations = executors["spatial_relations"]
+        assert isinstance(spatial_relations, SpatialRelationsExecutor)
+
+        # Argumento removido: a assinatura não aceita mais um segundo valor independente.
+        with pytest.raises(TypeError):
+            SpatialRelationsExecutor(policies=None, geometry_summary=object())  # type: ignore[call-arg,arg-type]
 
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = selected_document()
+        document = _extended_document()
         del document["components"]["geometric_mapping"]
         del document["components"]["sensor_association"]
 
@@ -557,7 +939,12 @@ class TestComposeExecutors:
             effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
         )
 
-        assert set(executors) == {"state_estimation", "semantic_fusion"}
+        assert set(executors) == {
+            "state_estimation",
+            "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
+        }
 
     def test_a_broken_backend_in_one_stage_never_costs_another_stage_its_executor(
         self, tmp_path: Path
@@ -566,9 +953,9 @@ class TestComposeExecutors:
 
         ``sensor_association.tolerances`` rejects ``max_reprojection_invalid_rate`` above 1
         (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
-        other three stages, whose own configuration is unrelated, still compose normally.
+        other stages, whose own configuration is unrelated, still compose normally.
         """
-        document = selected_document()
+        document = _extended_document()
         document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
             "max_reprojection_invalid_rate"
         ] = 2.0
@@ -577,7 +964,54 @@ class TestComposeExecutors:
             effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
         )
 
-        assert set(executors) == {"state_estimation", "geometric_mapping", "semantic_fusion"}
+        assert set(executors) == {
+            "state_estimation",
+            "geometric_mapping",
+            "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
+        }
+
+    def test_an_unselected_optional_channel_leaves_it_none_never_a_default_policy(
+        self, tmp_path: Path
+    ) -> None:
+        """Every optional Entity Resolution channel and Spatial Relations predicate is absent.
+
+        ``selected_document()`` never selects ``semantic_compatibility``, ``temporal_
+        compatibility``, ``appearance``, ``representation``, ``geometric_predicate`` or
+        ``contact_predicate``: the stages still compose, with the geometry-only path.
+        """
+        composed = _compose(tmp_path, document=_extended_document())
+
+        channels = composed.entity_comparison_channels
+        assert channels is not None
+        assert channels.geometry is not None
+        assert channels.semantic is None
+        assert channels.temporal is None
+        assert channels.appearance is None
+        assert channels.representation is None
+
+        policies = composed.spatial_relations_policies
+        assert policies is not None
+        assert policies.frame_conventions is not None
+        assert policies.candidate is not None
+        assert policies.geometric is None
+        assert policies.contact is None
+
+    def test_an_incomplete_required_selection_leaves_the_stage_absent_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = _extended_document()
+        del document["components"]["entity_resolution"]["geometry_comparison"]
+
+        executors = compose_executors(
+            effective_from(tmp_path, document), module_available=lambda _name: True, environ={}
+        )
+
+        assert "entity_resolution" not in executors
+        # spatial_relations depende de entity_resolution rio abaixo, não da sua composição:
+        # a seleção incompleta de um estágio nunca contamina a composição de outro.
+        assert "spatial_relations" in executors
 
     def test_a_composed_executor_is_the_real_thing_and_runs_against_a_real_artifact(
         self, tmp_path: Path
@@ -650,6 +1084,705 @@ class TestComposeExecutors:
 
         assert ref.contract == "StateEstimationRunArtifact"
         assert (output_dir / "manifest.json").is_file()
+
+    def test_the_entity_resolution_executor_is_the_real_thing_and_runs_against_a_real_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``EntityResolutionExecutor`` reads a real ``SemanticMappingRunArtifact``.
+
+        Not a fake type-compatible stand-in: ``make_entity`` builds one genuinely self-consistent
+        ``Entity`` (its geometry derived through ``summarize_geometry`` over a real
+        ``GeometrySource``), persisted with the capability's own ``SemanticMappingRunWriter``. The
+        composed executor reads it back through ``SemanticMappingRunReader`` and writes a real
+        ``EntityResolutionRunArtifact``, exactly as the runtime's own DAG runner would call it.
+        """
+        from runtime_entities import make_entity
+
+        from contextmap.geometric_mapping import MapId
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        entity = make_entity(semantic_map_id=semantic_map_id)
+        manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=MapId("map-0001"),
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest="sha256:artifact",
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write([entity])
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(manifest.run_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/semantic_mapping",
+        )
+        effective = effective_from(tmp_path, _extended_document())
+        executors = compose_executors(effective, module_available=lambda _name: True, environ={})
+        output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        request = StageRequest(
+            stage_id="entity_resolution",
+            inputs={"entities": (entities_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executors["entity_resolution"].execute(request)
+
+        assert ref.contract == "EntityResolutionRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
+
+    def test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``SpatialRelationsExecutor`` reads a real resolution and a real map.
+
+        Two real upstream artifacts, not fakes: an ``EntityResolutionRunArtifact`` produced by
+        running the composed ``entity_resolution`` executor itself (the same construction as
+        ``test_the_entity_resolution_executor_is_the_real_thing_and_runs_against_a_real_artifact``,
+        chained), and a ``GeometricMapArtifact`` written by the capability's own
+        ``GeometricMapArtifactWriter`` (``_write_aligned_geometric_map``) whose eight points are,
+        coordinate for coordinate, the same support ``make_entity`` already summarized for its two
+        entities. That alignment is what lets ``resolved_entity_geometries`` (inside the executor)
+        recompute bounds identical to what entity resolution persisted, instead of raising -- so
+        candidate generation runs on genuine, map-derived positions, not on a coincidence of
+        matching test doubles. The two entities are 0.1 m apart along x (well inside the
+        configured ``proximity_radius_m=0.6``), so at least one real, geometry-driven candidate
+        is produced; the composed executor writes a real ``SpatialRelationsRunArtifact``, exactly
+        as the runtime's own DAG runner would call it.
+        """
+        import dataclasses
+
+        from runtime_entities import make_entity
+
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.composition import compose
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            GEOMETRY_SUMMARY_ALGORITHM_ID,
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.spatial_relations import RelationState, SpatialRelationsRunReader
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+
+        # As convenções de eixo do documento estendido declaram "odom" como o frame do mapa; o
+        # fixture de geometria (tanto o real quanto o InMemoryGeometrySource de ``make_entity``)
+        # está em "map". A escolha do nome do frame é um detalhe de configuração deste teste, não
+        # uma invariante do domínio -- então o documento local é ajustado para concordar com a
+        # geometria real, em vez de forçar a geometria a se chamar "odom".
+        document = _extended_document()
+        document["components"]["spatial_relations"]["frame_conventions"][
+            "map-frame-conventions-v1"
+        ]["map_frame"] = "map"
+        effective = effective_from(tmp_path, document)
+        executors = compose_executors(effective, module_available=lambda _name: True, environ={})
+
+        geometry_dir = workspace / "corridor-02" / "run-0001" / "geometric_mapping"
+        geometry_manifest = _write_aligned_geometric_map(geometry_dir)
+        geometry_ref = ArtifactRef(
+            stage_id="geometric_mapping",
+            contract="GeometricMapArtifact",
+            artifact_id=str(geometry_manifest.run_id),
+            content_hash=inventory_digest(geometry_manifest.file_inventory),
+            location=geometry_dir.relative_to(workspace).as_posix(),
+        )
+
+        # Duas entidades reais sobre o mesmo mapa, com suportes de geometria disjuntos (índices
+        # 0-3 e 4-7) e vizinhos: 0.1 m de vão no eixo x, dentro do proximity_radius_m=0.6
+        # configurado, então a geração de candidatos tem um par real para medir.
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        entities = [
+            make_entity(
+                "entity--support-000001",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(0, 1, 2, 3),
+            ),
+            make_entity(
+                "entity--support-000002",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(4, 5, 6, 7),
+            ),
+        ]
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        mapping_manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=geometry_manifest.map_id,
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest="sha256:artifact",
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write(entities)
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(mapping_manifest.run_id),
+            content_hash=inventory_digest(mapping_manifest.file_inventory),
+            location=mapping_dir.relative_to(workspace).as_posix(),
+        )
+
+        # Passo 1: entity_resolution real, encadeado, exatamente como o teste irmão o constrói --
+        # a forma mais simples de obter um EntityResolutionRunArtifact genuíno para este teste.
+        resolution_output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        resolution_request = StageRequest(
+            stage_id="entity_resolution",
+            inputs={"entities": (entities_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=resolution_output_dir,
+            workspace=workspace,
+        )
+        resolution_ref = executors["entity_resolution"].execute(resolution_request)
+        assert resolution_ref.contract == "EntityResolutionRunArtifact"
+
+        # Passo 2: spatial_relations real, sobre a resolução e o mapa geométrico reais.
+        relations_output_dir = workspace / "corridor-02" / "run-0001" / "spatial_relations"
+        relations_request = StageRequest(
+            stage_id="spatial_relations",
+            inputs={"entities": (resolution_ref,), "geometry": (geometry_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=relations_output_dir,
+            workspace=workspace,
+        )
+
+        ref = executors["spatial_relations"].execute(relations_request)
+
+        assert ref.contract == "SpatialRelationsRunArtifact"
+        assert (relations_output_dir / "manifest.json").is_file()
+
+        # A geometria real e as duas entidades vizinhas produziram trabalho genuíno: pelo menos
+        # um candidato de relação, ainda sem estado decidido (nenhum avaliador geométrico ou de
+        # contato foi selecionado no documento estendido) -- honestamente UNRESOLVED, nunca uma
+        # relação fabricada.
+        reader = SpatialRelationsRunReader(relations_output_dir)
+        relations = tuple(reader.iter_relations())
+        assert len(relations) >= 1
+        assert all(relation.state is RelationState.UNRESOLVED for relation in relations)
+
+        # Reabre o manifesto e confere a proveniência de ``geometry_summary`` de ponta a ponta:
+        # a política persistida é a mesma que a composição de fato construiu a partir do
+        # documento estendido, não uma segunda instância que só coincide por acaso.
+        composed = compose(
+            effective,
+            stages=["spatial_relations"],
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert composed.spatial_relations_policies is not None
+        expected_policy = composed.spatial_relations_policies.geometry_summary
+        assert reader.manifest.policies["geometry_summary"] == {
+            "policy_id": GEOMETRY_SUMMARY_ALGORITHM_ID,
+            "fingerprint": expected_policy.fingerprint(),
+            "parameters": dataclasses.asdict(expected_policy),
+        }
+
+
+class TestComposeVisualPerceptionExecutor:
+    """#507: ``visual_perception`` gets a real, wired ``VisualPerceptionExecutor``.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader, so a real provider for both is
+    required for the four variation points to compose successfully -- exactly like
+    ``TestCanonicalComposition`` already needs for those two slots individually.
+    """
+
+    def test_composes_a_real_executor_when_all_four_slots_are_selected(
+        self, tmp_path: Path
+    ) -> None:
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" in executors
+        executor = executors["visual_perception"]
+        assert isinstance(executor, VisualPerceptionExecutor)
+        # Backends de verdade, não um stub type-compatible: region_discovery e
+        # semantic_interpreter já vêm prontos; dense_features/region_features são
+        # fábricas run-scoped que, quando chamadas, devolvem o adapter real.
+        assert isinstance(executor._region_discovery, Sam3RegionDiscovery)  # type: ignore[attr-defined]
+        assert isinstance(executor._semantic_interpreter, QwenSemanticInterpreter)  # type: ignore[attr-defined]
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        assert isinstance(executor._dense_features(scope), DinoV3DenseFeatureBackend)  # type: ignore[attr-defined]
+        assert isinstance(executor._region_features(scope), ClipVisualFeatureBackend)  # type: ignore[attr-defined]
+
+    def test_an_incomplete_visual_perception_selection_leaves_it_out_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        del document["components"]["visual_perception"]["semantic_interpretation"]
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" not in executors
+        # Nenhum estágio irmão paga pelo problema de visual_perception (#507).
+        assert "state_estimation" in executors
+
+    def test_composed_executor_actually_runs_and_produces_a_real_perception_run_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """Prove the executor's own orchestration (#507), not the backends' science.
+
+        Region discovery, feature extraction and semantic interpretation are
+        deterministic fakes injected directly (constructing the real ``Sam3``/``DINOv3``/
+        ``CLIP``/``Qwen`` backends would need real weights and, for two of them, a real
+        model runtime) -- but the sequence, the prepared-image materialization, the
+        resolved stage graph, the assembled ``PerceptionResult`` and the written/reopened
+        ``PerceptionRunArtifact`` are all real. See the milestone PR for the separate,
+        real-backend GPU validation this local test cannot perform.
+        """
+        pytest.importorskip("PIL")  # Pillow decodes/writes the prepared-image PNG; not a base dep.
+
+        from collections.abc import Sequence
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+
+        class _FakeRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeFeatureExtractor:
+            def __init__(self, scope: FeatureScope) -> None:
+                self._scope = scope
+
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id=f"fake_{self._scope.value}_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return self._scope
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                if self._scope is FeatureScope.DENSE:
+                    return [
+                        VisualFeature(
+                            feature_id=FeatureId("feature-dense-0000"),
+                            scope=FeatureScope.DENSE,
+                            embedding_space_id="fake-dense-space",
+                            shape=(2,),
+                            dtype="float32",
+                            payload_reference=f"{image.source_observation_id}-dense.npy",
+                            provenance=self.backend_provenance(),
+                        )
+                    ]
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId(f"feature-{region.region_id}"),
+                        scope=FeatureScope.REGION,
+                        embedding_space_id="fake-region-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-{region.region_id}.npy",
+                        provenance=self.backend_provenance(),
+                        region_id=region.region_id,
+                    )
+                    for region in regions
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.DENSE),  # type: ignore[arg-type]
+            region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            for index in range(2):
+                writer.add_observation(
+                    ImageObservation(
+                        observation_id=SourceObservationId(f"frame-{index:04d}"),
+                        sensor_id=SensorId("camera_1"),
+                        frame_id=FrameId("camera_1_optical"),
+                        timestamp=SourceTimestamp(
+                            seconds=index, nanoseconds=0, clock_id="fixture:header"
+                        ),
+                        provenance=SourceProvenance(
+                            source_type="fixture", source_path="fixtures/images"
+                        ),
+                        width=2,
+                        height=2,
+                        encoding=ImageEncoding.BGR8,
+                        data=pixels,
+                    )
+                )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
+        # O diretório de rascunho das imagens preparadas nunca sobrevive à execução.
+        assert list(workspace.glob(".tmp-*")) == []
+
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert {str(result.source_observation_id) for result in results} == {
+            "frame-0000",
+            "frame-0001",
+        }
+        for result in results:
+            assert len(result.regions) == 1
+            assert len(result.features) == 2  # one dense + one region feature
+
+    def test_a_mask_conditioned_region_features_backend_gets_the_region_own_mask(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #2 of the PR #535 review: the executor now supplies a real ``mask_source``.
+
+        ``region_features=alphaclip`` used to compose into an executor that failed
+        deterministically the moment any image was processed: ``VisualPerceptionExecutor``
+        built its region-features scope with ``mask_source=None``, and AlphaCLIP's own
+        composition factory (``composition.py``'s ``_alphaclip``, left unmodified here)
+        refuses exactly that. This runs the real ``_alphaclip`` factory through the real
+        executor, with a mask-based fake region-discovery backend that attaches an inline
+        mask to its one region -- exactly what SAM2/SAM3 do -- and a fake AlphaCLIP model
+        runtime standing in for the SDK.
+        """
+        pytest.importorskip("PIL")
+
+        from collections.abc import Sequence
+
+        import numpy as np
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            InlineMask,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+        from contextmap.visual_perception.backends.alphaclip import AlphaClipNativeOutput
+
+        class _FakeMaskedRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                        mask_reference="masks/region-0000.npy",
+                        mask=InlineMask(width=2, height=2, data=(True, True, True, True)),
+                        image_width=2,
+                        image_height=2,
+                    )
+                ]
+
+        class _FakeDenseFeatureExtractor:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_dense_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return FeatureScope.DENSE
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId("feature-dense-0000"),
+                        scope=FeatureScope.DENSE,
+                        embedding_space_id="fake-dense-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-dense.npy",
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        class _FakeAlphaClipRuntime:
+            def encode(
+                self, image: PreparedImage, requests: Sequence[Any]
+            ) -> AlphaClipNativeOutput:
+                return AlphaClipNativeOutput(
+                    array=np.array([[1.0, 2.0]] * len(requests), dtype=np.float32),
+                    elapsed_seconds=0.01,
+                    peak_memory_bytes=None,
+                )
+
+        document = selected_document()
+        document["components"]["visual_perception"]["region_features"] = {
+            "backend": "alphaclip",
+            "alphaclip": {
+                "model_name": "ViT-B/16",
+                "base_checkpoint_path": "clip.pt",
+                "alpha_checkpoint_path": "alpha.pt",
+                "checkpoint_fingerprint": "sha256:" + "1" * 64,
+            },
+        }
+        recorder = _Recorder()
+        providers = {
+            **_providers(recorder),
+            "visual_perception.region_features": lambda _config, _secrets: _FakeAlphaClipRuntime(),
+        }
+        composed = compose(
+            effective_from(tmp_path, document),
+            providers=providers,
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert composed.region_features is not None
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeMaskedRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeDenseFeatureExtractor(),  # type: ignore[arg-type]
+            region_features=composed.region_features,
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            writer.add_observation(
+                ImageObservation(
+                    observation_id=SourceObservationId("frame-0000"),
+                    sensor_id=SensorId("camera_1"),
+                    frame_id=FrameId("camera_1_optical"),
+                    timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:header"),
+                    provenance=SourceProvenance(
+                        source_type="fixture", source_path="fixtures/images"
+                    ),
+                    width=2,
+                    height=2,
+                    encoding=ImageEncoding.BGR8,
+                    data=pixels,
+                )
+            )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert len(results) == 1
+        assert len(results[0].regions) == 1
+        assert len(results[0].features) == 2  # one dense + one AlphaCLIP region feature
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:

@@ -104,6 +104,57 @@ def selected_document() -> dict[str, Any]:
                 },
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
             },
+            "entity_resolution": {
+                "retrieval": {
+                    "backend": "entity-candidate-retrieval-v1",
+                    "entity-candidate-retrieval-v1": {
+                        "centroid_radius_m": 20.0,
+                        "bounds_margin_m": 0.1,
+                    },
+                },
+                "resolution": {
+                    "backend": "conservative-staged-resolution-v1",
+                    "conservative-staged-resolution-v1": {
+                        "use_channels": ["geometry"],
+                        "min_supporting_channels": 1,
+                    },
+                },
+                "geometry_comparison": {
+                    "backend": "entity-geometry-comparison-v1",
+                    "entity-geometry-comparison-v1": {
+                        "min_shared_support_jaccard": 0.5,
+                        "min_bounds_iou": 0.5,
+                        "min_bounds_containment": 0.9,
+                        "min_conflict_gap_m": 0.5,
+                        "min_extent_ratio": 0.3,
+                    },
+                },
+            },
+            "spatial_relations": {
+                "frame_conventions": {
+                    "backend": "map-frame-conventions-v1",
+                    "map-frame-conventions-v1": {
+                        "map_frame": "odom",
+                        "up_axis": "+z",
+                        "forward_axis": "+x",
+                    },
+                },
+                "candidate": {
+                    "backend": "bounds-neighborhood-candidates-v1",
+                    "bounds-neighborhood-candidates-v1": {
+                        "predicates": ["next_to", "touching"],
+                        "proximity_radius_m": 0.6,
+                        "directional_radius_m": 2.0,
+                    },
+                },
+                "geometry_summary": {
+                    "backend": "entity-geometry-summary-v1",
+                    "entity-geometry-summary-v1": {
+                        "sparse_point_threshold": 3,
+                        "connectivity_radius_m": 0.5,
+                    },
+                },
+            },
         },
     }
 

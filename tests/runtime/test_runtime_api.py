@@ -22,6 +22,7 @@ from runtime_ingestion import factory, request
 from runtime_worlds import World, world_executors
 
 from contextmap.runtime import (
+    EXTENDED_PROFILE_ID,
     ArtifactRef,
     BackendUnavailableError,
     CancellationToken,
@@ -35,6 +36,7 @@ from contextmap.runtime import (
     Runtime,
     RuntimeRunRecord,
     StaticCatalog,
+    check_selection,
     resolve_effective_config,
 )
 
@@ -132,7 +134,7 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     bare = Runtime().status()
 
     assert status.workspace == str(tmp_path / "ws")
-    assert status.profiles == ("canonical/1",)
+    assert status.profiles == ("canonical/1", "canonical/2")
     assert set(status.schemas) == {"configuration", "plan", "run", "reuse", "catalog"}
     assert status.verifier_configured is True
     assert status.executors == tuple(sorted(PLAN_ORDER))
@@ -157,6 +159,50 @@ def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> N
     assert unimplemented.components == ()
     assert by_stage["point_representation"].optional
     assert not by_stage["point_representation"].default_enabled
+
+
+def test_an_optional_component_round_trips_through_discovery_edit_and_validation(
+    tmp_path: Path,
+) -> None:
+    """P2 #3 of the PR #540 review: ``RuntimeComponent.optional`` and the edit contract agree.
+
+    ``entity_resolution.semantic_compatibility`` may legitimately have no backend selected.
+    Discovery must say so (``RuntimeComponent.optional``), and the edit that lets a frontend
+    choose it must accept "no backend" as one of ``allowed`` -- not describe a ``current`` of
+    ``None`` while claiming only concrete backend ids are accepted.
+    """
+    runtime = Runtime(module_available=_ready, environ={})
+    component_id = "entity_resolution.semantic_compatibility"
+
+    # Discovery: o componente se declara opcional.
+    capability = next(
+        c
+        for c in runtime.capabilities(profile=EXTENDED_PROFILE_ID)
+        if c.stage_id == "entity_resolution"
+    )
+    component = next(c for c in capability.components if c.component_id == component_id)
+    assert component.optional
+
+    document = selected_document()
+    document["pipeline"]["preset"] = EXTENDED_PROFILE_ID
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    config = runtime.resolve_config(profile=EXTENDED_PROFILE_ID, files=[path])
+
+    # Edição: "sem backend" é um valor aceito, não só o que `current` descreve.
+    plan = runtime.resolve_plan(config)
+    edit = next(e for e in plan.editable if e.path == f"components.{component_id}.backend")
+    assert edit.current is None
+    assert edit.allowed is not None
+    assert None in edit.allowed
+
+    # Validação: aplicar explicitamente "sem backend" continua uma seleção completa.
+    validated = runtime.resolve_config(
+        profile=EXTENDED_PROFILE_ID, files=[path], overrides=[f"{edit.path}=null"]
+    )
+    assert validated.config.components[component_id].backend is None
+    assert check_selection(validated.config) == ()
 
 
 def test_a_backend_that_cannot_be_used_says_why() -> None:
@@ -460,6 +506,98 @@ def test_a_runtime_with_no_injected_executors_still_composes_them_from_configura
     }
     for stage in ("state_estimation", "geometric_mapping", "sensor_association", "semantic_fusion"):
         assert stage not in report.missing_executors
+
+
+def test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade(
+    tmp_path: Path,
+) -> None:
+    """``providers=`` reaches the facade's own composition path exactly like the CLI's.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader: without a ``RuntimeProvider`` for
+    each, ``visual_perception`` stays a genuine ``missing_executors`` entry (see
+    ``test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration``).
+    Supplying them through ``Runtime(providers=...)`` -- not a hand-built executor for the
+    whole stage -- lets ``compose_executors`` build the real thing.
+    """
+    providers = {
+        "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+    }
+    runtime = Runtime(
+        workspace=tmp_path / "ws", providers=providers, module_available=_ready, environ={}
+    )
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
+def test_a_declared_provider_target_lets_visual_perception_compose_with_no_python_providers(
+    tmp_path: Path,
+) -> None:
+    """The facade's counterpart of the CLI's decisive #507 proof.
+
+    Unlike ``test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade``
+    above, this ``Runtime`` is constructed with no ``providers=`` at all: the runtime for
+    ``sam3``/``qwen`` instead comes from a ``resources.providers`` target declared in the
+    resolved configuration, resolved lazily by
+    ``contextmap.runtime.composition.resolve_provider`` from a real importable module.
+    """
+    runtime = Runtime(workspace=tmp_path / "ws", module_available=_ready, environ={})
+    targets = json.dumps(
+        {
+            "visual_perception.region_discovery": "runtime_provider_fixtures:load_region_discovery",
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+    )
+    config = _config(runtime, tmp_path, f"resources.providers={targets}")
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
+def test_a_provider_given_to_runtime_reaches_an_optional_entity_resolution_channel(
+    tmp_path: Path,
+) -> None:
+    """P2 #2 of the PR #540 review: ``Runtime(providers=...)`` must reach ``compose_executors``.
+
+    ``entity_resolution.appearance``, once selected, needs a ``FeatureVectorSource`` from a
+    ``RuntimeProvider`` -- the same mechanism sam3/qwen/gemini already use. Before this fix,
+    ``Runtime`` had no way to accept or forward ``providers``, so selecting this optional
+    channel silently dropped the whole ``entity_resolution`` executor instead of composing it.
+    """
+    document = selected_document()
+    document["pipeline"]["preset"] = EXTENDED_PROFILE_ID
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    document["components"]["entity_resolution"]["appearance"] = {
+        "backend": "entity-appearance-comparison-v1",
+        "entity-appearance-comparison-v1": {
+            "embedding_space_id": "clip-vit-b32",
+            "min_supporting_similarity": 0.8,
+        },
+    }
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    def provide(config: Any, secrets: Any) -> object:
+        return object()  # um FeatureVectorSource real não importa aqui, só a propagação
+
+    runtime = Runtime(
+        workspace=tmp_path / "ws",
+        providers={"entity_resolution.appearance": provide},
+        module_available=_ready,
+        environ={},
+    )
+    config = runtime.resolve_config(profile=EXTENDED_PROFILE_ID, files=[path])
+
+    report = runtime.preflight(config, targets=["entity_resolution"])
+
+    assert "entity_resolution" not in report.missing_executors
 
 
 def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Path) -> None:

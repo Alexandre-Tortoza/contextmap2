@@ -11,6 +11,8 @@ Este documento descreve `src/contextmap/visual_perception/backends/clip.py`, o p
 
 O modo faz parte da configuração do backend, não de um branch downstream. `extract()` retorna metadata canônica e enfileira cada vetor pelo mesmo sink de payload do `PerceptionRunWriter`. `extract_visual()` também devolve arrays, views, `EmbeddingSpace` e diagnósticos no mesmo passe.
 
+`REGION` com zero regiões aceitas é um resultado legítimo de Region Discovery (um frame sem nada saliente), não um erro (#380): `extract()`/`extract_visual()` retornam zero features sem invocar o runtime, `ClipExtraction.embedding_space` fica `None` (nenhuma view foi codificada, logo não há identidade de espaço a relatar) e `array` fica com shape `(0, 0)`. Regiões não aceitas continuam rejeitadas explicitamente.
+
 O composition root fornece `feature_stage_id`. Seu SHA-256 cria o namespace
 dos `FeatureId` e das referências de payload, de modo que CLIP global/região
 possa coexistir com DINO ou outro feature stage no mesmo `PerceptionResult`.

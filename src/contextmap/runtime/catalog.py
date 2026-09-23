@@ -17,7 +17,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 CANONICAL_PROFILE_ID = "canonical/1"
-"""Versioned identity of the canonical Solution 1 topology and profile."""
+"""Versioned identity of the canonical Solution 1 topology and profile.
+
+Its topology ends at ``semantic_fusion``: any configuration, run or experiment that already
+recorded this identity keeps meaning exactly that. See :data:`EXTENDED_PROFILE_ID` for the
+topology that adds ``semantic_mapping``, ``entity_resolution`` and ``spatial_relations``.
+"""
+
+EXTENDED_PROFILE_ID = "canonical/2"
+"""Versioned identity of the topology that extends :data:`CANONICAL_PROFILE_ID`.
+
+It is ``canonical/1``'s stages, unchanged and in the same order, plus ``semantic_mapping``
+(structural: it has no component or executor of its own yet), ``entity_resolution`` and
+``spatial_relations``. A version identifier is never reused for a different topology (see
+:class:`RuntimePreset`), so the extended topology is a new profile, not a mutation of
+``canonical/1``.
+"""
 
 _ROSBAGS_HINT = "pip install 'contextmap[ros1]'"
 
@@ -32,7 +47,6 @@ FUSION = "SemanticFusionRunArtifact"
 ENTITIES = "SemanticEntityArtifact"
 RESOLUTION = "EntityResolutionRunArtifact"
 RELATIONS = "SpatialRelationsRunArtifact"
-CONTEXT_MAP = "ContextMapArtifact"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,11 +83,17 @@ class ComponentSpec:
         capability: Owner capability package name.
         slot: Name of the variation point inside the capability.
         backends: Selectable backends keyed by ``backend_id``.
+        optional: Whether a stage that owns this component still composes with no backend
+            selected for it. It marks a genuinely optional variation point (for example one
+            evidence channel of a decision that evaluates several independently): its absence
+            is a valid, explicit configuration, never a default standing in for the missing
+            choice. ``False`` for every variation point a stage always needs to run.
     """
 
     capability: str
     slot: str
     backends: Mapping[str, BackendSpec]
+    optional: bool = False
 
     @property
     def component_id(self) -> str:
@@ -189,11 +209,14 @@ class RuntimePreset:
         raise KeyError(stage_id)
 
 
-def _component(capability: str, slot: str, *backends: BackendSpec) -> ComponentSpec:
+def _component(
+    capability: str, slot: str, *backends: BackendSpec, optional: bool = False
+) -> ComponentSpec:
     return ComponentSpec(
         capability=capability,
         slot=slot,
         backends={backend.backend_id: backend for backend in backends},
+        optional=optional,
     )
 
 
@@ -294,6 +317,72 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="baseline-evidence-accumulation-v1"),
         BackendSpec(backend_id="quality-aware-evidence-accumulation-v1"),
     ),
+    _component(
+        "entity_resolution",
+        "retrieval",
+        BackendSpec(backend_id="entity-candidate-retrieval-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "resolution",
+        BackendSpec(backend_id="conservative-staged-resolution-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "geometry_comparison",
+        BackendSpec(backend_id="entity-geometry-comparison-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "semantic_compatibility",
+        BackendSpec(backend_id="entity-semantic-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "temporal_compatibility",
+        BackendSpec(backend_id="entity-temporal-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "appearance",
+        BackendSpec(backend_id="entity-appearance-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "representation",
+        BackendSpec(backend_id="entity-representation-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "spatial_relations",
+        "frame_conventions",
+        BackendSpec(backend_id="map-frame-conventions-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "candidate",
+        BackendSpec(backend_id="bounds-neighborhood-candidates-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometry_summary",
+        BackendSpec(backend_id="entity-geometry-summary-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometric_predicate",
+        BackendSpec(backend_id="bounds-geometric-predicates-v1"),
+        optional=True,
+    ),
+    _component(
+        "spatial_relations",
+        "contact_predicate",
+        BackendSpec(backend_id="point-contact-predicates-v1"),
+        optional=True,
+    ),
 )
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
@@ -304,9 +393,10 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
-        "Full Solution 1 topology, from a recorded source to the ContextMapArtifact. "
-        "Stages whose capability is not implemented yet are declared unavailable and "
-        "reported explicitly instead of being skipped."
+        "The Solution 1 topology that is executable today, from a recorded source to "
+        "semantic fusion. Semantic mapping, entity resolution, spatial relations and the "
+        "ContextMapArtifact are not part of it: see EXTENDED_PROFILE_ID for the preset that "
+        "adds the first three, and this identity never changes topology."
     ),
     stages=(
         StageDeclaration(
@@ -447,5 +537,65 @@ CANONICAL_PRESET = RuntimePreset(
     ),
 )
 
-PRESETS: Mapping[str, RuntimePreset] = {CANONICAL_PRESET.preset_id: CANONICAL_PRESET}
+_EXTENDED_STAGES: tuple[StageDeclaration, ...] = (
+    StageDeclaration(
+        stage_id="semantic_mapping",
+        capability="semantic_mapping",
+        inputs=(
+            StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
+            StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+        ),
+        output=ENTITIES,
+    ),
+    StageDeclaration(
+        stage_id="entity_resolution",
+        capability="entity_resolution",
+        components=(
+            "entity_resolution.retrieval",
+            "entity_resolution.resolution",
+            "entity_resolution.geometry_comparison",
+            "entity_resolution.semantic_compatibility",
+            "entity_resolution.temporal_compatibility",
+            "entity_resolution.appearance",
+            "entity_resolution.representation",
+        ),
+        inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
+        output=RESOLUTION,
+    ),
+    StageDeclaration(
+        stage_id="spatial_relations",
+        capability="spatial_relations",
+        components=(
+            "spatial_relations.frame_conventions",
+            "spatial_relations.candidate",
+            "spatial_relations.geometry_summary",
+            "spatial_relations.geometric_predicate",
+            "spatial_relations.contact_predicate",
+        ),
+        inputs=(
+            StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+            StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+        ),
+        output=RELATIONS,
+    ),
+)
+"""The three stages :data:`EXTENDED_PROFILE_ID` adds on top of :data:`CANONICAL_PROFILE_ID`."""
+
+EXTENDED_PRESET = RuntimePreset(
+    preset_id=EXTENDED_PROFILE_ID,
+    description=(
+        "canonical/1's topology, unchanged, extended to semantic mapping, entity resolution "
+        "and spatial relations. Semantic mapping has no automatic executor of its own yet: "
+        "its artifact must be supplied for entity resolution to consume, never computed by "
+        "this composition root. The ContextMapArtifact is not part of it: a later versioned "
+        "preset declares it once the artifact-assembly capability composes automatically, "
+        "and this identity never changes topology."
+    ),
+    stages=CANONICAL_PRESET.stages + _EXTENDED_STAGES,
+)
+
+PRESETS: Mapping[str, RuntimePreset] = {
+    CANONICAL_PRESET.preset_id: CANONICAL_PRESET,
+    EXTENDED_PRESET.preset_id: EXTENDED_PRESET,
+}
 """Known presets. A profile of the same identity starts from each of them."""

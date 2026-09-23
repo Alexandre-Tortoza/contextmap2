@@ -66,6 +66,9 @@ class Ros1BagSourceAdapter:
         self._config = config
         self._typestore = get_typestore(Stores.ROS1_NOETIC)
         self._warnings: list[SourceAdapterWarning] = []
+        self._content_hash = _ros_common.StreamingContentHash()
+        self._calibration_cache: CalibrationSet | None = None
+        self._calibration_read = False
 
     def capabilities(self) -> SourceAdapterCapabilities:
         """Report which configured modalities are actually present in the bag.
@@ -89,13 +92,29 @@ class Ros1BagSourceAdapter:
     def read_observations(self) -> Iterator[SourceObservation]:
         """Decode the bag and yield canonical observations.
 
+        When ``config.window`` is set, only messages whose recording
+        timestamp falls inside it are read at all — the bag's own chunk
+        index is used to skip the rest without decompressing it (issue
+        #506) — and each configured topic's ``observation_id`` counter
+        starts at zero relative to the window, not to the bag's start;
+        correlating across two different windows' observations must use
+        their physical ``timestamp``, never ``observation_id``. This cost
+        guarantee covers the configured modality topics (rgb/lidar/imu/pose)
+        and :meth:`content_hash`; it does not extend to
+        :meth:`read_calibration`, which is global source metadata read once
+        regardless of the window (see :meth:`read_calibration`).
+
         Yields:
             One :data:`~contextmap.ingestion.models.SourceObservation` per
-            successfully decoded message, in bag order.
+            successfully decoded message within the configured window (the
+            whole bag when none is configured), in bag order.
 
         Raises:
             MissingRequiredTopicError: If a topic named in
                 ``config.required_topics`` is absent from the bag.
+            InvalidSourceWindowError: If ``config.window`` is set and its
+                clock does not match this bag's recording-time clock, or it
+                does not overlap the bag's recording-time range at all.
         """
         available = self._available_topics()
         self._check_required_topics(available)
@@ -103,14 +122,23 @@ class Ros1BagSourceAdapter:
         topic_kinds = self._configured_topic_kinds()
         calibration_ids = _ros_common.calibration_ids_by_sensor(self.read_calibration())
         self._warnings = []
+        self._content_hash = _ros_common.StreamingContentHash()
         counters: dict[str, int] = {}
+        start_ns, stop_ns = _ros_common.resolve_window_bounds(
+            self._config, open_reader=lambda: Reader(self._config.path), topic_kinds=topic_kinds
+        )
 
         with Reader(self._config.path) as reader:
             connections = [
                 connection for connection in reader.connections if connection.topic in topic_kinds
             ]
-            for connection, bag_timestamp, rawdata in reader.messages(connections=connections):
+            for connection, bag_timestamp, rawdata in reader.messages(
+                connections=connections, start=start_ns, stop=stop_ns
+            ):
                 topic = connection.topic
+                self._content_hash.update(
+                    topic=topic, timestamp_nanoseconds=bag_timestamp, rawdata=rawdata
+                )
                 index = counters.get(topic, 0)
                 counters[topic] = index + 1
                 try:
@@ -139,6 +167,22 @@ class Ros1BagSourceAdapter:
         """
         return tuple(self._warnings)
 
+    def content_hash(self) -> str | None:
+        """Return the content hash of exactly what the most recent read actually read.
+
+        Unlike :func:`~contextmap.ingestion.sequence_provenance.compute_source_content_hash`
+        (a separate, full pass over the whole source), this is accumulated
+        incrementally while :meth:`read_observations` reads each message, so
+        it covers only the configured window when one is set — never the
+        whole 24 GB bag just to declare provenance for a 90 s slice of it
+        (issue #506).
+
+        Returns:
+            ``"sha256:<hex digest>"``, or ``None`` if
+            :meth:`read_observations` was never called.
+        """
+        return self._content_hash.hexdigest()
+
     def read_calibration(self) -> CalibrationSet | None:
         """Return merged configured and source camera calibration.
 
@@ -147,10 +191,26 @@ class Ros1BagSourceAdapter:
         the sequence. Static extrinsics supplied in
         ``SourceAdapterConfig.calibration`` are preserved in the result.
 
+        Calibration is deliberately NOT bounded by ``config.window``: unlike
+        ``read_observations()``/``content_hash()`` (issue #506, cost
+        proportional to the window), ``camera_info`` is treated as global,
+        source-wide metadata that describes the whole bag, not a per-window
+        artifact — see ``docs/adapters.md``. The scan is performed at most
+        once per adapter instance and the result cached, so calling this
+        method again (as ``read_observations()`` does internally, and as the
+        runtime does again afterwards) never re-scans the bag.
+
         Returns:
             The merged calibration, or ``None`` when neither configuration
             nor the source provides calibration.
         """
+        if not self._calibration_read:
+            self._calibration_cache = self._discover_calibration()
+            self._calibration_read = True
+        return self._calibration_cache
+
+    def _discover_calibration(self) -> CalibrationSet | None:
+        """Scan the whole bag's ``camera_info`` topic once; never windowed."""
         topic = self._config.topics.camera_info
         discovered: list[CalibrationEntry] = []
         if topic is not None:

@@ -15,9 +15,12 @@ O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele 
 │   ├── semantic-interpretations.jsonl                   # execução semântica auditável
 │   ├── semantic-views/                                  # pixels exatos enviados ao backend
 │   │   └── <view-payloads>
-│   └── features/                                       # quando payloads são persistidos
-│       ├── feature-index.jsonl
-│       └── <observation-scope>/*.npy
+│   ├── features/                                       # quando payloads são persistidos
+│   │   ├── feature-index.jsonl
+│   │   └── <observation-scope>/*.npy
+│   └── masks/                                          # quando alguma região carrega máscara
+│       ├── mask-index.jsonl
+│       └── <source_observation_id>/<region_id>.npy    # bit-packed, ver mask_store.md
 ├── metrics/
 │   ├── stage-timings.jsonl                             # um StageOutcome por linha
 │   └── feature-extraction.jsonl                        # quando há diagnóstico de feature
@@ -50,6 +53,7 @@ flowchart LR
 
 - **`outputs/results.jsonl`, não `outputs/results.parquet`.** Mesma decisão e mesmo motivo da issue #39 de Ingestion: nenhuma dependência de runtime nova (`pyarrow`/`pandas`) se justifica ainda; JSON Lines é inspecionável com ferramentas de texto padrão. Revisitar se o volume de resultados tornar leitura linha-a-linha um gargalo real.
 - **`outputs/results.jsonl` continua canônico para metadata; `outputs/features/feature-index.jsonl` indexa apenas payloads numéricos opt-in.** Cada `PerceptionResult` carrega suas `regions`/`features`/`claims`; o feature index não duplica esse contrato, apenas liga a chave `(source_observation_id, feature_id)` ao arquivo `.npy`, hash e metadata necessária para leitura lazy. `finalize()` valida essa referência cruzada antes de publicar o artifact.
+- **Máscara de região nunca inlina pixels em `outputs/results.jsonl` (#378).** Ao contrário de payloads de feature, persistir a máscara não é opt-in: toda região com `mask` materializado é persistida automaticamente por `finalize()` em `outputs/masks/` (bit-packed, ver [`mask_store.md`](mask_store.md)), e a região grava apenas `mask_reference`. `PerceptionRunReader.list_results()` nunca materializa pixels; `PerceptionRunReader.mask_store()` carrega e verifica o hash sob demanda.
 - **Views semânticas são outputs contratuais.** Cada `SemanticVisualView` possui SHA-256 obrigatório e referencia um arquivo abaixo de `outputs/semantic-views/`. `add_semantic_view_payload()` valida o hash antes de enfileirar os bytes (na persistência; a inferência já verifica o mesmo hash em cada runtime, ver [Integridade das views](semantic-interpretation.md#integridade-das-views-na-inferência)); `finalize()` exige que toda view de toda execução possua payload inventariado e rejeita payloads sem request correspondente.
 - **`debug/` só existe quando há conteúdo real.** Feature Extraction
   materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava
@@ -85,12 +89,20 @@ deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
 
-## Reprodutibilidade do pipeline resolvido (`schema_version` 0.4.0)
+## Reprodutibilidade do pipeline resolvido (`schema_version` 0.5.0)
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
+
+O schema `0.5.0` move a máscara de região para fora de `outputs/results.jsonl`
+(#378): `encode_region()` nunca mais inlina pixels, só `mask_reference`;
+`decode_region()` sempre devolve `mask=None`. Uma máscara de imagem inteira
+custava cerca de 0,92 MB de JSON por região, independente do tamanho real da
+região; ver [`mask_store.md`](mask_store.md) para o formato compacto e o
+carregamento lazy. Esta é uma quebra pré-1.0: artifacts `0.4.0` e anteriores
+são rejeitados na abertura.
 
 O schema `0.4.0` incorpora a nova forma de `SemanticClaim` e os registros
 completos de execução semântica. Cada registro preserva request, prompt
 renderizado, resposta/hash, parsing, diagnósticos e configuração efetiva
 redigida. A cópia humana da resposta bruta só é inventariada em debug `FULL`.
-Esta é uma quebra pré-1.0: artifacts `0.3.0` são rejeitados na abertura.
+Esta foi uma quebra pré-1.0: artifacts `0.3.0` foram rejeitados na abertura.

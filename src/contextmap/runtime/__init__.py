@@ -26,6 +26,7 @@ from contextmap.runtime.api import (
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
     CANONICAL_PROFILE_ID,
+    EXTENDED_PROFILE_ID,
     BackendSpec,
     ComponentSpec,
     Interception,
@@ -39,6 +40,7 @@ from contextmap.runtime.composition import (
     RuntimeProvider,
     compose,
     compose_executors,
+    resolve_provider,
 )
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
@@ -74,6 +76,7 @@ from contextmap.runtime.errors import (
     PipelineError,
     PlanDocumentError,
     PreflightError,
+    ProviderConfigurationError,
     ResumeError,
     ReuseError,
     RunCancelledError,
@@ -155,6 +158,7 @@ __all__ = [
     "DEBUG_LEVELS",
     "EFFECTIVE_CONFIG_FILENAME",
     "EVENT_KINDS",
+    "EXTENDED_PROFILE_ID",
     "LATEST",
     "NAMED_PREFIX",
     "RUN_SCHEMA_VERSION",
@@ -202,6 +206,7 @@ __all__ = [
     "PoliciesConfig",
     "PreflightError",
     "PreflightReport",
+    "ProviderConfigurationError",
     "ResolvedPipelinePlan",
     "ResolvedSecrets",
     "ResolvedSelections",
@@ -263,6 +268,7 @@ __all__ = [
     "read_run",
     "resolve_effective_config",
     "resolve_plan",
+    "resolve_provider",
     "resolve_secrets",
     "resolve_selections",
     "resume_plan",
