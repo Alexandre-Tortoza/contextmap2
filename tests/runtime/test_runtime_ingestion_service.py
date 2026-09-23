@@ -20,6 +20,7 @@ from contextmap.ingestion import (
     SourceTopicMapping,
     SourceWindow,
     SynchronizationConfig,
+    compute_source_content_hash,
 )
 from contextmap.runtime import (
     ArtifactRef,
@@ -386,8 +387,6 @@ class TestSuccessfulRun:
         # Uma janela configurada nunca deve custar uma passada de hash sobre a
         # fonte inteira: o hash persistido é o do adapter (só o que foi lido),
         # não igual ao hash do arquivo inteiro no disco.
-        from contextmap.ingestion.sequence_provenance import compute_source_content_hash
-
         assert provenance.source_content_hash != compute_source_content_hash(
             Path(request.source_path)
         )
