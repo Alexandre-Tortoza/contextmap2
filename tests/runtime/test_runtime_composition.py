@@ -9,6 +9,7 @@ import pytest
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
 from runtime_fixtures import unavailable_context_map  # noqa: F401
 
+from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
 from contextmap.runtime import EXTENDED_PROFILE_ID, ConfigurationError
@@ -96,6 +97,153 @@ def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]
     document = selected_document() if document is None else document
     document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
     return document
+
+
+# Mesmas coordenadas que ``runtime_entities.InMemoryGeometrySource`` deriva para os índices
+# 0..7 (``(0.1 * i, 0.2 * (i % 3), 0.05 * (i % 5))``): oito pontos bastam para dois ``make_entity``
+# de quatro índices cada, e são o único jeito de um ``GeometricMapArtifact`` real concordar, ponto
+# a ponto, com a geometria que ``make_entity`` já resume sozinho a partir daquele fixture.
+_ALIGNED_MAP_POINTS: tuple[tuple[float, float, float], ...] = tuple(
+    (0.1 * index, 0.2 * (index % 3), 0.05 * (index % 5)) for index in range(8)
+)
+
+
+def _write_aligned_geometric_map(output_dir: Path) -> GeometricMapArtifactManifest:
+    """Persist a real, tiny ``GeometricMapArtifact`` whose points are ``make_entity``'s own support.
+
+    Uma única captura LiDAR, uma única pose e um extrínseco identidade: o ponto do mapa fica
+    numericamente igual ao ponto bruto do "scan" (``P_map = T_map_body · T_body_lidar · P_source``
+    com translação zero e rotação identidade nos dois fatores), então os oito pontos persistidos
+    aqui caem exatamente sobre a geometria que ``runtime_entities.make_entity`` resume por conta
+    própria a partir do seu próprio ``InMemoryGeometrySource`` -- mesmos índices (via
+    ``geometry_id_for``, uma função pura de ``map_id`` e índice), mesmas coordenadas. É o que
+    permite ``resolved_entity_geometries`` recomputar bounds e frame idênticos aos que a resolução
+    persistiu, sem precisar hackear identidades de geometria.
+
+    O ``MapId`` final é o que ``GeometricMapArtifactWriter`` deriva (``sequence_name--run_id``);
+    o chamador lê ``manifest.map_id`` e passa exatamente esse valor a ``make_entity``.
+    """
+    import struct
+
+    from contextmap.geometric_mapping import (
+        GeometricMapArtifactWriter,
+        GeometricMapRunId,
+        MotionCorrectionPolicy,
+        ScanDisposition,
+        assemble_geometry_inputs,
+    )
+    from contextmap.ingestion import (
+        CalibrationSet,
+        FrameId,
+        FullSequenceSelection,
+        LidarObservation,
+        PointFieldDataType,
+        PointFieldDescriptor,
+        RigidTransform,
+        SensorId,
+        SequenceArtifactId,
+        SequenceSelectionResult,
+        SourceObservationId,
+        SourceProvenance,
+        selection_identity,
+    )
+    from contextmap.shared import SourceTimestamp
+    from contextmap.state_estimation import (
+        EstimatorProvenance,
+        LookupPolicy,
+        PoseEstimate,
+        PoseProvenance,
+        PoseValidity,
+        Trajectory,
+        TrajectoryId,
+        TrajectoryProvenance,
+        calibration_identity,
+        pose_estimate_id_for,
+    )
+
+    stamp = SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:aligned-map")
+    sequence_artifact_id = SequenceArtifactId("aligned-sequence")
+    trajectory_id = TrajectoryId("aligned--trajectory")
+    calibration = CalibrationSet(
+        entries={},
+        static_transforms=(
+            RigidTransform(
+                parent_frame=FrameId("body"),
+                child_frame=FrameId("lidar"),
+                translation=(0.0, 0.0, 0.0),
+                rotation=(0.0, 0.0, 0.0, 1.0),
+            ),
+        ),
+    )
+    trajectory = Trajectory(
+        trajectory_id=trajectory_id,
+        reference_frame=FrameId("map"),
+        body_frame=FrameId("body"),
+        poses=(
+            PoseEstimate(
+                estimate_id=pose_estimate_id_for(trajectory_id=trajectory_id, index=0),
+                timestamp=stamp,
+                parent_frame=FrameId("map"),
+                child_frame=FrameId("body"),
+                translation_m=(0.0, 0.0, 0.0),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+                validity=PoseValidity.VALID,
+                provenance=PoseProvenance(source_observation_ids=(SourceObservationId("pose-0"),)),
+            ),
+        ),
+        gaps=(),
+        provenance=TrajectoryProvenance(
+            estimator=EstimatorProvenance(backend_id="fixture_estimator", backend_version="0"),
+            sequence_artifact_id=sequence_artifact_id,
+            selection_id="full-sequence",
+            calibration_identity=calibration_identity(calibration),
+            code_version="test",
+        ),
+    )
+    # Precisão dupla: ``InMemoryGeometrySource`` (usado por ``make_entity``) guarda coordenadas
+    # float64 exatas. Empacotar em float32 arredondaria os pontos do "scan" e o mapa recomputado
+    # nunca bateria, bit a bit, com os bounds que a resolução persistiu.
+    fields = tuple(
+        PointFieldDescriptor(
+            name=name, offset_bytes=index * 8, data_type=PointFieldDataType.FLOAT64
+        )
+        for index, name in enumerate(("x", "y", "z"))
+    )
+    scan = LidarObservation(
+        observation_id=SourceObservationId("scan-aligned-0000"),
+        sensor_id=SensorId("velodyne"),
+        frame_id=FrameId("lidar"),
+        timestamp=stamp,
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/lidar"),
+        point_count=len(_ALIGNED_MAP_POINTS),
+        point_step_bytes=24,
+        fields=fields,
+        data=b"".join(struct.pack("<3d", *point) for point in _ALIGNED_MAP_POINTS),
+        is_dense=True,
+    )
+    selection = FullSequenceSelection()
+    plan = assemble_geometry_inputs(
+        sequence=SequenceSelectionResult(
+            sequence_artifact_id=sequence_artifact_id,
+            selection=selection,
+            selection_id=selection_identity(sequence_artifact_id, selection),
+            observations=(scan,),
+        ),
+        calibration=calibration,
+        trajectory=trajectory,
+        pose_lookup=LookupPolicy.exact(),
+        motion_correction_policy=MotionCorrectionPolicy(
+            raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.ACCEPT
+        ),
+        motion_correction=None,
+        state_estimation_run_id=None,
+    )
+    return GeometricMapArtifactWriter(
+        output_dir=output_dir,
+        sequence_name="aligned-map",
+        run_id=GeometricMapRunId("run-0001"),
+        run_index=1,
+    ).finalize(plan=plan, aggregation=None, code_version="test")
 
 
 class TestCanonicalComposition:
@@ -823,6 +971,170 @@ class TestComposeExecutors:
 
         assert ref.contract == "EntityResolutionRunArtifact"
         assert (output_dir / "manifest.json").is_file()
+
+    def test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``SpatialRelationsExecutor`` reads a real resolution and a real map.
+
+        Two real upstream artifacts, not fakes: an ``EntityResolutionRunArtifact`` produced by
+        running the composed ``entity_resolution`` executor itself (the same construction as
+        ``test_the_entity_resolution_executor_is_the_real_thing_and_runs_against_a_real_artifact``,
+        chained), and a ``GeometricMapArtifact`` written by the capability's own
+        ``GeometricMapArtifactWriter`` (``_write_aligned_geometric_map``) whose eight points are,
+        coordinate for coordinate, the same support ``make_entity`` already summarized for its two
+        entities. That alignment is what lets ``resolved_entity_geometries`` (inside the executor)
+        recompute bounds identical to what entity resolution persisted, instead of raising -- so
+        candidate generation runs on genuine, map-derived positions, not on a coincidence of
+        matching test doubles. The two entities are 0.1 m apart along x (well inside the
+        configured ``proximity_radius_m=0.6``), so at least one real, geometry-driven candidate
+        is produced; the composed executor writes a real ``SpatialRelationsRunArtifact``, exactly
+        as the runtime's own DAG runner would call it.
+        """
+        import dataclasses
+
+        from runtime_entities import make_entity
+
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.composition import compose
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            GEOMETRY_SUMMARY_ALGORITHM_ID,
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.spatial_relations import RelationState, SpatialRelationsRunReader
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+
+        # As convenções de eixo do documento estendido declaram "odom" como o frame do mapa; o
+        # fixture de geometria (tanto o real quanto o InMemoryGeometrySource de ``make_entity``)
+        # está em "map". A escolha do nome do frame é um detalhe de configuração deste teste, não
+        # uma invariante do domínio -- então o documento local é ajustado para concordar com a
+        # geometria real, em vez de forçar a geometria a se chamar "odom".
+        document = _extended_document()
+        document["components"]["spatial_relations"]["frame_conventions"][
+            "map-frame-conventions-v1"
+        ]["map_frame"] = "map"
+        effective = effective_from(tmp_path, document)
+        executors = compose_executors(effective, module_available=lambda _name: True, environ={})
+
+        geometry_dir = workspace / "corridor-02" / "run-0001" / "geometric_mapping"
+        geometry_manifest = _write_aligned_geometric_map(geometry_dir)
+        geometry_ref = ArtifactRef(
+            stage_id="geometric_mapping",
+            contract="GeometricMapArtifact",
+            artifact_id=str(geometry_manifest.run_id),
+            content_hash=inventory_digest(geometry_manifest.file_inventory),
+            location=geometry_dir.relative_to(workspace).as_posix(),
+        )
+
+        # Duas entidades reais sobre o mesmo mapa, com suportes de geometria disjuntos (índices
+        # 0-3 e 4-7) e vizinhos: 0.1 m de vão no eixo x, dentro do proximity_radius_m=0.6
+        # configurado, então a geração de candidatos tem um par real para medir.
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        entities = [
+            make_entity(
+                "entity--support-000001",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(0, 1, 2, 3),
+            ),
+            make_entity(
+                "entity--support-000002",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(4, 5, 6, 7),
+            ),
+        ]
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        mapping_manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=geometry_manifest.map_id,
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest="sha256:artifact",
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write(entities)
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(mapping_manifest.run_id),
+            content_hash=inventory_digest(mapping_manifest.file_inventory),
+            location=mapping_dir.relative_to(workspace).as_posix(),
+        )
+
+        # Passo 1: entity_resolution real, encadeado, exatamente como o teste irmão o constrói --
+        # a forma mais simples de obter um EntityResolutionRunArtifact genuíno para este teste.
+        resolution_output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        resolution_request = StageRequest(
+            stage_id="entity_resolution",
+            inputs={"entities": (entities_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=resolution_output_dir,
+            workspace=workspace,
+        )
+        resolution_ref = executors["entity_resolution"].execute(resolution_request)
+        assert resolution_ref.contract == "EntityResolutionRunArtifact"
+
+        # Passo 2: spatial_relations real, sobre a resolução e o mapa geométrico reais.
+        relations_output_dir = workspace / "corridor-02" / "run-0001" / "spatial_relations"
+        relations_request = StageRequest(
+            stage_id="spatial_relations",
+            inputs={"entities": (resolution_ref,), "geometry": (geometry_ref,)},
+            components={},
+            config_digest=effective.digest,
+            output_dir=relations_output_dir,
+            workspace=workspace,
+        )
+
+        ref = executors["spatial_relations"].execute(relations_request)
+
+        assert ref.contract == "SpatialRelationsRunArtifact"
+        assert (relations_output_dir / "manifest.json").is_file()
+
+        # A geometria real e as duas entidades vizinhas produziram trabalho genuíno: pelo menos
+        # um candidato de relação, ainda sem estado decidido (nenhum avaliador geométrico ou de
+        # contato foi selecionado no documento estendido) -- honestamente UNRESOLVED, nunca uma
+        # relação fabricada.
+        reader = SpatialRelationsRunReader(relations_output_dir)
+        relations = tuple(reader.iter_relations())
+        assert len(relations) >= 1
+        assert all(relation.state is RelationState.UNRESOLVED for relation in relations)
+
+        # Reabre o manifesto e confere a proveniência de ``geometry_summary`` de ponta a ponta:
+        # a política persistida é a mesma que a composição de fato construiu a partir do
+        # documento estendido, não uma segunda instância que só coincide por acaso.
+        composed = compose(
+            effective,
+            stages=["spatial_relations"],
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert composed.spatial_relations_policies is not None
+        expected_policy = composed.spatial_relations_policies.geometry_summary
+        assert reader.manifest.policies["geometry_summary"] == {
+            "policy_id": GEOMETRY_SUMMARY_ALGORITHM_ID,
+            "fingerprint": expected_policy.fingerprint(),
+            "parameters": dataclasses.asdict(expected_policy),
+        }
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:
