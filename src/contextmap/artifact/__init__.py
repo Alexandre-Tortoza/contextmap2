@@ -51,7 +51,12 @@ from contextmap.artifact.references import (
     UpstreamRecordRef,
 )
 from contextmap.artifact.schema_identity import describe_schema, schema_fingerprint
-from contextmap.artifact.serialization.assembly import assemble_context_map
+from contextmap.artifact.serialization.assembly import (
+    AssemblyMetrics,
+    AssemblyResult,
+    assemble_context_map,
+    assemble_context_map_with_metrics,
+)
 from contextmap.artifact.serialization.bundle import (
     BundleManifest,
     ClosurePolicy,
@@ -112,6 +117,8 @@ __all__ = [
     "ArtifactExistsError",
     "ArtifactIntegrityError",
     "ArtifactKind",
+    "AssemblyMetrics",
+    "AssemblyResult",
     "BundleError",
     "BundleManifest",
     "CheckOutcome",
@@ -173,6 +180,7 @@ __all__ = [
     "ValidationStatus",
     "artifact_digest",
     "assemble_context_map",
+    "assemble_context_map_with_metrics",
     "context_map_from_record",
     "context_map_to_record",
     "describe_schema",

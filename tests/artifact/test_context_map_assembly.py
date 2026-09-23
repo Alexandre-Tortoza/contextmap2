@@ -7,6 +7,12 @@ real pipeline run produces. ``_ambiguous_world`` is the one bespoke fixture, nee
 real Entity Resolution fixture the serialization tests share is unambiguous by construction (a
 single hypothesis per entity); it uses Entity Resolution's own public materialization API, not a
 hand-written record.
+
+``_matching_metadata`` builds a ``ContextMapMetadata`` whose ``source_sequences``, ``frame`` and
+``time_bounds`` actually agree with a real ``GeometricMapArtifactManifest``, because
+``assemble_context_map`` now cross-checks caller-supplied metadata against the geometry it opens
+(see ``test_metadata_mismatch_with_geometry_is_rejected*``): a fixture exercising some other
+invariant must not incidentally also disagree with the very geometry it opens.
 """
 
 from __future__ import annotations
@@ -17,7 +23,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from context_map_builders import SEQUENCE_ARTIFACT_ID, digest, entity_capabilities, metadata
+from context_map_builders import (
+    bounds,
+    digest,
+    entity_capabilities,
+    map_frame,
+    metadata,
+    upstream_artifact,
+)
 from context_map_serialization_geometry import build_geometry_artifact
 from context_map_serialization_upstream import write_relations_run, write_resolution_run
 from mapping_builders import make_hypothesis
@@ -31,6 +44,11 @@ from contextmap.artifact import (
     ContextMapArtifactReader,
     ContextMapArtifactWriter,
     ContextMapId,
+    ContextMapMetadata,
+    DerivationKind,
+    ObservationWindow,
+    PolicyRef,
+    SourceSequence,
     UpstreamArtifact,
     UpstreamArtifactError,
     artifact_digest,
@@ -38,6 +56,10 @@ from contextmap.artifact import (
     context_map_to_record,
 )
 from contextmap.artifact.references import ContextEntityReference
+from contextmap.artifact.serialization.assembly import (
+    AssemblyResult,
+    assemble_context_map_with_metrics,
+)
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     EntityResolutionRunId,
@@ -48,25 +70,26 @@ from contextmap.entity_resolution import (
 )
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.semantic_mapping import SemanticMapId
+from contextmap.shared import SourceTimestamp
 from contextmap.spatial_relations import SpatialRelationsRunReader
 
 CONTEXT_MAP_ID = ContextMapId("context-map--assembly-test--0001")
 
 
-def _sequence_lineage() -> tuple[UpstreamArtifact, ...]:
+def _sequence_lineage(manifest: GeometricMapArtifactManifest) -> tuple[UpstreamArtifact, ...]:
     """The one lineage entry ``assemble_context_map`` never derives itself.
 
     Every ``ContextMapMetadata`` requires at least one ``source_sequences`` entry, and the map's
     own construction requires a matching ``SEQUENCE`` artifact in the lineage — a dependency this
-    module (scoped to geometry, entity resolution and spatial relations) never opens. Every test
-    here uses ``context_map_builders.metadata()``'s default source sequence, so one fixed,
-    synthetic entry covers them all.
+    module (scoped to geometry, entity resolution and spatial relations) never opens. The
+    identity must match the real geometry manifest's own ``sequence_artifact_id``, since
+    ``assemble_context_map`` now cross-checks ``metadata.source_sequences`` against it.
     """
     return (
         UpstreamArtifact(
-            artifact_id=SEQUENCE_ARTIFACT_ID,
+            artifact_id=str(manifest.sequence_artifact_id),
             kind=ArtifactKind.SEQUENCE,
-            content_identity=digest(SEQUENCE_ARTIFACT_ID),
+            content_identity=digest(str(manifest.sequence_artifact_id)),
             configuration_fingerprint=None,
             code_version=None,
             model_identities=(),
@@ -74,9 +97,44 @@ def _sequence_lineage() -> tuple[UpstreamArtifact, ...]:
     )
 
 
-def _assemble(**kwargs: Any) -> ContextMap:
+def _matching_window(manifest: GeometricMapArtifactManifest) -> ObservationWindow:
+    """The exact observation window a real geometry manifest reports, as ``SourceTimestamp``s."""
+
+    def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
+        seconds, nanoseconds = divmod(total_nanoseconds, 1_000_000_000)
+        return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=manifest.clock_id)
+
+    return ObservationWindow(
+        start=_timestamp(manifest.start_time_ns), end=_timestamp(manifest.end_time_ns)
+    )
+
+
+def _matching_metadata(
+    manifest: GeometricMapArtifactManifest, **overrides: Any
+) -> ContextMapMetadata:
+    """``metadata()`` whose sequence, selection and time window agree with a real geometry.
+
+    ``metadata()``'s own defaults (``context_map_builders.SEQUENCE_ARTIFACT_ID`` and a fixed
+    ``window()``) are unrelated identities, picked for the schema-level ``ContextMapMetadata``
+    tests, and were never meant to describe any specific geometry artifact. Every assembly test
+    that opens a real ``GeometricMapArtifact`` needs metadata that actually agrees with it.
+    """
+    defaults: dict[str, Any] = {
+        "source_sequences": (
+            SourceSequence(
+                sequence_artifact_id=str(manifest.sequence_artifact_id),
+                selection_id=manifest.selection_id,
+            ),
+        ),
+        "time_bounds": _matching_window(manifest),
+    }
+    defaults.update(overrides)
+    return metadata(**defaults)
+
+
+def _assemble(manifest: GeometricMapArtifactManifest, **kwargs: Any) -> ContextMap:
     """``assemble_context_map`` with the mandatory sequence lineage filled in by default."""
-    kwargs.setdefault("additional_lineage", _sequence_lineage())
+    kwargs.setdefault("additional_lineage", _sequence_lineage(manifest))
     return assemble_context_map(**kwargs)
 
 
@@ -186,7 +244,10 @@ def test_geometry_only_map_declares_only_geometry(tmp_path: Path) -> None:
     geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
 
     context_map = _assemble(
-        context_map_id=CONTEXT_MAP_ID, metadata=metadata(), geometric_map_location=geometry_dir
+        geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(geometry_manifest),
+        geometric_map_location=geometry_dir,
     )
 
     assert context_map.entities == ()
@@ -217,8 +278,11 @@ def test_populated_map_from_real_entity_resolution_and_spatial_relations_runs(
     predicates = {relation.predicate for relation in upstream_relations}
 
     context_map = _assemble(
+        world.geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities(*predicates)),
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
         spatial_relations_location=world.relations_dir,
@@ -255,8 +319,11 @@ def test_relation_endpoints_predicate_state_and_uncertainty_are_preserved(tmp_pa
     predicates = {relation.predicate for relation in upstream_relations}
 
     context_map = _assemble(
+        world.geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities(*predicates)),
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
         spatial_relations_location=world.relations_dir,
@@ -291,8 +358,9 @@ def test_ambiguous_and_insufficient_evidence_semantic_state_is_preserved(tmp_pat
     geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
     resolution_dir = _build_ambiguous_resolution(tmp_path, geometry_manifest)
     context_map = _assemble(
+        geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities()),
+        metadata=_matching_metadata(geometry_manifest, capabilities=entity_capabilities()),
         geometric_map_location=geometry_dir,
         entity_resolution_location=resolution_dir,
     )
@@ -334,9 +402,11 @@ def test_assembly_is_deterministic_regardless_of_relation_reader_natural_order(
     ]
 
     context_map = _assemble(
+        world.geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(
-            capabilities=entity_capabilities(*{item.predicate for item in natural_order})
+        metadata=_matching_metadata(
+            world.geometry_manifest,
+            capabilities=entity_capabilities(*{item.predicate for item in natural_order}),
         ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
@@ -354,14 +424,16 @@ def test_assembling_the_same_runs_twice_gives_the_same_context_map(tmp_path: Pat
     predicates = {item.predicate for item in relations_run.iter_relations()}
     kwargs = dict(
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities(*predicates)),
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
         spatial_relations_location=world.relations_dir,
     )
 
-    first = _assemble(**kwargs)
-    second = _assemble(**kwargs)
+    first = _assemble(world.geometry_manifest, **kwargs)
+    second = _assemble(world.geometry_manifest, **kwargs)
 
     assert first == second
 
@@ -382,7 +454,7 @@ def test_spatial_relations_without_entity_resolution_is_rejected(tmp_path: Path)
 
 
 def test_geometry_reference_mismatch_is_rejected(tmp_path: Path) -> None:
-    geometry_dir, _ = build_geometry_artifact(tmp_path / "geometry-workspace")
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
     resolution_dir = tmp_path / "entity-resolution"
     write_resolution_run(
         resolution_dir,
@@ -394,7 +466,7 @@ def test_geometry_reference_mismatch_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(UpstreamArtifactError, match="geometric map"):
         assemble_context_map(
             context_map_id=CONTEXT_MAP_ID,
-            metadata=metadata(capabilities=entity_capabilities()),
+            metadata=_matching_metadata(geometry_manifest, capabilities=entity_capabilities()),
             geometric_map_location=geometry_dir,
             entity_resolution_location=resolution_dir,
         )
@@ -415,11 +487,324 @@ def test_dangling_spatial_relations_dependency_is_rejected(tmp_path: Path) -> No
     with pytest.raises(UpstreamArtifactError, match="does not match"):
         assemble_context_map(
             context_map_id=CONTEXT_MAP_ID,
-            metadata=metadata(capabilities=entity_capabilities()),
+            metadata=_matching_metadata(
+                world.geometry_manifest, capabilities=entity_capabilities()
+            ),
             geometric_map_location=world.geometry_dir,
             entity_resolution_location=other_resolution_dir,
             spatial_relations_location=world.relations_dir,
         )
+
+
+# --- additional_lineage restriction (issue #541, blocker 1) --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ArtifactKind.ENTITY_RESOLUTION_RUN,
+        ArtifactKind.SPATIAL_RELATIONS_RUN,
+        ArtifactKind.GEOMETRIC_MAP,
+    ],
+)
+def test_additional_lineage_rejects_structural_artifact_kinds(
+    tmp_path: Path, kind: ArtifactKind
+) -> None:
+    """A caller cannot smuggle a structural dependency in without this function opening it.
+
+    Before this fix, passing an ``ENTITY_RESOLUTION_RUN`` here (never supplying a real
+    ``entity_resolution_location``) let a caller declare ``ENTITIES`` and cite a resolution run
+    in the lineage while the map actually carried zero entities from it.
+    """
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
+    smuggled = upstream_artifact("smuggled--structural--0001", kind)
+
+    with pytest.raises(ValueError, match=kind.name):
+        assemble_context_map(
+            context_map_id=CONTEXT_MAP_ID,
+            metadata=_matching_metadata(geometry_manifest),
+            geometric_map_location=geometry_dir,
+            additional_lineage=(smuggled,),
+        )
+
+
+def test_additional_lineage_rejects_semantic_map(tmp_path: Path) -> None:
+    """``SEMANTIC_MAP`` is not structural, but assembly still derives it itself for free."""
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
+    smuggled = upstream_artifact("smuggled--semantic-map--0001", ArtifactKind.SEMANTIC_MAP)
+
+    with pytest.raises(ValueError, match="SEMANTIC_MAP"):
+        assemble_context_map(
+            context_map_id=CONTEXT_MAP_ID,
+            metadata=_matching_metadata(geometry_manifest),
+            geometric_map_location=geometry_dir,
+            additional_lineage=(smuggled,),
+        )
+
+
+def test_additional_lineage_still_accepts_sequence_and_evidence_artifacts(tmp_path: Path) -> None:
+    """The legitimate pinning use case (SEQUENCE, optional evidence) is not collateral damage."""
+    world = _build_world(tmp_path)
+    perception_run = upstream_artifact("perception-run--pinned--0001", ArtifactKind.PERCEPTION_RUN)
+
+    context_map = _assemble(
+        world.geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(world.geometry_manifest),
+        geometric_map_location=world.geometry_dir,
+        additional_lineage=(*_sequence_lineage(world.geometry_manifest), perception_run),
+    )
+
+    assert {item.kind for item in context_map.lineage} == {
+        ArtifactKind.GEOMETRIC_MAP,
+        ArtifactKind.SEQUENCE,
+        ArtifactKind.PERCEPTION_RUN,
+    }
+
+
+# --- LabelHypothesis provenance (issue #541, blocker 2) -------------------------------------------
+
+
+def test_label_hypothesis_origin_cites_semantic_fusion_not_entity_resolution(
+    tmp_path: Path,
+) -> None:
+    """A label's evidence chain must name the fusion run that actually proposed it.
+
+    Before this fix, every ``LabelHypothesis.origin`` reused the entity's own origin, which cited
+    the *resolved entity* record of the Entity Resolution run — making a label look like Entity
+    Resolution produced it. Entity Resolution never opens a claim, a region or a model output; the
+    label came from Semantic Fusion, reachable here only through
+    ``ResolvedEntity.evidence.fused_evidence`` and each hypothesis's own ``fused_evidence_id``.
+    """
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
+    resolution_dir = _build_ambiguous_resolution(tmp_path, geometry_manifest)
+    resolution = EntityResolutionRunReader(resolution_dir)
+    resolved_one = next(
+        item
+        for item in resolution.resolved_entities().entities
+        if str(item.member_entity_refs[0].entity_id) == "one"
+    )
+    [fused_ref] = resolved_one.evidence.fused_evidence
+
+    context_map = _assemble(
+        geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(geometry_manifest, capabilities=entity_capabilities()),
+        geometric_map_location=geometry_dir,
+        entity_resolution_location=resolution_dir,
+    )
+
+    entity = next(
+        item for item in context_map.entities if str(item.member_entities[0].entity_id) == "one"
+    )
+    [hypothesis] = entity.semantic_state.hypotheses
+    assert hypothesis.label == "pallet"
+    assert hypothesis.origin.kind is DerivationKind.MULTIVIEW_FUSED
+
+    cited_artifacts = {
+        record.artifact_id: context_map.upstream_artifact(record.artifact_id)
+        for record in hypothesis.origin.derived_from
+    }
+    cited_kinds = {artifact.kind for artifact in cited_artifacts.values()}
+    assert cited_kinds == {ArtifactKind.SEMANTIC_FUSION_RUN}
+    assert str(fused_ref.fusion_run_id) in cited_artifacts
+    assert {record.record_id for record in hypothesis.origin.derived_from} == {
+        str(fused_ref.fused_evidence_id)
+    }
+    # O run de Entity Resolution nunca é citado no nível da hipótese — só no nível da entidade.
+    assert str(resolved_one.resolution_run_id) not in cited_artifacts
+
+    # A origem no nível da entidade continua legitimamente citando a resolução de identidade.
+    assert entity.origin.kind is DerivationKind.MULTIVIEW_FUSED
+    assert {record.artifact_id for record in entity.origin.derived_from} == {
+        str(resolved_one.resolution_run_id)
+    }
+
+
+def test_label_hypothesis_origin_policy_is_assemblys_own_merge_rule(tmp_path: Path) -> None:
+    """The policy that merged same-label hypotheses is assembly's own rule, not a borrowed one."""
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
+    resolution_dir = _build_ambiguous_resolution(tmp_path, geometry_manifest)
+
+    context_map = _assemble(
+        geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(geometry_manifest, capabilities=entity_capabilities()),
+        geometric_map_location=geometry_dir,
+        entity_resolution_location=resolution_dir,
+    )
+
+    entity = next(
+        item for item in context_map.entities if str(item.member_entities[0].entity_id) == "one"
+    )
+    [hypothesis] = entity.semantic_state.hypotheses
+    assert hypothesis.origin.policy == PolicyRef(
+        policy_id="label-hypothesis-merge-by-text", version="v1"
+    )
+    # Não é a mesma policy da entidade (materialização de Entity Resolution).
+    assert hypothesis.origin.policy != entity.origin.policy
+
+
+# --- PolicyRef translation (issue #541, blocker 3) ------------------------------------------------
+
+
+def test_entity_origin_policy_is_not_the_configuration_fingerprint(tmp_path: Path) -> None:
+    """``configuration_fingerprint`` is not the materialization rule's version."""
+    world = _build_world(tmp_path)
+    resolution = EntityResolutionRunReader(world.resolution_dir)
+    materialization_policy = resolution.materialization().policy
+
+    context_map = _assemble(
+        world.geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(world.geometry_manifest, capabilities=entity_capabilities()),
+        geometric_map_location=world.geometry_dir,
+        entity_resolution_location=world.resolution_dir,
+    )
+
+    entity = context_map.entities[0]
+    assert entity.origin.policy == PolicyRef(
+        policy_id="connected-components-materialization", version="v1"
+    )
+    assert entity.origin.policy.version != materialization_policy.configuration_fingerprint
+
+    # A configuração efetiva não é descartada: passa a viver na linhagem do próprio run.
+    resolution_entry = context_map.upstream_artifact(str(resolution.run_id))
+    assert (
+        resolution_entry.configuration_fingerprint
+        == materialization_policy.configuration_fingerprint
+    )
+
+
+def test_relation_origin_policy_does_not_conflate_taxonomy_version(tmp_path: Path) -> None:
+    """``taxonomy_version`` versions the predicate vocabulary, not the decision policy's rule."""
+    world = _build_world(tmp_path)
+    relations_run = SpatialRelationsRunReader(world.relations_dir)
+    predicates = {item.predicate for item in relations_run.iter_relations()}
+    first_relation = next(iter(relations_run.iter_relations()))
+
+    context_map = _assemble(
+        world.geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
+        geometric_map_location=world.geometry_dir,
+        entity_resolution_location=world.resolution_dir,
+        spatial_relations_location=world.relations_dir,
+    )
+
+    for relation in context_map.relations:
+        assert relation.origin.policy is not None
+        assert relation.origin.policy.policy_id == "conservative-relation-decision"
+        assert relation.origin.policy.version == "v1"
+        assert relation.origin.policy.version != first_relation.provenance.taxonomy_version
+
+    relations_entry = context_map.upstream_artifact(str(relations_run.manifest.run_id))
+    assert (
+        relations_entry.configuration_fingerprint
+        == first_relation.provenance.configuration_fingerprint
+    )
+
+
+# --- relation evidence provenance (issue #541, should-fix 4) --------------------------------------
+
+
+def test_relation_origin_cites_relation_evidence_not_only_the_relation_record(
+    tmp_path: Path,
+) -> None:
+    """``origin.derived_from`` must cite the relation's own evidence, not just its own record."""
+    world = _build_world(tmp_path)
+    relations_run = SpatialRelationsRunReader(world.relations_dir)
+    predicates = {item.predicate for item in relations_run.iter_relations()}
+
+    context_map = _assemble(
+        world.geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
+        geometric_map_location=world.geometry_dir,
+        entity_resolution_location=world.resolution_dir,
+        spatial_relations_location=world.relations_dir,
+    )
+
+    by_source = {relation.source_relation_id: relation for relation in context_map.relations}
+    decisive = [
+        upstream for upstream in relations_run.iter_relations() if upstream.relation_evidence_refs
+    ]
+    assert decisive, "the fixture must have at least one decisive relation to exercise this"
+
+    for upstream in decisive:
+        translated = by_source[upstream.relation_id]
+        cited_record_ids = {record.record_id for record in translated.origin.derived_from}
+        expected_evidence_ids = {str(item) for item in upstream.relation_evidence_refs}
+        assert expected_evidence_ids <= cited_record_ids
+        # A citação não é mais só o próprio registro da relação quando existe evidência real.
+        assert str(upstream.relation_id) not in cited_record_ids
+
+
+# --- metadata / geometry cross-check (issue #541, should-strengthen 5) ----------------------------
+
+
+def test_metadata_frame_mismatch_with_geometry_is_rejected(tmp_path: Path) -> None:
+    geometry_dir, geometry_manifest = build_geometry_artifact(tmp_path / "geometry-workspace")
+
+    with pytest.raises(UpstreamArtifactError, match="frame"):
+        assemble_context_map(
+            context_map_id=CONTEXT_MAP_ID,
+            metadata=_matching_metadata(
+                geometry_manifest,
+                frame=map_frame(frame_id="a-different-frame"),
+                bounds=bounds(frame_id="a-different-frame"),
+            ),
+            geometric_map_location=geometry_dir,
+            additional_lineage=_sequence_lineage(geometry_manifest),
+        )
+
+
+def test_metadata_source_sequence_mismatch_with_geometry_is_rejected(tmp_path: Path) -> None:
+    geometry_dir, _ = build_geometry_artifact(tmp_path / "geometry-workspace")
+
+    with pytest.raises(UpstreamArtifactError, match="sequence"):
+        assemble_context_map(
+            context_map_id=CONTEXT_MAP_ID,
+            metadata=metadata(),  # source_sequences default não bate com a geometria real
+            geometric_map_location=geometry_dir,
+        )
+
+
+# --- assembly metrics (issue #537 acceptance criterion, issue #541 finding 6) ---------------------
+
+
+def test_assemble_context_map_with_metrics_reports_sane_counts_and_timings(
+    tmp_path: Path,
+) -> None:
+    world = _build_world(tmp_path)
+    relations_run = SpatialRelationsRunReader(world.relations_dir)
+    predicates = {item.predicate for item in relations_run.iter_relations()}
+    kwargs: dict[str, Any] = dict(
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
+        geometric_map_location=world.geometry_dir,
+        entity_resolution_location=world.resolution_dir,
+        spatial_relations_location=world.relations_dir,
+        additional_lineage=_sequence_lineage(world.geometry_manifest),
+    )
+
+    result = assemble_context_map_with_metrics(**kwargs)
+    expected = assemble_context_map(**kwargs)
+
+    assert isinstance(result, AssemblyResult)
+    assert result.context_map == expected
+    assert result.metrics.entity_count == len(result.context_map.entities) > 0
+    assert result.metrics.relation_count == len(result.context_map.relations) > 0
+    assert result.metrics.lineage_count == len(result.context_map.lineage) > 0
+    assert result.metrics.translation_duration_seconds >= 0.0
+    assert result.metrics.validation_duration_seconds >= 0.0
+    assert result.metrics.peak_memory_bytes > 0
 
 
 # --- provenance closure -----------------------------------------------------------------------
@@ -431,8 +816,11 @@ def test_provenance_closure_is_complete(tmp_path: Path) -> None:
     predicates = {item.predicate for item in relations_run.iter_relations()}
 
     context_map = _assemble(
+        world.geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities(*predicates)),
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
         spatial_relations_location=world.relations_dir,
@@ -460,8 +848,11 @@ def test_round_trip_assemble_write_reopen_same_record(tmp_path: Path) -> None:
     predicates = {item.predicate for item in relations_run.iter_relations()}
 
     context_map = _assemble(
+        world.geometry_manifest,
         context_map_id=CONTEXT_MAP_ID,
-        metadata=metadata(capabilities=entity_capabilities(*predicates)),
+        metadata=_matching_metadata(
+            world.geometry_manifest, capabilities=entity_capabilities(*predicates)
+        ),
         geometric_map_location=world.geometry_dir,
         entity_resolution_location=world.resolution_dir,
         spatial_relations_location=world.relations_dir,

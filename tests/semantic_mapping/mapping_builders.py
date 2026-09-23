@@ -55,6 +55,14 @@ FUSION_SUPPORT_ID = FusionSupportId("support-000001")
 CLOCK_ID = "fixture:header"
 CODE_DIGEST = "sha256:" + "ab" * 32
 """A caller-supplied code digest; the capability records it as given and never computes one."""
+FUSION_ARTIFACT_DIGEST = "sha256:" + "cd" * 32
+"""A fixture fusion-artifact digest shaped like a real one (``sha256:<64 hex>``).
+
+Some consumers of ``FusedEvidenceRef`` (for example ``contextmap.artifact``'s assembly, which
+derives a ``SEMANTIC_FUSION_RUN`` lineage entry from ``fusion_artifact_digest``) validate that
+shape strictly; this capability's own contracts do not, so a placeholder that merely looks
+plausible is enough here.
+"""
 
 
 def timestamp(seconds: int, nanoseconds: int = 0, *, clock_id: str = CLOCK_ID) -> SourceTimestamp:
@@ -182,7 +190,7 @@ def make_fused_evidence_ref(
     return FusedEvidenceRef(
         fusion_run_id=fusion_run_id,
         fusion_schema_version="0.1.0",
-        fusion_artifact_digest="sha256:artifact",
+        fusion_artifact_digest=FUSION_ARTIFACT_DIGEST,
         sequence_artifact_id="sequence-0001",
         fused_evidence_id=fused_evidence_id,
         fusion_support_id=fusion_support_id,
