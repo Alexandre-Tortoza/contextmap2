@@ -24,6 +24,7 @@ or service locator: the table of factories below is explicit and closed.
 
 from __future__ import annotations
 
+import importlib
 import os
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -45,6 +46,7 @@ from contextmap.runtime.errors import (
     BackendRuntimeMissingError,
     BackendUnavailableError,
     CompositionError,
+    ProviderConfigurationError,
     StageUnavailableError,
 )
 
@@ -75,6 +77,58 @@ that backend declares (and only those), and returns whatever runtime the backend
 adapter expects (for example a SAM3 runtime or a Gemini client). Loading the model is the
 provider's business, so heavy SDKs stay out of the runtime package.
 """
+
+
+def resolve_provider(component_id: str, target: str) -> RuntimeProvider:
+    """Resolve a ``"resources.providers"`` target into the :data:`RuntimeProvider` it names.
+
+    This is the declarative counterpart of passing a :data:`RuntimeProvider` in Python: a
+    configuration names, instead of embeds, the callable the composition root asks for a
+    model runtime. The imported attribute *is* the provider -- there is no intermediate
+    factory or wrapper, so it must already accept ``(config, secrets)`` and return the
+    runtime, exactly like a provider supplied through ``compose(providers=...)``.
+
+    Security posture: only the ``"module:attribute"`` syntax is accepted, never ``eval``;
+    no module is ever installed automatically; and this is called lazily, by
+    :meth:`_Context.runtime`/:meth:`_Context.optional_runtime`, only for a component that is
+    actually being composed -- never eagerly for every target a document declares. A
+    ``resources.providers`` target is Python code that is imported and then called at
+    runtime, the same trust boundary as any other configuration that names executable code:
+    configuration from an untrusted source must never be resolved this way.
+
+    Args:
+        component_id: Variation point the target was declared for, used only to build an
+            actionable error.
+        target: ``"module_name:attribute"``.
+
+    Returns:
+        The imported attribute, already verified callable.
+
+    Raises:
+        ProviderConfigurationError: If ``target`` is malformed, its module cannot be
+            imported, the attribute does not exist on it, or the attribute is not callable.
+    """
+    module_name, separator, attribute_name = target.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ProviderConfigurationError(
+            component_id, target, "must look like 'module:attribute' with both parts non-empty"
+        )
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as error:
+        raise ProviderConfigurationError(
+            component_id, target, f"module {module_name!r} could not be imported: {error}"
+        ) from error
+    try:
+        attribute = getattr(module, attribute_name)
+    except AttributeError as error:
+        raise ProviderConfigurationError(
+            component_id, target, f"module {module_name!r} has no attribute {attribute_name!r}"
+        ) from error
+    if not callable(attribute):
+        raise ProviderConfigurationError(component_id, target, "is not callable")
+    return cast("RuntimeProvider", attribute)
+
 
 FeatureFactory = Callable[["FeatureBuildScope"], "FeatureExtractor"]
 SourceAdapterFactory = Callable[["SourceAdapterConfig"], "SourceAdapter"]
@@ -162,6 +216,7 @@ def compose(
     stages: Iterable[str] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
+    on_provider_override: Callable[[str], None] | None = None,
 ) -> ComposedRuntime:
     """Construct the implementations an effective configuration selects.
 
@@ -169,12 +224,21 @@ def compose(
         effective: The resolved configuration.
         providers: Model runtimes or clients supplied by the caller, keyed by component
             identity (``"<capability>.<slot>"``), for backends without a bundled loader
-            and to override a bundled one.
+            and to override a bundled one. For a component this leaves unset, a
+            ``resources.providers`` target declared in ``effective`` is resolved instead,
+            lazily, only if that component is actually being composed; see
+            :func:`resolve_provider`.
         stages: The stages to compose, or ``None`` for every enabled stage whose
             capability is implemented.
         environ: Environment to read secrets from; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed;
             defaults to an :mod:`importlib` lookup.
+        on_provider_override: Called with a component identity when ``providers`` supplies
+            an entry for it that wins over a ``resources.providers`` target ``effective``
+            also declares for the same component -- the only case where a caller-embedded
+            provider silently takes precedence over what the configuration itself names.
+            Never called when the two never disagree, in particular on every ordinary run
+            through the installed CLI, which never passes ``providers``.
 
     Returns:
         The composed implementations. No model has been loaded.
@@ -185,7 +249,10 @@ def compose(
         StageUnavailableError: If a requested stage has no implemented capability.
         BackendConfigurationError: If a capability rejects its backend's parameters.
         BackendUnavailableError: If a backend needs a module or secret that is missing.
-        BackendRuntimeMissingError: If a backend needs a runtime nobody supplied.
+        BackendRuntimeMissingError: If a backend needs a runtime nobody supplied and the
+            configuration declares no ``resources.providers`` target for it either.
+        ProviderConfigurationError: If a ``resources.providers`` target this component needs
+            is malformed or cannot be resolved into a callable.
     """
     preset = PRESETS[effective.config.pipeline.preset]
     enabled = effective.config.pipeline.stages
@@ -224,6 +291,7 @@ def compose(
         providers=dict(providers or {}),
         environ=os.environ if environ is None else environ,
         module_available=module_available,
+        on_provider_override=on_provider_override,
     )
     attributes: dict[str, object] = {}
     for stage in selected:
@@ -269,6 +337,7 @@ class _Context:
     providers: Mapping[str, RuntimeProvider]
     environ: Mapping[str, str]
     module_available: Callable[[str], bool] | None
+    on_provider_override: Callable[[str], None] | None = None
 
     def component(self, component_id: str) -> ComponentConfig:
         return self.effective.config.components[component_id]
@@ -316,13 +385,22 @@ class _Context:
         return config, extra_values
 
     def ensure_available(self, component_id: str) -> None:
-        """Fail when a bundled code path needs a module or secret that is missing."""
+        """Fail when a bundled code path needs a module or secret that is missing.
+
+        A component whose runtime a provider supplies -- explicitly, or through a declared
+        ``resources.providers`` target -- never needs its own bundled module: that heavy
+        import is the provider's business, never ``contextmap.runtime``'s (see the module
+        docstring). Only the module check is skipped this way; a missing secret is still
+        reported, since a provider is not necessarily what reads it.
+        """
+        declared = self._declared_provider_target(component_id)
+        provider_expected = component_id in self.providers or declared is not None
         problems = check_component_availability(
             component_id,
             self.component(component_id),
             environ=self.environ,
             module_available=self.module_available,
-            check_modules=component_id not in self.providers,
+            check_modules=not provider_expected,
         )
         if problems:
             raise BackendUnavailableError(problems)
@@ -333,17 +411,47 @@ class _Context:
         names = COMPONENTS[component_id].backends[backend].secrets
         return ResolvedSecrets(names, {n: self.environ[n] for n in names if self.environ.get(n)})
 
+    def _declared_provider_target(self, component_id: str) -> str | None:
+        """Read the ``resources.providers`` target the configuration declares, if any."""
+        return self.effective.config.resources.providers.get(component_id)
+
+    def _resolved_provider(self, component_id: str) -> RuntimeProvider | None:
+        """Resolve this component's provider, or ``None`` when nobody supplies one.
+
+        Precedence: an explicit ``providers=`` entry always wins, even over a
+        ``resources.providers`` target the configuration declares for the same component --
+        and that override is reported through ``on_provider_override`` exactly when it
+        actually happens (both exist for the same component). Otherwise, a declared target
+        is resolved lazily, right here, only because this component is genuinely being
+        composed; the target is never resolved for a component nobody asked to build.
+        """
+        explicit = self.providers.get(component_id)
+        target = self._declared_provider_target(component_id)
+        if explicit is not None:
+            if target is not None and self.on_provider_override is not None:
+                self.on_provider_override(component_id)
+            return explicit
+        if target is not None:
+            return resolve_provider(component_id, target)
+        return None
+
     def runtime(self, component_id: str, config: Any, protocol: str) -> Any:
-        """Ask the caller's provider for the runtime of a backend without a bundled loader."""
-        provider = self.providers.get(component_id)
+        """Ask the caller's or the configuration's provider for a backend's runtime.
+
+        Raises:
+            BackendRuntimeMissingError: If neither an explicit provider nor a declared
+                ``resources.providers`` target supplies one.
+            ProviderConfigurationError: If a declared target cannot be resolved.
+        """
+        provider = self._resolved_provider(component_id)
         if provider is None:
             backend = self.component(component_id).backend or ""
             raise BackendRuntimeMissingError(component_id, backend, protocol)
         return provider(config, self.secrets(component_id))
 
     def optional_runtime(self, component_id: str, config: Any) -> Any:
-        """Return the caller's runtime for a backend that also bundles a loader, or ``None``."""
-        provider = self.providers.get(component_id)
+        """Return the resolved runtime for a backend that also bundles a loader, or ``None``."""
+        provider = self._resolved_provider(component_id)
         return None if provider is None else provider(config, self.secrets(component_id))
 
 
@@ -828,6 +936,7 @@ def compose_executors(
     providers: Mapping[str, RuntimeProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
+    on_provider_override: Callable[[str], None] | None = None,
 ) -> dict[str, StageExecutor]:
     """Compose the real :class:`~contextmap.runtime.pipeline.StageExecutor` a DAG run needs.
 
@@ -870,12 +979,16 @@ def compose_executors(
             :func:`compose`.
         environ: Environment to read secrets from; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
+        on_provider_override: Called with a component identity whenever ``providers``
+            overrides a ``resources.providers`` target ``effective`` also declares for it;
+            see :func:`compose`.
 
     Returns:
         One executor per stage that could genuinely be composed from ``effective``. Never
         raises: a stage this cannot build for any reason (incomplete selection, a rejected
-        parameter, a missing module or secret) is simply absent from the result, one stage
-        at a time, so one broken stage never costs the others their real executor.
+        parameter, a missing module or secret, or an unresolvable declared provider target)
+        is simply absent from the result, one stage at a time, so one broken stage never
+        costs the others their real executor.
     """
     from contextmap.runtime.executors import (
         GeometricMappingExecutor,
@@ -894,6 +1007,7 @@ def compose_executors(
                 providers=providers,
                 environ=environ,
                 module_available=module_available,
+                on_provider_override=on_provider_override,
             )
         except (ConfigurationError, CompositionError):
             # Seleção incompleta, estágio desabilitado, ou backend selecionado que rejeita seus

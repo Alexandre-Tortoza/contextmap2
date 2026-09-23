@@ -486,6 +486,33 @@ def test_supplied_providers_let_visual_perception_compose_through_the_runtime_fa
     assert "visual_perception" not in report.missing_executors
 
 
+def test_a_declared_provider_target_lets_visual_perception_compose_with_no_python_providers(
+    tmp_path: Path,
+) -> None:
+    """The facade's counterpart of the CLI's decisive #507 proof.
+
+    Unlike ``test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade``
+    above, this ``Runtime`` is constructed with no ``providers=`` at all: the runtime for
+    ``sam3``/``qwen`` instead comes from a ``resources.providers`` target declared in the
+    resolved configuration, resolved lazily by
+    ``contextmap.runtime.composition.resolve_provider`` from a real importable module.
+    """
+    runtime = Runtime(workspace=tmp_path / "ws", module_available=_ready, environ={})
+    targets = json.dumps(
+        {
+            "visual_perception.region_discovery": "runtime_provider_fixtures:load_region_discovery",
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+    )
+    config = _config(runtime, tmp_path, f"resources.providers={targets}")
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
 def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
     config = _config(runtime, tmp_path)

@@ -29,6 +29,8 @@ state_estimation = "seq-01--run-0003"
 [resources]                  # recursos/dispositivo
 device = "cuda"
 workspace = "workspace/run-a"
+[resources.providers]        # RuntimeProvider declarado por componente (ver seção própria)
+"visual_perception.region_discovery" = "meu_pkg.contextmap_loaders:load_sam3"
 
 [policies]                   # política de debug
 debug_level = "standard"     # none | standard | full
@@ -39,7 +41,7 @@ debug_level = "standard"     # none | standard | full
 | `pipeline` | preset de topologia e quais estágios opcionais participam |
 | `components` | backend escolhido para cada ponto de variação, com os parâmetros **somente desse backend** |
 | `inputs` | sequência esperada e seleção explícita de runs/artifacts upstream por estágio: ids exatos, listas de runs, seleções nomeadas ou `latest` ([`selection.md`](selection.md)) |
-| `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram) e workspace |
+| `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram), workspace e `providers` (alvos `RuntimeProvider` declarados por componente, ver seção própria) |
 | `policies` | nível de debug; o debug nunca é dependência contratual de um estágio downstream |
 
 Não há campos de política de avaliação: nenhum consumidor existe ainda, e o schema não ganha campo sem consumidor.
@@ -66,6 +68,19 @@ Mapeamentos se mesclam chave a chave; qualquer outro valor substitui. O valor de
 - rejeita combinações incompatíveis (hoje: o canal de evidência `point_representation` de Semantic Fusion exige o estágio `point_representation` habilitado).
 
 O runtime **não escolhe backend em nome do usuário**: o perfil `canonical/1` fixa a topologia e deixa todo backend não selecionado. `check_selection()` reporta o que falta escolher.
+
+## `resources.providers`: runtime de modelo declarado em configuração
+
+Um backend sem loader empacotado (SAM2, SAM3, Qwen, Gemini, Florence-2 hoje) precisa de um `RuntimeProvider` — um `Callable[[config, ResolvedSecrets], runtime]` — para ser composto. Um chamador Python pode montar esse `Callable` diretamente (`Runtime(providers=...)`, `main(providers=...)`), mas o binário `contextmap` **instalado** não tem como: ele só enxerga o que a configuração descreve. `resources.providers` é essa descrição: um mapeamento `component_id -> "módulo:atributo"`, um por ponto de variação que precisa de um provider.
+
+```json
+{"resources": {"providers": {"visual_perception.region_discovery": "meu_pkg.loaders:load_sam3"}}}
+```
+
+- **Validação aqui é só estrutural.** A resolução do documento (`resolve_effective_config()`) exige apenas que cada valor seja uma string não vazia; ela nunca importa o módulo. Importar e resolver o alvo em um `RuntimeProvider` de verdade é responsabilidade de `contextmap.runtime.composition.resolve_provider`, chamado só quando aquele componente está sendo composto de fato — ver [`composition.md`](composition.md#providers-declarados-em-configuração-resourcesproviders) para a precedência (um `providers=` explícito, quando existe, ainda vence), a preguiça e a postura de segurança.
+- **Camadas e digest.** `resources.providers` flui pelas mesmas três camadas de qualquer outro campo (perfil < arquivos, mesclados chave a chave < overrides, que substituem o mapa inteiro) e participa do `digest` automaticamente, porque é só mais um campo de `RuntimeConfig.to_document()` — nenhum tratamento especial foi necessário.
+- **Não é parâmetro de backend.** Um alvo declarado é uma decisão de composição/implantação (qual processo fornece qual runtime), nunca um parâmetro científico validado pela capability; por isso vive em `resources`, ao lado de `device`/`workspace`, e nunca dentro do bloco `components.<capability>.<slot>.<backend>` do próprio backend.
+- **Segurança.** Um alvo é código Python executado em tempo de execução (importado e depois chamado). Configuração de origem não confiável nunca deve declarar um alvo, exatamente como não deve apontar para qualquer outro código executável — essa fronteira de confiança já existe hoje e não é nova.
 
 ## Digest e persistência
 

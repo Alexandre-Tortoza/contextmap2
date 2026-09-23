@@ -11,13 +11,16 @@ configuration override, so the CLI never becomes a second place that decides wha
 Stage executors: for every command that runs or previews a plan, the executors that
 :func:`~contextmap.runtime.composition.compose_executors` can build from the resolved
 configuration (``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
-``semantic_fusion`` unconditionally; ``visual_perception`` once ``main(providers=...)``
-supplies a runtime for every one of its selected backends that has no bundled loader --
-SAM2, SAM3, Qwen, Gemini and Florence-2 today) are composed automatically, so the
-installed ``contextmap`` binary executes them with no Python wrapper beyond that explicit
-``providers`` mapping. Executors supplied by the caller of :func:`main` (tests, or a future
-embedder) are merged on top and always win, so an explicit injection can override or extend
-what was composed -- including ``ingestion``, whose
+``semantic_fusion`` unconditionally; ``visual_perception`` once a runtime is available for
+every one of its selected backends that has no bundled loader -- SAM2, SAM3, Qwen, Gemini
+and Florence-2 today) are composed automatically, so the installed ``contextmap`` binary
+executes them with **no Python wrapper**: a runtime provider can be supplied either through
+``main(providers=...)`` (a Python embedder only) or, for the installed binary itself,
+declared in configuration as a ``resources.providers`` target (a ``"module:attribute"``
+string, resolved by :func:`~contextmap.runtime.composition.resolve_provider`; see
+``docs/composition.md`` and ``docs/configuration.md``). Executors supplied by the caller of
+:func:`main` (tests, or a future embedder) are merged on top and always win, so an explicit
+injection can override or extend what was composed -- including ``ingestion``, whose
 :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor` needs a concrete
 request that is never part of a configuration (see ``contextmap ingest``).
 ``point_representation`` has no real executor yet: without an injection, a real run of that
@@ -188,10 +191,14 @@ def main(
             Qwen, Gemini, Florence-2 and every other backend built through
             :meth:`~contextmap.runtime.composition._Context.runtime`), keyed by component
             identity (``"<capability>.<slot>"``) in the exact shape
-            :func:`~contextmap.runtime.composition.compose_executors` already expects. Without
-            it, a stage whose selected backends need one (today, ``visual_perception`` unless
-            every one of its four backends bundles its own loader) is composed by neither this
-            call nor a Python embedder that never wires ``executors=`` by hand.
+            :func:`~contextmap.runtime.composition.compose_executors` already expects. This is
+            the Python-embedding path; the installed binary instead declares a
+            ``resources.providers`` target in configuration for the same component (see the
+            module docstring) -- an entry given here for a component that also has one
+            declared still wins, and that override is recorded on the run's ``run_planned``
+            event. Without either, a stage whose selected backends need one (today,
+            ``visual_perception`` unless every one of its four backends bundles its own
+            loader) is composed by neither this call nor a Python embedder.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
@@ -547,31 +554,48 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
     reuse = _reuse_policy(session)
-    executors = _executors_for(session, effective)
+    provider_overrides: list[str] = []
+    executors = _executors_for(session, effective, provider_overrides)
     if args.dry_run:
         return _dry_run(session, effective, plan, execution, resolved, reuse, executors)
     assert workspace is not None  # exigido acima
     _dataset_directory(effective, workspace)  # recusa cedo um run sem dataset
-    return _execute(session, effective, execution, Path(workspace), reuse, executors)
+    return _execute(
+        session, effective, execution, Path(workspace), reuse, executors, provider_overrides
+    )
 
 
-def _executors_for(session: _Session, effective: EffectiveConfig) -> Mapping[str, StageExecutor]:
+def _executors_for(
+    session: _Session,
+    effective: EffectiveConfig,
+    provider_overrides: list[str] | None = None,
+) -> Mapping[str, StageExecutor]:
     """Merge the executors composed from ``effective`` with the ones the caller injected.
 
     ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
-    ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once
-    ``session.providers`` supplies a runtime for every backend that needs one,
-    ``visual_perception``) from the resolved configuration alone, so the installed CLI runs
-    them with no Python wrapper; a stage it cannot build for any reason is simply absent,
-    never raised (see its own docstring). Whatever the caller of :func:`main` passed in
-    ``session.executors`` (tests, a stage composition cannot build such as ``ingestion``, or
-    an explicit override) is layered on top and always wins.
+    ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once a runtime
+    provider is available for every backend that needs one -- explicitly through
+    ``session.providers``, or declared as a ``resources.providers`` target in the resolved
+    configuration itself -- ``visual_perception``) from the resolved configuration alone, so
+    the installed CLI runs them with no Python wrapper; a stage it cannot build for any
+    reason is simply absent, never raised (see its own docstring). Whatever the caller of
+    :func:`main` passed in ``session.executors`` (tests, a stage composition cannot build
+    such as ``ingestion``, or an explicit override) is layered on top and always wins.
+
+    Args:
+        session: The current CLI session.
+        effective: The resolved configuration.
+        provider_overrides: When given, receives (by mutation) the component identities
+            where ``session.providers`` won over a ``resources.providers`` target the
+            configuration also declared -- so ``_run`` can pass it into ``run_plan`` for a
+            real run to record it, exactly as it happened, in the run's own trail.
     """
     composed = compose_executors(
         effective,
         providers=session.providers,
         environ=session.environ,
         module_available=session.module_available,
+        on_provider_override=None if provider_overrides is None else provider_overrides.append,
     )
     return {**composed, **session.executors}
 
@@ -639,6 +663,7 @@ def _execute(
     workspace: Path,
     reuse: ReusePolicy | None,
     executors: Mapping[str, StageExecutor],
+    provider_overrides: Sequence[str] = (),
 ) -> int:
     """Run for real, journaling every step of the lifecycle into a fresh run directory."""
     args = session.args
@@ -661,6 +686,7 @@ def _execute(
                 reuse=reuse,
                 environ=session.environ,
                 module_available=session.module_available,
+                provider_overrides=provider_overrides,
                 journal=journal,
                 redact=secrets.redact,
             )
@@ -670,6 +696,7 @@ def _execute(
                 executors,
                 environ=session.environ,
                 module_available=session.module_available,
+                provider_overrides=provider_overrides,
                 reuse=reuse,
                 journal=journal,
                 redact=secrets.redact,

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import runtime_provider_fixtures
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
 from runtime_fixtures import unavailable_context_map  # noqa: F401
 
@@ -20,11 +21,13 @@ from contextmap.runtime.composition import (
     compose,
     compose_executors,
     composed_stages,
+    resolve_provider,
 )
 from contextmap.runtime.errors import (
     BackendConfigurationError,
     BackendRuntimeMissingError,
     BackendUnavailableError,
+    ProviderConfigurationError,
     StageUnavailableError,
 )
 from contextmap.semantic_fusion import (
@@ -45,6 +48,8 @@ from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDis
 
 REGION = "visual_perception.region_discovery"
 INTERPRETER = "visual_perception.semantic_interpretation"
+DENSE_FEATURES = "visual_perception.dense_features"
+REGION_FEATURES = "visual_perception.region_features"
 
 
 class _Recorder:
@@ -448,6 +453,184 @@ class TestExplicitFailures:
 
         with pytest.raises(ConfigurationError, match=r"state_estimation\.estimator"):
             _compose(tmp_path, document=document)
+
+
+class TestResolveProvider:
+    """Unit tests for resolving a ``"module:attribute"`` string into a callable."""
+
+    def test_resolves_a_real_importable_target(self) -> None:
+        provider = resolve_provider(REGION, "runtime_provider_fixtures:load_region_discovery")
+
+        assert provider is runtime_provider_fixtures.load_region_discovery
+
+    @pytest.mark.parametrize(
+        "target",
+        ["no-colon-at-all", ":load_region_discovery", "runtime_provider_fixtures:", ":"],
+    )
+    def test_rejects_a_malformed_target(self, target: str) -> None:
+        with pytest.raises(ProviderConfigurationError) as error:
+            resolve_provider(REGION, target)
+
+        assert error.value.component_id == REGION
+        assert error.value.target == target
+
+    def test_rejects_a_module_that_cannot_be_imported(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="could not be imported"):
+            resolve_provider(REGION, "no_such_package_exists_for_contextmap:load")
+
+    def test_rejects_an_attribute_the_module_does_not_have(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="no attribute"):
+            resolve_provider(REGION, "runtime_provider_fixtures:does_not_exist")
+
+    def test_rejects_an_attribute_that_is_not_callable(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="not callable"):
+            resolve_provider(REGION, "runtime_provider_fixtures:not_callable")
+
+
+class TestDeclaredProviderTargets:
+    """``resources.providers``: a declared target resolved lazily by the composition root.
+
+    This is the config-driven counterpart of ``providers=``: a caller of the installed
+    ``contextmap`` binary, which never passes ``providers=`` at all, still gets a real
+    backend composed when the effective configuration names a ``"module:attribute"``
+    target for it (#507's real, previously unmet acceptance criterion).
+    """
+
+    def test_a_declared_target_supplies_the_runtime_with_no_explicit_provider(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},  # isola o slot sob teste
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert isinstance(composed.region_discovery, Sam3RegionDiscovery)
+
+    def test_ensure_available_skips_the_module_check_for_a_declared_target(
+        self, tmp_path: Path
+    ) -> None:
+        """dense_features' own bundled loader needs torch/transformers/PIL -- but a
+        declared provider supplies the runtime instead, so composing it must never demand
+        those modules be importable (composition.py's own module docstring)."""
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            DENSE_FEATURES: "runtime_provider_fixtures:load_dense_features",
+            REGION_FEATURES: "runtime_provider_fixtures:load_region_features",
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers=_providers(recorder),  # region_discovery e semantic_interpretation
+            module_available=lambda _name: False,  # nada está instalado
+            environ={},
+        )
+
+        assert composed.dense_features is not None
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        composed.dense_features(scope)
+        assert runtime_provider_fixtures.CALLS[-1][0] == "dense_features"
+
+    def test_an_explicit_provider_wins_over_a_declared_target_and_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        explicit = recorder.provider("explicit-sam3")
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={REGION: explicit, INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert composed.region_discovery is not None
+        assert overrides == [REGION]
+        # o provider explícito de fato construiu o backend, não o alvo declarado.
+        assert recorder.calls[0][0] is not None
+
+    def test_no_override_is_reported_when_only_a_declared_target_exists(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert overrides == []
+
+    def test_an_unresolvable_declared_target_raises_a_provider_configuration_error(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {REGION: "not-a-valid-target"}
+
+        with pytest.raises(ProviderConfigurationError) as error:
+            compose(
+                effective_from(tmp_path, document),
+                stages=["visual_perception"],
+                providers={INTERPRETER: recorder.provider("qwen")},
+                module_available=lambda _name: True,
+                environ={},
+            )
+
+        assert error.value.component_id == REGION
+
+    def test_compose_executors_reports_the_override_through_its_own_callback(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert "visual_perception" in executors
+        assert overrides == [REGION]
 
 
 class TestStagesAndExtensionPoints:
