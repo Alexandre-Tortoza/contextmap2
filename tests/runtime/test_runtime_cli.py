@@ -155,6 +155,42 @@ class TestDryRun:
             "semantic_fusion",
         }.issubset(executors["registered"])
 
+    def test_supplying_providers_composes_visual_perception_through_the_cli(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #1 of the PR #535 review: ``providers=`` now reaches the CLI's own path.
+
+        ``sam3`` (region discovery) and ``qwen`` (semantic interpretation) -- the default
+        fixture's backends -- have no bundled model loader (``composition.py``): without a
+        ``RuntimeProvider`` for each, ``compose_executors`` honestly leaves
+        ``visual_perception`` out, and the installed binary could never compose it, even
+        through a Python embedder, because ``main()`` had nowhere to receive one. ``main()``
+        now accepts ``providers=`` in the exact shape ``compose_executors(providers=...)`` (and
+        every other ``RuntimeProvider`` caller) already expects, so real backend selection
+        composes through the CLI's own ``_executors_for()``, not a hand-built executor
+        standing in for the whole stage.
+        """
+        providers = {
+            "visual_perception.region_discovery": lambda _config, _secrets: object(),
+            "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "visual_perception",
+            "--dry-run",
+            "--json",
+            providers=providers,
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert "visual_perception" in executors["registered"]
+        assert "visual_perception" not in executors["missing"]
+
     def test_an_injected_executor_overrides_the_one_composed_from_configuration(
         self, tmp_path: Path
     ) -> None:

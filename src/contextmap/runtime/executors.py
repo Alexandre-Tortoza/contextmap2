@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from contextmap.geometric_mapping import (
@@ -89,10 +91,12 @@ from contextmap.visual_perception import (
     PerceptionRunReader,
     PerceptionRunWriter,
     PreparedImage,
+    Region2D,
     RegionDiscovery,
     SemanticInterpreter,
     SourceImage,
     assemble_perception_result,
+    box_mask_shape,
     execute_stage_graph,
     perception_result_id_for,
     prepare_image,
@@ -512,6 +516,51 @@ def _materialize_prepared_image(image: ImageObservation, root: Path) -> Prepared
     )
 
 
+class _RegionInlineMaskSource:
+    """Crops each region's own already-decoded inline mask to its box-local raster envelope.
+
+    A mask-conditioned region-features backend (AlphaCLIP) is conditioned on the region's
+    mask, not only its crop, and asks for it box-local (``box_mask_shape``), not full-image
+    (``contextmap.visual_perception.backends.alphaclip.RegionMaskSource``). A mask-based
+    Region Discovery backend (SAM2, SAM3) already attaches that mask to each ``Region2D`` at
+    full-image resolution (``region.mask``) before ``AlphaClipRegionFeatureBackend.extract``
+    ever runs, in the same per-image stage graph -- this only crops it. No new evidence is
+    produced, no threshold applied, and nothing is loaded from disk: it is the exact inverse
+    of how the backend itself re-expands a box-local mask back into full-image coordinates.
+
+    Raises:
+        ValueError: If ``region`` was produced by a discovery backend that never attaches an
+            inline mask (a mask-conditioned backend cannot run over a box-only region).
+    """
+
+    def load_box_local_mask(self, region: Region2D) -> Any:
+        """Return ``region``'s own mask, cropped to ``region.bounding_box``'s raster envelope."""
+        import numpy as np
+
+        if region.mask is None:
+            raise ValueError(
+                f"region {region.region_id!r} has no inline mask: a mask-conditioned region "
+                "features backend needs a mask-based region discovery backend"
+            )
+        full = np.asarray(region.mask.data, dtype=np.bool_).reshape(
+            region.mask.height, region.mask.width
+        )
+        height, width = box_mask_shape(region.bounding_box)
+        top = math.floor(region.bounding_box.y)
+        left = math.floor(region.bounding_box.x)
+        cropped = np.zeros((height, width), dtype=np.bool_)
+        source_top, source_left = max(0, top), max(0, left)
+        source_bottom = min(full.shape[0], top + height)
+        source_right = min(full.shape[1], left + width)
+        copy_height, copy_width = source_bottom - source_top, source_right - source_left
+        if copy_height > 0 and copy_width > 0:
+            cropped[
+                source_top - top : source_top - top + copy_height,
+                source_left - left : source_left - left + copy_width,
+            ] = full[source_top:source_bottom, source_left:source_right]
+        return cropped
+
+
 class VisualPerceptionExecutor:
     """Runs the canonical Visual Perception pipeline over one sequence's images.
 
@@ -521,8 +570,9 @@ class VisualPerceptionExecutor:
     ``execute_stage_graph()``/``assemble_perception_result()``, the exact
     public path already exercised manually/in validation scripts (#507).
     The executor only materializes decodable images, wires the run-scoped
-    feature extractors, loops over observations and hands results to
-    ``PerceptionRunWriter``.
+    feature extractors (including a ``mask_source`` for a mask-conditioned region-features
+    backend such as AlphaCLIP, see ``_RegionInlineMaskSource``), loops over observations and
+    hands results to ``PerceptionRunWriter``.
 
     A backend that does not (yet) satisfy the canonical preset's stage
     shape — for example a ``SemanticInterpreter`` that only implements the
@@ -574,7 +624,14 @@ class VisualPerceptionExecutor:
                 payload_sink=payload_sink,
                 prepared_image_root=scratch,
             )
-            region_scope = replace(dense_scope, feature_stage_id="region_feature_extraction")
+            # mask_source é sempre fornecido: backends que não o exigem (CLIP, DINOv2/v3)
+            # simplesmente o ignoram, e um backend condicionado a máscara (AlphaCLIP) só o usa
+            # quando a região tem, de fato, uma máscara inline (#535).
+            region_scope = replace(
+                dense_scope,
+                feature_stage_id="region_feature_extraction",
+                mask_source=_RegionInlineMaskSource(),
+            )
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={

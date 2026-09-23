@@ -908,6 +908,214 @@ class TestComposeVisualPerceptionExecutor:
             assert len(result.regions) == 1
             assert len(result.features) == 2  # one dense + one region feature
 
+    def test_a_mask_conditioned_region_features_backend_gets_the_region_own_mask(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #2 of the PR #535 review: the executor now supplies a real ``mask_source``.
+
+        ``region_features=alphaclip`` used to compose into an executor that failed
+        deterministically the moment any image was processed: ``VisualPerceptionExecutor``
+        built its region-features scope with ``mask_source=None``, and AlphaCLIP's own
+        composition factory (``composition.py``'s ``_alphaclip``, left unmodified here)
+        refuses exactly that. This runs the real ``_alphaclip`` factory through the real
+        executor, with a mask-based fake region-discovery backend that attaches an inline
+        mask to its one region -- exactly what SAM2/SAM3 do -- and a fake AlphaCLIP model
+        runtime standing in for the SDK.
+        """
+        pytest.importorskip("PIL")
+
+        from collections.abc import Sequence
+
+        import numpy as np
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            InlineMask,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+        from contextmap.visual_perception.backends.alphaclip import AlphaClipNativeOutput
+
+        class _FakeMaskedRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                        mask_reference="masks/region-0000.npy",
+                        mask=InlineMask(width=2, height=2, data=(True, True, True, True)),
+                        image_width=2,
+                        image_height=2,
+                    )
+                ]
+
+        class _FakeDenseFeatureExtractor:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_dense_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return FeatureScope.DENSE
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId("feature-dense-0000"),
+                        scope=FeatureScope.DENSE,
+                        embedding_space_id="fake-dense-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-dense.npy",
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        class _FakeAlphaClipRuntime:
+            def encode(
+                self, image: PreparedImage, requests: Sequence[Any]
+            ) -> AlphaClipNativeOutput:
+                return AlphaClipNativeOutput(
+                    array=np.array([[1.0, 2.0]] * len(requests), dtype=np.float32),
+                    elapsed_seconds=0.01,
+                    peak_memory_bytes=None,
+                )
+
+        document = selected_document()
+        document["components"]["visual_perception"]["region_features"] = {
+            "backend": "alphaclip",
+            "alphaclip": {
+                "model_name": "ViT-B/16",
+                "base_checkpoint_path": "clip.pt",
+                "alpha_checkpoint_path": "alpha.pt",
+                "checkpoint_fingerprint": "sha256:" + "1" * 64,
+            },
+        }
+        recorder = _Recorder()
+        providers = {
+            **_providers(recorder),
+            "visual_perception.region_features": lambda _config, _secrets: _FakeAlphaClipRuntime(),
+        }
+        composed = compose(
+            effective_from(tmp_path, document),
+            providers=providers,
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert composed.region_features is not None
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeMaskedRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeDenseFeatureExtractor(),  # type: ignore[arg-type]
+            region_features=composed.region_features,
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            writer.add_observation(
+                ImageObservation(
+                    observation_id=SourceObservationId("frame-0000"),
+                    sensor_id=SensorId("camera_1"),
+                    frame_id=FrameId("camera_1_optical"),
+                    timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:header"),
+                    provenance=SourceProvenance(
+                        source_type="fixture", source_path="fixtures/images"
+                    ),
+                    width=2,
+                    height=2,
+                    encoding=ImageEncoding.BGR8,
+                    data=pixels,
+                )
+            )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert len(results) == 1
+        assert len(results[0].regions) == 1
+        assert len(results[0].features) == 2  # one dense + one AlphaCLIP region feature
+
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:
     import sys

@@ -37,7 +37,7 @@ from contextmap.runtime.catalog import (
     PRESETS,
     StageDeclaration,
 )
-from contextmap.runtime.composition import compose, compose_executors
+from contextmap.runtime.composition import RuntimeProvider, compose, compose_executors
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
     DEBUG_LEVELS,
@@ -663,6 +663,14 @@ class Runtime:
             build on its own, such as ``ingestion``'s ``IngestionStageExecutor`` (it needs a
             concrete request that is never part of a configuration). A stage with neither a
             composed nor a supplied executor is blocked by preflight.
+        providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
+            Qwen, Gemini, Florence-2 and every other backend ``compose_executors`` builds
+            through a ``RuntimeProvider``), keyed by component identity
+            (``"<capability>.<slot>"``), in the exact shape
+            :func:`~contextmap.runtime.composition.compose_executors` already expects. Without
+            it, a stage whose selected backends need one (today, ``visual_perception`` unless
+            every one of its four backends bundles its own loader) is composed by neither this
+            runtime nor a frontend that never builds a whole executor by hand.
         verifier: Tells whether an indexed artifact still exists and is intact. Reuse and resume
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
@@ -678,6 +686,7 @@ class Runtime:
         *,
         workspace: str | os.PathLike[str] | None = None,
         executors: Mapping[str, StageExecutor] | None = None,
+        providers: Mapping[str, RuntimeProvider] | None = None,
         verifier: Callable[[ArtifactRef], bool] | None = None,
         adapter_factory: SourceAdapterFactory | None = None,
         environ: Mapping[str, str] | None = None,
@@ -687,6 +696,7 @@ class Runtime:
         """Create a runtime; nothing is loaded and nothing is discovered."""
         self._workspace = None if workspace is None else Path(workspace)
         self._executors = dict(executors or {})
+        self._providers = dict(providers or {})
         self._verifier = verifier
         self._adapter_factory = adapter_factory
         self._environ = environ
@@ -1209,14 +1219,18 @@ class Runtime:
         """Merge the executors composed from ``config`` with the ones given at construction.
 
         ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
-        ``geometric_mapping``, ``sensor_association`` and ``semantic_fusion``) from ``config``
-        alone; a stage it cannot build for any reason is simply absent, never raised (see its
-        own docstring). Whatever this runtime was constructed with in ``executors`` (a test
-        double, a stage composition cannot build such as ``ingestion``, or an explicit
-        override) is layered on top and always wins.
+        ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once
+        ``self._providers`` supplies a runtime for every backend that needs one,
+        ``visual_perception``) from ``config`` alone; a stage it cannot build for any reason is
+        simply absent, never raised (see its own docstring). Whatever this runtime was
+        constructed with in ``executors`` (a test double, a stage composition cannot build such
+        as ``ingestion``, or an explicit override) is layered on top and always wins.
         """
         composed = compose_executors(
-            config, environ=self._environ, module_available=self._module_available
+            config,
+            providers=self._providers,
+            environ=self._environ,
+            module_available=self._module_available,
         )
         return {**composed, **self._executors}
 

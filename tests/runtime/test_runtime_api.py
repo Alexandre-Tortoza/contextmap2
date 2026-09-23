@@ -460,6 +460,32 @@ def test_a_runtime_with_no_injected_executors_still_composes_them_from_configura
         assert stage not in report.missing_executors
 
 
+def test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade(
+    tmp_path: Path,
+) -> None:
+    """``providers=`` reaches the facade's own composition path exactly like the CLI's.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader: without a ``RuntimeProvider`` for
+    each, ``visual_perception`` stays a genuine ``missing_executors`` entry (see
+    ``test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration``).
+    Supplying them through ``Runtime(providers=...)`` -- not a hand-built executor for the
+    whole stage -- lets ``compose_executors`` build the real thing.
+    """
+    providers = {
+        "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+    }
+    runtime = Runtime(
+        workspace=tmp_path / "ws", providers=providers, module_available=_ready, environ={}
+    )
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
 def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
