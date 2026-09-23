@@ -30,8 +30,18 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 SCENARIO_SCHEMA = "contextmap.e2e.scenario/v1"
 ACCEPTANCE_REPORT_SCHEMA = "contextmap.e2e.acceptance-report/v1"
 SCENARIO_ID = "solution-1-canonical"
-SCENARIO_VERSION = "1.0.0"
-"""Version of the frozen scenario; any change to a frozen decision needs a new one."""
+SCENARIO_VERSION = "1.0.1"
+"""Version of the frozen scenario; any change to a frozen decision needs a new one.
+
+1.0.1 fixes the runtime-selection completeness bug that #540's real catalog wiring for
+``entity_resolution``/``spatial_relations`` exposed: those capabilities, and the policy
+components ``geometric_mapping``/``sensor_association`` already had, now declare catalog
+components and therefore need an explicit backend selected (the runtime never chooses one on
+the caller's behalf, even when a policy has a single option). The profile now also resolves
+against ``canonical/2`` instead of ``canonical/1``, since that is the preset whose topology
+actually includes semantic mapping, entity resolution and spatial relations. Neither change
+alters the dataset, the gates, the ablation-only list or any stage's scientific rationale.
+"""
 
 CROSS_STAGE = "cross_stage"
 """Capability name of a gate about a boundary; the failing capability is named per result."""
@@ -448,8 +458,14 @@ def scenario_snapshot_name(scenario: E2EScenario) -> str:
     return f"{scenario.scenario_id}-{scenario.version}-{scenario.subject.subject_id}.json"
 
 
-RUNTIME_PRESET = "canonical/1"
-"""Runtime topology preset the scenario's profile is expressed against."""
+RUNTIME_PRESET = "canonical/2"
+"""Runtime topology preset the scenario's profile is expressed against.
+
+``canonical/2`` is ``canonical/1`` extended to semantic mapping, entity resolution and spatial
+relations (see :data:`contextmap.runtime.catalog.EXTENDED_PROFILE_ID`); the scenario's
+``context_map`` stage is not part of either preset's DAG and is assembled as an explicit step
+after the run, not selected here.
+"""
 
 _OPTIONAL_STAGES_OFF = ("point_representation",)
 """Optional runtime stages the canonical profile keeps off; they run only as ablations."""

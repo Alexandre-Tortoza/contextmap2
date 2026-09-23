@@ -51,7 +51,7 @@
       "reason": "The baseline resolves on geometry; extra evidence is an ablation."
     }
   ],
-  "digest": "sha256:1bbed3b51366cb7c1c984faa03b1846065d92954f017734ad53101a209e1de93",
+  "digest": "sha256:6cb84daecf94947546a61f95566d162b2a6ac7b0d9ce13509b575310e31cbaa4",
   "gates": [
     {
       "capability": "ingestion",
@@ -394,13 +394,45 @@
     },
     {
       "capability": "geometric_mapping",
-      "components": [],
-      "rationale": "One persistent map in the trajectory frame; geometry has no backend choice.",
+      "components": [
+        {
+          "backend": "lookup-policy-v1",
+          "component_id": "geometric_mapping.pose_lookup",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "motion-correction-v1",
+          "component_id": "geometric_mapping.motion_correction",
+          "external_service": false,
+          "model": null
+        }
+      ],
+      "rationale": "One persistent map in the trajectory frame; each policy has one option today.",
       "stage_id": "geometric_mapping"
     },
     {
       "capability": "sensor_association",
-      "components": [],
+      "components": [
+        {
+          "backend": "conservative-depth-support-v1",
+          "component_id": "sensor_association.occlusion",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "diagnostic-tolerances-v1",
+          "component_id": "sensor_association.tolerances",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "lookup-policy-v1",
+          "component_id": "sensor_association.pose_policy",
+          "external_service": false,
+          "model": null
+        }
+      ],
       "rationale": "Calibrated projection with explicit visibility and occlusion policies.",
       "stage_id": "sensor_association"
     },
@@ -431,13 +463,51 @@
     },
     {
       "capability": "entity_resolution",
-      "components": [],
+      "components": [
+        {
+          "backend": "entity-candidate-retrieval-v1",
+          "component_id": "entity_resolution.retrieval",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "conservative-staged-resolution-v1",
+          "component_id": "entity_resolution.resolution",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "entity-geometry-comparison-v1",
+          "component_id": "entity_resolution.geometry_comparison",
+          "external_service": false,
+          "model": null
+        }
+      ],
       "rationale": "Decides identity across supports; prefers unresolved to a silent merge.",
       "stage_id": "entity_resolution"
     },
     {
       "capability": "spatial_relations",
-      "components": [],
+      "components": [
+        {
+          "backend": "map-frame-conventions-v1",
+          "component_id": "spatial_relations.frame_conventions",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "bounds-neighborhood-candidates-v1",
+          "component_id": "spatial_relations.candidate",
+          "external_service": false,
+          "model": null
+        },
+        {
+          "backend": "entity-geometry-summary-v1",
+          "component_id": "spatial_relations.geometry_summary",
+          "external_service": false,
+          "model": null
+        }
+      ],
       "rationale": "Derives relations from resolved entities and never replaces their evidence.",
       "stage_id": "spatial_relations"
     },
@@ -576,5 +646,5 @@
     "sequence_manifest_digest": "sha256:74d39984385d63de00480249d1fe9d774f639e6172c89f5ceb0eafa078cc468d",
     "subject_id": "corridor-02-sample"
   },
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

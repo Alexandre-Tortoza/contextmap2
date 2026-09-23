@@ -202,11 +202,35 @@ def _stages() -> tuple[ScenarioStage, ...]:
         ScenarioStage(
             stage_id="geometric_mapping",
             capability="geometric_mapping",
-            rationale="One persistent map in the trajectory frame; geometry has no backend choice.",
+            components=(
+                ComponentSelection(
+                    component_id="geometric_mapping.pose_lookup", backend="lookup-policy-v1"
+                ),
+                ComponentSelection(
+                    component_id="geometric_mapping.motion_correction",
+                    backend="motion-correction-v1",
+                ),
+            ),
+            rationale=(
+                "One persistent map in the trajectory frame; each policy has one option today."
+            ),
         ),
         ScenarioStage(
             stage_id="sensor_association",
             capability="sensor_association",
+            components=(
+                ComponentSelection(
+                    component_id="sensor_association.occlusion",
+                    backend="conservative-depth-support-v1",
+                ),
+                ComponentSelection(
+                    component_id="sensor_association.tolerances",
+                    backend="diagnostic-tolerances-v1",
+                ),
+                ComponentSelection(
+                    component_id="sensor_association.pose_policy", backend="lookup-policy-v1"
+                ),
+            ),
             rationale="Calibrated projection with explicit visibility and occlusion policies.",
         ),
         ScenarioStage(
@@ -235,11 +259,39 @@ def _stages() -> tuple[ScenarioStage, ...]:
         ScenarioStage(
             stage_id="entity_resolution",
             capability="entity_resolution",
+            components=(
+                ComponentSelection(
+                    component_id="entity_resolution.retrieval",
+                    backend="entity-candidate-retrieval-v1",
+                ),
+                ComponentSelection(
+                    component_id="entity_resolution.resolution",
+                    backend="conservative-staged-resolution-v1",
+                ),
+                ComponentSelection(
+                    component_id="entity_resolution.geometry_comparison",
+                    backend="entity-geometry-comparison-v1",
+                ),
+            ),
             rationale="Decides identity across supports; prefers unresolved to a silent merge.",
         ),
         ScenarioStage(
             stage_id="spatial_relations",
             capability="spatial_relations",
+            components=(
+                ComponentSelection(
+                    component_id="spatial_relations.frame_conventions",
+                    backend="map-frame-conventions-v1",
+                ),
+                ComponentSelection(
+                    component_id="spatial_relations.candidate",
+                    backend="bounds-neighborhood-candidates-v1",
+                ),
+                ComponentSelection(
+                    component_id="spatial_relations.geometry_summary",
+                    backend="entity-geometry-summary-v1",
+                ),
+            ),
             rationale="Derives relations from resolved entities and never replaces their evidence.",
         ),
         ScenarioStage(

@@ -438,7 +438,7 @@ def test_the_scenario_selects_its_backends_in_a_runtime_configuration_document()
     document = scenario_runtime_document(scenario)
 
     assert document["pipeline"] == {
-        "preset": "canonical/1",
+        "preset": "canonical/2",
         # Point Representation é só por ablação: o perfil canônico a mantém desligada.
         "stages": {"point_representation": False},
     }

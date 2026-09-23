@@ -34,9 +34,13 @@ def test_the_runtime_topology_contains_every_required_stage_and_keeps_optional_o
     document = _resolve(tmp_path).config.to_document()
     stages = document["pipeline"]["stages"]
 
-    assert document["pipeline"]["preset"] == "canonical/1"
-    assert {stage.stage_id for stage in scenario.stages} <= set(stages)
-    assert all(stages[stage.stage_id] for stage in scenario.stages)
+    assert document["pipeline"]["preset"] == "canonical/2"
+    # context_map não é estágio de nenhum preset (a montagem roda fora do DAG); o cenário o
+    # declara como capability alvo para os gates de avaliação, não como estágio selecionável.
+    assert {stage.stage_id for stage in scenario.stages} - {"context_map"} <= set(stages)
+    assert all(
+        stages[stage.stage_id] for stage in scenario.stages if stage.stage_id != "context_map"
+    )
     # Point Representation existe no runtime e fica desligada: só entra por ablação.
     assert stages["point_representation"] is False
     assert set(stages) - {stage.stage_id for stage in scenario.stages} == {"point_representation"}

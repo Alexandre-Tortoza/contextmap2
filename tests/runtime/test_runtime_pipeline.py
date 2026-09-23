@@ -39,12 +39,8 @@ CANONICAL_ORDER = [
     "geometric_mapping",
     "sensor_association",
     "semantic_fusion",
-    "semantic_mapping",
-    "entity_resolution",
-    "spatial_relations",
-    "context_map",
 ]
-IMPLEMENTED = CANONICAL_ORDER[:6]
+IMPLEMENTED = CANONICAL_ORDER
 
 
 def _ready(_name: str) -> bool:
@@ -153,11 +149,7 @@ class TestCanonicalDag:
 
         assert not stage.available
         assert "milestone" in stage.unavailable_reason
-        assert [item.source for item in stage.inputs] == [
-            "geometric_mapping",
-            "entity_resolution",
-            "spatial_relations",
-        ]
+        assert [item.source for item in stage.inputs] == ["geometric_mapping"]
 
 
 class TestPersistedTopology:

@@ -51,12 +51,12 @@ PLAN_ORDER = (
     "sensor_association",
     "point_representation",
     "semantic_fusion",
-    "semantic_mapping",
-    "entity_resolution",
-    "spatial_relations",
-    "context_map",
 )
-RUN_ORDER = PLAN_ORDER[:7]
+RUN_ORDER = PLAN_ORDER
+# `canonical/1`'s own topology, extended by the ``unavailable_context_map`` fixture with a
+# ``context_map`` stage marked unavailable -- it never joins ``run_stages`` because it is not
+# a dependency of any real target.
+PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP = (*PLAN_ORDER, "context_map")
 
 
 def _ready(_name: str) -> bool:
@@ -146,7 +146,7 @@ def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> N
     capabilities = Runtime(module_available=_ready, environ={}).capabilities()
     by_stage = {capability.stage_id: capability for capability in capabilities}
 
-    assert tuple(by_stage) == PLAN_ORDER
+    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
     ingestion = by_stage["ingestion"]
     assert ingestion.implemented
     assert [component.component_id for component in ingestion.components] == [
@@ -377,8 +377,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
 
     by_stage = {stage.stage_id: stage for stage in plan.stages}
     assert plan.preset == "canonical/1"
-    assert plan.order == PLAN_ORDER
-    assert tuple(by_stage) == PLAN_ORDER
+    assert plan.order == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
+    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_CONTEXT_MAP
     assert plan.run_stages == RUN_ORDER
     assert (plan.config_digest, plan.disabled_stages, plan.problems) == (config.digest, (), ())
     association = by_stage["sensor_association"]

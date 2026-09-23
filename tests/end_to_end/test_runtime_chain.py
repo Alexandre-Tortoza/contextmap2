@@ -301,9 +301,9 @@ def _executors() -> dict[str, Any]:
                     tilt_tolerance_deg=2.0,
                     leaning_min_vertical_overlap_m=0.3,
                 ),
-            ),
-            geometry_summary=GeometrySummaryPolicy(
-                sparse_point_threshold=3, connectivity_radius_m=0.5
+                geometry_summary=GeometrySummaryPolicy(
+                    sparse_point_threshold=3, connectivity_radius_m=0.5
+                ),
             ),
         ),
     }
