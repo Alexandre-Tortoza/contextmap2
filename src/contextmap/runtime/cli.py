@@ -10,17 +10,21 @@ configuration override, so the CLI never becomes a second place that decides wha
 
 Stage executors: for every command that runs or previews a plan, the executors that
 :func:`~contextmap.runtime.composition.compose_executors` can build from the resolved
-configuration (``state_estimation``, ``geometric_mapping``, ``sensor_association`` and
-``semantic_fusion`` unconditionally; ``visual_perception`` once a runtime is available for
-every one of its selected backends that has no bundled loader -- SAM2, SAM3, Qwen, Gemini
-and Florence-2 today) are composed automatically, so the installed ``contextmap`` binary
-executes them with **no Python wrapper**: a runtime provider can be supplied either through
-``main(providers=...)`` (a Python embedder only) or, for the installed binary itself,
-declared in configuration as a ``resources.providers`` target (a ``"module:attribute"``
-string, resolved by :func:`~contextmap.runtime.composition.resolve_provider`; see
-``docs/composition.md`` and ``docs/configuration.md``). Executors supplied by the caller of
-:func:`main` (tests, or a future embedder) are merged on top and always win, so an explicit
-injection can override or extend what was composed -- including ``ingestion``, whose
+configuration (``state_estimation``, ``geometric_mapping``, ``sensor_association``,
+``semantic_fusion``, ``entity_resolution`` and ``spatial_relations`` unconditionally;
+``visual_perception`` once a runtime is available for every one of its selected backends
+that has no bundled loader -- SAM2, SAM3, Qwen, Gemini and Florence-2 today) are composed
+automatically, so the installed ``contextmap`` binary executes them with **no Python
+wrapper**: a runtime provider can be supplied either through ``main(providers=...)`` (a
+Python embedder only) or, for the installed binary itself, declared in configuration as a
+``resources.providers`` target (a ``"module:attribute"`` string, resolved by
+:func:`~contextmap.runtime.composition.resolve_provider`; see ``docs/composition.md`` and
+``docs/configuration.md``). The same mechanism covers any other optional component that
+needs a model runtime or client the repository does not load itself (for example
+``entity_resolution.appearance``), keyed by component identity (``"<capability>.<slot>"``).
+Executors supplied by the caller of :func:`main` (tests, or a future embedder) are merged
+on top and always win, so an explicit injection can override or extend what was composed --
+including ``ingestion``, whose
 :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor` needs a concrete
 request that is never part of a configuration (see ``contextmap ingest``).
 ``point_representation`` has no real executor yet: without an injection, a real run of that
@@ -189,16 +193,16 @@ def main(
             with neither a composed nor a supplied executor is blocked by preflight.
         providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
             Qwen, Gemini, Florence-2 and every other backend built through
-            :meth:`~contextmap.runtime.composition._Context.runtime`), keyed by component
-            identity (``"<capability>.<slot>"``) in the exact shape
+            :meth:`~contextmap.runtime.composition._Context.runtime`, for example
+            ``entity_resolution.appearance`` or ``visual_perception``'s four backends), keyed
+            by component identity (``"<capability>.<slot>"``) in the exact shape
             :func:`~contextmap.runtime.composition.compose_executors` already expects. This is
             the Python-embedding path; the installed binary instead declares a
             ``resources.providers`` target in configuration for the same component (see the
             module docstring) -- an entry given here for a component that also has one
             declared still wins, and that override is recorded on the run's ``run_planned``
-            event. Without either, a stage whose selected backends need one (today,
-            ``visual_perception`` unless every one of its four backends bundles its own
-            loader) is composed by neither this call nor a Python embedder.
+            event. Without either, a component that needs one composes as absent, exactly
+            like an incomplete selection, never with a substitute.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse

@@ -105,6 +105,16 @@ Uma consequência do streaming: a checagem "já existe um artefato em `output_di
 
 `SequenceArtifactReader(artifact_dir)` abre um artefato existente, expõe `manifest`, `list_observations()` (todas as observações decodificadas, na ordem do índice), `get_observation(observation_id)` (busca por identidade), `read_calibration()`/`read_provenance()`/`read_diagnostics()` (`None` quando não persistidos) e `verify_integrity()` (lista de problemas estruturais, incluindo cross-references inválidas entre `index.jsonl` e o inventário de arquivos — ver [`provenance.md`](provenance.md); lista vazia = artefato íntegro).
 
+### Custo de leitura: índice vs. payload (issue #374)
+
+`list_observations()` é a única operação cujo custo é, por definição, proporcional ao payload total: ela decodifica cada observação, incluindo o binário de `rgb/`/`pointcloud/`, porque seu contrato é devolver a sequência inteira materializada. Toda outra forma de leitura tem custo proporcional apenas ao tamanho do índice (`index.jsonl`), nunca ao payload:
+
+- `get_observation(observation_id)` resolve a identidade através de um índice `observation_id -> offset` (`iter_index()`), construído uma vez por reader a partir do índice e mantido em cache — não mais via varredura linear que decodificava (com payload) cada observação anterior à procurada.
+- `read_diagnostics()` resolve os `dropped-events.jsonl` decodificando só os `observation_id` neles referenciados (via o mesmo índice `observation_id -> offset`), não a sequência inteira.
+- `iter_index()` expõe `(offset, observation_id, timestamp)` por linha, sem nunca abrir um arquivo de payload; é o que `resolve_selection()` (`sequence_selection.py`) usa para decidir quais observações casam com uma seleção antes de decodificar qualquer uma delas. `observation_at(offset)` decodifica uma única observação (payload incluído, quando a modalidade tiver um) a partir de um offset devolvido por `iter_index()`.
+
+Medido contra o artefato real `corridor-02` (208.697 observações, 24,4 GB de payload, ver issue #374 para o método): `read_diagnostics()` caiu de ~24 GB de pico de RSS para ~605 MB; `resolve_selection()` de uma janela de 90 s (21.035 de 208.697 observações) caiu de 13-24 GB para ~42 MB ao resolver (a seleção só decide *quais* observações casam) e ~2,3 GB caso o chamador efetivamente materialize/acesse o payload de todas as observações selecionadas — esse último número é o tamanho real do payload da janela, não um bug; `get_observation()` caiu de 12,1 s para ~1,6 s.
+
 ## Reabertura sem a fonte original
 
 Um artefato v0 é reaberto apenas com `manifest.json`, `index.jsonl` e os arquivos em `rgb/`/`pointcloud/` — nenhum deles exige reabrir o bag/dataset original nem depende de tipos ROS-nativos.

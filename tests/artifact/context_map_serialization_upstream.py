@@ -76,7 +76,10 @@ _CANDIDATES = CandidatePolicy(
     directional_radius_m=2.0,
 )
 _POLICIES = RelationsRunPolicies(
-    frame_conventions=_CONVENTIONS, candidate=_CANDIDATES, geometric=_GEOMETRIC
+    frame_conventions=_CONVENTIONS,
+    candidate=_CANDIDATES,
+    geometry_summary=_SUMMARY_POLICY,
+    geometric=_GEOMETRIC,
 )
 
 

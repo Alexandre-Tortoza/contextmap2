@@ -79,6 +79,7 @@ LINEAGE = RelationsRunLineage(
 POLICIES = RelationsRunPolicies(
     frame_conventions=CONVENTIONS,
     candidate=CANDIDATES,
+    geometry_summary=LATTICE_POLICY,
     geometric=GEOMETRIC,
     contact=CONTACT,
 )

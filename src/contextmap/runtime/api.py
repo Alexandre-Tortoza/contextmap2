@@ -138,16 +138,22 @@ class RuntimeComponent:
     Attributes:
         component_id: ``"<capability>.<slot>"``.
         backends: The selectable backends.
+        optional: Whether the stage that owns this component still runs with no backend
+            selected for it (see :class:`~contextmap.runtime.catalog.ComponentSpec`). A
+            consumer must treat "no backend" as one legitimate, explicit state for such a
+            component, never as an incomplete one.
     """
 
     component_id: str
     backends: tuple[RuntimeBackend, ...]
+    optional: bool
 
     def to_document(self) -> dict[str, Any]:
         """Return the JSON-compatible form."""
         return {
             "component_id": self.component_id,
             "backends": [backend.to_document() for backend in self.backends],
+            "optional": self.optional,
         }
 
 
@@ -665,16 +671,15 @@ class Runtime:
             composed nor a supplied executor is blocked by preflight.
         providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
             Qwen, Gemini, Florence-2 and every other backend ``compose_executors`` builds
-            through a ``RuntimeProvider``), keyed by component identity
+            through a ``RuntimeProvider``, for example ``entity_resolution.appearance`` or
+            ``visual_perception``'s four backends), keyed by component identity
             (``"<capability>.<slot>"``), in the exact shape
             :func:`~contextmap.runtime.composition.compose_executors` already expects. An
             entry here for a component whose configuration also declares a
             ``resources.providers`` target still wins over that declared target, and the
             override is recorded on the run's own ``run_planned`` event. Without either a
-            provider given here or a declared target, a stage whose selected backends need
-            one (today, ``visual_perception`` unless every one of its four backends bundles
-            its own loader) is composed by neither this runtime nor a frontend that never
-            builds a whole executor by hand.
+            provider given here or a declared target, a component that needs one is composed
+            as absent, exactly like an incomplete selection, never with a substitute.
         verifier: Tells whether an indexed artifact still exists and is intact. Reuse and resume
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
@@ -1101,6 +1106,7 @@ class Runtime:
                         self._backend(component_id, backend_id)
                         for backend_id in sorted(COMPONENTS[component_id].backends)
                     ),
+                    optional=COMPONENTS[component_id].optional,
                 )
                 for component_id in stage.components
             ),
@@ -1316,11 +1322,17 @@ def _editable(
             continue
         for component_id in stage.components:
             component = config.config.components[component_id]
+            spec = COMPONENTS[component_id]
+            backend_choices: tuple[Any, ...] = tuple(sorted(spec.backends))
+            if spec.optional:
+                # Componente genuinamente opcional: "nenhum backend" é um estado válido e
+                # explícito, então precisa aparecer em `allowed`, nunca só em `current`.
+                backend_choices = (*backend_choices, None)
             edits.append(
                 RuntimeEdit(
                     path=f"components.{component_id}.backend",
                     kind="choice",
-                    allowed=tuple(sorted(COMPONENTS[component_id].backends)),
+                    allowed=backend_choices,
                     current=component.backend,
                 )
             )

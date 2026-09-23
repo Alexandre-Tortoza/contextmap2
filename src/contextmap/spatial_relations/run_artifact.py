@@ -49,6 +49,7 @@ from contextmap.entity_resolution import (
     resolution_artifact_digest,
 )
 from contextmap.geometric_mapping import MapId
+from contextmap.semantic_mapping import GEOMETRY_SUMMARY_ALGORITHM_ID, GeometrySummaryPolicy
 from contextmap.shared import AtomicRunDirectory, FileEntry, RunDirectoryError, check_file_inventory
 from contextmap.spatial_relations._identity import directed_key, reference_key
 from contextmap.spatial_relations.candidates import (
@@ -200,12 +201,17 @@ class RelationsRunPolicies:
     Attributes:
         frame_conventions: The axes the run declared for the map frame.
         candidate: The candidate generation policy.
+        geometry_summary: The policy that summarized each resolved entity's geometry before
+            candidate generation; it measurably affects the geometric and contact predicate
+            outputs (see :func:`~contextmap.spatial_relations.resolved_entity_geometries`), so
+            it is part of the run's provenance exactly like every other effective policy.
         geometric: The geometric predicate policy, when geometric evidence was produced.
         contact: The contact predicate policy, when contact evidence was produced.
     """
 
     frame_conventions: FrameConventions
     candidate: CandidatePolicy
+    geometry_summary: GeometrySummaryPolicy
     geometric: GeometricPredicatePolicy | None = None
     contact: ContactPredicatePolicy | None = None
 
@@ -825,6 +831,11 @@ def _policies_record(policies: RelationsRunPolicies) -> dict[str, Any]:
             "forward_axis": (
                 None if conventions.forward_axis is None else conventions.forward_axis.value
             ),
+        },
+        "geometry_summary": {
+            "policy_id": GEOMETRY_SUMMARY_ALGORITHM_ID,
+            "fingerprint": policies.geometry_summary.fingerprint(),
+            "parameters": dataclasses.asdict(policies.geometry_summary),
         },
         "observation": {
             "rule_id": OBSERVATION_RULE_ID,
