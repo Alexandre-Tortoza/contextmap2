@@ -53,6 +53,7 @@ import time
 import tracemalloc
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,8 @@ from contextmap.artifact.references import (
 )
 from contextmap.artifact.serialization.dependencies import artifact_digest
 from contextmap.artifact.serialization.errors import UnresolvedReferenceError, UpstreamArtifactError
+from contextmap.artifact.serialization.manifest import ContextMapArtifactManifest
+from contextmap.artifact.serialization.writer import ContextMapArtifactWriter
 from contextmap.artifact.versioning import CONTEXT_MAP_SCHEMA_VERSION
 from contextmap.entity_resolution import (
     EntityResolutionRunReader,
@@ -217,8 +220,9 @@ class AssemblyMetrics:
             capabilities) is checked: :mod:`contextmap.artifact.composition` and the lineage
             checks run entirely inside ``ContextMap.__post_init__``, so this is the map's real
             validation cost, not a separate pass this function invents. This function never
-            writes the map to disk, so there is no separate write duration to report here; see
-            ``docs/assembly.md`` for that scope note.
+            writes the map to disk, so there is no write duration here; see
+            :func:`write_context_map_with_metrics` for that separate measurement (issue #537
+            asks for the two to be reported separately, not for this function to also write).
         peak_memory_bytes: Peak Python-allocated memory observed during the call
             (:mod:`tracemalloc`), from the moment measurement started.
         entity_count: Entities the assembled map actually carries.
@@ -309,6 +313,54 @@ def assemble_context_map_with_metrics(
     return AssemblyResult(context_map=context_map, metrics=metrics)
 
 
+@dataclass(frozen=True, kw_only=True)
+class WriteMetrics:
+    """Wall time spent persisting an already-assembled map (issue #537).
+
+    Attributes:
+        write_duration_seconds: Wall time of :meth:`~contextmap.artifact.serialization.writer.
+            ContextMapArtifactWriter.write` itself: opening and verifying the upstream artifacts
+            it cites, encoding every record table and publishing the directory atomically.
+    """
+
+    write_duration_seconds: float
+
+
+def write_context_map_with_metrics(
+    context_map: ContextMap,
+    *,
+    output_dir: Path,
+    upstream_locations: Mapping[str, Path],
+    written_at: datetime | None = None,
+) -> tuple[ContextMapArtifactManifest, WriteMetrics]:
+    """Persist ``context_map`` exactly like :class:`ContextMapArtifactWriter`, measuring the write.
+
+    Kept separate from :func:`assemble_context_map_with_metrics`: persisting an already-assembled
+    map is the writer's own responsibility, not assembly's (:class:`ContextMapArtifactWriter`'s
+    own docstring), and issue #537 asks validation and write duration to be reported as two
+    separate measurements, not folded into one "assembly" number. This adds only the wall-clock
+    measurement around an otherwise unmodified call to the writer.
+
+    Args:
+        context_map: The map to persist; typically the ``context_map`` of an
+            :class:`AssemblyResult`.
+        output_dir: See :meth:`ContextMapArtifactWriter.__init__`.
+        upstream_locations: See :meth:`ContextMapArtifactWriter.write`.
+        written_at: See :meth:`ContextMapArtifactWriter.__init__`.
+
+    Returns:
+        The published manifest and how long the write itself took.
+
+    Raises:
+        Same as :meth:`ContextMapArtifactWriter.write`.
+    """
+    writer = ContextMapArtifactWriter(output_dir=output_dir, written_at=written_at)
+    write_started = time.perf_counter()
+    manifest = writer.write(context_map, upstream_locations=upstream_locations)
+    write_ended = time.perf_counter()
+    return manifest, WriteMetrics(write_duration_seconds=write_ended - write_started)
+
+
 def _assemble_fields(
     *,
     context_map_id: ContextMapId,
@@ -355,13 +407,7 @@ def _assemble_fields(
         entities, identities, fusion_lineage = _translate_entities(
             context_map_id, resolution_reader.resolved_entities(), materialization.policy
         )
-        lineage.append(
-            _resolution_upstream_artifact(
-                resolution_reader,
-                entity_resolution_location,
-                configuration_fingerprint=materialization.policy.configuration_fingerprint,
-            )
-        )
+        lineage.append(_resolution_upstream_artifact(resolution_reader, entity_resolution_location))
         lineage.extend(_semantic_map_upstream_artifacts(resolution_reader.manifest.lineage))
         lineage.extend(fusion_lineage)
 
@@ -381,13 +427,7 @@ def _assemble_fields(
                 )
             relations = _translate_relations(relations_reader, identities, geometry_manifest.map_id)
             lineage.append(
-                _relations_upstream_artifact(
-                    relations_reader,
-                    spatial_relations_location,
-                    configuration_fingerprint=_relations_configuration_fingerprint(
-                        relations_reader
-                    ),
-                )
+                _relations_upstream_artifact(relations_reader, spatial_relations_location)
             )
 
     return {
@@ -500,25 +540,25 @@ def _geometry_upstream_artifact(
 
 
 def _resolution_upstream_artifact(
-    reader: EntityResolutionRunReader, location: Path, *, configuration_fingerprint: str | None
+    reader: EntityResolutionRunReader, location: Path
 ) -> UpstreamArtifact:
-    """The ``ENTITY_RESOLUTION_RUN`` lineage entry, citing the materialization's own fingerprint.
+    """The ``ENTITY_RESOLUTION_RUN`` lineage entry.
 
-    ``configuration_fingerprint`` is the materialization policy's effective configuration
-    (``EntityResolutionRunReader.materialization().policy.configuration_fingerprint``), the one
-    role of this run assembly actually reads. It belongs here, on the run's own lineage entry —
-    "hash of the effective configuration that produced it" is exactly what ``UpstreamArtifact.
-    configuration_fingerprint`` documents — not folded into the per-entity ``PolicyRef.version``
-    ``_translate_resolution_policy`` builds: issue #541's blocker 3 was exactly that conflation
-    (a different configuration of the *same* rule version showing up in the map as a different
-    rule version). The run may have other, unread roles (candidate retrieval, comparison gates) with
-    their own fingerprints; this cites only the one this module actually opened and used.
+    ``UpstreamArtifact.configuration_fingerprint`` documents "hash of the effective
+    configuration that produced it" — the whole run, not one of its roles. An Entity Resolution
+    run has several independently-configured roles (materialization, candidate retrieval,
+    comparison gates, ...), each with its own fingerprint; assembly only opens the
+    materialization role, so citing its fingerprint here would misrepresent it as the run's
+    single effective configuration (review of issue #541, second round). This stays ``None``
+    until the capability exposes one fingerprint for the whole run; the materialization
+    fingerprint itself is still available, unrenamed, wherever
+    ``EntityResolutionRunReader.materialization().policy.configuration_fingerprint`` is reachable.
     """
     return UpstreamArtifact(
         artifact_id=str(reader.run_id),
         kind=ArtifactKind.ENTITY_RESOLUTION_RUN,
         content_identity=artifact_digest(location),
-        configuration_fingerprint=configuration_fingerprint,
+        configuration_fingerprint=None,
         code_version=reader.manifest.code_version,
         model_identities=(),
     )
@@ -552,30 +592,26 @@ def _semantic_map_upstream_artifacts(lineage: ResolutionRunLineage) -> tuple[Ups
 
 
 def _relations_upstream_artifact(
-    reader: SpatialRelationsRunReader, location: Path, *, configuration_fingerprint: str | None
+    reader: SpatialRelationsRunReader, location: Path
 ) -> UpstreamArtifact:
+    """The ``SPATIAL_RELATIONS_RUN`` lineage entry.
+
+    Same reasoning as :func:`_resolution_upstream_artifact`: a Spatial Relations run has several
+    independently-configured policies (``frame_conventions``, ``candidate``,
+    ``geometry_summary``, ``geometric``, ``contact``). A single relation's own
+    ``RelationProvenance.configuration_fingerprint`` covers only the decision-policy role, not
+    the run's other policies, so citing it here would misrepresent it as the whole run's
+    effective configuration (review of issue #541, second round). This stays ``None`` until the
+    capability exposes one fingerprint for the whole run.
+    """
     return UpstreamArtifact(
         artifact_id=str(reader.manifest.run_id),
         kind=ArtifactKind.SPATIAL_RELATIONS_RUN,
         content_identity=artifact_digest(location),
-        configuration_fingerprint=configuration_fingerprint,
+        configuration_fingerprint=None,
         code_version=reader.manifest.code_version,
         model_identities=(),
     )
-
-
-def _relations_configuration_fingerprint(reader: SpatialRelationsRunReader) -> str | None:
-    """The one decision-policy configuration every relation of a run was decided under.
-
-    ``RelationProvenance.configuration_fingerprint`` is recorded per relation, not once on the
-    run's own manifest (``RelationsRunPolicies`` has no decision-policy entry), because
-    ``decide_relations`` is one deterministic call over the whole candidate set: every relation of
-    a run genuinely shares the same effective configuration, so the first relation already
-    represents it. A run with zero relations configured nothing to fingerprint, so this stays
-    ``None`` instead of inventing one.
-    """
-    first = next(iter(reader.iter_relations()), None)
-    return None if first is None else first.provenance.configuration_fingerprint
 
 
 def _split_policy_id(policy_id: str) -> tuple[str, str]:

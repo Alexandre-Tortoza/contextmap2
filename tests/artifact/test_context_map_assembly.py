@@ -59,6 +59,7 @@ from contextmap.artifact.references import ContextEntityReference
 from contextmap.artifact.serialization.assembly import (
     AssemblyResult,
     assemble_context_map_with_metrics,
+    write_context_map_with_metrics,
 )
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
@@ -668,12 +669,11 @@ def test_entity_origin_policy_is_not_the_configuration_fingerprint(tmp_path: Pat
     )
     assert entity.origin.policy.version != materialization_policy.configuration_fingerprint
 
-    # A configuração efetiva não é descartada: passa a viver na linhagem do próprio run.
+    # Nem um fingerprint parcial (só a política de materialização) é gravado como se fosse a
+    # configuração efetiva do run inteiro: o run tem outros papéis não lidos aqui (retrieval,
+    # comparação), cada um com seu próprio fingerprint (revisão do #541, ver docs/assembly.md).
     resolution_entry = context_map.upstream_artifact(str(resolution.run_id))
-    assert (
-        resolution_entry.configuration_fingerprint
-        == materialization_policy.configuration_fingerprint
-    )
+    assert resolution_entry.configuration_fingerprint is None
 
 
 def test_relation_origin_policy_does_not_conflate_taxonomy_version(tmp_path: Path) -> None:
@@ -700,11 +700,11 @@ def test_relation_origin_policy_does_not_conflate_taxonomy_version(tmp_path: Pat
         assert relation.origin.policy.version == "v1"
         assert relation.origin.policy.version != first_relation.provenance.taxonomy_version
 
+    # Idem: o run de Spatial Relations tem várias políticas efetivas (frame_conventions,
+    # candidate, geometry_summary, geometric, contact); a de uma relação isolada não representa
+    # a configuração do run inteiro, então não é gravada como se representasse.
     relations_entry = context_map.upstream_artifact(str(relations_run.manifest.run_id))
-    assert (
-        relations_entry.configuration_fingerprint
-        == first_relation.provenance.configuration_fingerprint
-    )
+    assert relations_entry.configuration_fingerprint is None
 
 
 # --- relation evidence provenance (issue #541, should-fix 4) --------------------------------------
@@ -872,3 +872,41 @@ def test_round_trip_assemble_write_reopen_same_record(tmp_path: Path) -> None:
         reopened = reader.context_map()
 
     assert context_map_to_record(reopened) == context_map_to_record(context_map)
+
+
+# --- write metrics (issue #537, acceptance gap) ----------------------------------------------
+
+
+def test_write_context_map_with_metrics_reports_the_write_and_matches_the_plain_writer(
+    tmp_path: Path,
+) -> None:
+    """``write_context_map_with_metrics`` publishes the same artifact, plus a write duration."""
+    world = _build_world(tmp_path)
+    context_map = _assemble(
+        world.geometry_manifest,
+        context_map_id=CONTEXT_MAP_ID,
+        metadata=_matching_metadata(world.geometry_manifest, capabilities=entity_capabilities()),
+        geometric_map_location=world.geometry_dir,
+        entity_resolution_location=world.resolution_dir,
+    )
+    upstream_locations = {
+        str(world.geometry_manifest.map_id): world.geometry_dir,
+        "entity-resolution--run-0001": world.resolution_dir,
+    }
+
+    output_dir = tmp_path / "out" / "context_map"
+    manifest, metrics = write_context_map_with_metrics(
+        context_map, output_dir=output_dir, upstream_locations=upstream_locations
+    )
+
+    assert metrics.write_duration_seconds >= 0.0
+
+    with ContextMapArtifactReader.open(output_dir) as reader:
+        reopened = reader.context_map()
+    assert context_map_to_record(reopened) == context_map_to_record(context_map)
+
+    other_output_dir = tmp_path / "out" / "context_map_plain"
+    plain_manifest = ContextMapArtifactWriter(output_dir=other_output_dir).write(
+        context_map, upstream_locations=upstream_locations
+    )
+    assert manifest.content_identity == plain_manifest.content_identity

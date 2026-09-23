@@ -54,8 +54,10 @@ from contextmap.artifact.schema_identity import describe_schema, schema_fingerpr
 from contextmap.artifact.serialization.assembly import (
     AssemblyMetrics,
     AssemblyResult,
+    WriteMetrics,
     assemble_context_map,
     assemble_context_map_with_metrics,
+    write_context_map_with_metrics,
 )
 from contextmap.artifact.serialization.bundle import (
     BundleManifest,
@@ -178,6 +180,7 @@ __all__ = [
     "ValidationLevel",
     "ValidationReport",
     "ValidationStatus",
+    "WriteMetrics",
     "artifact_digest",
     "assemble_context_map",
     "assemble_context_map_with_metrics",
@@ -189,4 +192,5 @@ __all__ = [
     "schema_fingerprint",
     "validate_context_map_artifact",
     "verify_bundle",
+    "write_context_map_with_metrics",
 ]
