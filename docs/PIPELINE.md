@@ -1,1412 +1,842 @@
 # Canonical Pipeline do ContextMap2
 
-Este documento descreve o pipeline end-to-end alvo do ContextMap2, desde uma fonte registrada de sensores até o `ContextMapArtifact` final.
+Este documento é o mapa operacional do pipeline do ContextMap2. O objetivo não é apenas mostrar a ordem dos módulos, mas tornar explícito **onde cada transformação acontece**, **quais dados entram e saem**, **qual capability é dona da decisão** e **onde procurar no código quando um comportamento precisa ser alterado ou um gargalo precisa ser investigado**.
 
-Ele documenta **o canonical pipeline planejado do ContextMap2**. As capabilities são implementadas por milestones independentes, portanto uma etapa descrita aqui pode ainda não estar disponível no código.
+Para ownership e dependências entre capabilities, consulte [architecture.md](architecture.md). Para os contratos públicos, consulte [CONTRACTS.md](CONTRACTS.md). Para persistência, imutabilidade e lineage, consulte [ARTIFACTS.md](ARTIFACTS.md). Para composição dos executores e configuração, consulte [runtime-composition.md](runtime-composition.md).
 
-Para ownership e dependências, consulte [architecture.md](architecture.md). Para a semântica dos objetos que atravessam módulos, consulte [CONTRACTS.md](CONTRACTS.md). Para persistência e lineage, consulte [ARTIFACTS.md](ARTIFACTS.md).
+A regra de leitura é importante: o diagrama abaixo mistura o **fluxo científico completo** com o **estado real da implementação**. Uma capability pode estar implementada e testável isoladamente sem possuir executor automático no runtime global. Essas duas coisas são distinguidas explicitamente ao longo do documento.
 
-## Visão geral
+## Pipeline detalhada
 
-O pipeline não é uma única sequência linear. Depois da Ingestion, Percepção Visual e State Estimation podem processar a mesma sequência em branches independentes. A geometria persistente depende do estado estimado. A associação 2D↔3D reúne geometria e evidência visual. A partir daí surgem evidência fundida, entidades, identidades resolvidas, relações e o mapa final.
+O fluxo principal é vertical. Branches paralelos existem onde os dados realmente podem ser processados de forma independente, principalmente Visual Perception e State Estimation depois da Ingestion.
 
 ```mermaid
 flowchart TD
-    RAW[Raw recorded source]
-    ING[Ingestion]
-    SEQ[SequenceArtifact]
 
-    VP[Visual Perception]
-    PR[PerceptionRunArtifact]
+    subgraph RT["0. Runtime & Configuration"]
+        RT_CFG["EffectiveConfig<br/>preset + arquivos + overrides"]
+        RT_CAT["Runtime catalog<br/>stages + variation points + backends"]
+        RT_COMP["compose() / compose_executors()<br/>implementações concretas"]
+        RT_PREF["preflight<br/>dependências + disponibilidade + seleção"]
+        RT_PLAN["run plan<br/>reuse / recompute / provided artifacts"]
+        RT_EXEC["StageRequest / StageExecutor<br/>journal + lifecycle"]
+        RT_CFG --> RT_CAT --> RT_COMP --> RT_PREF --> RT_PLAN --> RT_EXEC
+    end
 
-    ST[State Estimation]
-    TR[StateEstimationRunArtifact]
+    RAW["Fonte registrada<br/>ROS 1 / ROS 2 / dataset / arquivos"]
 
-    GM[Geometric Mapping]
-    GEO[GeometricMapArtifact]
+    subgraph ING["1. Ingestion"]
+        ING_REQ["IngestionRequest<br/>source + tópicos + janela + sync"]
+        ING_ADAPTER["SourceAdapter<br/>ROS1 / ROS2 / adapter específico"]
+        ING_OBS["SourceObservation[]<br/>Image / LiDAR / IMU / ExternalPose"]
+        ING_CAL["CalibrationSet<br/>intrínsecos + extrínsecos estáticos"]
+        ING_VAL["Validação estrutural<br/>timestamps + payload + frames"]
+        ING_SYNC["synchronize()<br/>nearest-within-tolerance + diagnostics"]
+        ING_PROV["Provenance + content/config hashes"]
+        ING_WRITE["SequenceArtifactWriter<br/>publicação atômica"]
+        SEQ["SequenceArtifact"]
+        ING_SEL["resolve_selection()<br/>full / frames / timestamps / ids"]
 
-    SA[Sensor Association]
-    ASSOC[SensorAssociationRunArtifact]
+        RAW --> ING_REQ --> ING_ADAPTER
+        ING_ADAPTER --> ING_OBS
+        ING_ADAPTER --> ING_CAL
+        ING_OBS --> ING_VAL
+        ING_CAL --> ING_VAL
+        ING_VAL --> ING_SYNC
+        ING_OBS --> ING_PROV
+        ING_CAL --> ING_PROV
+        ING_SYNC --> ING_WRITE
+        ING_PROV --> ING_WRITE
+        ING_OBS --> ING_WRITE
+        ING_CAL --> ING_WRITE
+        ING_WRITE --> SEQ --> ING_SEL
+    end
 
-    P3D[Point Representation, optional]
-    PREP[PointRepresentationRunArtifact]
+    RT_EXEC -.-> ING_REQ
 
-    SF[Semantic Fusion]
-    FUS[SemanticFusionRunArtifact]
+    subgraph VP["2. Visual Perception"]
+        VP_IMG["ImageObservation"]
+        VP_MAT["materialização da imagem<br/>runtime workspace"]
+        VP_PREP["image_preparation<br/>PreparedImage + transform chain"]
 
-    SM[Semantic Mapping]
-    ENT[Semantic entity artifact]
+        VP_PASS["Discovery passes<br/>full frame / tiles / scales"]
+        VP_RD["RegionDiscovery backend<br/>SAM2 / SAM3 / Florence-2"]
+        VP_CAND["RegionCandidate[]<br/>mask / box / native scores"]
+        VP_REMAP["remap para coordenadas<br/>da PreparedImage"]
+        VP_NORM["normalize_regions()<br/>validar + área + constraints<br/>IoU/containment + merge + budget"]
+        VP_REG["Region2D[]<br/>geometry freeze"]
 
-    ER[Entity Resolution]
-    RENT[EntityResolutionRunArtifact]
+        VP_DENSE["dense_feature_extraction<br/>DINOv2 / DINOv3"]
+        VP_DFEAT["VisualFeature[DENSE]<br/>DenseFeatureMap + payload"]
 
-    SR[Spatial Relations]
-    REL[SpatialRelationsRunArtifact]
+        VP_RFE["region_feature_extraction<br/>CLIP / AlphaCLIP"]
+        VP_RFEAT["VisualFeature[REGION]<br/>payload + EmbeddingSpace"]
 
-    CM[Context Map Assembly]
-    OUT[ContextMapArtifact]
+        VP_SCENE["scene_interpretation<br/>stage legado do canonical/1"]
+        VP_REGIONSEM["region_interpretation<br/>stage legado do canonical/1"]
+        VP_CLAIMS["SemanticClaim[] + SceneContext"]
 
-    RAW --> ING --> SEQ
-    SEQ --> VP --> PR
-    SEQ --> ST --> TR
-    SEQ --> GM
-    TR --> GM --> GEO
+        VP_ASM["assemble_perception_result()<br/>somente stages SUCCEEDED"]
+        VP_RESULT["PerceptionResult"]
+        VP_STORE["PerceptionRunWriter<br/>MaskStore + FeatureStore + semantic views<br/>stage outcomes + diagnostics"]
+        PERC["PerceptionRunArtifact"]
 
-    PR --> SA
-    GEO --> SA
-    TR --> SA
-    SEQ --> SA
-    SA --> ASSOC
+        ING_SEL --> VP_IMG --> VP_MAT --> VP_PREP
 
-    GEO --> P3D
-    ASSOC -. optional selection/context .-> P3D
-    P3D --> PREP
+        VP_PREP --> VP_PASS --> VP_RD --> VP_CAND --> VP_REMAP --> VP_NORM --> VP_REG
 
-    ASSOC --> SF
-    PREP -. optional evidence .-> SF
-    SF --> FUS
+        VP_PREP --> VP_DENSE --> VP_DFEAT
+        VP_PREP --> VP_RFE
+        VP_REG --> VP_RFE
+        VP_RFE --> VP_RFEAT
 
-    FUS --> SM --> ENT
-    ENT --> ER --> RENT
-    RENT --> SR --> REL
+        VP_PREP --> VP_SCENE
+        VP_PREP --> VP_REGIONSEM
+        VP_REG --> VP_REGIONSEM
+        VP_SCENE --> VP_CLAIMS
+        VP_REGIONSEM --> VP_CLAIMS
 
-    GEO --> CM
-    RENT --> CM
-    REL --> CM
-    CM --> OUT
+        VP_REG --> VP_ASM
+        VP_DFEAT --> VP_ASM
+        VP_RFEAT --> VP_ASM
+        VP_CLAIMS --> VP_ASM
+        VP_ASM --> VP_RESULT --> VP_STORE --> PERC
+    end
+
+    RT_EXEC -.-> VP_MAT
+
+    subgraph SE["3. State Estimation"]
+        SE_INPUT["StateEstimationRequest<br/>seleção + observações + calibração"]
+        SE_REQ["geometry_requirements()<br/>modalidades + frames necessários"]
+        SE_GRAPH["StaticFrameGraph<br/>extrínsecos canônicos"]
+        SE_PREF["run_geometry_preflight()<br/>READY / BLOCKED"]
+        SE_BACKEND{"StateEstimator"}
+        SE_EXT["ExternalPoseEstimator<br/>validar / normalizar medições"]
+        SE_FL_JOB["FastLioEstimator<br/>construir FastLioJob"]
+        SE_FL_RUN["FastLioRunner<br/>processo/container isolado"]
+        SE_POSES["PoseEstimate[]"]
+        SE_TRAJ["Trajectory<br/>gaps + provenance"]
+        SE_WRITE["StateEstimationRunWriter"]
+        TRAJ["StateEstimationRunArtifact"]
+
+        ING_SEL --> SE_INPUT
+        SEQ --> SE_INPUT
+        SE_INPUT --> SE_REQ --> SE_PREF
+        ING_CAL --> SE_GRAPH --> SE_PREF
+        SE_PREF --> SE_BACKEND
+        SE_BACKEND --> SE_EXT --> SE_POSES
+        SE_BACKEND --> SE_FL_JOB --> SE_FL_RUN --> SE_POSES
+        SE_POSES --> SE_TRAJ --> SE_WRITE --> TRAJ
+    end
+
+    RT_EXEC -.-> SE_INPUT
+
+    subgraph GM["4. Geometric Mapping"]
+        GM_SEL["seleção de scans LiDAR"]
+        GM_INPUT["assemble_geometry_inputs()<br/>layout + payload hash + motion state"]
+        GM_POSE["TrajectoryLookup<br/>T_map_body(t)"]
+        GM_STATIC["StaticFrameGraph<br/>T_body_source"]
+        GM_PLAN["GeometryInputPlan<br/>accepted + rejected scans"]
+        GM_TRANS["transform_scan()<br/>P_map = T_map_body · T_body_source · P_source"]
+        GM_FILTER["drop apenas NaN/Inf<br/>sem filtro semântico"]
+        GM_ACC["MapAccumulator<br/>raw points ou ScanVoxelPolicy"]
+        GM_STORAGE["PackedGeometry / GeometrySource<br/>refs posicionais + scan index"]
+        GM_WRITE["GeometricMapArtifactWriter"]
+        GEO["GeometricMapArtifact"]
+
+        SEQ --> GM_SEL --> GM_INPUT
+        TRAJ --> GM_POSE --> GM_INPUT
+        ING_CAL --> GM_STATIC --> GM_INPUT
+        GM_INPUT --> GM_PLAN --> GM_TRANS --> GM_FILTER --> GM_ACC --> GM_STORAGE --> GM_WRITE --> GEO
+    end
+
+    RT_EXEC -.-> GM_INPUT
+
+    subgraph SA["5. Sensor Association"]
+        SA_FRAME["AssociationFrameInput<br/>ImageObservation + PreparedImage + PerceptionResult"]
+        SA_CLOUD["GeometryCloud.from_source()<br/>carrega coordenadas autoritativas"]
+        SA_POSE["TrajectoryLookup no timestamp RGB"]
+        SA_EXT["StaticFrameGraph<br/>T_body_camera"]
+        SA_CAM["CameraProjection<br/>pinhole / fisheye / MEI"]
+        SA_RAWPX["pixel na imagem crua"]
+        SA_XFORM["raw_to_prepared_transform()<br/>crop / resize / normalize"]
+        SA_SUPPORT["classificar suporte<br/>behind / outside / invalid / in-support"]
+        SA_VIS["resolve_visibility()<br/>depth support + occlusion"]
+        SA_MASK["associate_regions()<br/>MaskStoreReader / máscara inline"]
+        SA_MEM["FrameMembership<br/>região ↔ GeometryReference"]
+        SA_DENSE["sample_dense_features()<br/>nearest / bilinear<br/>quando canal denso é fornecido"]
+        SA_OBS["build_spatial_observations()<br/>SpatialObservation por região"]
+        SA_QUAL["derive_observation_quality()<br/>medidas separadas"]
+        SA_DIAG["diagnostics<br/>calibração + tempo + reprojeção"]
+        SA_SERVICE["SensorAssociationService"]
+        SA_WRITE["SensorAssociationRunWriter"]
+        ASSOC["SensorAssociationRunArtifact"]
+
+        SEQ --> SA_FRAME
+        PERC --> SA_FRAME
+        GEO --> SA_CLOUD
+        TRAJ --> SA_POSE
+        ING_CAL --> SA_EXT
+        ING_CAL --> SA_CAM
+
+        SA_CLOUD --> SA_POSE --> SA_EXT --> SA_CAM --> SA_RAWPX --> SA_XFORM --> SA_SUPPORT --> SA_VIS --> SA_MASK --> SA_MEM
+        SA_FRAME --> SA_XFORM
+        SA_FRAME --> SA_MASK
+        SA_MEM --> SA_OBS
+        SA_VIS --> SA_DENSE
+        PERC --> SA_DENSE
+        SA_OBS --> SA_QUAL
+        SA_MEM --> SA_QUAL
+        SA_OBS --> SA_DIAG
+        SA_POSE --> SA_DIAG
+        SA_OBS --> SA_SERVICE
+        SA_QUAL --> SA_SERVICE
+        SA_DIAG --> SA_SERVICE
+        SA_DENSE --> SA_SERVICE
+        SA_SERVICE --> SA_WRITE --> ASSOC
+    end
+
+    RT_EXEC -.-> SA_SERVICE
+
+    subgraph PR["6. Point Representation - opcional"]
+        PR_CENTER["seleção de centros<br/>GeometryReference"]
+        PR_SUPPORT["SupportExtractor<br/>POINT / radius / k-nearest"]
+        PR_PREP["CoordinatePreparation<br/>center / centroid / scale"]
+        PR_ENCODER{"PointEncoder"}
+        PR_BASE["GeometricDescriptorEncoder<br/>baseline determinístico"]
+        PR_PTV3["PTv3 / Pointcept runtime<br/>backend aprendido opcional"]
+        PR_SERVICE["RepresentationService<br/>falhas explícitas + métricas"]
+        PR_WRITE["PointRepresentationRunWriter"]
+        PREP3D["PointRepresentationRunArtifact"]
+
+        GEO --> PR_CENTER --> PR_SUPPORT --> PR_PREP --> PR_ENCODER
+        PR_ENCODER --> PR_BASE --> PR_SERVICE
+        PR_ENCODER --> PR_PTV3 --> PR_SERVICE
+        PR_SERVICE --> PR_WRITE --> PREP3D
+        ASSOC -.-> PR_CENTER
+    end
+
+    subgraph SF["7. Semantic Fusion"]
+        SF_GROUP["group_by_physical_observation()<br/>frames físicos ≠ inferências"]
+        SF_SUPPORT["build_fusion_supports()<br/>Jaccard de GeometryReference<br/>componentes conexas"]
+        SF_CONTRIB["EvidenceContribution<br/>claims + scores + feature refs + quality refs"]
+        SF_ACC{"Accumulation policy"}
+        SF_BASE["baseline-evidence-accumulation-v1<br/>label key + stances + uncertainty"]
+        SF_Q["quality-aware-evidence-accumulation-v1<br/>opcional, peso por qualidade"]
+        SF_FUSED["FusedEvidence<br/>hipóteses + conflitos + provenance"]
+        SF_WRITE["SemanticFusionRunWriter"]
+        FUS["SemanticFusionRunArtifact"]
+
+        ASSOC --> SF_GROUP
+        PERC --> SF_GROUP
+        SEQ --> SF_GROUP
+        ASSOC --> SF_SUPPORT
+        GEO --> SF_SUPPORT
+        SF_GROUP --> SF_CONTRIB
+        PERC --> SF_CONTRIB
+        ASSOC --> SF_CONTRIB
+        PREP3D -.-> SF_CONTRIB
+        SF_SUPPORT --> SF_ACC
+        SF_CONTRIB --> SF_ACC
+        SF_ACC --> SF_BASE --> SF_FUSED
+        SF_ACC --> SF_Q --> SF_FUSED
+        SF_FUSED --> SF_WRITE --> FUS
+    end
+
+    RT_EXEC -.-> SF_GROUP
+
+    subgraph SM["8. Semantic Mapping"]
+        SM_SELECT["seleção explícita de FusionOutcome"]
+        SM_MAT["materialize_entities()<br/>one-support-one-entity-v1"]
+        SM_GEO["summarize_geometry()<br/>refs + bounds + centroid + diagnostics"]
+        SM_SEM["semantic_state_from_fused_evidence()<br/>hipóteses + ambiguidade + atributos"]
+        SM_EVID["evidence_links_from_fused_evidence()<br/>refs + digest + lineage"]
+        SM_TIME["summarize_temporal_state()<br/>frames físicos + inferências + lifecycle"]
+        SM_ENTITY["Entity"]
+        SM_WRITE["SemanticMappingRunWriter"]
+        SMAP["SemanticMappingRunArtifact<br/>runtime contract: SemanticEntityArtifact"]
+
+        FUS --> SM_SELECT --> SM_MAT
+        GEO --> SM_GEO --> SM_MAT
+        SM_MAT --> SM_SEM
+        SM_MAT --> SM_EVID
+        SM_MAT --> SM_TIME
+        SM_SEM --> SM_ENTITY
+        SM_EVID --> SM_ENTITY
+        SM_TIME --> SM_ENTITY
+        SM_GEO --> SM_ENTITY
+        SM_ENTITY --> SM_WRITE --> SMAP
+    end
+
+    subgraph ER["9. Entity Resolution"]
+        ER_ENT["EntitySet"]
+        ER_INDEX["EntitySpatialIndex"]
+        ER_RETR["retrieve_candidate_sets()<br/>centroid / bounds / tempo"]
+        ER_PAIR["candidate_pairs"]
+        ER_GATE["evaluate_comparison_gates()<br/>mapa + frame compatíveis"]
+        ER_GEOM["compare_geometry()"]
+        ER_SEM["compare_semantics()<br/>opcional"]
+        ER_TIME["compare_temporal()<br/>opcional"]
+        ER_APP["AppearanceComparator<br/>opcional"]
+        ER_REP["RepresentationComparator<br/>opcional"]
+        ER_EVID["EntityMatchEvidence<br/>canais tipados separados"]
+        ER_DEC["conservative-staged-resolution-v1<br/>MATCH / DISTINCT / UNRESOLVED"]
+        ER_SPLIT["detect_split_candidates()<br/>diagnóstico opcional"]
+        ER_RES["materialize_resolved_entities()<br/>connected components + transitivity checks"]
+        ER_WRITE["EntityResolutionRunWriter"]
+        RES["EntityResolutionRunArtifact"]
+
+        SMAP --> ER_ENT --> ER_INDEX --> ER_RETR --> ER_PAIR --> ER_GATE
+        ER_GATE --> ER_GEOM --> ER_EVID
+        ER_GATE --> ER_SEM --> ER_EVID
+        ER_GATE --> ER_TIME --> ER_EVID
+        ER_GATE --> ER_APP --> ER_EVID
+        ER_GATE --> ER_REP --> ER_EVID
+        GEO --> ER_GEOM
+        PERC -.-> ER_APP
+        PREP3D -.-> ER_REP
+        ER_EVID --> ER_DEC --> ER_RES
+        ER_ENT --> ER_SPLIT
+        GEO --> ER_SPLIT
+        ER_SPLIT -.-> ER_WRITE
+        ER_RES --> ER_WRITE --> RES
+    end
+
+    RT_EXEC -.-> ER_RETR
+
+    subgraph SR["10. Spatial Relations"]
+        SR_READ["resolved_entity_geometries()<br/>Entity Resolution reader"]
+        SR_FRAME["FrameConventions<br/>up / forward axes"]
+        SR_CAND["generate_relation_candidates()<br/>sweep-and-prune + bounds"]
+        SR_GEOM["evaluate_geometric_candidates()<br/>NEXT_TO / ABOVE / IN_FRONT_OF<br/>INSIDE / INTERSECTS"]
+        SR_CONTACT["evaluate_contact_candidates()<br/>TOUCHING / ON_TOP_OF / LEANING_AGAINST"]
+        SR_OBS["observation evidence<br/>opcional, corroborante"]
+        SR_DEC["decide_relations()<br/>SUPPORTED / REJECTED / UNRESOLVED"]
+        SR_CHECK["consistência estrutural<br/>direção + simetria"]
+        SR_DERIVE["gerar inversos / gêmeas<br/>BELOW / BEHIND / CONTAINS / symmetric"]
+        SR_WRITE["SpatialRelationsRunWriter"]
+        REL["SpatialRelationsRunArtifact"]
+
+        RES --> SR_READ
+        GEO --> SR_READ
+        SR_READ --> SR_FRAME --> SR_CAND
+        SR_CAND --> SR_GEOM --> SR_DEC
+        SR_CAND --> SR_CONTACT --> SR_DEC
+        SR_CAND --> SR_OBS --> SR_DEC
+        GEO --> SR_CONTACT
+        SR_DEC --> SR_CHECK --> SR_DERIVE --> SR_WRITE --> REL
+    end
+
+    RT_EXEC -.-> SR_CAND
+
+    subgraph ART["11. Context Map Artifact"]
+        ART_META["ContextMapMetadata<br/>frame + unidades + janela + capabilities"]
+        ART_ASM["assemble_context_map()<br/>traduz e fecha lineage"]
+        ART_SCHEMA["ContextMap<br/>schema validado"]
+        ART_WRITE["ContextMapArtifactWriter<br/>layout + tabelas + manifest"]
+        ART_VALID["validate_context_map_artifact()<br/>integridade + dependências"]
+        ART_BUNDLE["export_bundle()<br/>opcional"]
+        CTX["ContextMapArtifact"]
+        CONSUMERS["Consumidores externos<br/>viewer / query / navigation / agents"]
+
+        GEO --> ART_ASM
+        RES --> ART_ASM
+        REL --> ART_ASM
+        ART_META --> ART_ASM --> ART_SCHEMA --> ART_WRITE --> CTX
+        CTX --> ART_VALID
+        CTX --> ART_BUNDLE
+        CTX --> CONSUMERS
+    end
+
+    subgraph EV["12. Evaluation - transversal"]
+        EV_REF["ReferenceSet + annotations + trust"]
+        EV_RUN["stage evaluators / experiment runner"]
+        EV_REPORT["EvaluationReport<br/>qualidade e custo separados"]
+        EV_REF --> EV_RUN --> EV_REPORT
+    end
+
+    PERC -.-> EV_RUN
+    TRAJ -.-> EV_RUN
+    GEO -.-> EV_RUN
+    ASSOC -.-> EV_RUN
+    PREP3D -.-> EV_RUN
+    FUS -.-> EV_RUN
+    SMAP -.-> EV_RUN
+    RES -.-> EV_RUN
+    REL -.-> EV_RUN
+    CTX -.-> EV_RUN
 ```
 
-## Mapa mental dos módulos
+O grafo acima mostra o **fluxo científico completo**, não apenas o que o runtime consegue montar automaticamente hoje. A seção seguinte deixa essa diferença explícita.
 
-Esta seção é a leitura rápida da pipeline. O objetivo aqui não é descrever todos os contratos internos, mas responder quatro perguntas para cada capability:
+## Estado de execução atual
 
-1. **Por que ela existe?**
-2. **O que recebe?**
-3. **O que faz?**
-4. **O que entrega para o próximo estágio?**
+A capability de domínio existe para todos os blocos de Ingestion até Spatial Relations, e o pacote `contextmap.artifact` já implementa schema, montagem, escrita, leitura, validação e bundle do mapa final. O que ainda não está uniforme é a **orquestração automática**.
 
-A ordem não é totalmente linear. Depois da Ingestion, **Visual Perception** e **State Estimation** formam duas branches que podem executar em paralelo. Elas se reencontram quando a evidência visual precisa ser associada à geometria 3D.
+| Estágio | Capability implementada | Executor automático no runtime | Observação |
+| --- | --- | --- | --- |
+| Ingestion | sim | não por `compose_executors()` | `IngestionStageExecutor` existe, mas requer um `IngestionRequest` da execução e é injetado explicitamente. |
+| Visual Perception | sim | sim | Exige os quatro variation points e providers quando o backend não tem loader embutido. |
+| State Estimation | sim | sim | ExternalPose e FAST-LIO são selecionáveis. |
+| Geometric Mapping | sim | sim | Executor usa lookup, motion-correction policy e agregação configurada. |
+| Sensor Association | sim | sim | O executor global atual monta a associação geométrica e não injeta mapas densos de feature. |
+| Point Representation | sim | não | Descritor determinístico e PTv3 existem, mas o estágio precisa de artifact fornecido/injetado no runtime global. |
+| Semantic Fusion | sim | sim, baseline | O executor global atual suporta a acumulação baseline e recusa o canal de Point Representation. A política quality-aware existe na capability, mas não é executada por esse executor. |
+| Semantic Mapping | sim | sim, condicional | Compõe quando o chamador também fornece `semantic_map_id` e `code_digest`, que não são valor de configuração. |
+| Entity Resolution | sim | sim | Aparência e representação exigem vector sources fornecidos pelo runtime/provider quando ativadas. |
+| Spatial Relations | sim | sim | Avaliadores geométrico e de contato são opcionais por configuração. |
+| ContextMapArtifact | sim | sim | `ContextMapExecutor` monta o artifact por referência aos runs de Entity Resolution e Spatial Relations; `assemble_context_map_with_metrics()` e `ContextMapArtifactWriter` continuam existindo como capability standalone, sem lógica nova no executor. |
 
-### 00 - Runtime
+O preset global é:
 
-**Por que existe:** uma pipeline com vários módulos, backends e artifacts precisa de uma composição reproduzível. A seleção de modelos e a orchestration não devem ficar espalhadas dentro dos módulos científicos.
+- `canonical/1`: Ingestion → Visual Perception + State Estimation → Geometric Mapping → Sensor Association → Point Representation opcional → Semantic Fusion → Semantic Mapping → Entity Resolution → Spatial Relations → `context_map`. Antes do v0.1.0 sair esta é a única topologia do repositório e continua livre para evoluir até o release; a partir daí, uma mudança de topologia abre uma identidade nova (`canonical/2`, ...) em vez de mudar esta.
 
-**Recebe:** configuração solicitada, presets e artifacts já disponíveis.
+## 0. Runtime & Configuration
 
-**Faz:** seleciona implementações concretas, monta o DAG, valida dependências e decide quando reutilizar ou recomputar artifacts.
+**Função.** Transformar configuração declarativa em uma execução reproduzível. Runtime não possui ciência de percepção, geometria, fusão ou relações; ele seleciona implementações, valida dependências, conecta artifacts e registra lifecycle.
 
-**Entrega:** um plano de execução reproduzível.
+**Recebe.** `EffectiveConfig`, preset, seleção de backends/policies, recursos, providers, secrets via ambiente e artifacts já existentes ou fornecidos.
 
-**Estado atual:** planejado. O runtime global ainda não está integrado na `dev`.
+**Faz.** `catalog.py` define stages e variation points; `composition.py` constrói backends e policies concretos; `pipeline.py` resolve DAG, preflight, inputs e ordem; `reuse.py` decide reuso por identidade; `runs.py` e `lifecycle.py` registram execução, falhas, cancelamento e retomada; `executors.py` adapta um stage do runtime ao serviço público da capability.
 
----
+**Entrega.** `StageRequest`, `ArtifactRef`, plano de execução, journal e artifacts produzidos ou reutilizados.
 
-### 01 - Ingestion
+**Onde procurar.**
 
-**Por que existe:** ROS bags, ROS 1, ROS 2, datasets e outras fontes possuem formatos próprios. Os módulos seguintes não devem depender desses formatos diretamente.
+| Problema | Arquivo principal |
+| --- | --- |
+| Stage não aparece ou depende do artifact errado | `src/contextmap/runtime/catalog.py` |
+| Backend/policy não compõe | `src/contextmap/runtime/composition.py` |
+| Preflight, dependências, ordem do DAG | `src/contextmap/runtime/pipeline.py` |
+| Executor chama a capability de forma errada | `src/contextmap/runtime/executors.py` |
+| Reuso/recompute inesperado | `src/contextmap/runtime/reuse.py` |
+| Run, journal, resume, lifecycle | `src/contextmap/runtime/runs.py`, `lifecycle.py` |
 
-**Recebe:** dados registrados de sensores, como RGB, LiDAR/depth, IMU, odometria, calibração e timestamps.
-
-**Faz:** converte a fonte específica em observações canônicas, sincroniza sensores, normaliza timestamps e calibração e preserva provenance.
-
-**Entrega:** `SequenceArtifact`.
-
-Em termos simples:
-
-```text
-ROS / bag / dataset
-        ↓
-    Ingestion
-        ↓
- SequenceArtifact
-```
-
----
-
-### 02A - Visual Perception
-
-**Por que existe:** antes de construir memória semântica persistente, o sistema precisa extrair evidência visual dos frames.
-
-**Recebe:** imagens e observações visuais provenientes do `SequenceArtifact`.
-
-**Faz:** executa Region Discovery, Feature Extraction e Semantic Interpretation. Produz regiões, features/embeddings, claims semânticas e contexto da cena.
-
-Esses resultados ainda são **evidência de frame/run**. Uma detecção ou label produzido aqui não é automaticamente uma entidade persistente do mapa.
-
-**Entrega:** `PerceptionRunArtifact`.
-
-Em termos simples:
-
-```text
-imagem
-  ↓
-Visual Perception
-  ├─ regiões
-  ├─ features / embeddings
-  └─ hipóteses / claims semânticas
-        ↓
-PerceptionRunArtifact
-```
-
----
-
-### 02B - State Estimation
-
-**Por que existe:** LiDAR, depth e câmera observam o mundo a partir da posição atual do sensor. Para juntar observações feitas em instantes diferentes, precisamos saber **onde o robô/sensor estava em cada timestamp**.
-
-**Recebe:** dados que permitem obter pose e movimento, como LiDAR, IMU, odometria ou uma trajetória externa já calculada.
-
-**Faz:** estima ou importa a trajetória canônica e permite consultar a pose do robô/sensor ao longo do tempo.
-
-Ele responde essencialmente:
-
-> Onde o sensor estava, e com qual orientação, quando esta observação foi feita?
-
-**Entrega:** `StateEstimationRunArtifact`, contendo a trajetória/poses canônicas.
-
-Em termos simples:
-
-```text
-LiDAR / IMU / odometria / poses externas
-                  ↓
-           State Estimation
-                  ↓
-           trajetória / poses
-                  ↓
-      StateEstimationRunArtifact
-```
-
----
-
-### 03 - Geometric Mapping
-
-**Por que existe:** um ponto medido pelo LiDAR ou depth inicialmente está no frame local do sensor. Isso não é ainda uma coordenada persistente do mapa.
-
-**Recebe:** observações geométricas do `SequenceArtifact` e a trajetória produzida por State Estimation.
-
-**Faz:** transforma medições locais para o frame global do mapa, acumula geometria 3D e mantém referências estáveis e provenance.
-
-**Entrega:** `GeometricMapArtifact`.
-
-Em termos simples:
-
-```text
-pontos locais + pose do sensor
-             ↓
-      Geometric Mapping
-             ↓
-   geometria 3D no frame global
-             ↓
-      GeometricMapArtifact
-```
-
----
-
-### 04 - Sensor Association
-
-**Por que existe:** detectar uma região em uma imagem não diz automaticamente qual superfície ou conjunto de pontos 3D aquela região representa.
-
-**Recebe:** `PerceptionRunArtifact`, `GeometricMapArtifact`, trajetória, calibração e transformações da câmera.
-
-**Faz:** realiza a associação 2D → 3D considerando projeção, modelo da câmera, pose, field of view, visibilidade, oclusão, máscara e validade geométrica.
-
-O resultado é uma observação espacial: evidência visual de uma observação específica ancorada em geometria real do mapa.
-
-**Entrega:** `SensorAssociationRunArtifact` e `SpatialObservation`.
-
-Em termos simples:
-
-```text
-evidência visual + geometria + pose/calibração
-                    ↓
-             Sensor Association
-                    ↓
-     "esta evidência corresponde a este
-          suporte espacial no mapa"
-                    ↓
-       SensorAssociationRunArtifact
-```
-
----
-
-### 05 - Point Representation (opcional)
-
-**Por que existe:** XYZ puro descreve geometria, mas alguns estágios podem se beneficiar de uma representação vetorial da estrutura 3D local.
-
-**Recebe:** suportes do `GeometricMapArtifact` e, quando aplicável, contexto explícito de associação.
-
-**Faz:** calcula descritores ou embeddings 3D locais. Essa representação complementa a geometria; não substitui os pontos ou referências geométricas.
-
-**Entrega:** `PointRepresentationRunArtifact`.
-
-Este estágio é opcional porque seu custo só é justificável se houver ganho mensurável nos estágios downstream.
-
----
-
-### 06 - Semantic Fusion
-
-**Por que existe:** uma observação individual não deve virar verdade persistente. O mesmo suporte espacial pode ser observado várias vezes, com evidências concordantes, ambíguas ou contraditórias.
-
-**Recebe:** `SpatialObservation`, claims/features visuais e, opcionalmente, Point Representations.
-
-**Faz:** acumula evidência de múltiplas observações físicas sobre suporte espacial compatível. Preserva hipóteses alternativas, conflitos, abstenções, provenance e incerteza.
-
-Semantic Fusion ainda **não decide identidade de objeto**.
-
-**Entrega:** `SemanticFusionRunArtifact` e `FusedEvidence`.
-
-Em termos simples:
-
-```text
-observação A ─┐
-observação B ─┼─> Semantic Fusion
-observação C ─┘         ↓
-                 evidência acumulada
-                 sem apagar conflitos
-                        ↓
-              SemanticFusionRunArtifact
-```
-
----
-
-### 07 - Semantic Mapping
-
-**Por que existe:** `FusedEvidence` ainda é evidência acumulada. O mapa precisa de unidades persistentes e consultáveis que carreguem geometria, semântica, tempo e provenance.
-
-**Recebe:** `FusedEvidence` e referências para a geometria correspondente.
-
-**Faz:** materializa `Entity` persistente com suporte geométrico, estado semântico, evidence links, histórico temporal, confidence/uncertainty e provenance.
-
-Neste estágio, duas entidades diferentes ainda podem representar o mesmo objeto físico. Semantic Mapping não resolve isso.
-
-**Entrega:** `SemanticMappingRunArtifact` e `Entity`.
-
-Em termos simples:
-
-```text
-FusedEvidence + geometria
-          ↓
-    Semantic Mapping
-          ↓
- entidade persistente
-  ├─ geometry
-  ├─ semantics
-  ├─ evidence
-  ├─ uncertainty
-  └─ temporal state
-          ↓
-SemanticMappingRunArtifact
-```
-
----
-
-### 08 - Entity Resolution
-
-**Por que existe:** observações e suportes independentes podem produzir duas ou mais `Entity` que, no mundo real, representam o mesmo objeto.
-
-**Recebe:** entidades produzidas por Semantic Mapping.
-
-**Faz:** decide, com evidência explícita, quais entidades permanecem distintas, quais pertencem ao mesmo objeto e quais devem permanecer não resolvidas. As source entities não são apagadas.
-
-**Entrega:** `EntityResolutionRunArtifact`.
-
-**Estado atual:** planejado.
-
----
-
-### 09 - Spatial Relations
-
-**Por que existe:** saber que duas entidades existem não descreve como elas se relacionam no espaço.
-
-**Recebe:** entidades resolvidas e geometria.
-
-**Faz:** deriva relações espaciais ou topológicas, como containment, adjacency, proximity e outras relações definidas por políticas explícitas.
-
-**Entrega:** `SpatialRelationsRunArtifact`.
-
-**Estado atual:** planejado.
-
----
-
-### 10 - Context Map Assembly
-
-**Por que existe:** consumidores externos precisam de um produto final único, versionado e consultável, sem perder a cadeia de evidência que levou até ele.
-
-**Recebe:** geometria, entidades resolvidas, relações e lineage dos artifacts upstream.
-
-**Faz:** monta o mapa contextual final mantendo referências para evidência, provenance e incerteza. Ele não substitui os artifacts anteriores nem apaga sua origem.
-
-**Entrega:** `ContextMapArtifact`.
-
-**Estado atual:** planejado.
-
-### Fluxo resumido
-
-```text
-Fonte registrada
-      ↓
-01 Ingestion
-      ↓
-SequenceArtifact
-      ├──────────────────────────────┐
-      ↓                              ↓
-02A Visual Perception        02B State Estimation
-      ↓                              ↓
-PerceptionRunArtifact          trajetória / poses
-      │                              ↓
-      │                     03 Geometric Mapping
-      │                              ↓
-      │                       GeometricMapArtifact
-      └──────────────┬───────────────┘
-                     ↓
-             04 Sensor Association
-                     ↓
-            SpatialObservation
-                     │
-          ┌──────────┴──────────┐
-          │                     ↓
-          │           05 Point Representation
-          │                (opcional)
-          │                     │
-          └──────────┬──────────┘
-                     ↓
-              06 Semantic Fusion
-                     ↓
-                FusedEvidence
-                     ↓
-             07 Semantic Mapping
-                     ↓
-                   Entity
-                     ↓
-             08 Entity Resolution
-                     ↓
-             09 Spatial Relations
-                     ↓
-           10 Context Map Assembly
-                     ↓
-             ContextMapArtifact
-```
-
-## Estado atual da pipeline
-
-O diagrama end-to-end acima é o alvo do canonical pipeline. Na `dev`, o caminho materializado termina hoje em `SemanticMappingRunArtifact` (com a estrutura 3D opcional de `PointRepresentationRunArtifact` como evidência): a Ingestion alimenta Visual Perception e State Estimation, o Geometric Mapping consome a trajetória, o Sensor Association ancora a percepção na geometria, a Point Representation descreve a estrutura 3D local, a Semantic Fusion acumula evidência multi-vista sem criar identidade de objeto e a Semantic Mapping materializa essa evidência como entidades persistentes sem ainda resolver identidade entre entidades.
-
-```mermaid
-flowchart LR
-    RAW["Fonte registrada"] --> ING["Ingestion"]
-    ING --> SEQ["SequenceArtifact"]
-    SEQ --> VP["Visual Perception Core"]
-    VP --> PRA["PerceptionRunArtifact"]
-    SEQ --> ST["State Estimation"]
-    ST --> TRA["StateEstimationRunArtifact"]
-    SEQ --> GM["Geometric Mapping"]
-    TRA --> GM
-    GM --> MAPA["GeometricMapArtifact"]
-    PRA --> SA["Sensor Association"]
-    MAPA --> SA
-    TRA --> SA
-    SA --> ASA["SensorAssociationRunArtifact"]
-    MAPA --> PTR["Point Representation<br/>(opcional)"]
-    PTR --> PTRA["PointRepresentationRunArtifact"]
-    ASA --> FUS["Semantic Fusion"]
-    PTRA -.-> FUS
-    FUS --> FUSA["SemanticFusionRunArtifact"]
-    FUSA --> SMP["Semantic Mapping"]
-    SMP --> SMPA["SemanticMappingRunArtifact"]
-    SMPA --> ER["Entity Resolution"]
-    ER --> ERA["EntityResolutionRunArtifact"]
-    ERA -. próximo estágio ainda não integrado .-> FUT["Spatial Relations<br/>+ downstream"]
-```
-
-Essa distinção é obrigatória ao ler este documento: seções posteriores descrevem o contrato arquitetural esperado, mas apenas Ingestion, Visual Perception Core, State Estimation, Geometric Mapping, Sensor Association, Point Representation (opcional), Semantic Fusion, Semantic Mapping e Entity Resolution possuem implementação consolidada neste ponto.
-
-## Regra fundamental
-
-Cada estágio consome **contratos públicos e artefatos imutáveis**. Um estágio posterior não deve reabrir detalhes privados do backend anterior nem corrigir silenciosamente o resultado upstream.
-
-Exemplos:
-
-- Sensor Association consome `Region2D`, `VisualFeature`, `SemanticClaim`, geometria e pose, mas não importa classes internas de SAM, DINO, Gemini ou FAST-LIO.
-- Semantic Fusion consome `SpatialObservation` e evidências referenciadas, mas não executa novamente a VLM para corrigir um label.
-- Spatial Relations consome entidades resolvidas, mas não corrige Entity Resolution para conseguir uma relação conveniente.
-
-## 0. Runtime e plano de execução
-
-Esta etapa está **materializada** em `contextmap.runtime`: antes de executar modelos ou transformações pesadas, o runtime resolve a configuração do experimento (perfil `canonical/1` por padrão, arquivos e overrides, com digest determinístico), deriva a topologia, valida dependências, contratos, seleções de runs, backends, módulos opcionais, segredos e executores (`preflight`) e só então executa, registrando o plano, os eventos e as decisões de reuso de cada run. Um preset declara a topologia, do recorded source ao `ContextMapArtifact`: `canonical/1`. Antes do v0.1.0 sair não existe consumidor publicado a proteger de uma mudança de topologia, então esta identidade continua livre para evoluir junto com o pipeline; a disciplina de nunca mudar a topologia de um preset publicado (abrindo uma identidade versionada nova em vez disso) começa a valer a partir do release. `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` têm hoje um executor de estágio real, composto automaticamente da configuração (Semantic Mapping exige também `semantic_map_id`/`code_digest`, que não são valor de configuração); Point Representation ainda não tem (backend com modelo/GPU), e a Ingestion tem um executor real que continua exigindo injeção explícita (precisa do `IngestionRequest` da execução, não da configuração) — por isso a execução end-to-end com dados reais ainda não foi validada. Detalhes em [runtime-composition.md](runtime-composition.md) e na [documentação do módulo](../src/contextmap/runtime/docs/README.md).
-
-```mermaid
-flowchart LR
-    CFG[Configuração solicitada]
-    PRESET[Preset/version]
-    BACK[Backends selecionados]
-    DAG[Resolved execution DAG]
-    VALID[Dependency validation]
-    RUN[Execution]
-
-    CFG --> PRESET --> BACK --> DAG --> VALID --> RUN
-```
-
-### Responsabilidade
-
-Runtime deve:
-
-- carregar configuração efetiva;
-- selecionar implementações concretas;
-- construir dependências;
-- validar o DAG de execução;
-- selecionar explicitamente artifacts/runs upstream;
-- ordenar estágios;
-- decidir reutilização ou recomputação de artefatos imutáveis;
-- registrar o plano resolvido e seus fingerprints.
-
-Runtime não deve conter segmentação, projeção, fusão, entity resolution ou regras de relações.
-
-### Saída
-
-A execução deve registrar um plano reproduzível que identifique:
-
-```text
-stage
-selected inputs
-selected backend
-configuration digest
-expected output artifact
-reuse/recompute decision
-dependency edges
-```
+Detalhes: [runtime docs](../src/contextmap/runtime/docs/README.md), [composition](../src/contextmap/runtime/docs/composition.md) e [executors](../src/contextmap/runtime/docs/executors.md).
 
 ## 1. Ingestion
 
-Ingestion transforma dados específicos de uma fonte em observações canônicas e em um `SequenceArtifact` independente de ROS, dataset ou formato de gravação.
+**Função.** Converter formatos de borda em uma sequência canônica independente de ROS ou dataset. Ingestion é dona de observações de sensor, calibração canônica, sincronização, provenance da fonte e persistência do `SequenceArtifact`.
 
-```mermaid
-flowchart TD
-    SRC["ROS 1 bag / ROS 2 bag / fonte registrada"] --> AD["SourceAdapter"]
-    AD --> OBS["SourceObservation[]"]
-    AD --> CAL["CalibrationSet"]
-    OBS --> VAL["Validação estrutural"]
-    OBS --> SYNC["synchronize()"]
-    SYNC --> DIAG["SynchronizationDiagnostics"]
-    OBS --> ART["SequenceArtifact"]
-    CAL --> ART
-    DIAG --> ART
-    ART --> SEL["resolve_selection()<br/>seleção / replay"]
-    SEL --> DOWN["capabilities downstream"]
-```
+**Recebe de.** Fonte registrada e configuração da execução. Adapters ROS 1/ROS 2 ou específicos convertem os dados de origem.
 
-O adapter decodifica e normaliza a fonte. Sincronização não altera a identidade das observações físicas e não cria truth persistente; ela produz agrupamentos e diagnósticos auditáveis. O artefato persiste as observações normalizadas, calibração/provenance/diagnósticos quando disponíveis e pode ser reaberto sem a fonte ROS original.
+**Entradas principais.** RGB, LiDAR, IMU, poses externas, timestamps, intrínsecos, extrínsecos estáticos, tópicos/canais e janela temporal.
 
-### Contratos implementados
+**Fluxo interno.**
 
-- `SourceObservation`, com `ImageObservation`, `LidarObservation`, `ImuObservation` e `ExternalPoseMeasurement`;
-- `CalibrationSet`, modelos pinhole/fisheye e `RigidTransform`;
-- `ProcessingObservation`, `SynchronizationDiagnostics` e `DroppedEvent`;
-- `SequenceSelection` e `selection_identity()`;
-- `SequenceArtifactWriter` / `SequenceArtifactReader`;
-- `SequenceProvenance`, validação e diagnósticos.
+1. `SourceAdapter` lê a fonte e produz `SourceObservation` e `CalibrationSet`.
+2. As observações são validadas sem corrigir silenciosamente payloads, frames ou timestamps inválidos.
+3. `synchronize()` agrupa por uma modalidade de referência usando nearest-within-tolerance e registra decisões e eventos descartados. Clocks diferentes nunca são comparados implicitamente.
+4. Provenance e identidades de conteúdo/configuração são calculadas.
+5. `SequenceArtifactWriter` publica observações, calibração, diagnostics e provenance de forma atômica.
+6. `resolve_selection()` fornece subsets determinísticos para os stages downstream.
 
-`ExternalPoseMeasurement` continua sendo evidência de entrada. Ela não é automaticamente um `PoseEstimate` do mapa.
+**Entrega para.** Visual Perception, State Estimation, Geometric Mapping, Sensor Association e Semantic Fusion.
 
-### Saída implementada
+**Onde procurar.**
 
-`SequenceArtifact`, persistido de forma imutável e reabrível.
+| Problema | Arquivo / documento |
+| --- | --- |
+| Parsing de ROS/dataset | `ingestion/adapters/`, [adapters.md](../src/contextmap/ingestion/docs/adapters.md) |
+| Frames/timestamps inválidos | `ingestion/validation.py` |
+| RGB e LiDAR não alinham no tempo | `ingestion/synchronization.py`, [synchronization.md](../src/contextmap/ingestion/docs/synchronization.md) |
+| Intrínsecos/extrínsecos incorretos | `ingestion/calibration.py`, [calibration.md](../src/contextmap/ingestion/docs/calibration.md) |
+| Artifact ou replay | `ingestion/sequence_artifact.py`, `sequence_selection.py` |
 
-Detalhes: [documentação de Ingestion](../src/contextmap/ingestion/docs/README.md), especialmente [contracts](../src/contextmap/ingestion/docs/contracts.md), [artifact](../src/contextmap/ingestion/docs/artifact.md), [synchronization](../src/contextmap/ingestion/docs/synchronization.md) e [calibration](../src/contextmap/ingestion/docs/calibration.md).
+## 2. Visual Perception
 
-### Não responsabilidade
+**Função.** Produzir evidência visual de frame/run: regiões 2D, máscaras, embeddings/features, claims semânticas e contexto de cena. Nada aqui é entidade persistente do mapa.
 
-Ingestion não faz percepção semântica, state estimation canônica, projeção 2D↔3D, fusão ou criação de entidades.
+**Recebe de.** Ingestion, principalmente `ImageObservation` selecionadas do `SequenceArtifact`.
 
-## 2. Branch de Visual Perception
+**Pipeline interna canônica atual.** `CANONICAL_PRESET_V1` em `visual_perception/pipeline.py` contém `image_preparation`, `region_discovery`, `dense_feature_extraction`, `region_feature_extraction`, `scene_interpretation` e `region_interpretation`. O executor de DAG é genérico: uma falha numa branch pula apenas seus dependentes e preserva evidência de branches independentes.
 
-Visual Perception transforma uma observação física de imagem em evidência visual canônica para um `PerceptionRun`, sem decidir projeção 2D↔3D, identidade persistente de entidade ou fusão multi-view.
+### 2.1 Image preparation
 
-### Topologia implementada: `canonical/1`
+`prepare_image()` transforma a observação em `PreparedImage` e registra uma cadeia explícita de operações. Crop, resize, rectification e normalization só existem quando configurados. A imagem bruta não é alterada silenciosamente.
 
-```mermaid
-flowchart LR
-    IMG["image_preparation<br/>PreparedImage"]
-    REG["region_discovery<br/>Region2D[]"]
-    DENSE["dense_feature_extraction<br/>VisualFeature[] DENSE"]
-    RFEAT["region_feature_extraction<br/>VisualFeature[] REGION"]
-    SCENE["scene_interpretation<br/>SceneContext | None"]
-    RINT["region_interpretation<br/>SemanticClaim[]"]
-    RESULT["PerceptionResult"]
+Arquivos: `visual_perception/image_preparation.py` e [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md#preparação-de-imagem-e-constraints).
 
-    IMG --> REG
-    IMG --> DENSE
-    IMG --> RFEAT
-    REG --> RFEAT
-    IMG --> SCENE
-    IMG --> RINT
-    REG --> RINT
-    REG --> RESULT
-    DENSE --> RESULT
-    RFEAT --> RESULT
-    SCENE --> RESULT
-    RINT --> RESULT
-```
+### 2.2 Region Discovery e geração de máscaras
 
-`image_preparation` é atualmente um estágio fonte: `PreparedImage` é fornecida externamente ao grafo. `resolve_pipeline()` valida o preset antes de construir backends; os backends são resolvidos uma vez e reutilizados entre observações. `execute_stage_graph()` isola falhas por branch: um estágio `FAILED` faz apenas seus dependentes ficarem `SKIPPED`, enquanto branches independentes continuam contribuindo evidência.
-
-### Contratos implementados
-
-- `PreparedImage`;
-- `Region2D`;
-- `VisualFeature` com scopes `DENSE`, `GLOBAL` e `REGION`;
-- `SemanticClaim`, incluindo hipóteses `PRIMARY` e `ALTERNATIVE`;
-- `SceneContext`;
-- `SemanticInterpretationRequest`, `SemanticVisualView` e `SemanticFeatureReference`;
-- `SemanticInterpretationExecution`, prompt renderizado, parser estruturado e policy explícita de confidence;
-- `SemanticScore`, produzido por `SemanticScorer` sem mutar a claim;
-- `PerceptionRun` e `PerceptionResult`;
-- `BackendProvenance`.
-
-`RegionId`, `FeatureId` e `ClaimId` são locais ao `PerceptionResult`. Reprocessar a mesma `SourceObservation` em outro run cria outro `PerceptionResult`; não cria uma nova observação física e não funde resultados anteriores.
-
-### Semantic Interpretation: boundary implementado
-
-O milestone de Semantic Interpretation materializa um boundary backend-neutral
-sem transformar uma classificação de frame em verdade persistente. O request
-canônico registra exatamente quais views, features, contexto e metadata foram
-selecionados; o output distingue resposta bruta, parsing e evidência canônica.
-
-```mermaid
-flowchart LR
-    E["views + optional features/context"] --> REQ["SemanticInterpretationRequest"]
-    REQ --> SI["SemanticInterpreter"]
-    SI --> EX["SemanticInterpretationExecution"]
-    EX --> CLAIM["SemanticClaim[] / SceneContext"]
-    EX --> AUDIT["request + prompt + raw response + diagnostics"]
-    CLAIM --> RESULT["PerceptionResult"]
-    AUDIT --> PRA["PerceptionRunArtifact"]
-    RESULT --> PRA
-```
-
-`SemanticVisualView` é content-addressed e precisa estar materializada no run
-artifact. Se uma `VisualFeature` for consumida semanticamente, seu payload
-também deixa de ser opcional para aquele run. `scene_context_reference`,
-`region_id` e outputs parseados são reconciliados com evidência persistida
-antes da finalização.
-
-Qwen, Gemini e Florence-2 implementam o mesmo port `SemanticInterpreter` e usam o parser
-compartilhado com policy `UNSCORED_ONLY`, portanto confidence auto-relatada
-pelo VLM não vira score canônico. Qwen e Florence-2 possuem execuções controladas
-com runtimes transformers reais sobre os 20 frames de corridor-02, sem anotações
-humanas; a execução real do Gemini continua pendente.
-
-A capability executável `semantic_interpreter` já existe em
-`visual_perception.pipeline`, recebendo um estágio-fonte `semantic_request`.
-Entretanto, `CANONICAL_PRESET_V1` ainda conserva temporariamente
-`scene_interpretation`/`region_interpretation`; migrar o preset exige definir
-explicitamente a política que constrói os requests, em vez de esconder essa
-seleção dentro de um backend.
-
-Detalhes: [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
-
-### Region Discovery implementado
-
-```mermaid
-flowchart LR
-    PI["PreparedImage"] --> PASSES["full-frame / tiles / scales"]
-    PASSES --> RD["SAM2 | SAM3 | Florence-2"]
-    RD --> RC["RegionCandidate[]"]
-    RC --> N["normalize / merge"]
-    N --> GF["Geometry Freeze"]
-    GF --> R2D["Region2D[]"]
-    R2D --> RESULT["PerceptionResult"]
-```
-
-Region Discovery agora possui adapters concretos para SAM2, SAM3 e Florence-2, além de image preparation auditável, tiling/scale com validação da imagem materializada, remapeamento global, filtros/constraints, merge e diagnostics. O output do estágio continua sendo o `Region2D` canônico; candidatos e decisões intermediárias permanecem evidence/audit da execução. Detalhes: [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/region-discovery.md).
-
-### Feature Extraction e backends implementados
-
-```mermaid
-flowchart LR
-    PI["PreparedImage"] --> FE["FeatureExtractor"]
-    REG["Region2D[]"] --> FE
-    FE --> VF["VisualFeature[]"]
-    VF --> ES["EmbeddingSpace<br/>compatibilidade exata"]
-    VF --> STORE["FeatureStore<br/>payload lazy"]
-    VF --> DFM["DenseFeatureMap<br/>sampling explícito"]
-    DFM --> POOL["pool_region_feature()"]
-    REG --> POOL
-    DFM -. preset alternativo .-> ENH["FeatureResolutionEnhancement"]
-```
-
-Feature Extraction possui contratos e infraestrutura backend-neutral para os três scopes de `VisualFeature`, identidade de `EmbeddingSpace`, persistência e integridade de payloads, geometria explícita de dense feature maps, pooling mask-aware, diagnostics e avaliação. `dense_feature_extraction` e `region_feature_extraction` fazem parte de `CANONICAL_PRESET_V1` via o port `FeatureExtractor`. A geometria densa persistida em `metrics/feature-extraction.jsonl` é contratual: antes de publicar um run, `PerceptionRunWriter.finalize()` vincula cada diagnostic produzido à `VisualFeature` exata e rejeita inconsistências de scope, shape/grid, dtype, normalização, payload, provenance, `EmbeddingSpace` ou run proprietário.
-
-Os adapters concretos DINOv2 e DINOv3 produzem mapas densos nativos; CLIP produz features globais ou de região; AlphaCLIP produz features de região condicionadas por máscara. Todos ficam isolados em `visual_perception/backends/`, carregam runtimes de forma lazy e falham explicitamente sem fallback. A CI valida os contratos com runtimes determinísticos injetados, não a equivalência numérica de checkpoints reais. A seleção concreta ainda pertence à composition root. `feature_resolution_enhancement` é uma capability conhecida pelo DAG, mas permanece opcional, fora do preset canônico e sem backend aprendido integrado.
-
-Detalhes: [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [espaço de embedding](../src/contextmap/visual_perception/docs/embedding_space.md), [feature store](../src/contextmap/visual_perception/docs/feature_store.md) e [protocolo de avaliação](../src/contextmap/evaluation/docs/feature_extraction.md).
-
-### Persistência e leitura multi-run
-
-```mermaid
-flowchart LR
-    RESULT["PerceptionResult[]"] --> W["PerceptionRunWriter"]
-    W --> ART["PerceptionRunArtifact"]
-    ART --> R["PerceptionRunReader"]
-    R --> SET["PerceptionEvidenceSet"]
-    SET -. evidência reutilizável por run .-> DOWN["downstream implementado<br/>via associação e fusão"]
-```
-
-`PerceptionEvidenceSet` exige seleção explícita de runs e agrupa resultados pela observação física sem escolher label vencedor, combinar confidences ou associar regiões como o mesmo objeto.
-
-### Ainda não materializado na integração canônica
-
-Os seguintes elementos aparecem na arquitetura alvo ou como variation points já definidos, mas ainda não possuem integração concreta na `dev` ou não fazem parte de `CANONICAL_PRESET_V1`:
-
-- seleção dos adapters DINOv2, DINOv3, CLIP e AlphaCLIP pela composition root do runtime, por configuração explícita, nunca implícita; DINOv2/DINOv3/CLIP já foram validados com pesos reais, mas AlphaCLIP e a avaliação científica comparativa permanecem pendentes;
-- backend aprendido de `FeatureResolutionEnhancement` e sua inclusão no preset canônico;
-- promoção de `semantic_interpreter` e da política explícita de construção de `SemanticInterpretationRequest` para `CANONICAL_PRESET_V1`; a execução real do Gemini (sem credencial nem consentimento para enviar frames) e a avaliação de Qwen/Gemini/Florence-2 com anotações semânticas humanas continuam pendentes;
-- integração de `SemanticScorer` no preset canônico; os adapters CLIP/AlphaCLIP já existem, mas permanecem uma capability explícita fora de `CANONICAL_PRESET_V1`;
-- semantic refinement;
-- execução end-to-end do DAG do runtime com executores reais de Visual Perception e Point Representation: o runtime já conecta os estágios (ordem, entradas exatas, reuso, lifecycle) e já compõe automaticamente executores reais de `state_estimation`, `geometric_mapping`, `sensor_association` e `semantic_fusion` a partir da configuração; Visual Perception e Point Representation dependem de backend com modelo/GPU e ainda não têm um, e a Ingestion tem um executor real que continua exigindo injeção explícita (precisa do `IngestionRequest` da execução).
-
-Implementar um port ou backend não o adiciona automaticamente ao preset. A inclusão exige topologia, inputs/outputs, validação e avaliação explícitas.
-
-Detalhes: [documentação de Visual Perception](../src/contextmap/visual_perception/docs/README.md), [pipeline](../src/contextmap/visual_perception/docs/pipeline.md), [contracts](../src/contextmap/visual_perception/docs/contracts.md), [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md), [Feature Extraction](../src/contextmap/visual_perception/docs/feature-extraction.md), [service](../src/contextmap/visual_perception/docs/service.md), [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md) e [evidence set](../src/contextmap/visual_perception/docs/evidence_set.md).
-
-## 3. Branch de State Estimation
-
-State Estimation produz a trajetória canônica usada para colocar observações no frame global do mapa.
-
-```mermaid
-flowchart TD
-    SEQ[SequenceArtifact]
-    PRE[Geometry/frame preflight]
-    EXT[External pose backend]
-    FL[FAST-LIO backend]
-    P[PoseEstimate]
-    T[Trajectory]
-    L[Pose lookup / interpolation]
-    A[StateEstimationRunArtifact]
-
-    SEQ --> PRE
-    PRE --> EXT --> P
-    PRE --> FL --> P
-    P --> T --> L --> A
-```
-
-### Entrada
-
-Dependendo do backend:
-
-- external pose measurements;
-- LiDAR + IMU;
-- calibration/extrinsics requeridos;
-- selection temporal.
-
-### Backends
-
-Implementados atrás do port `StateEstimator`:
-
-- `ExternalPose`, valida e normaliza uma pose externa canônica; é o baseline de geometria;
-- `FAST-LIO`, produz pose LiDAR-inertial sem vazar tipos do backend, com o processo isolado atrás de um runner e de um wrapper de implantação que roda no container do FAST-LIO. Não há fallback de um backend para o outro. Foi executado de verdade sobre uma janela de 90 s do `corridor-02` (888 poses); a covariância do FAST-LIO não é exportada e as varreduras de entrada permanecem cruas (sem deskew).
-
-### Contratos
-
-`PoseEstimate` declara explicitamente:
+Este é o caminho a investigar quando houver gargalo ou erro na geração de máscaras.
 
 ```text
-timestamp / clock_id
-parent_frame
-child_frame
-translation_m
-orientation (x, y, z, w)
-covariance?            # ausente quando o backend não a reporta
-validity
-provenance
+PreparedImage
+→ discovery passes
+→ backend SAM2 / SAM3 / Florence-2
+→ RegionCandidate
+→ remap tile/scale → PreparedImage
+→ normalize_regions
+→ Region2D
+→ MaskStore no PerceptionRunArtifact
 ```
 
-`Trajectory` reúne poses com frame de referência, frame do corpo, gaps registrados e provenance; limites de tempo e resumo de qualidade são derivados.
+O custo pode vir de lugares diferentes:
 
-### Time alignment
+| Sintoma | Onde olhar |
+| --- | --- |
+| Inferência de máscara lenta | `visual_perception/backends/sam2.py`, `sam3.py`, `florence2.py` e runtime/modelo correspondente |
+| Muitas inferências por frame | `visual_perception/discovery.py`, `DiscoveryPassConfig`, tiling, overlap, scale e budget |
+| Máscara deslocada depois de tile/resize | `visual_perception/discovery.py` e o remapeamento para coordenadas globais |
+| Muitas regiões duplicadas | `visual_perception/normalization.py`, IoU, containment e merge |
+| Regiões filtradas inesperadamente | `NormalizationConfig`, valid/exclusion regions e filtros de área |
+| Artifact grande ou escrita lenta das máscaras | `visual_perception/mask_store.py` e `run_artifact.py`, não o backend de discovery |
 
-Downstream solicita pose no timestamp de uma observação através de uma política explícita:
+Backends produzem `RegionCandidate`; a normalização comum valida geometria, aplica constraints, deduplica, limita budget e congela `Region2D`. Scores nativos permanecem com semântica própria e nunca viram confidence universal.
 
-```text
-EXACT
-NEAREST        (tolerância de distância ao redor da pose)
-INTERPOLATED   (tolerância opcional do intervalo entre as vizinhas)
-```
+Detalhes: [region-discovery.md](../src/contextmap/visual_perception/docs/region-discovery.md) e [mask_store.md](../src/contextmap/visual_perception/docs/mask_store.md).
 
-Rejeições (fora do intervalo, sem correspondência exata, tolerância excedida, interpolação através de um gap) são dados contáveis, nunca extrapolação silenciosa. Uma pose interpolada preserva os estimates que a originaram e é distinguível de uma pose estimada.
+### 2.3 Feature Extraction
 
-### Preflight
+A branch densa recebe apenas a imagem preparada. A branch de região recebe imagem + `Region2D`.
 
-Antes do estimator, valida por capability:
+- DINOv2/DINOv3 produzem features densas no preset global atual.
+- CLIP/AlphaCLIP produzem features de região.
+- Payloads ficam em `FeatureStore`; `VisualFeature` carrega identidade do espaço, shape, dtype, normalização e referência ao payload.
+- Features de espaços diferentes não são comparadas apenas porque têm a mesma dimensão.
 
-- frames e extrínsecos necessários (frame graph estático com verificação de caminhos redundantes);
-- direção do transform e rotação válida;
-- clock domains;
-- identidade da calibração.
+Arquivos: `visual_perception/feature_store.py`, `dense_region_association.py`, `backends/dinov2.py`, `dinov3.py`, `clip.py`, `alphaclip.py`.
 
-Uma capability posterior sem pré-requisitos (por exemplo, câmera sem modelo de intrínsecos) nunca bloqueia uma execução LiDAR-inertial: aparece como prontidão downstream. Um preflight `BLOCKED` impede que o estimador inicie e que um run seja persistido.
+Detalhes: [feature-extraction.md](../src/contextmap/visual_perception/docs/feature-extraction.md).
 
-Saída persistida: `StateEstimationRunArtifact`.
+### 2.4 Semantic Interpretation
 
-Detalhes: [documentação de State Estimation](../src/contextmap/state_estimation/docs/README.md), [contratos](../src/contextmap/state_estimation/docs/contracts.md), [lookup](../src/contextmap/state_estimation/docs/lookup.md), [backends](../src/contextmap/state_estimation/docs/backends.md), [preflight](../src/contextmap/state_estimation/docs/preflight.md), [artifact](../src/contextmap/state_estimation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/state_estimation.md).
+O boundary novo baseado em `SemanticInterpretationRequest` e `SemanticInterpreter.interpret(request)` está implementado, com adapters Qwen, Gemini e Florence-2. Porém, o `CANONICAL_PRESET_V1` interno ainda usa os stages legados `scene_interpretation` e `region_interpretation`.
+
+Isso é uma distinção importante para diagnóstico: um backend que implementa somente o boundary novo pode falhar nesses stages do preset atual, enquanto Region Discovery e Feature Extraction continuam concluindo normalmente por serem branches independentes.
+
+Arquivos: `visual_perception/semantic_requests.py`, `semantic_backend.py`, `semantic_prompt.py`, adapters em `backends/`.
+
+Detalhes: [semantic-interpretation.md](../src/contextmap/visual_perception/docs/semantic-interpretation.md).
+
+### 2.5 Assembly e artifact
+
+`assemble_perception_result()` agrega apenas outputs de stages `SUCCEEDED`. `PerceptionRunWriter` persiste resultados, stage outcomes, máscaras compactas, payloads de feature e execuções semânticas verificáveis.
+
+**Entrega para.** Sensor Association, Semantic Fusion, Entity Resolution por aparência e Evaluation.
+
+## 3. State Estimation
+
+**Função.** Produzir a trajetória dinâmica `T_map_body(t)` usada para colocar medições no mapa e projetar geometria no timestamp das imagens.
+
+**Recebe de.** Ingestion: `ExternalPoseMeasurement` ou LiDAR + IMU, além de calibração estática quando o backend exige.
+
+**Fluxo interno.**
+
+1. O backend declara `geometry_requirements()`.
+2. `StaticFrameGraph` resolve relações estáticas necessárias.
+3. `run_geometry_preflight()` bloqueia combinações inviáveis antes do estimador.
+4. `ExternalPoseEstimator` valida/publica medições externas, ou `FastLioEstimator` constrói um job LiDAR-inercial para `FastLioRunner`.
+5. O resultado é normalizado em `PoseEstimate[]` e `Trajectory`.
+6. Gaps, frames, clock e provenance permanecem explícitos.
+7. `StateEstimationRunWriter` persiste o run.
+
+**Entrega para.** Geometric Mapping, Sensor Association e Evaluation.
+
+**Onde procurar.**
+
+| Problema | Arquivo |
+| --- | --- |
+| Pose importada inválida | `state_estimation/backends/external_pose.py` |
+| FAST-LIO não inicia/diverge | `backends/fast_lio.py`, `fast_lio_process.py`, `fast_lio_wrapper.py` |
+| Extrínseco ou frame ausente | `state_estimation/frame_graph.py`, `preflight.py` |
+| Pose no timestamp errada | `state_estimation/lookup.py` |
+| Drift / ATE / RPE | capability de Evaluation, não o contrato de State Estimation |
+
+Detalhes: [State Estimation](../src/contextmap/state_estimation/docs/README.md), [backends](../src/contextmap/state_estimation/docs/backends.md) e [lookup](../src/contextmap/state_estimation/docs/lookup.md).
 
 ## 4. Geometric Mapping
 
-Geometric Mapping transforma observações geométricas locais em uma geometria persistente no frame global do mapa.
+**Função.** Transformar LiDAR do frame local do sensor para um frame global persistente, mantendo referências estáveis e lineage até cada medição.
 
-```mermaid
-flowchart TD
-    S[Selected LiDAR/depth observations]
-    D[Motion correction state]
-    P[Pose lookup]
-    X[Static extrinsic]
-    T[Source → map transform]
-    A[Persistent accumulation]
-    I[Spatial index / bounds]
-    M[GeometricMapArtifact]
+**Recebe de.** Ingestion fornece os scans e a calibração; State Estimation fornece a trajetória.
 
-    S --> D --> T
-    P --> T
-    X --> T
-    T --> A --> I --> M
-```
+**Fluxo interno.**
 
-### Entrada
+1. `assemble_geometry_inputs()` resolve layout XYZ, payload hash, estado de motion correction, `T_map_body(t)` e `T_body_source`.
+2. Scans incompatíveis são rejeitados com motivo explícito antes de transformar pontos.
+3. `transform_scan()` aplica `P_map = T_map_body(t) · T_body_source · P_source`.
+4. Apenas coordenadas NaN/Inf são descartadas nessa etapa. Não há filtro de distância, denoising ou semântica escondida.
+5. `MapAccumulator` grava em fluxo. O baseline mantém cada medição; `ScanVoxelPolicy` pode agregar apenas dentro do mesmo scan.
+6. `PackedGeometry` oferece acesso aleatório, lookup por `GeometryReference`, scan index e trace da transformação.
+7. `GeometricMapArtifactWriter` publica o mapa.
 
-- `SequenceArtifact`;
-- selection;
-- `StateEstimationRunArtifact`;
-- static extrinsics/calibration;
-- LiDAR/depth payloads.
+**Limite importante.** O módulo registra o estado de motion correction, mas **não aplica deskew**; todos os pontos de um scan usam a pose resolvida para um instante.
 
-### Motion correction
+**Entrega para.** Sensor Association, Point Representation, Semantic Fusion, Semantic Mapping, Entity Resolution, Spatial Relations e Artifact.
 
-Cada scan precisa declarar estado:
+**Onde procurar.**
 
-```text
-raw / uncorrected
-motion-corrected / deskewed
-unknown
-```
+| Problema | Arquivo |
+| --- | --- |
+| Scan rejeitado | `geometric_mapping/inputs.py` |
+| Point cloud deslocada/rotacionada | `transformation.py`, depois conferir trajetória e extrínsecos upstream |
+| Mapa muito grande | `accumulation.py`, política de agregação |
+| Consulta espacial lenta | `geometry_storage.py` / acesso espacial |
+| Erro de lineage de ponto | transform trace e serialization do módulo |
 
-Nunca inferir `deskewed=true` apenas porque FAST-LIO foi usado.
-
-### Transformação source→map
-
-Para um exemplo LiDAR:
-
-```text
-P_map = T_map_body(t) · T_body_lidar · P_lidar
-```
-
-A cadeia real depende do rig, mas frame source/target e cada transform precisam ser explícitos.
-
-O ponto persistente preserva tanto coordenadas locais quanto globais e lineage do transform.
-
-### Persistência da geometria
-
-O mapa geométrico inicial pode ser point-based. Ele deve fornecer referências estáveis dentro do artefato:
-
-```text
-GeometryReference(map_id, geometry_id)
-```
-
-Downstream referencia geometria em vez de copiar XYZ repetidamente.
-
-### Spatial access
-
-O contrato deve permitir operações como:
-
-```text
-get(GeometryReference)
-iter_geometry(...)
-query_bounds(Bounds3D)
-map_bounds()
-```
-
-A implementação concreta do índice é privada.
-
-Saída persistida: `GeometricMapArtifact`.
-
-Detalhes: [documentação de Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md), [contratos](../src/contextmap/geometric_mapping/docs/contracts.md), [correção de movimento](../src/contextmap/geometric_mapping/docs/motion-correction.md), [inputs](../src/contextmap/geometric_mapping/docs/inputs.md), [transformação](../src/contextmap/geometric_mapping/docs/transformation.md), [acumulação](../src/contextmap/geometric_mapping/docs/accumulation.md), [acesso espacial](../src/contextmap/geometric_mapping/docs/spatial-access.md), [artifact](../src/contextmap/geometric_mapping/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/geometric_mapping.md).
+Detalhes: [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md), [inputs](../src/contextmap/geometric_mapping/docs/inputs.md), [transformation](../src/contextmap/geometric_mapping/docs/transformation.md) e [accumulation](../src/contextmap/geometric_mapping/docs/accumulation.md).
 
 ## 5. Sensor Association
 
-Sensor Association conecta a geometria persistente às evidências visuais de uma observação.
+**Função.** Ancorar evidência visual 2D em geometria 3D persistente. É aqui que uma região/máscara deixa de ser apenas geometria de imagem e passa a ter suporte espacial no mapa.
 
-É aqui que o sistema faz a ponte 2D↔3D.
+**Recebe de.**
 
-```mermaid
-flowchart TD
-    PM[P_map]
-    POSE[T_map_body at RGB timestamp]
-    EXT[body ↔ camera extrinsic]
-    CAM[Camera model / intrinsics]
-    RAW[Raw camera pixel]
-    IMG[PreparedImage transform chain]
-    PIX[PreparedImage pixel]
-    VIS[Visibility / occlusion]
-    REG[Region2D membership]
-    DEN[Dense feature sampling]
-    SO[SpatialObservation]
+- Geometric Mapping: `GeometrySource` / `GeometricMapArtifact`.
+- State Estimation: trajetória e política de lookup.
+- Ingestion: calibração, modelo de câmera e imagem original.
+- Visual Perception: `PreparedImage`, `Region2D`, claims e features.
 
-    PM --> RAW
-    POSE --> RAW
-    EXT --> RAW
-    CAM --> RAW
-    RAW --> IMG --> PIX --> VIS
-    VIS --> REG --> SO
-    VIS --> DEN --> SO
-```
+**Fluxo interno.**
 
-### Projection 3D→2D
+1. `GeometryCloud.from_source()` carrega a geometria autoritativa.
+2. `FrameProjector` resolve `T_map_body(t_rgb)` e `T_body_camera`.
+3. O modelo de câmera projeta 3D para pixel na imagem crua.
+4. `raw_to_prepared_transform()` reproduz crop/resize da percepção para levar o pixel ao mesmo espaço em que as máscaras vivem.
+5. Pontos são classificados como behind-camera, outside-image, outside-valid-support ou in-support.
+6. `resolve_visibility()` aplica a política conservadora de oclusão por suporte de profundidade local.
+7. `associate_regions()` testa pertencimento às máscaras. Máscaras persistidas são carregadas sob demanda via `MaskStoreReader`.
+8. `build_spatial_observations()` cria uma `SpatialObservation` por região, com `GeometryReference`, referências de claims/features e provenance.
+9. Quando mapas densos são fornecidos, `sample_dense_features()` calcula índices/pesos nearest ou bilinear sem duplicar vetores por ponto.
+10. `derive_observation_quality()` mede profundidade, ângulo, borda, visibilidade, densidade, offset temporal e reprojeção quando existe referência confiável.
+11. Diagnostics de calibração, tempo e reprojeção permanecem separados da evidência semântica.
+12. O run é persistido em `SensorAssociationRunArtifact`.
 
-A cadeia conceitual é:
+**Estado do executor global.** `SensorAssociationExecutor` atualmente cria `dense_maps={}`, portanto o stage automático usa o caminho de associação geométrica/máscara, apesar de a capability já possuir dense sampling completo.
 
-```text
-P_map
-→ P_camera at t_rgb
-→ raw camera pixel
-→ PreparedImage pixel
-```
+**Onde procurar.**
 
-Ela deve usar:
+| Sintoma | Código |
+| --- | --- |
+| Projeção 3D→2D deslocada | `frame_projection.py`, `camera_models.py`, `image_transform.py` |
+| Problema só depois de crop/resize | `image_transform.py` |
+| Pontos do fundo recebem label da frente | `visibility.py` e `OcclusionPolicy` |
+| Máscara não recebe pontos | `membership.py`; confirmar `MaskStoreReader` e dimensões |
+| Feature densa amostrada no patch errado | `dense_sampling.py` |
+| Quality estranha | `quality.py`, `quality_derivation.py` |
+| Reprojeção/tempo suspeitos | `diagnostics.py` |
 
-- trajectory/pose selecionado;
-- extrinsic correto;
-- camera model correto, incluindo fisheye quando declarado pela calibração;
-- transformações de imagem aplicadas por Visual Perception.
+Detalhes: [Sensor Association](../src/contextmap/sensor_association/docs/README.md), [projection chain](../src/contextmap/sensor_association/docs/projection_chain.md), [visibility](../src/contextmap/sensor_association/docs/visibility.md) e [membership](../src/contextmap/sensor_association/docs/membership.md).
 
-Não é permitido assumir que raw image e `PreparedImage` usam as mesmas coordenadas.
+## 6. Point Representation
 
-### Visibility e occlusion
+**Função.** Produzir uma representação numérica opcional da estrutura 3D local. Ela complementa geometria, não a substitui e não contém label.
 
-Pontos projetáveis ainda podem estar atrás de superfícies visíveis. A política de visibility/occlusion decide quais suportes 3D podem contribuir para a evidência daquela imagem.
+**Recebe de.** Geometric Mapping. Um contexto de associação pode ser registrado explicitamente no run, mas a capability não depende de Sensor Association.
 
-### Region membership
+**Fluxo interno.**
 
-Para cada ponto visível, verificar membership em `Region2D` congeladas.
+1. Selecionar centros `GeometryReference`.
+2. `SupportExtractor` recupera ponto, vizinhança por raio ou k-nearest.
+3. `CoordinatePreparation` centraliza e/ou normaliza escala conforme a política.
+4. `PointEncoder` recebe `PreparedSupport`.
+5. O backend pode ser o descritor geométrico determinístico ou PTv3/Pointcept.
+6. `RepresentationService` mantém falhas de suporte explícitas.
+7. O run persiste `PointRepresentation`, `RepresentationSpace` e payloads lazy.
 
-Um ponto pode pertencer a zero, uma ou várias regiões. Overlap não é resolvido semanticamente aqui.
+**Estado do runtime.** A capability e os backends existem, inclusive PTv3 real, mas não há `StageExecutor` automático no runtime global.
 
-### Dense feature sampling
+**Onde procurar.** `point_representation/support.py` para custo de neighborhood query; `backends/geometric_descriptor.py` para baseline; `backends/ptv3.py` e `ptv3_pointcept.py` para o backend aprendido; `service.py` para execução.
 
-Quando um dense `VisualFeature` está disponível:
-
-```text
-GeometryReference
-→ prepared-image pixel
-→ feature-grid coordinate
-→ local visual feature evidence
-```
-
-Region-level embeddings continuam associados à região, não são fingidos como medições independentes por ponto.
-
-### Saída
-
-`SpatialObservation` representa evidência visual ancorada em suporte 3D persistente.
-
-Saída persistida: `SensorAssociationRunArtifact`.
-
-Detalhes: [documentação de Sensor Association](../src/contextmap/sensor_association/docs/README.md), [contratos](../src/contextmap/sensor_association/docs/contracts.md), [modelos de câmera](../src/contextmap/sensor_association/docs/camera_models.md), [cadeia de projeção](../src/contextmap/sensor_association/docs/projection_chain.md), [visibilidade](../src/contextmap/sensor_association/docs/visibility.md), [pertencimento à máscara](../src/contextmap/sensor_association/docs/membership.md), [amostragem densa](../src/contextmap/sensor_association/docs/dense_sampling.md), [qualidade da observação](../src/contextmap/sensor_association/docs/quality.md), [diagnósticos](../src/contextmap/sensor_association/docs/diagnostics.md), [artifact](../src/contextmap/sensor_association/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/sensor_association.md).
-
-## 6. Point Representation, opcional
-
-Point Representation descreve estrutura geométrica local sem misturá-la com evidência visual ou semântica.
-
-```mermaid
-flowchart LR
-    G[GeometryReference]
-    N[Neighborhood support]
-    E[PointEncoder]
-    P[PointRepresentation]
-    A[PointRepresentationRunArtifact]
-
-    G --> N --> E --> P --> A
-```
-
-### Support extraction
-
-As políticas implementadas são:
-
-- radius support;
-- k-nearest support;
-
-Não existe política voxel/cell no código atual; ela só deve ser adicionada diante de requisito e avaliação concretos.
-
-O suporte precisa preservar quais `GeometryReference` participaram.
-
-### Backends
-
-Baseline:
-
-- descriptor geométrico determinístico.
-
-Opcional/experimental:
-
-- PTv3 learned 3D representation.
-
-PTv3 não é requisito automático do canonical pipeline. Seu uso deve ser justificado por avaliação/ablation.
-
-No estado atual, o descritor determinístico e o PTv3 estão implementados e foram avaliados sobre geometria real do corredor-02: o PTv3 tem a **fronteira** (`PTv3PointEncoder` atrás de um `PTv3Runtime` injetável) e um **runtime real sobre o Pointcept** (`PointceptPTv3Runtime`, só o backbone, num ambiente CUDA 12.6 separado). Medido: cerca de 30 ms por suporte e pico de 193 MiB de tensores na GPU, contra 1,5 a 2,9 ms do descritor, sem vantagem demonstrada de discriminação de lugar sob reobservação. A evidência sustenta manter a capability opcional e adiar o PTv3 como backend canônico; o efeito downstream continua pendente, pois exige Entity Resolution integrada e anotações de identidade.
-
-### Saída
-
-`PointRepresentation` + `RepresentationSpace`.
-
-Saída persistida: `PointRepresentationRunArtifact`.
-
-Detalhes: [documentação de Point Representation](../src/contextmap/point_representation/docs/README.md), [contratos](../src/contextmap/point_representation/docs/contracts.md), [extração de suporte](../src/contextmap/point_representation/docs/support-extraction.md), [execução](../src/contextmap/point_representation/docs/execution.md), [descritor geométrico](../src/contextmap/point_representation/docs/geometric-descriptor.md), [PTv3](../src/contextmap/point_representation/docs/ptv3.md), [artifact](../src/contextmap/point_representation/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/point_representation.md).
+Detalhes: [Point Representation](../src/contextmap/point_representation/docs/README.md) e [support extraction](../src/contextmap/point_representation/docs/support-extraction.md).
 
 ## 7. Semantic Fusion
 
-Semantic Fusion acumula evidência de múltiplas observações físicas sobre suporte espacial compatível, sem ainda criar identidade persistente de objeto.
+**Função.** Acumular múltiplas observações sobre suporte espacial compatível sem criar identidade persistente de objeto.
 
-```mermaid
-flowchart TD
-    A[Selected AssociationRunArtifacts]
-    G[Group by physical SourceObservation]
-    S[Build FusionSupport]
-    C[Assemble typed evidence channels]
-    F[Baseline fusion policy]
-    U[Ambiguity / conflict / abstention]
-    E[FusedEvidence]
+**Recebe de.** Sensor Association fornece `SpatialObservation`; Visual Perception fornece a evidência referenciada; Geometric Mapping fornece as referências espaciais; Ingestion fornece timestamps; Point Representation é um canal opcional.
 
-    A --> G --> S --> C --> F --> U --> E
-```
+**Fluxo interno.**
 
-### Regra de correlação
+1. `group_by_physical_observation()` separa frame físico de execução de inferência. Repetir um modelo três vezes no mesmo frame continua sendo uma observação física.
+2. `build_fusion_supports()` conecta observações cuja geometria possui Jaccard acima do limiar e usa componentes conexas como `FusionSupport`.
+3. Cada observação vira `EvidenceContribution`.
+4. A política baseline agrupa claims por uma chave tipográfica de label, mantém stances `SUPPORTING`, `CONFLICTING`, `AMBIGUOUS` e `ABSTAINING` e registra incerteza.
+5. Canais permanecem tipados: claims, scores, visual features, observation quality, geometry support e point representation não são concatenados num score único.
+6. A política quality-aware opcional adiciona peso de contribuição derivado somente da qualidade mensurável da vista e não apaga evidência.
+7. `FusedEvidence` é persistida em `SemanticFusionRunArtifact`.
 
-Três inferências sobre a mesma imagem são uma observação física com três resultados correlacionados:
+**Estado do executor global.** O executor atual usa a política baseline e rejeita o input de Point Representation. A quality-aware policy existe na capability para execução/avaliação controlada, mas não é substituída silenciosamente no executor.
 
-```text
-frame-0120
-├── run A
-├── run B
-└── run C
-```
+**Onde procurar.**
 
-Isso não equivale a três frames fisicamente distintos.
+| Problema | Código |
+| --- | --- |
+| Mesmo frame contado várias vezes | `semantic_fusion/grouping.py` |
+| Observações do mesmo objeto não entram no mesmo suporte | `support.py`, limiar Jaccard |
+| Regiões diferentes são fundidas demais | `support.py`; revisar geometria e política |
+| Contradições/empates inesperados | `accumulation.py` |
+| Quality weight inesperado | `quality_aware.py` |
+| Canal opcional desaparece | conferir `BaselineAccumulationPolicy.channels` e inputs |
 
-Fusion deve manter separados:
-
-```text
-physical_observation_count
-inference_result_count
-```
-
-### FusionSupport
-
-Agrupa `SpatialObservation` com suporte 3D suficientemente compatível para acumular evidência.
-
-`FusionSupport` não significa automaticamente "mesmo objeto".
-
-### Canais de evidência
-
-Podem participar, conforme policy/configuração:
-
-- `SemanticClaim`;
-- `SemanticScore`;
-- visual feature references;
-- visibility/coverage;
-- optional `PointRepresentation`;
-- temporal metadata.
-
-Os canais mantêm semânticas e escalas separadas.
-
-### Política baseline
-
-A primeira policy deve ser determinística e preservar:
-
-- hypotheses concorrentes;
-- primary/alternative roles;
-- scored e unscored evidence;
-- abstentions;
-- conflicts;
-- número de observações físicas;
-- contribution trace.
-
-Não reduzir destrutivamente tudo a um único label.
-
-### Estado implementado
-
-- **Agrupamento por observação física** (`physical-observation-grouping-v1`) sobre uma seleção **explícita** de runs de percepção; a contagem de frames físicos, de resultados de inferência, de runs e de variantes de backend ficam separadas.
-- **`FusionSupport`** por sobreposição de geometria (`geometry-jaccard-support-v1`, limiares declarados e sem valores padrão); observações com pouca geometria vão para uma lista de excluídas explícita.
-- **Política baseline** (`baseline-evidence-accumulation-v1`): uma contribuição por observação espacial, hipóteses por chave de label tipográfica, stances (`SUPPORTING`, `CONFLICTING`, `AMBIGUOUS`, `ABSTAINING`) e sinais tipados, sem ranking e sem ponderar por qualidade.
-- **Incerteza reportada, nunca resolvida:** contradição, ambiguidade, empate e evidência insuficiente com a evidência exata; abstenção só para labels configurados; refinamentos (`pallet` / `wooden pallet`) **não** são reconhecidos.
-- **Canais tipados** (`semantic_claims`, `semantic_scores`, `visual_features`, `observation_quality`, `geometry_support`, `point_representation`) declarados pela política; um canal nunca é ativado só porque há dados.
-- **Política opcional ciente de qualidade** (`quality-aware-evidence-accumulation-v1`), com peso inspecionável e fator neutro registrado; **não** é o padrão e nenhuma decisão de adotá-la foi tomada.
-
-### Saída
-
-`FusedEvidence`.
-
-Saída persistida: `SemanticFusionRunArtifact`.
-
-Detalhes: [documentação de Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [contratos](../src/contextmap/semantic_fusion/docs/contracts.md), [agrupamento](../src/contextmap/semantic_fusion/docs/grouping.md), [suporte](../src/contextmap/semantic_fusion/docs/support.md), [acumulação](../src/contextmap/semantic_fusion/docs/accumulation.md), [política ciente de qualidade](../src/contextmap/semantic_fusion/docs/quality-aware.md), [artifact](../src/contextmap/semantic_fusion/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_fusion.md).
+Detalhes: [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [support](../src/contextmap/semantic_fusion/docs/support.md) e [accumulation](../src/contextmap/semantic_fusion/docs/accumulation.md).
 
 ## 8. Semantic Mapping
 
-Semantic Mapping materializa evidência fundida como entidades semânticas persistentes dentro de um semantic-map artifact.
+**Função.** Materializar `FusedEvidence` como entidades persistentes e consultáveis, mantendo geometria, semântica, evidência e tempo separados.
 
-```mermaid
-flowchart TD
-    F[FusedEvidence]
-    G[EntityGeometry]
-    S[EntitySemanticState]
-    T[EntityTemporalState]
-    E[Evidence linkage]
-    ENT[Entity]
+**Recebe de.** Semantic Fusion e Geometric Mapping.
 
-    F --> G
-    F --> S
-    F --> T
-    F --> E
-    G --> ENT
-    S --> ENT
-    T --> ENT
-    E --> ENT
-```
+**Fluxo interno.**
 
-### Entity
+1. A seleção de `FusionOutcome` é explícita.
+2. `materialize_entities()` aplica a baseline `one-support-one-entity-v1`.
+3. `summarize_geometry()` mantém o conjunto exato de `GeometryReference` como autoridade e deriva bounds, centroid, extent, estatísticas, orientação opcional e diagnostics.
+4. `semantic_state_from_fused_evidence()` preserva todas as hipóteses, alternativas, sinais e incertezas.
+5. Evidence links mantêm identidade/digest dos artifacts upstream.
+6. `summarize_temporal_state()` deriva first/last seen, frames físicos, inferências e lifecycle.
+7. Candidatos inválidos viram `CandidateRejection`; não desaparecem.
+8. O run persiste `Entity` em `SemanticMappingRunArtifact`.
 
-Uma entidade conecta:
+**Fronteira central.** Dois `FusionSupport` diferentes continuam duas `Entity`, mesmo que tenham o mesmo label e estejam adjacentes. Decidir se são o mesmo objeto pertence exclusivamente a Entity Resolution.
 
-- geometry support real, por `GeometryReference`;
-- centroid/bounds/extent derivados;
-- semantic hypotheses e alternatives;
-- attributes/properties com provenance;
-- conflicts/ambiguity;
-- first_seen/last_seen;
-- physical observation count;
-- inference result count;
-- referências para a evidência upstream.
+**Estado do runtime.** `SemanticMappingExecutor` compõe automaticamente quando o chamador também fornece `semantic_map_id` e `code_digest`, que não são valor de configuração; sem os dois, o artifact continua precisando ser fornecido para o stage seguinte.
 
-Ela não deve ser reduzida a `{id, label, confidence, xyz}`.
+**Onde procurar.** `semantic_mapping/materialization.py`, `geometry.py`, `semantic_state.py`, `evidence.py`, `temporal.py`.
 
-### Implementação
-
-A política baseline `one-support-one-entity-v1` materializa **um suporte selecionado como uma entidade**, com identidade `entity--<fusion_support_id>` (local ao artifact, função pura do suporte, independente da ordem e de candidatos rejeitados). A seleção é explícita: nenhum run de fusão é carregado implicitamente. Um candidato que não vira entidade válida é registrado como rejeição com o motivo, e um suporte sem nenhuma hipótese ainda vira uma entidade válida com estado `insufficient_evidence`. O estado semântico mantém toda hipótese, alternativa, conflito, abstenção e sinal sem score; uma hipótese primária só é exposta quando exatamente uma hipótese existe e nada compete com ela. A provenance de evidência inclui identidade, versão, digest e sequência do run de fusão; referências de features usam a identidade completa de run+resultado+feature. O artifact registra `entity_schema_version`, `code_version` e `code_digest` separadamente do schema do run. A validação atual dessas invariantes é determinística e sintética; ainda não há evidência de qualidade de Semantic Mapping em dados reais.
-
-Detalhes: [documentação de Semantic Mapping](../src/contextmap/semantic_mapping/docs/README.md), [contratos](../src/contextmap/semantic_mapping/docs/contracts.md), [geometria](../src/contextmap/semantic_mapping/docs/geometry.md), [estado semântico](../src/contextmap/semantic_mapping/docs/semantic-state.md), [evidência](../src/contextmap/semantic_mapping/docs/evidence.md), [estado temporal](../src/contextmap/semantic_mapping/docs/temporal-state.md), [materialização](../src/contextmap/semantic_mapping/docs/materialization.md), [artifact](../src/contextmap/semantic_mapping/docs/artifact.md) e [validação](../src/contextmap/evaluation/docs/semantic_mapping.md).
-
-### Saída
-
-O `SemanticMappingRunArtifact`, com as entidades semânticas persistidas.
-
-Nesse ponto, entidades podem ainda representar fragmentos/duplicatas do mesmo objeto físico: dois suportes independentes permanecem duas entidades. Essa decisão pertence a Entity Resolution, o estágio seguinte.
+Detalhes: [Semantic Mapping](../src/contextmap/semantic_mapping/docs/README.md) e [materialization](../src/contextmap/semantic_mapping/docs/materialization.md).
 
 ## 9. Entity Resolution
 
-Entity Resolution decide quando entidades semânticas de origem devem permanecer distintas, ser agrupadas ou ficar não resolvidas.
+**Função.** Decidir se entidades de origem representam o mesmo objeto físico, objetos distintos ou um caso não resolvido, sem mutar as entidades originais.
 
-```mermaid
-flowchart TD
-    E[Source Entities]
-    C[Candidate retrieval]
-    M[Match evidence]
-    D[Resolution decision]
-    R[ResolvedEntity materialization]
+**Recebe de.** Semantic Mapping. Os canais opcionais podem ler geometria, features visuais e representações 3D pelos owners correspondentes.
 
-    E --> C --> M --> D --> R
-```
+**Fluxo interno.**
 
-### Evidência de matching
+1. `EntitySpatialIndex` e `retrieve_candidate_sets()` reduzem o all-pairs com regras espaciais/temporais interpretáveis.
+2. `candidate_pairs` enumera cada par plausível uma vez.
+3. Gates impedem comparação entre mapas/frames incompatíveis.
+4. Cada canal produz evidência separada:
+   - geometria: bounds, suporte compartilhado, distância e orientação;
+   - semântica: compatibilidade de hipóteses/atributos;
+   - temporal: histórico de observação;
+   - aparência: protótipos de features visuais dentro do mesmo `EmbeddingSpace`;
+   - representação 3D: protótipos dentro do mesmo `RepresentationSpace`.
+5. `EntityMatchEvidence` preserva todos os canais sem score agregado.
+6. `ConservativeResolutionPolicy` decide `MATCH`, `DISTINCT` ou `UNRESOLVED`, lendo status dos canais.
+7. `materialize_resolved_entities()` forma componentes conexas apenas de `MATCH`.
+8. Contradições de transitividade impedem merge do componente e ficam explícitas.
+9. `detect_split_candidates()` pode diagnosticar over-merge, mas nunca divide automaticamente.
+10. O run persiste decisões, evidência e `ResolvedEntity`.
 
-A policy pode comparar canais tipados, quando disponíveis:
+**Entrega para.** Spatial Relations e montagem do ContextMap.
 
-- geometry overlap/proximity;
-- semantic compatibility;
-- visual appearance;
-- temporal compatibility;
-- optional point representations.
+**Onde procurar.**
 
-Nenhum canal deve ser escondido em um score opaco sem definição.
+| Sintoma | Código |
+| --- | --- |
+| Número de pares explode | `entity_resolution/retrieval.py` / `candidate-retrieval.md` |
+| Objetos iguais nunca viram candidatos | política de retrieval antes dos comparadores |
+| False merge por geometria | `geometry_comparison.py` e `resolution_policy.py` |
+| Labels incompatíveis tratadas errado | `semantic_comparison.py` |
+| Aparência parece ignorada | `appearance_comparison.py`, espaço e vector source |
+| Representação 3D parece ignorada | `representation_comparison.py` |
+| Match transitivo perigoso | `resolved_entity.py` |
+| Entidade deveria ser dividida | `split_detection.py`, lembrando que é diagnóstico only |
 
-### Decisões
-
-Estados esperados incluem conceitos equivalentes a:
-
-```text
-MATCH
-DISTINCT
-UNRESOLVED
-```
-
-`UNRESOLVED` é válido quando a evidência é insuficiente ou conflitante.
-
-### Materialização
-
-Um `ResolvedEntity` preserva:
-
-- source entity refs;
-- merge lineage;
-- resolution decisions;
-- geometry union/reference;
-- semantic alternatives/conflicts;
-- temporal state deduplicado por observação física.
-
-As entidades originais permanecem imutáveis.
-
-Saída persistida: `EntityResolutionRunArtifact`.
-
-### Estado implementado
-
-- **Candidatos:** recuperação permissiva e determinística por índice espacial em memória, sem all-pairs; semântica e evidência ausente nunca excluem um candidato.
-- **Canais:** geometria, semântica, aparência (um voto por observação física), temporal e, opcional, representação 3D, cada um **medido ou indisponível**; a ausência de um canal nunca vira zero nem voto por `DISTINCT`. Gates duros (entidades distintas, mesmo mapa geométrico, mesmo frame do mapa) bloqueiam a comparação.
-- **Decisão:** política baseline `conservative-staged-resolution-v1`, em estágios (gate, elegibilidade, evidência, regra, decisão) sobre o estado dos canais, sem soma ponderada; prefere `UNRESOLVED` a um `MATCH` sem explicação. Só pares candidatos são comparados.
-- **Materialização:** componentes conexos das decisões `MATCH`. Um componente que contém um par `DISTINCT` **não é fundido** e expõe uma `TransitivityContradiction` por par `DISTINCT`, todas registradas em cada entidade retida. Toda entidade de origem pertence a exatamente uma `ResolvedEntity`; a agregação é exata (união das referências de geometria, hipóteses semânticas verbatim, tempo recalculado da união das observações físicas).
-- **Divisão:** detecção opcional de candidatos a divisão, só diagnóstico; nada é dividido nem mutado.
-- **Artifact:** `output_dir` explícito, escrita atômica, todas as decisões (não só as `MATCH`), entidades resolvidas com linhagem, contradições e métricas separadas; reabre sem NumPy nem runtime. A versão do schema e o digest do inventário são publicados para quem consome.
-- **Evaluation:** fusão falsa, duplicata (com a causa), falha de recuperação e ablação de canais, cada uma em separado, contra uma referência de identidade anotada.
-
-O que **não** existe: runtime que execute este estágio, run sobre dados reais e, portanto, limiares calibrados com evidência real. Detalhes: [documentação de Entity Resolution](../src/contextmap/entity_resolution/docs/README.md), [contratos](../src/contextmap/entity_resolution/docs/contracts.md), [política](../src/contextmap/entity_resolution/docs/resolution-policy.md), [entidades resolvidas](../src/contextmap/entity_resolution/docs/resolved-entities.md), [artifact](../src/contextmap/entity_resolution/docs/artifact.md) e [avaliação](../src/contextmap/evaluation/docs/entity_resolution.md).
+Detalhes: [Entity Resolution](../src/contextmap/entity_resolution/docs/README.md), [candidate retrieval](../src/contextmap/entity_resolution/docs/candidate-retrieval.md) e [resolution policy](../src/contextmap/entity_resolution/docs/resolution-policy.md).
 
 ## 10. Spatial Relations
 
-Spatial Relations descreve relações entre **entidades resolvidas**.
+**Função.** Derivar relações espaciais entre entidades resolvidas usando medições explícitas e uma taxonomia versionada.
 
-```mermaid
-flowchart TD
-    E[Resolved entities]
-    C[Relation candidates]
-    G[Geometric predicates]
-    K[Contact/support evidence]
-    S[Optional semantic relation evidence]
-    D[Relation decision policy]
-    R[Relation]
+**Recebe de.** Entity Resolution fornece entidades resolvidas; Semantic Mapping fornece os resumos espaciais associados aos membros; Geometric Mapping resolve pontos quando predicados de contato precisam deles.
 
-    E --> C
-    C --> G --> D
-    C --> K --> D
-    C --> S --> D
-    D --> R
-```
+**Fluxo interno.**
 
-### Candidate generation
+1. O leitor de Entity Resolution produz geometrias resolvidas coerentes.
+2. `FrameConventions` declara `up_axis` e `forward_axis`; nada é inferido silenciosamente.
+3. `generate_relation_candidates()` reduz os pares via bounds, proximidade e precondições direcionais.
+4. Predicados geométricos medem `NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE` e `INTERSECTS`.
+5. Predicados de contato medem `TOUCHING`, `ON_TOP_OF` e `LEANING_AGAINST`.
+6. Afirmações relacionais upstream podem entrar como evidência de observação, mas nunca decidem sozinhas.
+7. `decide_relations()` produz `SUPPORTED`, `REJECTED` ou `UNRESOLVED`.
+8. Consistência estrutural impede relações direcionais contraditórias.
+9. Inversos e simétricos são derivados depois da decisão, para não medir duas vezes o mesmo fato.
+10. O run persiste `Relation`, `RelationEvidence` e decisões.
 
-Reduz pares irrelevantes através de critérios geométricos explícitos, sem decidir que uma relação é verdadeira.
+**Onde procurar.** `candidates.py` para recuperação; `geometric_predicates.py`; `contact_predicates.py`; `observation_evidence.py`; `decision.py`; `taxonomy.py`.
 
-### Relações geométricas
+Detalhes: [Spatial Relations](../src/contextmap/spatial_relations/docs/README.md), [taxonomy](../src/contextmap/spatial_relations/docs/taxonomy.md) e [decision](../src/contextmap/spatial_relations/docs/decision.md).
 
-Famílias planejadas incluem, quando geometricamente definíveis:
+## 11. Context Map Artifact
 
-```text
-NEXT_TO
-ABOVE / BELOW
-IN_FRONT_OF / BEHIND
-INSIDE / CONTAINS
-INTERSECTS
-```
+**Função.** Compor o produto público final sem repetir a ciência dos módulos upstream. O mapa final referencia a geometria autoritativa, incorpora as entidades resolvidas e relações e fecha provenance/lineage.
 
-### Contact/support
+**Recebe de.** Geometric Mapping, Entity Resolution, Spatial Relations e metadata de criação.
 
-Quando a geometria suporta a inferência:
+**Fluxo interno.**
 
-```text
-TOUCHING
-ON_TOP_OF
-LEANING_AGAINST
-```
+1. `assemble_context_map()` abre os runs reais e verifica que a lineage fecha.
+2. Entidades resolvidas e relações são traduzidas para os contratos do `ContextMap` sem refazer decisões.
+3. O estado semântico é traduzido preservando ambiguidade; hipóteses de label apontam para a evidência fundida que realmente as originou.
+4. Relações apontam para a evidência e geometria que as sustentam.
+5. `ContextMap.__post_init__` valida referências, capabilities declaradas e fechamento de provenance.
+6. `ContextMapArtifactWriter` grava manifest e tabelas deterministicamente e publica atomicamente.
+7. `ContextMapArtifactReader` permite leitura sem runtime de modelo.
+8. `validate_context_map_artifact()` verifica integridade e dependências.
+9. `export_bundle()` pode fechar dependências num bundle portátil.
 
-Essas relações exigem medições, não apenas labels semânticos.
+**Estado do runtime.** `context_map` é um estágio real de `canonical/1`, com `ContextMapExecutor` composto automaticamente pelo `compose_executors()`; nenhuma orquestração manual fora do DAG é necessária.
 
-### Reconciliation
+**Onde procurar.** `artifact/serialization/assembly.py`, `writer.py`, `reader.py`, `validation.py`, `bundle.py`.
 
-Evidência geométrica e semântica permanecem separadas. Uma policy conservadora produz algo equivalente a:
+Detalhes: [Artifact](../src/contextmap/artifact/docs/README.md), [assembly](../src/contextmap/artifact/docs/assembly.md) e [storage layout](../src/contextmap/artifact/docs/storage-layout.md).
 
-```text
-SUPPORTED
-REJECTED
-UNRESOLVED
-```
+## 12. Evaluation
 
-Relações inversas e simétricas precisam permanecer consistentes.
+Evaluation é transversal e **não altera o pipeline**. Ela lê artifacts imutáveis, reference sets e anotações para medir qualidade, regressão, custo e reprodutibilidade.
 
-### Saída
+Ela possui protocolos específicos para Region Discovery, Feature Extraction, Semantic Interpretation, State Estimation, Geometric Mapping, Sensor Association, Point Representation, Semantic Fusion, Semantic Mapping, Entity Resolution e Spatial Relations. Resultados de qualidade e performance permanecem separados; ausência de anotação ou métrica não aplicável nunca vira zero.
 
-`Relation` + `RelationEvidence`.
+Use Evaluation quando a pergunta for “esta alteração melhorou?”, não para executar a transformação científica em si.
 
-Saída persistida: `SpatialRelationsRunArtifact`.
+Detalhes: [Evaluation](../src/contextmap/evaluation/docs/README.md).
 
-Implementado em `contextmap.spatial_relations` ([documentação](../src/contextmap/spatial_relations/docs/README.md)): candidatos determinísticos com razões de exclusão, avaliadores geométricos (`NEXT_TO`, `ABOVE`, `IN_FRONT_OF`, `INSIDE`, `INTERSECTS`) e de contato por pontos (`TOUCHING`, `ON_TOP_OF`, `LEANING_AGAINST`), evidência de observação corroborante e a política de decisão conservadora, que só decide com os canais medidos, prefere `UNRESOLVED` e gera inverso e simetria depois de checar a consistência. Os eixos vertical e de profundidade vêm de convenções declaradas pela execução, porque nada a montante os define. A linhagem vem do manifest de Entity Resolution e as afirmações upstream são vinculadas às entidades resolvidas pelas observações espaciais da evidência delas. A avaliação por predicado liga entidades resolvidas às identidades anotadas pelo `IdentityEvaluation` da avaliação de Entity Resolution.
+## Mapa rápido: sintoma → etapa → código
 
-## 11. Context Map Assembly
+Esta tabela existe para que o documento funcione como índice de manutenção e investigação.
 
-A etapa final monta o produto público do repositório.
+| Sintoma ou mudança desejada | Etapa mais provável | Comece por |
+| --- | --- | --- |
+| Máscaras demorando para aparecer | Visual Perception / Region Discovery | `discovery.py`, config de passes/tiling e backend SAM/Florence |
+| Máscaras boas, mas artifact demora a finalizar | Visual Perception / persistência | `mask_store.py`, `run_artifact.py` |
+| Máscara está deslocada após resize/tile | Visual Perception / coordinate remap | `image_preparation.py`, `discovery.py`, `normalization.py` |
+| Embeddings densos muito lentos | Visual Perception / Feature Extraction | backend DINO + `feature_store.py` |
+| Pose tem gaps ou offset temporal | State Estimation | `lookup.py`, backend e preflight |
+| Mapa LiDAR fica duplicado/deslocado | Geometric Mapping | `inputs.py`, `transformation.py`; depois pose/calibração upstream |
+| 3D projeta no pixel errado | Sensor Association | `frame_projection.py`, `camera_models.py`, `image_transform.py` |
+| Objetos do fundo recebem evidência da frente | Sensor Association / visibility | `visibility.py` |
+| Região tem máscara, mas zero suporte 3D | Sensor Association / membership | `membership.py`, máscara persistida, visibilidade e calibração |
+| Feature densa chega na célula errada | Sensor Association / dense sampling | `dense_sampling.py` |
+| Support extraction 3D domina o tempo | Point Representation | `support.py` e implementação de `GeometrySource` |
+| Mesma imagem está contando como várias evidências | Semantic Fusion | `grouping.py` |
+| Observações do mesmo lugar não fundem | Semantic Fusion | `support.py`, Jaccard e geometria de associação |
+| Labels entram em conflito ou empate estranho | Semantic Fusion | `accumulation.py` |
+| Muitas entidades duplicadas | Semantic Mapping / Entity Resolution | primeiro `materialization.py`, depois `retrieval.py` e comparadores |
+| False merge de entidades | Entity Resolution | comparadores + `resolution_policy.py` |
+| Entity Resolution está O(N²) | Entity Resolution / candidate retrieval | `retrieval.py`, `EntitySpatialIndex` |
+| Relações demais ou faltando | Spatial Relations | `candidates.py`, depois evaluator do predicado |
+| ABOVE/IN_FRONT_OF invertidos | Spatial Relations / frame conventions | `frame_conventions.py`, `taxonomy.py` |
+| ContextMap não fecha lineage | Artifact | `serialization/assembly.py`, `structural_dependencies.py`, `validation.py` |
+| Mudança funciona visualmente, mas não sabemos se melhorou | Evaluation | evaluator do estágio + reference set/experiment manifest |
 
-```mermaid
-flowchart TD
-    G[GeometricMapArtifact]
-    E[EntityResolutionRunArtifact]
-    R[SpatialRelationsRunArtifact]
-    L[Lineage / metadata]
-    C[ContextMap]
-    A[ContextMapArtifact]
+## Regras de ownership que evitam procurar no lugar errado
 
-    G --> C
-    E --> C
-    R --> C
-    L --> C
-    C --> A
-```
+- Ingestion normaliza fonte e calibração; não projeta em câmera.
+- Visual Perception produz evidência de frame; não cria identidade persistente.
+- State Estimation produz pose; não possui geometria persistente.
+- Geometric Mapping possui a geometria e suas referências; não possui semântica.
+- Sensor Association liga 2D a 3D; não funde observações nem decide labels.
+- Point Representation descreve estrutura 3D; não substitui XYZ nem classifica.
+- Semantic Fusion acumula evidência; não decide identidade de objeto.
+- Semantic Mapping materializa entidades; não resolve duplicatas entre suportes.
+- Entity Resolution decide identidade; não cria relações espaciais.
+- Spatial Relations deriva relações; não corrige entidades.
+- Artifact compõe e persiste o produto final; não reexecuta ciência upstream.
+- Evaluation mede; não muda outputs do pipeline.
 
-### ContextMap
-
-O contrato de alto nível contém conceitualmente:
-
-```text
-ContextMap
-├── context_map_id
-├── schema_version
-├── metadata
-├── geometry_ref
-├── resolved entities / refs
-├── relations / refs
-├── indexes / capability metadata
-└── provenance / lineage refs
-```
-
-O **schema** deste contrato já existe em `contextmap.artifact` ([documentação](../src/contextmap/artifact/docs/README.md)): a capability é somente schema, sem layout em disco, serializador, ROS nem modelos. A **montagem** que produz um `ContextMap` real a partir dos artifacts de geometria, resolução de entidades e relações também já existe (`assemble_context_map`, [documentação](../src/contextmap/artifact/docs/assembly.md)), assim como o serializador e o `ContextMapArtifact` persistido (`ContextMapArtifactWriter`/`ContextMapArtifactReader`, [documentação](../src/contextmap/artifact/docs/writer.md)). O que ainda falta é um estágio de runtime que invoque a montagem como parte de uma execução completa do pipeline (planejado, fora do escopo da issue que introduziu a montagem).
-
-### Metadata espacial
-
-O mapa deve declarar explicitamente:
-
-- map frame;
-- units;
-- coordinate convention;
-- origin/anchor semantics;
-- bounds;
-- temporal/selection extent;
-- source sequences;
-- capabilities presentes.
-
-Um map frame local de estimator não deve ser confundido com um frame global/geodeticamente alinhado: o schema distingue origem local de estimador de origem ancorada externamente e nunca implica comparabilidade de coordenadas entre mapas sem um alinhamento a uma mesma referência externa ([metadados](../src/contextmap/artifact/docs/metadata.md)).
-
-### Portabilidade
-
-O `ContextMapArtifact` deve ser legível sem:
-
-- ROS;
-- FAST-LIO;
-- SAM/DINO/CLIP;
-- VLM SDKs;
-- CUDA;
-- viewer específico.
-
-Consumidores precisam apenas do schema, payloads e dependências contratuais explicitamente referenciadas.
-
-## 12. Artefatos ao longo do pipeline
-
-| Estágio | Artefato principal | Estado | Consumo downstream |
-| --- | --- | --- | --- |
-| Ingestion | `SequenceArtifact` | implementado | perception, state estimation, geometry |
-| Visual Perception | `PerceptionRunArtifact` | implementado | sensor association, evaluation |
-| State Estimation | `StateEstimationRunArtifact` | implementado | geometry, sensor association, evaluation |
-| Geometric Mapping | `GeometricMapArtifact` | implementado | association, point representation, evaluation |
-| Sensor Association | `SensorAssociationRunArtifact` | implementado | semantic fusion, evaluation |
-| Point Representation | `PointRepresentationRunArtifact` | implementado e opcional | semantic fusion opcional, evaluation |
-| Semantic Fusion | `SemanticFusionRunArtifact` | implementado | semantic mapping, evaluation |
-| Evaluation (transversal) | reference set, relatórios, run de experimento e comparação, evidência e decisão | implementado, sem execução real | decisões de configuração e aceite E2E |
-| Semantic Mapping | `SemanticMappingRunArtifact` | implementado | entity resolution, evaluation |
-| Entity Resolution | `EntityResolutionRunArtifact` | implementado, só com dados sintéticos | spatial relations, final map, evaluation |
-| Spatial Relations | `SpatialRelationsRunArtifact` | implementado | final map, evaluation |
-| Context Map Assembly | `ContextMapArtifact` | schema, montagem (`assemble_context_map`) e artifact persistido implementados; wiring do estágio de runtime planejado | external consumers |
-
-Todos esses artefatos são tratados como imutáveis. Uma nova execução produz um novo artifact/run identity.
-
-## 13. Lineage ponta a ponta
-
-Uma entidade final deve conseguir explicar sua origem sem copiar todos os payloads upstream.
-
-```mermaid
-flowchart RL
-    E[ResolvedEntity]
-    SE[Source Entity]
-    F[FusedEvidence]
-    SO[SpatialObservation]
-    PR[PerceptionResult]
-    R[Region2D / SemanticClaim]
-    IMG[SourceObservation RGB]
-
-    EG[EntityGeometry]
-    GR[GeometryReference]
-    GM[GeometricMap]
-    LIDAR[SourceObservation LiDAR]
-    POSE[PoseEstimate]
-
-    E --> SE --> F --> SO --> PR --> R --> IMG
-    E --> EG --> GR --> GM --> LIDAR
-    GM --> POSE
-```
-
-Uma relação final deve ser rastreável a:
-
-```text
-Relation
-→ RelationEvidence
-→ ResolvedEntity subject/object
-→ source entities
-→ geometry + fused evidence
-→ source sensor observations
-```
-
-## 14. Reuso e recomputação
-
-Como artifacts intermediários são imutáveis, mudar uma parte da pipeline não deve obrigar recomputação de tudo.
-
-Exemplo:
-
-```text
-mudar prompt/VLM
-    invalidates: perception-dependent downstream
-    preserves: state estimation + geometric map when inputs unchanged
-```
-
-```text
-mudar FAST-LIO configuration
-    invalidates: state estimation + geometry + association + downstream
-    may preserve: perception over the same canonical RGB selection
-```
-
-Reuso só é válido quando upstream identities, schema versions, selections e configuração relevante são compatíveis.
-
-## 15. Validação por estágio
-
-Cada capability possui métricas próprias. O projeto evita um único score opaco de qualidade.
-
-Exemplos:
-
-| Capability | Exemplos de validação |
-| --- | --- |
-| Ingestion | integridade, sincronização, calibração, indexação |
-| Region Discovery | IoU, coverage, over/under-segmentation, runtime |
-| Feature Extraction | spatial alignment, payload round-trip, compatibility |
-| Semantic Interpretation | conceito, hallucination, ambiguity, parsing |
-| State Estimation | ATE/RPE quando referência válida existe, transform consistency |
-| Geometric Mapping | source→map accuracy, scan consistency, reproducibility |
-| Sensor Association | reprojection error, occlusion, mask membership |
-| Point Representation | cobertura/falha do suporte, custo, estabilidade e ablação por braço |
-| Semantic Fusion | multi-view consistency, ambiguity retention, repeated-inference regression |
-| Entity Resolution | false merge, missed merge por causa, unresolved, falha de recuperação, sem score composto |
-| Spatial Relations | precision/recall por predicate, consistency, unresolved rate |
-| Artifact | schema/integrity/lineage closure |
-
-Qualidade e performance são relatadas separadamente.
-
-## 16. Invariantes do pipeline
-
-As seguintes regras atravessam todas as etapas:
-
-1. `SourceObservation` representa evidência física, não uma execução de modelo.
-2. Reexecutar um frame cria nova inferência, não nova observação física.
-3. `Region2D` é geometria 2D local ao resultado de percepção, não Entity ID.
-4. Geometria 3D persistente possui coordenada global autoritativa e provenance de transform.
-5. Semantic confidence, scorer support e fusion support não são o mesmo conceito.
-6. Missing/unscored evidence nunca é convertido silenciosamente para zero ou um.
-7. Debug files nunca são contratos públicos downstream.
-8. Artifacts persistidos são imutáveis.
-9. Runs upstream são selecionados explicitamente, nunca agregados implicitamente porque existem no workspace.
-10. Backend-native objects não atravessam fronteiras de capability.
-11. Falha de uma etapa deve permanecer atribuível à etapa responsável.
-12. O mapa final preserva referências suficientes para auditoria sem exigir que consumidores carreguem modelos de percepção.
+Quando uma alteração exige quebrar uma dessas fronteiras, trate-a como mudança arquitetural e atualize [architecture.md](architecture.md), [module-api.md](module-api.md), [CONTRACTS.md](CONTRACTS.md) e os documentos internos afetados no mesmo PR.
