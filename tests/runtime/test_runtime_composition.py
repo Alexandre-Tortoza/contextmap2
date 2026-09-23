@@ -892,6 +892,48 @@ class TestComposeExecutors:
         assert "point_representation" not in executors
         assert "semantic_mapping" not in executors
 
+    def test_the_trajectory_mode_policy_is_threaded_into_state_estimation(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #555: the ground-truth opt-in is a runtime policy, never a new
+        StateEstimationRequest field -- it only decides how the executor is built."""
+        from contextmap.runtime.executors import StateEstimationExecutor
+
+        default_executors = compose_executors(
+            effective_from(tmp_path, selected_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        document = selected_document()
+        document["policies"] = {"trajectory_mode": "allow_ground_truth"}
+        opted_in_executors = compose_executors(
+            effective_from(tmp_path, document),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        default_state_estimation = default_executors["state_estimation"]
+        opted_in_state_estimation = opted_in_executors["state_estimation"]
+        assert isinstance(default_state_estimation, StateEstimationExecutor)
+        assert isinstance(opted_in_state_estimation, StateEstimationExecutor)
+        assert default_state_estimation._allow_ground_truth_trajectory is False
+        assert opted_in_state_estimation._allow_ground_truth_trajectory is True
+
+    def test_pose_ingestion_is_never_composed_even_when_enabled(self, tmp_path: Path) -> None:
+        """Issue #555: like "ingestion" itself, this stage always needs a caller-supplied
+        IngestionRequest (here, a pose file path) -- never something this function can
+        derive from configuration alone."""
+        document = selected_document()
+        document["pipeline"]["stages"]["pose_ingestion"] = True
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "pose_ingestion" not in executors
+
     def test_semantic_mapping_composes_only_when_map_id_and_code_digest_are_both_given(
         self, tmp_path: Path
     ) -> None:

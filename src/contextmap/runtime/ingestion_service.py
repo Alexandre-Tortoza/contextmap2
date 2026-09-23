@@ -934,11 +934,15 @@ class _Run:
 
 
 class IngestionStageExecutor:
-    """Runs canonical ingestion as the ``ingestion`` stage of the runtime DAG.
+    """Runs canonical ingestion as an ingestion-producing stage of the runtime DAG.
 
     The stage has no upstream artifact; what to ingest comes from the request given here.
     A failed or cancelled ingestion becomes a :class:`~contextmap.runtime.lifecycle.StageFailure`
     carrying the ingestion's own failure category, so the run record says why.
+
+    Two instances of this executor, bound to different requests (for example a bag and a
+    pose file) and different ``stage_id``s, can take part in the same run -- see issue #555's
+    auxiliary ``pose_ingestion`` stage.
     """
 
     def __init__(
@@ -946,13 +950,28 @@ class IngestionStageExecutor:
         service: IngestionService,
         request: IngestionRequest,
         *,
+        stage_id: str = "ingestion",
         event_sink: EventSink | None = None,
         cancellation: CancellationToken | None = None,
         redact: Callable[[str], str] | None = None,
     ) -> None:
-        """Bind the executor to a service and the request it runs."""
+        """Bind the executor to a service and the request it runs.
+
+        Args:
+            service: Ingestion service to run the request through.
+            request: The ingestion request; only its ``output_dir``/``artifact_id`` are
+                overridden per run, from the stage request.
+            stage_id: Identity recorded on the published :class:`ArtifactRef`. Defaults to
+                ``"ingestion"``, the main sequence stage; a second instance of this executor
+                composing an auxiliary sequence (for example a pose-only one) uses a
+                different id.
+            event_sink: Where ingestion events are published, if anywhere.
+            cancellation: Cooperative cancellation token, if any.
+            redact: Secret-redaction callback passed through to the ingestion service.
+        """
         self._service = service
         self._request = request
+        self._stage_id = stage_id
         self._event_sink = event_sink
         self._cancellation = cancellation
         self._redact = redact
@@ -988,7 +1007,7 @@ class IngestionStageExecutor:
                 category=failure.category if failure else "execution",
             )
         return ArtifactRef(
-            stage_id="ingestion",
+            stage_id=self._stage_id,
             contract="SequenceArtifact",
             artifact_id=result.artifact_id,
             content_hash=result.content_hash,

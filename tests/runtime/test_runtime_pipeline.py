@@ -51,9 +51,12 @@ def _ready(_name: str) -> bool:
     return True
 
 
-def _document(*, point_representation: bool = False) -> dict[str, Any]:
+def _document(
+    *, point_representation: bool = False, pose_ingestion: bool = False
+) -> dict[str, Any]:
     document = selected_document()
     document["pipeline"]["stages"]["point_representation"] = point_representation
+    document["pipeline"]["stages"]["pose_ingestion"] = pose_ingestion
     return document
 
 
@@ -125,6 +128,24 @@ class TestCanonicalDag:
         assert {item.name: item.source for item in with_stage.stage("semantic_fusion").inputs}[
             "representation"
         ] == "point_representation"
+
+    def test_the_auxiliary_pose_ingestion_stage_joins_only_when_selected(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #555: an opt-in second ingestion stage feeding state_estimation an auxiliary
+        pose-only SequenceArtifact, exactly like point_representation is opt-in for
+        semantic_fusion -- absent by default, never a silent second source."""
+        without = resolve_plan(effective_from(tmp_path, _document()))
+        with_stage = resolve_plan(effective_from(tmp_path, _document(pose_ingestion=True)))
+
+        assert without.order is not None and with_stage.order is not None
+        assert "pose_ingestion" not in without.order
+        assert {item.name for item in without.stage("state_estimation").inputs} == {"sequence"}
+        assert "pose_ingestion" in with_stage.order
+        assert with_stage.order.index("pose_ingestion") < with_stage.order.index("state_estimation")
+        wiring = {item.name: item.source for item in with_stage.stage("state_estimation").inputs}
+        assert wiring["pose_sequence"] == "pose_ingestion"
+        assert with_stage.stage("pose_ingestion").output == "SequenceArtifact"
 
     def test_a_stage_digest_follows_only_its_own_configuration(self, tmp_path: Path) -> None:
         base = resolve_plan(effective_from(tmp_path, _document()))

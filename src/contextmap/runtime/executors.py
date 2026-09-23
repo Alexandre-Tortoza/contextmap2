@@ -68,12 +68,15 @@ from contextmap.geometric_mapping import (
     assemble_geometry_inputs_from_artifacts,
 )
 from contextmap.ingestion import (
+    ClockCompatibilityError,
     FullSequenceSelection,
     ImageEncoding,
     ImageObservation,
     SequenceArtifactReader,
+    SourceObservation,
     SourceObservationId,
     selection_identity,
+    validate_cross_source_clock_compatibility,
 )
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
@@ -227,6 +230,18 @@ def _one(request: StageRequest, name: str) -> Path:
     return request.directory_of(refs[0])
 
 
+def _optional_one(request: StageRequest, name: str) -> Path | None:
+    refs = request.inputs.get(name, ())
+    if not refs:
+        return None
+    if len(refs) != 1:
+        raise ExecutorError(
+            f"stage {request.stage_id!r} consumes at most one run of input {name!r}, got "
+            f"{len(refs)}: run the runtime once per run instead of choosing one"
+        )
+    return request.directory_of(refs[0])
+
+
 def _reference(
     request: StageRequest, contract: str, artifact_id: str, inventory: Sequence[object]
 ) -> ArtifactRef:
@@ -241,20 +256,55 @@ def _reference(
     )
 
 
+_GROUND_TRUTH_POSE_ROLE = "ground_truth"
+"""issue #555: an auxiliary pose sequence tagged with this role never drives the trajectory
+without :attr:`StateEstimationExecutor._allow_ground_truth_trajectory`'s explicit opt-in."""
+
+
 class StateEstimationExecutor:
     """Estimates the trajectory of the ingested sequence with the selected estimator."""
 
     def __init__(
-        self, estimator: StateEstimator, *, downstream: Sequence[GeometryRequirements] = ()
+        self,
+        estimator: StateEstimator,
+        *,
+        downstream: Sequence[GeometryRequirements] = (),
+        allow_ground_truth_trajectory: bool = False,
     ) -> None:
-        """Bind the executor to a composed estimator and the readiness it reports downstream."""
+        """Bind the executor to a composed estimator and the readiness it reports downstream.
+
+        Args:
+            estimator: The selected state estimation backend.
+            downstream: Requirements later capabilities report as readiness, never blocking.
+            allow_ground_truth_trajectory: Explicit opt-in (issue #555) letting an optional
+                auxiliary pose sequence tagged ``pose_role="ground_truth"`` become the
+                operational trajectory. ``False`` (default) drops a ground-truth-tagged
+                auxiliary pose from the merge entirely: the run behaves exactly as if no
+                auxiliary pose sequence were configured.
+        """
         self._estimator = estimator
         self._downstream = tuple(downstream)
+        self._allow_ground_truth_trajectory = allow_ground_truth_trajectory
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Estimate, persist and reference the trajectory of the ``sequence`` input."""
+        """Estimate, persist and reference the trajectory of the ``sequence`` input.
+
+        When the optional ``pose_sequence`` input is present (issue #555's auxiliary pose
+        bridge), its observations are merged in after its clock relationship with ``sequence``
+        is explicitly validated and its declared ``pose_role`` is checked -- never merged on a
+        matching ``timestamp_clock_id`` string alone. ``StateEstimationRequest`` never learns
+        that two artifacts contributed; the runtime's own per-stage input lineage (this
+        method's ``request.inputs``) already records both, with no new domain field.
+        """
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
+        observations: tuple[SourceObservation, ...] = tuple(sequence.list_observations())
+
+        pose_path = _optional_one(request, "pose_sequence")
+        if pose_path is not None:
+            auxiliary = tuple(SequenceArtifactReader(pose_path).list_observations())
+            observations = observations + self._select_auxiliary_pose(observations, auxiliary)
+
         identity = request.identity()
         outcome = execute_state_estimation(
             self._estimator,
@@ -264,7 +314,7 @@ class StateEstimationExecutor:
                 selection_id=selection_identity(
                     sequence.manifest.artifact_id, FullSequenceSelection()
                 ),
-                observations=tuple(sequence.list_observations()),
+                observations=observations,
                 calibration=sequence.read_calibration(),
             ),
             downstream=self._downstream,
@@ -276,6 +326,52 @@ class StateEstimationExecutor:
             run_index=request.run_number(),
         ).finalize(outcome)
         return _reference(request, TRAJECTORY, str(manifest.run_id), manifest.file_inventory)
+
+    def _select_auxiliary_pose(
+        self, primary: Sequence[SourceObservation], auxiliary: Sequence[SourceObservation]
+    ) -> tuple[SourceObservation, ...]:
+        """Validate an auxiliary pose sequence and decide whether it joins the merge.
+
+        Args:
+            primary: The main sequence's observations, before any merge.
+            auxiliary: The auxiliary pose sequence's observations.
+
+        Returns:
+            ``auxiliary`` unchanged, or ``()`` when its declared ``pose_role`` is
+            ``"ground_truth"`` and :attr:`_allow_ground_truth_trajectory` is not set.
+
+        Raises:
+            ExecutorError: If the two sequences' clock relationship cannot be verified (issue
+                #555 requires this before ever combining two artifacts' observations), or if
+                ``auxiliary`` does not declare one single, recognized ``pose_role``.
+        """
+        try:
+            validate_cross_source_clock_compatibility(primary, auxiliary)
+        except ClockCompatibilityError as error:
+            raise ExecutorError(f"cannot merge auxiliary pose sequence: {error}") from error
+        pose_role = self._auxiliary_pose_role(auxiliary)
+        if pose_role == _GROUND_TRUTH_POSE_ROLE and not self._allow_ground_truth_trajectory:
+            return ()
+        return tuple(auxiliary)
+
+    @staticmethod
+    def _auxiliary_pose_role(auxiliary: Sequence[SourceObservation]) -> str:
+        """Return the auxiliary sequence's single, consistent ``pose_role``.
+
+        Raises:
+            ExecutorError: If ``auxiliary`` is empty, declares no ``pose_role`` on some
+                observation, or declares more than one distinct value -- inconsistent or
+                missing pose role is never silently resolved (issue #555).
+        """
+        roles = {observation.provenance.raw_metadata.get("pose_role") for observation in auxiliary}
+        if len(roles) != 1 or None in roles:
+            raise ExecutorError(
+                "auxiliary pose sequence observations must declare a single, consistent "
+                f"pose_role in their provenance; got {sorted(str(role) for role in roles)!r}"
+            )
+        (role,) = roles
+        assert isinstance(role, str)
+        return role
 
 
 class GeometricMappingExecutor:

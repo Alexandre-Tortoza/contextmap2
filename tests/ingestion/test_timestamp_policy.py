@@ -16,12 +16,14 @@ from contextmap.ingestion.models import (
 )
 from contextmap.ingestion.timestamp_policy import (
     DEFAULT_TIMESTAMP_POLICY,
+    ClockCompatibilityError,
     ConstantOffsetCorrection,
     TimestampPolicy,
     apply_timestamp_policy,
     decode_timestamp_policy,
     diagnose_source_clock,
     encode_timestamp_policy,
+    validate_cross_source_clock_compatibility,
 )
 from contextmap.shared import SourceTimestamp
 
@@ -271,3 +273,54 @@ class TestEncodeDecodeTimestampPolicy:
         }
         with pytest.raises(ValueError, match="affine"):
             decode_timestamp_policy(document)
+
+
+class TestValidateCrossSourceClockCompatibility:
+    """Issue #555: a matching ``clock_id`` string is an assertion, not evidence."""
+
+    def test_overlapping_ranges_on_the_same_clock_pass(self) -> None:
+        clock = "corridor-02-header"
+        primary = [_image(100, clock_id=clock), _image(200, clock_id=clock)]
+        auxiliary = [_image(150, clock_id=clock), _image(250, clock_id=clock)]
+
+        validate_cross_source_clock_compatibility(primary, auxiliary)
+
+    def test_auxiliary_range_contained_in_primary_range_passes(self) -> None:
+        clock = "corridor-02-header"
+        primary = [_image(0, clock_id=clock), _image(1000, clock_id=clock)]
+        auxiliary = [_image(400, clock_id=clock), _image(600, clock_id=clock)]
+
+        validate_cross_source_clock_compatibility(primary, auxiliary)
+
+    def test_different_clock_ids_are_rejected(self) -> None:
+        primary = [_image(100, clock_id="corridor-02-header")]
+        auxiliary = [_image(100, clock_id="corridor-02-gt:tum-header-stamp")]
+
+        with pytest.raises(ClockCompatibilityError, match="clock"):
+            validate_cross_source_clock_compatibility(primary, auxiliary)
+
+    def test_disjoint_ranges_on_the_same_clock_id_are_rejected(self) -> None:
+        """The exact shape of bug #554 fixed: a matching clock_id label but a wrong epoch."""
+        clock = "corridor-02-header"
+        primary = [_image(100, clock_id=clock), _image(200, clock_id=clock)]
+        auxiliary = [
+            _image(_TWENTY_FIVE_YEARS_SECONDS + 100, clock_id=clock),
+            _image(_TWENTY_FIVE_YEARS_SECONDS + 200, clock_id=clock),
+        ]
+
+        with pytest.raises(ClockCompatibilityError, match="unverifiable"):
+            validate_cross_source_clock_compatibility(primary, auxiliary)
+
+    def test_a_sequence_using_more_than_one_clock_id_is_rejected(self) -> None:
+        primary = [_image(100, clock_id="corridor-02-header")]
+        auxiliary = [
+            _image(100, clock_id="corridor-02-gt:tum-header-stamp"),
+            _image(200, clock_id="some-other-clock"),
+        ]
+
+        with pytest.raises(ClockCompatibilityError, match="clock_id"):
+            validate_cross_source_clock_compatibility(primary, auxiliary)
+
+    def test_an_empty_sequence_is_rejected(self) -> None:
+        with pytest.raises(ClockCompatibilityError, match="empty"):
+            validate_cross_source_clock_compatibility([], [_image(100)])

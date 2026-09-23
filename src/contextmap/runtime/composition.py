@@ -1115,6 +1115,7 @@ def _compose_spatial_relations(context: _Context) -> dict[str, object]:
 
 _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "ingestion": _compose_ingestion,
+    "pose_ingestion": _compose_nothing,
     "visual_perception": _compose_visual_perception,
     "state_estimation": _compose_state_estimation,
     "geometric_mapping": _compose_geometric_mapping,
@@ -1166,14 +1167,17 @@ def compose_executors(
     upstream artifacts the DAG already carries -- except ``semantic_mapping``, which also needs
     ``semantic_map_id`` and ``code_digest`` (see below).
 
-    - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
+    - ``ingestion`` and ``pose_ingestion`` (issue #555's opt-in auxiliary pose stage, see
+      ``catalog.py``) are not composed here: :class:`~contextmap.runtime.ingestion_service.
       IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
       synchronization tolerance) that is per-invocation input, never part of a resolved
       configuration -- it is what the ``ingest`` command's own flags build. A caller that
-      wants ``ingestion`` to run inside :func:`~contextmap.runtime.pipeline.run_plan`
-      still injects an :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`
-      explicitly; the ordinary canonical path is to run ``contextmap ingest`` first and
-      feed its published artifact to ``run``/``stage`` as a provided or selected input.
+      wants either stage to run inside :func:`~contextmap.runtime.pipeline.run_plan`
+      still injects its own :class:`~contextmap.runtime.ingestion_service.
+      IngestionStageExecutor` explicitly (a second instance, under ``stage_id=
+      "pose_ingestion"``, for the auxiliary one); the ordinary canonical path is to run
+      ``contextmap ingest`` first and feed its published artifact to ``run``/``stage`` as a
+      provided or selected input.
     - ``visual_perception`` is composed only when all four of its variation points
       (``region_discovery``, ``dense_features``, ``region_features``,
       ``semantic_interpretation``) are genuinely selected and available -- a partially
@@ -1279,7 +1283,12 @@ def compose_executors(
     state_estimation = _compose_stage("state_estimation")
     if state_estimation is not None:
         assert state_estimation.state_estimator is not None
-        executors["state_estimation"] = StateEstimationExecutor(state_estimation.state_estimator)
+        executors["state_estimation"] = StateEstimationExecutor(
+            state_estimation.state_estimator,
+            allow_ground_truth_trajectory=(
+                effective.config.policies.trajectory_mode == "allow_ground_truth"
+            ),
+        )
 
     geometric_mapping = _compose_stage("geometric_mapping")
     if geometric_mapping is not None:

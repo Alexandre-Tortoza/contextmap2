@@ -39,7 +39,13 @@ def test_the_runtime_topology_contains_every_required_stage_and_keeps_optional_o
     assert all(stages[stage.stage_id] for stage in scenario.stages)
     # Point Representation existe no runtime e fica desligada: só entra por ablação.
     assert stages["point_representation"] is False
-    assert set(stages) - {stage.stage_id for stage in scenario.stages} == {"point_representation"}
+    # pose_ingestion (issue #555) é a bridge opcional de pose auxiliar: corridor-02 não a usa
+    # ainda (pose continua fora de banda), então fica desligada como qualquer estágio opt-in.
+    assert stages["pose_ingestion"] is False
+    assert set(stages) - {stage.stage_id for stage in scenario.stages} == {
+        "point_representation",
+        "pose_ingestion",
+    }
 
 
 def test_the_backends_the_runtime_resolves_are_the_ones_the_scenario_froze(tmp_path: Path) -> None:

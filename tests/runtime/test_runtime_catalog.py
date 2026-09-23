@@ -138,11 +138,14 @@ class TestCatalogAgainstCapabilities:
         assert set(owners) == set(COMPONENTS)
         assert all(len(stages) == 1 for stages in owners.values())
 
-    def test_only_the_point_representation_stage_is_optional_and_off_by_default(self) -> None:
+    def test_only_point_representation_and_pose_ingestion_are_optional_and_off_by_default(
+        self,
+    ) -> None:
         optional = [stage.stage_id for stage in CANONICAL_PRESET.stages if stage.optional]
 
-        assert optional == ["point_representation"]
+        assert optional == ["pose_ingestion", "point_representation"]
         assert not CANONICAL_PRESET.stage("point_representation").default_enabled
+        assert not CANONICAL_PRESET.stage("pose_ingestion").default_enabled
 
     def test_every_input_is_wired_to_a_stage_that_produces_its_contract(self) -> None:
         stages = {stage.stage_id: stage for stage in CANONICAL_PRESET.stages}
@@ -177,6 +180,7 @@ class TestCatalogAgainstCapabilities:
         assert CANONICAL_PROFILE_ID == "canonical/1"
         assert [stage.stage_id for stage in CANONICAL_PRESET.stages] == [
             "ingestion",
+            "pose_ingestion",
             "visual_perception",
             "state_estimation",
             "geometric_mapping",

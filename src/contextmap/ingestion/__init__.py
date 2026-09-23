@@ -101,6 +101,7 @@ from contextmap.ingestion.timestamp_policy import (
     DEFAULT_TIMESTAMP_POLICY,
     EVENT_CLOCK_HEADER_STAMP,
     WINDOW_CLOCK_RECORDING_TIME,
+    ClockCompatibilityError,
     ConstantOffsetCorrection,
     TimestampCorrectionDiagnostics,
     TimestampPolicy,
@@ -108,6 +109,7 @@ from contextmap.ingestion.timestamp_policy import (
     decode_timestamp_policy,
     diagnose_source_clock,
     encode_timestamp_policy,
+    validate_cross_source_clock_compatibility,
 )
 from contextmap.ingestion.validation import (
     validate_frame_references,
@@ -128,6 +130,7 @@ __all__ = [
     "CalibrationReferenceId",
     "CalibrationSet",
     "CameraModel",
+    "ClockCompatibilityError",
     "ConstantOffsetCorrection",
     "Covariance3x3",
     "Covariance6x6",
@@ -202,6 +205,7 @@ __all__ = [
     "summarize_observations",
     "synchronize",
     "validate_calibration_set",
+    "validate_cross_source_clock_compatibility",
     "validate_frame_references",
     "validate_image_observation",
     "validate_lidar_observation",

@@ -35,6 +35,7 @@ from contextmap.runtime import (
     ReusePolicy,
     RunJournal,
     StageExecutionError,
+    StageRequest,
     ValidationPolicy,
     read_run,
     resolve_plan,
@@ -779,10 +780,17 @@ class TestAsTheIngestionStageOfTheDag:
         effective = effective_from(tmp_path, selected_document())
         return effective, resolve_plan(effective).scope(targets=["ingestion"])
 
-    def _run(self, tmp_path: Path, service: IngestionService, **options: Any) -> Any:
+    def _run(
+        self,
+        tmp_path: Path,
+        service: IngestionService,
+        *,
+        stage_id: str = "ingestion",
+        **options: Any,
+    ) -> Any:
         effective, execution = self._plan(tmp_path)
         journal = RunJournal.create(tmp_path / "ws", effective, execution)
-        executor = IngestionStageExecutor(service, make_request(tmp_path))
+        executor = IngestionStageExecutor(service, make_request(tmp_path), stage_id=stage_id)
         return journal, run_plan(
             execution,
             {"ingestion": executor},
@@ -804,6 +812,33 @@ class TestAsTheIngestionStageOfTheDag:
         assert SequenceArtifactReader(directory).manifest.artifact_id == artifact.artifact_id
         # Nada é publicado fora da pasta do estágio: o executor só usa o diretório que recebeu.
         assert not (tmp_path / "ws" / "sequences").exists()
+        assert artifact.stage_id == "ingestion"
+
+    def test_the_stage_id_of_the_published_artifact_can_be_overridden(self, tmp_path: Path) -> None:
+        """Issue #555: a second, differently-configured instance of this same executor (for
+        example one reading a pose file instead of a bag) must publish its ``ArtifactRef``
+        under its own stage id, never the hard-coded ``"ingestion"``.
+
+        Calls ``execute()`` directly with a hand-built ``StageRequest``: ``run_plan`` itself
+        already checks that a stage's output names the DAG step that ran it (correctly so),
+        so exercising the override through a plan would require a real ``pose_ingestion``
+        stage declaration -- out of scope for this unit-level check of the executor alone.
+        """
+        executor = IngestionStageExecutor(
+            _service(), make_request(tmp_path), stage_id="pose_ingestion"
+        )
+        request = StageRequest(
+            stage_id="pose_ingestion",
+            inputs={},
+            components={},
+            config_digest="test",
+            output_dir=tmp_path / "ws" / "run-0001" / "pose_ingestion",
+            workspace=tmp_path / "ws",
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.stage_id == "pose_ingestion"
 
     def test_the_artifact_identity_is_derived_from_the_stage_and_is_repeatable(
         self, tmp_path: Path

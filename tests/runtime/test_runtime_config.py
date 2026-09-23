@@ -167,6 +167,17 @@ class TestDigest:
         assert changed != base
         assert changed.startswith("sha256:")
 
+    def test_trajectory_mode_defaults_to_operational_only_and_can_be_overridden(self) -> None:
+        """Issue #555: default behavior with a ground-truth auxiliary pose is unchanged
+        unless this opt-in is set explicitly."""
+        default = resolve_effective_config().config.policies.trajectory_mode
+        overridden = resolve_effective_config(
+            overrides=["policies.trajectory_mode=allow_ground_truth"]
+        ).config.policies.trajectory_mode
+
+        assert default == "operational_only"
+        assert overridden == "allow_ground_truth"
+
     def test_ignores_configuration_that_does_not_reach_the_execution(self, tmp_path: Path) -> None:
         selected = _sam3_document()
         with_unused = _sam3_document()
@@ -346,6 +357,7 @@ class TestStructuralValidation:
             ),
             ({"resources": {"device": 3}}, "resources.device"),
             ({"policies": {"debug_level": "loud"}}, "debug_level"),
+            ({"policies": {"trajectory_mode": "always_ground_truth"}}, "trajectory_mode"),
             ({"inputs": {"selections": {"ingestion": 3}}}, "inputs.selections"),
         ],
     )

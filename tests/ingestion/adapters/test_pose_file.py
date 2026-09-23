@@ -43,6 +43,7 @@ def _config(
             "format": "tum",
             "parent_frame": "map",
             "body_frame": "epson",
+            "pose_role": "ground_truth",
             **extra,
         },
     )
@@ -94,6 +95,7 @@ def test_provenance_carries_source_path_format_and_content_hash(tmp_path: Path) 
     assert first.provenance.source_path == str(path)
     assert first.provenance.raw_metadata["format"] == "tum"
     assert first.provenance.raw_metadata["source_content_hash"] == expected_hash
+    assert first.provenance.raw_metadata["pose_role"] == "ground_truth"
 
 
 def test_observation_ids_are_stable_and_unique_per_line(tmp_path: Path) -> None:
@@ -164,7 +166,12 @@ def test_configured_window_is_rejected(tmp_path: Path) -> None:
         topics=SourceTopicMapping(),
         timestamp_clock_id="corridor-02-gt:tum-header-stamp",
         window=window,
-        extra={"format": "tum", "parent_frame": "map", "body_frame": "epson"},
+        extra={
+            "format": "tum",
+            "parent_frame": "map",
+            "body_frame": "epson",
+            "pose_role": "ground_truth",
+        },
     )
 
     with pytest.raises(PoseFileConfigError, match="window"):
@@ -178,7 +185,7 @@ def test_missing_format_raises_config_error_before_reading_the_file(tmp_path: Pa
         path=str(path),
         topics=SourceTopicMapping(),
         timestamp_clock_id="corridor-02-gt:tum-header-stamp",
-        extra={"parent_frame": "map", "body_frame": "epson"},
+        extra={"parent_frame": "map", "body_frame": "epson", "pose_role": "ground_truth"},
     )
 
     with pytest.raises(PoseFileConfigError, match="format"):
@@ -192,7 +199,7 @@ def test_missing_parent_frame_raises_config_error(tmp_path: Path) -> None:
         path=str(path),
         topics=SourceTopicMapping(),
         timestamp_clock_id="corridor-02-gt:tum-header-stamp",
-        extra={"format": "tum", "body_frame": "epson"},
+        extra={"format": "tum", "body_frame": "epson", "pose_role": "ground_truth"},
     )
 
     with pytest.raises(PoseFileConfigError, match="parent_frame"):
@@ -206,7 +213,7 @@ def test_missing_body_frame_raises_config_error(tmp_path: Path) -> None:
         path=str(path),
         topics=SourceTopicMapping(),
         timestamp_clock_id="corridor-02-gt:tum-header-stamp",
-        extra={"format": "tum", "parent_frame": "map"},
+        extra={"format": "tum", "parent_frame": "map", "pose_role": "ground_truth"},
     )
 
     with pytest.raises(PoseFileConfigError, match="body_frame"):
@@ -218,6 +225,42 @@ def test_unsupported_format_raises_config_error(tmp_path: Path) -> None:
 
     with pytest.raises(PoseFileConfigError, match="format"):
         PoseFileSourceAdapter(_config(path, format="csv"))
+
+
+@pytest.mark.parametrize("pose_role", ["ground_truth", "odometry", "external_localization"])
+def test_accepted_pose_roles_are_recorded_in_raw_metadata(tmp_path: Path, pose_role: str) -> None:
+    path = _pose_file(tmp_path)
+    adapter = PoseFileSourceAdapter(_config(path, pose_role=pose_role))
+
+    first = next(iter(adapter.read_observations()))
+
+    assert first.provenance.raw_metadata["pose_role"] == pose_role
+
+
+def test_unrecognized_pose_role_raises_config_error(tmp_path: Path) -> None:
+    path = _pose_file(tmp_path)
+
+    with pytest.raises(PoseFileConfigError, match="pose_role"):
+        PoseFileSourceAdapter(_config(path, pose_role="reference"))
+
+
+def test_missing_pose_role_raises_config_error(tmp_path: Path) -> None:
+    """Ground truth vs. odometry vs. external localization is too significant to default:
+
+    a `pose_role` accidentally omitted (or silently defaulted) could let a ground-truth
+    trajectory be mistaken for an operational one downstream. See issue #555.
+    """
+    path = _pose_file(tmp_path)
+    config = SourceAdapterConfig(
+        source_type="pose_file",
+        path=str(path),
+        topics=SourceTopicMapping(),
+        timestamp_clock_id="corridor-02-gt:tum-header-stamp",
+        extra={"format": "tum", "parent_frame": "map", "body_frame": "epson"},
+    )
+
+    with pytest.raises(PoseFileConfigError, match="pose_role"):
+        PoseFileSourceAdapter(config)
 
 
 def test_missing_timestamp_clock_id_raises_config_error(tmp_path: Path) -> None:
@@ -233,7 +276,12 @@ def test_missing_timestamp_clock_id_raises_config_error(tmp_path: Path) -> None:
         source_type="pose_file",
         path=str(path),
         topics=SourceTopicMapping(),
-        extra={"format": "tum", "parent_frame": "map", "body_frame": "epson"},
+        extra={
+            "format": "tum",
+            "parent_frame": "map",
+            "body_frame": "epson",
+            "pose_role": "ground_truth",
+        },
     )
 
     with pytest.raises(PoseFileConfigError, match="timestamp_clock_id"):

@@ -44,6 +44,7 @@ SECRET = "s3cr3t-value-123"
 TARGET = ["semantic_fusion"]
 PLAN_ORDER = (
     "ingestion",
+    "pose_ingestion",
     "visual_perception",
     "state_estimation",
     "geometric_mapping",
@@ -55,13 +56,19 @@ PLAN_ORDER = (
     "spatial_relations",
     "context_map",
 )
-# The order a run scoped to ``TARGET`` (``semantic_fusion``) actually executes: ``PLAN_ORDER``'s
-# prefix up to and including it, since nothing after it is a dependency of that target.
-RUN_ORDER = PLAN_ORDER[: PLAN_ORDER.index("semantic_fusion") + 1]
+# ``pose_ingestion`` (issue #555) stays off by default in this suite's config, unlike
+# ``point_representation``, which ``selected_document()`` enables explicitly -- so a resolved
+# plan's actual stages/order exclude it, while a full catalog listing (``status.executors``,
+# ``capabilities()``) still names it.
+ACTIVE_PLAN_ORDER = tuple(stage for stage in PLAN_ORDER if stage != "pose_ingestion")
+# The order a run scoped to ``TARGET`` (``semantic_fusion``) actually executes: the active
+# stages' prefix up to and including it, since nothing after it is a dependency of that target.
+RUN_ORDER = ACTIVE_PLAN_ORDER[: ACTIVE_PLAN_ORDER.index("semantic_fusion") + 1]
 # `canonical/1`'s own topology, extended by the ``unavailable_future_stage`` fixture with a
 # fictional ``scene_graph`` stage marked unavailable -- it never joins ``run_stages`` because it
 # is not a dependency of any real target.
 PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE = (*PLAN_ORDER, "scene_graph")
+ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE = (*ACTIVE_PLAN_ORDER, "scene_graph")
 
 
 def _ready(_name: str) -> bool:
@@ -375,10 +382,15 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
 
     by_stage = {stage.stage_id: stage for stage in plan.stages}
     assert plan.preset == "canonical/1"
-    assert plan.order == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
-    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
+    assert plan.order == ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
+    assert tuple(by_stage) == ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
     assert plan.run_stages == RUN_ORDER
-    assert (plan.config_digest, plan.disabled_stages, plan.problems) == (config.digest, (), ())
+    # pose_ingestion (issue #555) is off by default; nothing else is disabled in this config.
+    assert (plan.config_digest, plan.disabled_stages, plan.problems) == (
+        config.digest,
+        ("pose_ingestion",),
+        (),
+    )
     association = by_stage["sensor_association"]
     assert [(item.name, item.source) for item in association.inputs] == [
         ("sequence", "ingestion"),
@@ -406,7 +418,8 @@ def test_a_disabled_optional_stage_is_listed_and_its_branch_disappears(tmp_path:
 
     fusion = next(stage for stage in plan.stages if stage.stage_id == "semantic_fusion")
     toggle = next(e for e in plan.editable if e.path == "pipeline.stages.point_representation")
-    assert plan.disabled_stages == ("point_representation",)
+    # pose_ingestion is also off by default (issue #555); only point_representation was toggled.
+    assert set(plan.disabled_stages) == {"pose_ingestion", "point_representation"}
     assert plan.order is not None
     assert "point_representation" not in plan.order
     assert "representation" not in [item.name for item in fusion.inputs]

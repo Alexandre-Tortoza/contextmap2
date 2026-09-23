@@ -1136,7 +1136,10 @@ def _config_lines(effective: EffectiveConfig) -> list[str]:
         f"  resources: device={config.resources.device or '-'}, "
         f"workspace={config.resources.workspace or '-'}"
     )
-    lines.append(f"  policies: debug_level={config.policies.debug_level}")
+    lines.append(
+        f"  policies: debug_level={config.policies.debug_level}, "
+        f"trajectory_mode={config.policies.trajectory_mode}"
+    )
     return lines
 
 

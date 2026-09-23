@@ -12,8 +12,12 @@ decimal, meters, unit quaternion ``(x, y, z, w)``; blank lines and lines
 starting with ``#`` are skipped). The file itself never declares which
 frames the pose relates, nor a clock domain compatible with any other
 source, so :class:`SourceAdapterConfig.extra` must declare ``format``,
-``parent_frame`` and ``body_frame`` explicitly — nothing is inferred from
-the file name or content. See
+``parent_frame``, ``body_frame`` and ``pose_role`` explicitly — nothing is
+inferred from the file name or content. ``pose_role`` (``ground_truth``,
+``odometry`` or ``external_localization``, see issue #555) records whether
+this pose is a reference trajectory or one meant to drive the pipeline;
+downstream composition uses it to keep a ground-truth pose from silently
+becoming the operational trajectory. See
 ``src/contextmap/ingestion/docs/adapters.md``.
 """
 
@@ -47,6 +51,12 @@ _SOURCE_TYPE = "pose_file"
 _SUPPORTED_FORMATS = frozenset({"tum"})
 _NANOSECONDS_PER_SECOND = Decimal(1_000_000_000)
 _DEFAULT_SENSOR_ID = "external_pose_file"
+_POSE_ROLES = frozenset({"ground_truth", "odometry", "external_localization"})
+"""Small, explicit vocabulary (issue #555): ground truth is significant enough that an
+omitted or unrecognized role must fail loudly rather than default silently -- a ground-truth
+pose accidentally treated as operational would corrupt the trajectory downstream without any
+visible error. Never inferred from the file name or content, same as format/parent_frame/
+body_frame."""
 
 
 class PoseFileConfigError(SourceAdapterError):
@@ -71,6 +81,7 @@ class _PoseFileSettings:
     parent_frame: FrameId
     body_frame: FrameId
     sensor_id: SensorId
+    pose_role: str
 
 
 def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
@@ -85,9 +96,10 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
     Raises:
         PoseFileConfigError: If ``format`` is not a supported value, if
             ``parent_frame``/``body_frame`` is missing or not a non-empty
-            string, if ``config.timestamp_clock_id`` is not declared, or if
-            ``config.window`` is set. Nothing is inferred from the file name
-            or content.
+            string, if ``pose_role`` is missing or not one of
+            :data:`_POSE_ROLES`, if ``config.timestamp_clock_id`` is not
+            declared, or if ``config.window`` is set. Nothing is inferred
+            from the file name or content.
     """
     if config.window is not None:
         # Este adapter sempre lê o arquivo inteiro (ver docs/adapters.md); aceitar
@@ -115,6 +127,13 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
             "pose_file adapter requires a non-empty extra['body_frame']; "
             "a pose file never declares which frame its pose reports"
         )
+    pose_role = extra.get("pose_role")
+    if pose_role not in _POSE_ROLES:
+        raise PoseFileConfigError(
+            "pose_file adapter requires extra['pose_role'] to be one of "
+            f"{sorted(_POSE_ROLES)}, got {pose_role!r}; ground truth versus operational pose "
+            "is too significant to infer or default"
+        )
     if config.timestamp_clock_id is None:
         # Um arquivo TUM não carrega clock algum (nem sequer um implícito no
         # próprio formato): sintetizar um id de clock aqui seria exatamente o
@@ -133,6 +152,7 @@ def _settings_from_config(config: SourceAdapterConfig) -> _PoseFileSettings:
         parent_frame=FrameId(parent_frame),
         body_frame=FrameId(body_frame),
         sensor_id=SensorId(sensor_id),
+        pose_role=pose_role,
     )
 
 
@@ -218,6 +238,7 @@ class PoseFileSourceAdapter:
                     raw_metadata={
                         "format": self._settings.format,
                         "source_content_hash": content_hash,
+                        "pose_role": self._settings.pose_role,
                     },
                 )
                 yield ExternalPoseMeasurement(

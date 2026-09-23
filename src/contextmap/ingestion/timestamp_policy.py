@@ -348,6 +348,68 @@ def _raw_source_timestamp(observation: SourceObservation) -> SourceTimestamp:
     return observation.timestamp
 
 
+class ClockCompatibilityError(ValueError):
+    """Raised when two observation sequences' clock relationship cannot be trusted (issue #555)."""
+
+
+def validate_cross_source_clock_compatibility(
+    primary: Sequence[SourceObservation], auxiliary: Sequence[SourceObservation]
+) -> None:
+    """Verify two observation sequences can be safely merged onto one shared clock.
+
+    Two sources declaring the same ``timestamp_clock_id`` string is an *assertion*, not
+    evidence (issue #555): before a caller -- for example, a runtime executor merging a main
+    sequence with an auxiliary pose sequence -- combines their observations, it must verify
+    the two actually line up in that clock, never trust the label alone. This checks each
+    sequence's *published* (already timestamp-policy-corrected) ``observation.timestamp``,
+    not the pre-correction raw value :func:`diagnose_source_clock` reconstructs -- merging
+    happens on the corrected clock, so that is the relationship that must be verified.
+
+    Args:
+        primary: Observations of the main sequence.
+        auxiliary: Observations of the auxiliary sequence to be merged with it.
+
+    Raises:
+        ClockCompatibilityError: If either sequence is empty (nothing to validate against), if
+            either sequence itself spans more than one ``clock_id``, if the two sequences use
+            different clocks, or if their timestamp ranges in the shared clock do not overlap --
+            a matching ``clock_id`` string with disjoint ranges is exactly the wrong-epoch defect
+            issue #554 fixed, and is never accepted as compatible.
+    """
+    if not primary or not auxiliary:
+        raise ClockCompatibilityError(
+            "cannot validate clock compatibility against an empty observation sequence"
+        )
+    primary_clocks = {observation.timestamp.clock_id for observation in primary}
+    auxiliary_clocks = {observation.timestamp.clock_id for observation in auxiliary}
+    if len(primary_clocks) != 1 or len(auxiliary_clocks) != 1:
+        raise ClockCompatibilityError(
+            "cannot validate clock compatibility: each sequence must use exactly one clock_id "
+            f"(primary uses {sorted(primary_clocks)!r}, "
+            f"auxiliary uses {sorted(auxiliary_clocks)!r})"
+        )
+    (primary_clock,) = primary_clocks
+    (auxiliary_clock,) = auxiliary_clocks
+    if primary_clock != auxiliary_clock:
+        raise ClockCompatibilityError(
+            f"primary sequence uses clock {primary_clock!r} but auxiliary sequence uses "
+            f"{auxiliary_clock!r} -- merging across different clocks is not supported yet; a "
+            "declared offset/transform between them must be explicit, never inferred from naming"
+        )
+    primary_seconds = [observation.timestamp.to_float_seconds() for observation in primary]
+    auxiliary_seconds = [observation.timestamp.to_float_seconds() for observation in auxiliary]
+    primary_range = (min(primary_seconds), max(primary_seconds))
+    auxiliary_range = (min(auxiliary_seconds), max(auxiliary_seconds))
+    if primary_range[1] < auxiliary_range[0] or auxiliary_range[1] < primary_range[0]:
+        raise ClockCompatibilityError(
+            f"primary sequence spans [{primary_range[0]:.6f}, {primary_range[1]:.6f}]s on clock "
+            f"{primary_clock!r} but auxiliary sequence spans [{auxiliary_range[0]:.6f}, "
+            f"{auxiliary_range[1]:.6f}]s with no overlap -- sharing a clock_id does not mean the "
+            "two sequences were recorded over the same physical timeframe; the relationship is "
+            "unverifiable and the two artifacts cannot be safely merged"
+        )
+
+
 def encode_timestamp_policy(policy: TimestampPolicy) -> dict[str, Any]:
     """Encode a timestamp policy into the JSON-compatible form persisted in provenance.
 

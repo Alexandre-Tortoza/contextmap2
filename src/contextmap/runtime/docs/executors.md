@@ -48,7 +48,7 @@ Construir um destes executores manualmente (juntar backend, políticas e classe 
 
 ## O que ainda não existe
 
-- **`point_representation`** não tem executor: depende de um backend com modelo/GPU (`ptv3`) sem um executor real ainda; é o único estágio opcional do canônico, então um run que não o habilita nunca sente essa lacuna. Continua entrando por **referência** a um run existente (`provided` ou `inputs.selections`), como `visual_perception` fazia antes de #507.
+- **`point_representation`** não tem executor: depende de um backend com modelo/GPU (`ptv3`) sem um executor real ainda; um run que não o habilita nunca sente essa lacuna. Continua entrando por **referência** a um run existente (`provided` ou `inputs.selections`), como `visual_perception` fazia antes de #507. `pose_ingestion` (issue #555) é o outro estágio opcional do canônico, mas por um motivo diferente: como `ingestion`, ele sempre precisa de um `IngestionStageExecutor` injetado explicitamente (ver [`composition.md`](composition.md#bridge-de-pose-auxiliar-em-state_estimation-issue-555)), nunca por falta de executor real.
 - **`entity_resolution.appearance`** e **`entity_resolution.representation`**, quando selecionados, precisam de um `FeatureVectorSource`/`RepresentationVectorSource` que só existe vinculado a runs de percepção/representação já abertos: `compose_executors` os obtém de um `provider` fornecido pelo chamador (o mesmo mecanismo de `RuntimeProvider` já usado por `sam3`/`qwen`/`gemini`, explícito ou declarado em `resources.providers`), nunca os inventa.
 
 ## `ContextMapExecutor`

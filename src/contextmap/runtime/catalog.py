@@ -403,6 +403,17 @@ CANONICAL_PRESET = RuntimePreset(
             components=("ingestion.source_adapter",),
             output=SEQUENCE,
         ),
+        # Issue #555: an opt-in second ingestion stage, publishing an auxiliary, pose-only
+        # SequenceArtifact for state_estimation to merge with the main one. No component: its
+        # executor is always injected by the caller (see IngestionStageExecutor), same as
+        # "ingestion" itself -- an incremental bridge, not general multi-source ingestion.
+        StageDeclaration(
+            stage_id="pose_ingestion",
+            capability="ingestion",
+            optional=True,
+            default_enabled=False,
+            output=SEQUENCE,
+        ),
         StageDeclaration(
             stage_id="visual_perception",
             capability="visual_perception",
@@ -419,7 +430,15 @@ CANONICAL_PRESET = RuntimePreset(
             stage_id="state_estimation",
             capability="state_estimation",
             components=("state_estimation.estimator",),
-            inputs=(StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),),
+            inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+                StageInput(
+                    name="pose_sequence",
+                    contract=SEQUENCE,
+                    source="pose_ingestion",
+                    optional=True,
+                ),
+            ),
             output=TRAJECTORY,
         ),
         StageDeclaration(
