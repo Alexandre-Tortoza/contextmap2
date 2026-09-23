@@ -161,6 +161,11 @@ class IngestionRequest:
         artifact_id: Identity to publish under; a fresh one is generated when omitted. A run
             derives it from the stage identity so that identical executions publish the same
             identity.
+        extra: Adapter-specific configuration not covered by the shared shape above, passed
+            through unchanged to :attr:`~contextmap.ingestion.SourceAdapterConfig.extra` (for
+            example :class:`~contextmap.ingestion.adapters.pose_file.PoseFileSourceAdapter`'s
+            required ``format``/``parent_frame``/``body_frame``/``pose_role``). ``IngestionRequest``
+            never grows a field per adapter family for this.
     """
 
     source_type: str
@@ -178,6 +183,7 @@ class IngestionRequest:
     hash_source: bool = True
     config_identity: str | None = None
     artifact_id: str | None = None
+    extra: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the shape of the request; whether it can run is decided by preflight."""
@@ -215,6 +221,7 @@ class IngestionRequest:
             else _calibration_identity(self.calibration),
             "hash_source": self.hash_source,
             "config_identity": self.config_identity,
+            "extra": dict(self.extra),
         }
 
     @property
@@ -241,8 +248,8 @@ class IngestionRequest:
         Args:
             document: A mapping with ``source_path``, ``sequence_name``, ``topics``,
                 ``synchronization`` and optionally ``required_topics``, ``timestamp_clock_id``,
-                ``timestamp_policy``, ``window``, ``validation``, ``hash_source`` and
-                ``config_identity``.
+                ``timestamp_policy``, ``window``, ``validation``, ``hash_source``,
+                ``config_identity`` and ``extra``.
             output_dir: The final directory of the sequence artifact.
             source_type: The adapter family, when the document does not carry it.
             artifact_id: The identity to publish under, when the caller fixes it.
@@ -275,6 +282,7 @@ class IngestionRequest:
                 hash_source=document.get("hash_source", True),
                 config_identity=document.get("config_identity"),
                 artifact_id=artifact_id,
+                extra=dict(document.get("extra", {})),
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid ingestion request: {error!r}") from error
@@ -1046,6 +1054,7 @@ def _adapter_config(request: IngestionRequest) -> SourceAdapterConfig:
         calibration=request.calibration,
         required_topics=request.required_topics,
         window=request.window,
+        extra=request.extra,
     )
 
 

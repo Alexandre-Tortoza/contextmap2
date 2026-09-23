@@ -219,6 +219,7 @@ class TestRequestIdentity:
             {"config_identity": "sha256:abc"},
             {"validation": ValidationPolicy(on_problems="warn")},
             {"topics": SourceTopicMapping(rgb="/other", imu="/imu")},
+            {"extra": {"pose_role": "ground_truth"}},
         ],
     )
     def test_every_input_that_changes_the_result_changes_the_identity(
@@ -237,6 +238,21 @@ class TestRequestIdentity:
         assert rebuilt.identity == original.identity
         assert json.loads(json.dumps(document)) == document
         assert "output_dir" not in document
+
+    def test_extra_round_trips_through_the_document(self, tmp_path: Path) -> None:
+        """Issue #555: PoseFileSourceAdapter needs extra['format'/'parent_frame'/'body_frame'/
+        'pose_role'], which only reaches the adapter through this field -- SourceAdapterConfig
+        already carries it, but IngestionRequest had no pass-through until now."""
+        original = make_request(tmp_path, extra={"format": "tum", "pose_role": "ground_truth"})
+
+        document = original.to_document()
+        rebuilt = IngestionRequest.from_document(
+            document, output_dir=original.output_dir, source_type=None
+        )
+
+        assert document["extra"] == {"format": "tum", "pose_role": "ground_truth"}
+        assert rebuilt.extra == original.extra
+        assert rebuilt.identity == original.identity
 
     def test_a_configured_window_changes_the_identity(self, tmp_path: Path) -> None:
         base = make_request(tmp_path)
@@ -393,6 +409,18 @@ class TestSuccessfulRun:
         assert provenance.source_content_hash != compute_source_content_hash(
             Path(request.source_path)
         )
+
+    def test_extra_reaches_the_constructed_adapter_config(self, tmp_path: Path) -> None:
+        """Issue #555: PoseFileSourceAdapter's required format/parent_frame/body_frame/pose_role
+        only exist in SourceAdapterConfig.extra -- this is the only path that can carry them."""
+        built: list[FakeAdapter] = []
+        extra = {"format": "tum", "parent_frame": "map", "body_frame": "epson"}
+        request = make_request(tmp_path, extra=extra)
+
+        result = _service(built=built).run(request)
+
+        assert result.status == "completed" and result.failure is None
+        assert built and all(adapter.config.extra == extra for adapter in built)
 
     def test_adapter_warnings_reach_the_result_and_the_artifact(self, tmp_path: Path) -> None:
         result = _service(warnings=["skipped a malformed message"]).run(make_request(tmp_path))
