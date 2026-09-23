@@ -165,6 +165,7 @@ def make_entity(
     semantic_map_id: SemanticMapId = DEFAULT_SEMANTIC_MAP_ID,
     map_id: MapId = DEFAULT_MAP_ID,
     indexes: tuple[int, ...] = (0, 1, 2, 3),
+    fusion_artifact_digest: str = "sha256:artifact",
 ) -> Entity:
     """Build one real, self-consistent ``Entity`` over a small in-memory geometric support."""
     source = InMemoryGeometrySource(
@@ -213,7 +214,7 @@ def make_entity(
             FusedEvidenceRef(
                 fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
                 fusion_schema_version="0.1.0",
-                fusion_artifact_digest="sha256:artifact",
+                fusion_artifact_digest=fusion_artifact_digest,
                 sequence_artifact_id="sequence-0001",
                 fused_evidence_id=FusedEvidenceId("fused--support-000001"),
                 fusion_support_id=FusionSupportId("support-000001"),

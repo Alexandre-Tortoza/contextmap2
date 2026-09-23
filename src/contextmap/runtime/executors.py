@@ -30,6 +30,23 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from contextmap.artifact import (
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID,
+    ArtifactKind,
+    ContextMapId,
+    ContextMapMetadata,
+    DeclaredCapabilities,
+    MapCapability,
+    MapCreation,
+    ObservationWindow,
+    PolicyRef,
+    SourceSequence,
+    UpstreamArtifact,
+    artifact_digest,
+    assemble_context_map_with_metrics,
+    estimator_local_map_frame,
+    write_context_map_with_metrics,
+)
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     ConservativeResolutionPolicy,
@@ -61,6 +78,7 @@ from contextmap.ingestion import (
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
     ASSOCIATION,
+    CONTEXT_MAP,
     ENTITIES,
     FUSION,
     GEOMETRY,
@@ -102,10 +120,13 @@ from contextmap.sensor_association import (
     SensorAssociationRunWriter,
     SensorAssociationService,
 )
+from contextmap.shared import SourceTimestamp
 from contextmap.spatial_relations import (
+    AxisDirection,
     RelationEvidence,
     RelationsRunPolicies,
     SpatialRelationsRunId,
+    SpatialRelationsRunReader,
     SpatialRelationsRunWriter,
     decide_relations,
     evaluate_contact_candidates,
@@ -1027,3 +1048,126 @@ class SpatialRelationsExecutor:
             code_version=self._code_version or "",
         ).write(candidates=candidates, evidence=evidence, decisions=decisions)
         return _reference(request, RELATIONS, str(manifest.run_id), manifest.file_inventory)
+
+
+def _observation_window(clock_id: str, *, start_ns: int, end_ns: int) -> ObservationWindow:
+    def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
+        seconds, nanoseconds = divmod(total_nanoseconds, 1_000_000_000)
+        return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=clock_id)
+
+    return ObservationWindow(start=_timestamp(start_ns), end=_timestamp(end_ns))
+
+
+class ContextMapExecutor:
+    """Assembles the repository's public product: the ``ContextMap``, by reference.
+
+    Every entity, relation and piece of evidence was already decided by Entity Resolution and
+    Spatial Relations; this only translates their real, finished runs -- and the geometric map
+    and sequence they were built over -- into what :func:`~contextmap.artifact.
+    assemble_context_map_with_metrics` needs, and never infers anything itself (that function
+    already owns the translation rule, see :data:`~contextmap.artifact.
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID`).
+    """
+
+    def __init__(
+        self,
+        *,
+        up_axis: AxisDirection | None = None,
+        assembly_policy: PolicyRef | None = None,
+        code_version: str | None = None,
+    ) -> None:
+        """Bind the executor to the map frame's declared up axis and the assembly policy.
+
+        Args:
+            up_axis: Spatial Relations' own composed ``FrameConventions.up_axis``, when
+                declared -- the same value that already shaped this run's relations, never
+                re-derived independently here. ``None`` when no run declared one.
+            assembly_policy: Identity of the assembly rule; defaults to
+                :data:`~contextmap.artifact.CONTEXT_MAP_ASSEMBLY_POLICY_ID` version ``"1"``, the
+                one :func:`~contextmap.artifact.assemble_context_map_with_metrics` actually
+                implements.
+            code_version: Code revision that produced the run.
+        """
+        self._up_direction = up_axis.vector if up_axis is not None else None
+        self._assembly_policy = assembly_policy or PolicyRef(
+            policy_id=CONTEXT_MAP_ASSEMBLY_POLICY_ID, version="1"
+        )
+        self._code_version = code_version
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        """Assemble and write the final ``ContextMap`` from this run's real upstream artifacts."""
+        output = _output(request)
+        sequence_dir = _one(request, "sequence")
+        geometry_dir = _one(request, "geometry")
+        resolution_dir = _one(request, "entities")
+        relations_dir = _one(request, "relations")
+
+        with GeometricMapArtifactReader(geometry_dir) as geometry_reader:
+            geometry_manifest = geometry_reader.manifest
+            bounds = geometry_reader.geometry().geometric_map.bounds
+        relations_reader = SpatialRelationsRunReader(relations_dir)
+        predicates = sorted(
+            {relation.predicate for relation in relations_reader.iter_relations()},
+            key=lambda predicate: predicate.value,
+        )
+
+        metadata = ContextMapMetadata(
+            creation=MapCreation(
+                assembly_policy=self._assembly_policy,
+                code_version=self._code_version,
+                configuration_fingerprint=None,
+            ),
+            source_sequences=(
+                SourceSequence(
+                    sequence_artifact_id=str(geometry_manifest.sequence_artifact_id),
+                    selection_id=geometry_manifest.selection_id,
+                ),
+            ),
+            frame=estimator_local_map_frame(
+                frame_id=str(geometry_manifest.map_frame), up_direction=self._up_direction
+            ),
+            bounds=bounds,
+            time_bounds=_observation_window(
+                geometry_manifest.clock_id,
+                start_ns=geometry_manifest.start_time_ns,
+                end_ns=geometry_manifest.end_time_ns,
+            ),
+            capabilities=DeclaredCapabilities(
+                content=(MapCapability.ENTITIES, MapCapability.GEOMETRY, MapCapability.RELATIONS),
+                relation_predicates=tuple(predicates),
+            ),
+        )
+        sequence_lineage = (
+            UpstreamArtifact(
+                artifact_id=str(geometry_manifest.sequence_artifact_id),
+                kind=ArtifactKind.SEQUENCE,
+                content_identity=artifact_digest(sequence_dir),
+                configuration_fingerprint=None,
+                code_version=None,
+                model_identities=(),
+            ),
+        )
+        result = assemble_context_map_with_metrics(
+            context_map_id=ContextMapId(request.identity()),
+            metadata=metadata,
+            geometric_map_location=geometry_dir,
+            entity_resolution_location=resolution_dir,
+            spatial_relations_location=relations_dir,
+            additional_lineage=sequence_lineage,
+        )
+        location_by_kind = {
+            ArtifactKind.GEOMETRIC_MAP: geometry_dir,
+            ArtifactKind.ENTITY_RESOLUTION_RUN: resolution_dir,
+            ArtifactKind.SPATIAL_RELATIONS_RUN: relations_dir,
+        }
+        upstream_locations = {
+            item.artifact_id: location_by_kind[item.kind]
+            for item in result.context_map.lineage
+            if item.kind.is_structural
+        }
+        manifest, _write_metrics = write_context_map_with_metrics(
+            result.context_map, output_dir=output, upstream_locations=upstream_locations
+        )
+        return _reference(
+            request, CONTEXT_MAP, str(manifest.context_map_id), manifest.file_inventory
+        )

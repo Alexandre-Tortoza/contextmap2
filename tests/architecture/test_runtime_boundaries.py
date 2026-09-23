@@ -23,6 +23,7 @@ COMPOSITION = RUNTIME / "composition.py"
 PUBLIC_ROOT_IMPORTERS = {
     "ingestion_service.py": {"contextmap.ingestion"},
     "executors.py": {
+        "contextmap.artifact",
         "contextmap.entity_resolution",
         "contextmap.geometric_mapping",
         "contextmap.ingestion",

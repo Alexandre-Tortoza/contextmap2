@@ -125,6 +125,12 @@ codebase is (a ``-v<N>`` suffix; see :func:`_split_policy_id`) and owned directl
 
 _POLICY_VERSION_SUFFIX = re.compile(r"-(v\d+)$")
 
+CONTEXT_MAP_ASSEMBLY_POLICY_ID = "context-map-assembly-v1"
+"""Versioned identity of how this module translates Entity Resolution and Spatial Relations
+decisions into a :class:`~contextmap.artifact.ContextMap` -- the rule this whole module
+implements, cited in every assembled map's ``metadata.creation.assembly_policy`` so a reader
+never has to infer which translation produced it."""
+
 
 def assemble_context_map(
     *,

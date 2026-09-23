@@ -13,7 +13,7 @@ from runtime_fixtures import unavailable_context_map  # noqa: F401
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import EXTENDED_PROFILE_ID, ConfigurationError
+from contextmap.runtime import CONTEXT_PROFILE_ID, EXTENDED_PROFILE_ID, ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -101,6 +101,13 @@ def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]
     """
     document = selected_document() if document is None else document
     document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
+    return document
+
+
+def _context_map_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``selected_document()`` (or ``document``) resolved against ``canonical/3``."""
+    document = selected_document() if document is None else document
+    document.setdefault("pipeline", {})["preset"] = CONTEXT_PROFILE_ID
     return document
 
 
@@ -844,11 +851,12 @@ class TestCatalogAgreement:
         assert composable_backends() == declared
 
     def test_every_available_stage_of_the_catalog_has_a_composer(self) -> None:
-        from contextmap.runtime.catalog import EXTENDED_PRESET
+        from contextmap.runtime.catalog import CONTEXT_PRESET
 
-        # EXTENDED_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
-        # só canonical/2 adiciona), então cobre todo estágio que precisaria de um composer.
-        available = {stage.stage_id for stage in EXTENDED_PRESET.stages if stage.available}
+        # CONTEXT_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
+        # canonical/2 adiciona + o context_map que só canonical/3 adiciona), então cobre todo
+        # estágio que precisaria de um composer.
+        available = {stage.stage_id for stage in CONTEXT_PRESET.stages if stage.available}
 
         assert composed_stages() == available
 
@@ -1344,6 +1352,165 @@ class TestComposeExecutors:
             "fingerprint": expected_policy.fingerprint(),
             "parameters": dataclasses.asdict(expected_policy),
         }
+
+    def test_the_context_map_executor_is_the_real_thing_and_assembles_a_real_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``ContextMapExecutor`` assembles a real ``ContextMap`` (issue #177).
+
+        Chains the same real entity_resolution -> spatial_relations construction as
+        ``test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts``,
+        one hop further: ``context_map`` only composes under ``canonical/3``, so this uses
+        ``_context_map_document`` instead of ``_extended_document``, and feeds the composed
+        executor the real geometric map, the real spatial-relations run it just produced, and a
+        minimal stand-in sequence directory (only its manifest identity matters to
+        ``artifact_digest``).
+        """
+        import json
+
+        from runtime_entities import make_entity
+
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.shared import AtomicRunDirectory
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+        document = _context_map_document()
+        document["components"]["spatial_relations"]["frame_conventions"][
+            "map-frame-conventions-v1"
+        ]["map_frame"] = "map"
+        effective = effective_from(tmp_path, document)
+        executors = compose_executors(
+            effective, module_available=lambda _name: True, environ={}, code_version="test"
+        )
+        assert "context_map" in executors
+
+        geometry_dir = workspace / "corridor-02" / "run-0001" / "geometric_mapping"
+        geometry_manifest = _write_aligned_geometric_map(geometry_dir)
+        geometry_ref = ArtifactRef(
+            stage_id="geometric_mapping",
+            contract="GeometricMapArtifact",
+            artifact_id=str(geometry_manifest.map_id),
+            content_hash=inventory_digest(geometry_manifest.file_inventory),
+            location=geometry_dir.relative_to(workspace).as_posix(),
+        )
+
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        fusion_artifact_digest = "sha256:" + "ab" * 32
+        entities = [
+            make_entity(
+                "entity--support-000001",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(0, 1, 2, 3),
+                fusion_artifact_digest=fusion_artifact_digest,
+            ),
+            make_entity(
+                "entity--support-000002",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(4, 5, 6, 7),
+                fusion_artifact_digest=fusion_artifact_digest,
+            ),
+        ]
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        mapping_manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=geometry_manifest.map_id,
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest=fusion_artifact_digest,
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write(entities)
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(mapping_manifest.run_id),
+            content_hash=inventory_digest(mapping_manifest.file_inventory),
+            location=mapping_dir.relative_to(workspace).as_posix(),
+        )
+
+        resolution_output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        resolution_ref = executors["entity_resolution"].execute(
+            StageRequest(
+                stage_id="entity_resolution",
+                inputs={"entities": (entities_ref,)},
+                components={},
+                config_digest=effective.digest,
+                output_dir=resolution_output_dir,
+                workspace=workspace,
+            )
+        )
+
+        relations_output_dir = workspace / "corridor-02" / "run-0001" / "spatial_relations"
+        relations_ref = executors["spatial_relations"].execute(
+            StageRequest(
+                stage_id="spatial_relations",
+                inputs={"entities": (resolution_ref,), "geometry": (geometry_ref,)},
+                components={},
+                config_digest=effective.digest,
+                output_dir=relations_output_dir,
+                workspace=workspace,
+            )
+        )
+        # Sequence stand-in: só a identidade do manifesto importa para artifact_digest().
+        sequence_dir = workspace / "corridor-02" / "sequence"
+        with AtomicRunDirectory(sequence_dir) as run:
+            run.write_text("outputs/summary.json", "{}")
+            run.publish(
+                manifest={"artifact_id": "sequence-0001", "schema_version": "0.1.0"},
+                readme="# sequence\n",
+            )
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id="sequence-0001",
+            content_hash=inventory_digest(()),
+            location=sequence_dir.relative_to(workspace).as_posix(),
+        )
+
+        context_map_output_dir = workspace / "corridor-02" / "run-0001" / "context_map"
+        context_map_ref = executors["context_map"].execute(
+            StageRequest(
+                stage_id="context_map",
+                inputs={
+                    "sequence": (sequence_ref,),
+                    "geometry": (geometry_ref,),
+                    "entities": (resolution_ref,),
+                    "relations": (relations_ref,),
+                },
+                components={},
+                config_digest=effective.digest,
+                output_dir=context_map_output_dir,
+                workspace=workspace,
+            )
+        )
+
+        assert context_map_ref.contract == "ContextMapArtifact"
+        manifest_record = json.loads(
+            (context_map_output_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest_record["entity_count"] == 2
 
 
 class TestComposeVisualPerceptionExecutor:
