@@ -19,7 +19,10 @@ whose :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor` need
 concrete request that is never part of a configuration (see ``contextmap ingest``).
 ``visual_perception`` and ``point_representation`` have no real executor yet: without an
 injection, a real run of those stages is blocked by preflight with an explicit message; a
-dry run needs none.
+dry run needs none. Some optional components (for example ``entity_resolution.appearance``)
+need a model runtime or client the repository does not load itself; ``main(providers=...)``
+forwards those to ``compose_executors`` the same way ``executors=`` forwards executors, keyed
+by component identity (``"<capability>.<slot>"``).
 
 Exit codes: ``0`` success, ``1`` the request was understood but cannot be satisfied
 (invalid configuration, blocked preflight, failed stage, failed integrity check), ``2``
@@ -40,7 +43,7 @@ from typing import Any, TextIO
 from contextmap import __version__
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import CANONICAL_PROFILE_ID
-from contextmap.runtime.composition import compose, compose_executors
+from contextmap.runtime.composition import RuntimeProvider, compose, compose_executors
 from contextmap.runtime.config import (
     DEBUG_LEVELS,
     ConfigProblem,
@@ -118,6 +121,7 @@ class _Session:
 
     args: argparse.Namespace
     executors: Mapping[str, StageExecutor]
+    providers: Mapping[str, RuntimeProvider]
     environ: Mapping[str, str] | None
     module_available: Callable[[str], bool] | None
     verifier: Callable[[ArtifactRef], bool] | None
@@ -162,6 +166,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     executors: Mapping[str, StageExecutor] | None = None,
+    providers: Mapping[str, RuntimeProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     verifier: Callable[[ArtifactRef], bool] | None = None,
@@ -180,6 +185,11 @@ def main(
             to supply one composition cannot build on its own, such as ``ingestion``'s
             :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`. A stage
             with neither a composed nor a supplied executor is blocked by preflight.
+        providers: Model runtimes or clients for backends ``compose_executors`` cannot load
+            on its own, keyed by component identity (``"<capability>.<slot>"``); see
+            :data:`~contextmap.runtime.composition.RuntimeProvider`. Without an entry here, a
+            component that needs one (for example ``entity_resolution.appearance``) composes
+            as absent, exactly like an incomplete selection, never with a substitute.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
@@ -202,6 +212,7 @@ def main(
         session = _Session(
             args=args,
             executors=executors or {},
+            providers=providers or {},
             environ=environ,
             module_available=module_available,
             verifier=verifier,
@@ -554,7 +565,10 @@ def _executors_for(session: _Session, effective: EffectiveConfig) -> Mapping[str
     top and always wins.
     """
     composed = compose_executors(
-        effective, environ=session.environ, module_available=session.module_available
+        effective,
+        providers=session.providers,
+        environ=session.environ,
+        module_available=session.module_available,
     )
     return {**composed, **session.executors}
 
