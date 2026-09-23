@@ -24,7 +24,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, overload
 
 from contextmap.ingestion.models import SourceObservation, SourceObservationId
 from contextmap.ingestion.sequence_artifact import SequenceArtifactId, SequenceArtifactReader
@@ -160,6 +160,13 @@ def resolve_selection(
     a :class:`FrameRangeSelection` produce identical observations for the
     frames they have in common.
 
+    Resolving never reads a payload file: which observations match is
+    decided from :meth:`~contextmap.ingestion.sequence_artifact.SequenceArtifactReader.iter_index`
+    alone. The returned ``observations`` decode each matching observation —
+    payload included — only when the caller actually accesses it, and do not
+    cache it, so peak memory stays proportional to what the caller holds at
+    once, never to the size of the selection or of the sequence.
+
     Args:
         reader: Reader for the sequence artifact to select from.
         selection: The selection to resolve.
@@ -171,66 +178,124 @@ def resolve_selection(
         SequenceSelectionError: If ``selection`` references frame indices
             or observation identities that do not exist in the sequence.
     """
-    all_observations = reader.list_observations()
     sequence_artifact_id = reader.manifest.artifact_id
 
     if isinstance(selection, FullSequenceSelection):
-        resolved: list[SourceObservation] = list(all_observations)
+        offsets: list[int] = [entry.offset for entry in reader.iter_index()]
     elif isinstance(selection, FrameRangeSelection):
-        resolved = _resolve_frame_range(all_observations, selection)
+        offsets = _resolve_frame_range_offsets(reader, selection)
     elif isinstance(selection, TimestampRangeSelection):
-        resolved = _resolve_timestamp_range(all_observations, selection)
+        offsets = _resolve_timestamp_range_offsets(reader, selection)
     elif isinstance(selection, ExplicitIdsSelection):
-        resolved = _resolve_explicit_ids(all_observations, selection)
+        offsets = _resolve_explicit_ids_offsets(reader, selection)
     else:
         raise TypeError(f"unsupported selection type: {type(selection)!r}")
 
+    observations: Sequence[SourceObservation] = (
+        _LazyObservationView(reader, offsets) if offsets else ()
+    )
     return SequenceSelectionResult(
         sequence_artifact_id=sequence_artifact_id,
         selection=selection,
         selection_id=selection_identity(sequence_artifact_id, selection),
-        observations=tuple(resolved),
+        observations=observations,
     )
 
 
-def _resolve_frame_range(
-    observations: Sequence[SourceObservation], selection: FrameRangeSelection
-) -> list[SourceObservation]:
-    total = len(observations)
+def _resolve_frame_range_offsets(
+    reader: SequenceArtifactReader, selection: FrameRangeSelection
+) -> list[int]:
+    offsets: list[int] = []
+    total = 0
+    for position, entry in enumerate(reader.iter_index()):
+        total = position + 1
+        if selection.start_frame_index <= position < selection.end_frame_index:
+            offsets.append(entry.offset)
     if total > 0 and selection.start_frame_index >= total:
         raise SequenceSelectionError(
             f"start_frame_index {selection.start_frame_index} is out of range "
             f"for {total} observations"
         )
-    end = min(selection.end_frame_index, total)
-    return list(observations[selection.start_frame_index : end])
+    return offsets
 
 
-def _resolve_timestamp_range(
-    observations: Sequence[SourceObservation], selection: TimestampRangeSelection
-) -> list[SourceObservation]:
-    resolved: list[SourceObservation] = []
-    for observation in observations:
-        if observation.timestamp.clock_id != selection.clock_id:
+def _resolve_timestamp_range_offsets(
+    reader: SequenceArtifactReader, selection: TimestampRangeSelection
+) -> list[int]:
+    offsets: list[int] = []
+    for entry in reader.iter_index():
+        if entry.timestamp.clock_id != selection.clock_id:
             continue
-        seconds = observation.timestamp.to_float_seconds()
+        seconds = entry.timestamp.to_float_seconds()
         if selection.start_seconds <= seconds < selection.end_seconds:
-            resolved.append(observation)
-    return resolved
+            offsets.append(entry.offset)
+    return offsets
 
 
-def _resolve_explicit_ids(
-    observations: Sequence[SourceObservation], selection: ExplicitIdsSelection
-) -> list[SourceObservation]:
-    known_ids = {observation.observation_id for observation in observations}
-    missing = sorted(str(oid) for oid in selection.observation_ids if oid not in known_ids)
+def _resolve_explicit_ids_offsets(
+    reader: SequenceArtifactReader, selection: ExplicitIdsSelection
+) -> list[int]:
+    wanted = set(selection.observation_ids)
+    found: dict[SourceObservationId, int] = {}
+    for entry in reader.iter_index():
+        if entry.observation_id in wanted:
+            found[entry.observation_id] = entry.offset
+    missing = sorted(str(oid) for oid in wanted if oid not in found)
     if missing:
         raise SequenceSelectionError(f"observation_ids not found in sequence: {missing}")
-    return [
-        observation
-        for observation in observations
-        if observation.observation_id in selection.observation_ids
-    ]
+    return list(found.values())
+
+
+class _LazyObservationView(Sequence[SourceObservation]):
+    """A resolved selection's observations, decoded from disk one at a time.
+
+    Never reads ahead and never caches: each element — payload included — is
+    decoded fresh from
+    :meth:`~contextmap.ingestion.sequence_artifact.SequenceArtifactReader.observation_at`
+    on every access. A caller that iterates the same view twice pays the
+    decode cost twice; this trades that cost for the memory guarantee
+    :func:`resolve_selection` makes.
+    """
+
+    def __init__(self, reader: SequenceArtifactReader, offsets: Sequence[int]) -> None:
+        """Build a view over ``offsets`` (already in canonical sequence order).
+
+        Args:
+            reader: Reader used to decode each observation on access.
+            offsets: Byte offsets (see
+                :attr:`~contextmap.ingestion.sequence_artifact.IndexEntry.offset`),
+                in canonical sequence order.
+        """
+        self._reader = reader
+        self._offsets = tuple(offsets)
+
+    def __len__(self) -> int:
+        """Return the number of observations in this view."""
+        return len(self._offsets)
+
+    @overload
+    def __getitem__(self, index: int) -> SourceObservation: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[SourceObservation]: ...
+
+    def __getitem__(self, index: int | slice) -> SourceObservation | list[SourceObservation]:
+        """Decode the observation(s) at ``index``, reading their payload now."""
+        if isinstance(index, slice):
+            return [self._reader.observation_at(offset) for offset in self._offsets[index]]
+        return self._reader.observation_at(self._offsets[index])
+
+    def __eq__(self, other: object) -> bool:
+        """Compare elementwise against any other sequence of observations."""
+        if not isinstance(other, Sequence):
+            return NotImplemented
+        return len(self) == len(other) and all(
+            mine == theirs for mine, theirs in zip(self, other, strict=True)
+        )
+
+    def __repr__(self) -> str:
+        """Return a compact representation that never decodes any element."""
+        return f"_LazyObservationView(len={len(self)})"
 
 
 def encode_selection(selection: SequenceSelection) -> dict[str, Any]:

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -10,15 +11,21 @@ from contextmap.ingestion import (
     ExternalPoseMeasurement,
     ImageObservation,
     ImuObservation,
+    InvalidSourceWindowError,
     LidarObservation,
     MissingRequiredTopicError,
     SourceAdapterConfig,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
     synchronize,
 )
 from contextmap.ingestion.adapters.ros2_bag import Ros2BagSourceAdapter
-from contextmap.ingestion.calibration import FisheyeCameraModel, PinholeCameraModel
+from contextmap.ingestion.calibration import (
+    CalibrationEntry,
+    FisheyeCameraModel,
+    PinholeCameraModel,
+)
 
 _TOPICS = SourceTopicMapping(
     rgb="/camera/color/image",
@@ -282,6 +289,36 @@ def test_read_calibration_decodes_fisheye_model_without_lossy_conversion(tmp_pat
     assert entry.camera_model.distortion_coefficients == (0.01, 0.002, 0.0003, 0.00004)
 
 
+def test_read_calibration_scans_the_bag_only_once_per_adapter_instance(
+    bag_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão do #506: calibração é lida uma única vez, não uma por chamada.
+
+    Mesma garantia do adapter ROS 1: ``read_observations()`` já chama
+    ``read_calibration()`` internamente, e o runtime chama de novo depois
+    de exaurir as observações. Sem cache, isso decodifica o mesmo
+    ``camera_info`` duas vezes — um scan completo do bag cada vez.
+    """
+    config = SourceAdapterConfig(source_type="ros2_bag", path=str(bag_path), topics=_TOPICS)
+    adapter = Ros2BagSourceAdapter(config)
+    calls: list[Any] = []
+    real_entry = Ros2BagSourceAdapter._camera_calibration_entry
+
+    def counting_entry(self: Ros2BagSourceAdapter, message: Any, topic: str) -> CalibrationEntry:
+        calls.append(message)
+        return real_entry(self, message, topic)
+
+    monkeypatch.setattr(Ros2BagSourceAdapter, "_camera_calibration_entry", counting_entry)
+
+    list(adapter.read_observations())  # calls read_calibration() internally
+    second_call_result = adapter.read_calibration()  # mirrors the runtime's second call
+
+    assert len(calls) == 1, (
+        f"camera_info must be decoded once per adapter instance, not {len(calls)} times"
+    )
+    assert second_call_result is not None
+
+
 def test_missing_required_topic_raises_before_any_observation(bag_path: Path) -> None:
     config = SourceAdapterConfig(
         source_type="ros2_bag",
@@ -406,3 +443,102 @@ def test_adapter_output_synchronizes_modalities_on_shared_header_clock(bag_path:
         association.observation is not None for association in groups[0].associations.values()
     )
     assert diagnostics.dropped_events == ()
+
+
+_WINDOW_TOPICS = SourceTopicMapping(rgb="/camera/color/image")
+
+
+def _build_windowed_bag(path: Path, *, image_bag_timestamps_ns: list[int]) -> None:
+    """N image messages at distinct bag-recording timestamps (ROS 2 parity of the ROS 1 helper)."""
+    types = _TS.types
+    with Writer(path, version=9) as writer:
+        image_conn = writer.add_connection(
+            "/camera/color/image", types["sensor_msgs/msg/Image"].__msgtype__, typestore=_TS
+        )
+        for index, bag_ts in enumerate(image_bag_timestamps_ns):
+            msg = types["sensor_msgs/msg/Image"](
+                header=_header(1000 + index, "front_camera_optical"),
+                height=1,
+                width=1,
+                encoding="mono8",
+                is_bigendian=0,
+                step=1,
+                data=np.array([index], dtype=np.uint8),
+            )
+            _write(image_conn, writer, msg, bag_ts)
+
+
+def test_window_selects_only_messages_within_the_recording_time_range(tmp_path: Path) -> None:
+    path = tmp_path / "windowed"
+    _build_windowed_bag(
+        path,
+        image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000],
+    )
+    base_config = SourceAdapterConfig(source_type="ros2_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=2.0, end_seconds=4.0
+    )
+    adapter = Ros2BagSourceAdapter(replace(base_config, window=window))
+
+    observations = list(adapter.read_observations())
+
+    assert [obs.provenance.raw_metadata["bag_timestamp_nanoseconds"] for obs in observations] == [
+        2_000_000_000,
+        3_000_000_000,
+    ]
+
+
+def test_observation_id_counter_restarts_at_zero_relative_to_the_window(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "windowed"
+    _build_windowed_bag(path, image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000, 3_000_000_000])
+    base_config = SourceAdapterConfig(source_type="ros2_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=2.0, end_seconds=4.0
+    )
+    adapter = Ros2BagSourceAdapter(replace(base_config, window=window))
+
+    observations = list(adapter.read_observations())
+
+    assert [str(obs.observation_id) for obs in observations] == [
+        "camera_color_image-000000",
+        "camera_color_image-000001",
+    ]
+
+
+def test_window_with_no_overlap_is_rejected_explicitly(tmp_path: Path) -> None:
+    path = tmp_path / "windowed"
+    _build_windowed_bag(path, image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000])
+    base_config = SourceAdapterConfig(source_type="ros2_bag", path=str(path), topics=_WINDOW_TOPICS)
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=10.0, end_seconds=20.0
+    )
+    adapter = Ros2BagSourceAdapter(replace(base_config, window=window))
+
+    with pytest.raises(InvalidSourceWindowError, match="does not overlap"):
+        list(adapter.read_observations())
+
+
+def test_content_hash_covers_only_the_window_not_the_whole_source(tmp_path: Path) -> None:
+    path = tmp_path / "windowed"
+    _build_windowed_bag(
+        path,
+        image_bag_timestamps_ns=[1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000],
+    )
+    base_config = SourceAdapterConfig(source_type="ros2_bag", path=str(path), topics=_WINDOW_TOPICS)
+
+    full_adapter = Ros2BagSourceAdapter(base_config)
+    assert full_adapter.content_hash() is None
+    list(full_adapter.read_observations())
+    full_hash = full_adapter.content_hash()
+
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=1.0, end_seconds=3.0
+    )
+    windowed_adapter = Ros2BagSourceAdapter(replace(base_config, window=window))
+    list(windowed_adapter.read_observations())
+    windowed_hash = windowed_adapter.content_hash()
+
+    assert windowed_hash is not None
+    assert windowed_hash != full_hash
