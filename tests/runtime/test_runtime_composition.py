@@ -11,7 +11,7 @@ from runtime_fixtures import unavailable_context_map  # noqa: F401
 
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import ConfigurationError
+from contextmap.runtime import EXTENDED_PROFILE_ID, ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -84,6 +84,18 @@ def _compose(
     options.setdefault("module_available", lambda _name: True)
     options.setdefault("environ", {})
     return compose(effective_from(tmp_path, document), providers=_providers(recorder), **options)
+
+
+def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``selected_document()`` (or ``document``) resolved against ``canonical/2``.
+
+    ``canonical/1``, the default profile, ends at ``semantic_fusion``: Entity Resolution and
+    Spatial Relations only exist under the extended topology (see the P1 fix of the PR #540
+    review, ``docs/runtime-composition.md``).
+    """
+    document = selected_document() if document is None else document
+    document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
+    return document
 
 
 class TestCanonicalComposition:
@@ -501,9 +513,11 @@ class TestCatalogAgreement:
         assert composable_backends() == declared
 
     def test_every_available_stage_of_the_catalog_has_a_composer(self) -> None:
-        from contextmap.runtime.catalog import CANONICAL_PRESET
+        from contextmap.runtime.catalog import EXTENDED_PRESET
 
-        available = {stage.stage_id for stage in CANONICAL_PRESET.stages if stage.available}
+        # EXTENDED_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
+        # só canonical/2 adiciona), então cobre todo estágio que precisaria de um composer.
+        available = {stage.stage_id for stage in EXTENDED_PRESET.stages if stage.available}
 
         assert composed_stages() == available
 
@@ -530,7 +544,9 @@ class TestComposeExecutors:
         )
 
         executors = compose_executors(
-            effective_from(tmp_path), module_available=lambda _name: True, environ={}
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
         )
 
         assert set(executors) == {
@@ -556,7 +572,7 @@ class TestComposeExecutors:
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = selected_document()
+        document = _extended_document()
         del document["components"]["geometric_mapping"]
         del document["components"]["sensor_association"]
 
@@ -580,7 +596,7 @@ class TestComposeExecutors:
         (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
         other stages, whose own configuration is unrelated, still compose normally.
         """
-        document = selected_document()
+        document = _extended_document()
         document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
             "max_reprojection_invalid_rate"
         ] = 2.0
@@ -606,7 +622,7 @@ class TestComposeExecutors:
         compatibility``, ``appearance``, ``representation``, ``geometric_predicate`` or
         ``contact_predicate``: the stages still compose, with the geometry-only path.
         """
-        composed = _compose(tmp_path)
+        composed = _compose(tmp_path, document=_extended_document())
 
         channels = composed.entity_comparison_channels
         assert channels is not None
@@ -626,7 +642,7 @@ class TestComposeExecutors:
     def test_an_incomplete_required_selection_leaves_the_stage_absent_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = selected_document()
+        document = _extended_document()
         del document["components"]["entity_resolution"]["geometry_comparison"]
 
         executors = compose_executors(
@@ -766,7 +782,7 @@ class TestComposeExecutors:
             content_hash=inventory_digest(manifest.file_inventory),
             location="corridor-02/run-0001/semantic_mapping",
         )
-        effective = effective_from(tmp_path)
+        effective = effective_from(tmp_path, _extended_document())
         executors = compose_executors(effective, module_available=lambda _name: True, environ={})
         output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
         request = StageRequest(

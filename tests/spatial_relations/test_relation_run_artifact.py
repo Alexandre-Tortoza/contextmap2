@@ -97,7 +97,28 @@ def test_the_manifest_records_lineage_policies_and_counts(run: Run, tmp_path: Pa
     assert policies["frame_conventions"]["up_axis"] == "+z"
     assert policies["frame_conventions"]["fingerprint"] == CONVENTIONS.fingerprint()
     assert policies["geometric"]["parameters"]["next_to_max_gap_m"] == 0.5
+    assert policies["geometry_summary"]["fingerprint"] == POLICIES.geometry_summary.fingerprint()
     assert manifest.counts["relations"] == len(run.decisions.relations)
+
+
+def test_a_reopened_run_exposes_the_geometry_summary_policy_that_produced_it(
+    run: Run, tmp_path: Path
+) -> None:
+    """P2 #4 of the PR #540 review: ``geometry_summary`` is part of the run's own provenance.
+
+    ``resolved_entity_geometries`` (inside ``SpatialRelationsExecutor``) uses this policy
+    before candidate generation, and it measurably affects the geometric/contact predicate
+    outputs -- so the artifact must be self-describing about it, exactly like
+    ``frame_conventions``, ``candidate``, ``geometric`` and ``contact`` already are.
+    """
+    _write(run, tmp_path / "relations")
+
+    reopened = SpatialRelationsRunReader(tmp_path / "relations").manifest.policies
+
+    geometry_summary = reopened["geometry_summary"]
+    assert geometry_summary["policy_id"] == "entity-geometry-summary-v1"
+    assert geometry_summary["fingerprint"] == POLICIES.geometry_summary.fingerprint()
+    assert geometry_summary["parameters"] == dataclasses.asdict(POLICIES.geometry_summary)
 
 
 def test_the_manifest_holds_no_absolute_path_and_no_secret(run: Run, tmp_path: Path) -> None:

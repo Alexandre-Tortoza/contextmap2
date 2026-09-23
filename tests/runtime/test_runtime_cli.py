@@ -155,6 +155,43 @@ class TestDryRun:
             "semantic_fusion",
         }.issubset(executors["registered"])
 
+    def test_a_provider_given_to_main_reaches_an_optional_entity_resolution_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """P2 #2 of the PR #540 review: ``main(providers=...)`` must reach ``compose_executors``.
+
+        Before this fix, the CLI had no provider-injection path at all, so a configuration
+        that legitimately selected ``entity_resolution.appearance`` (it needs a
+        ``FeatureVectorSource``, the same ``RuntimeProvider`` mechanism sam3/qwen/gemini
+        already use) silently lost the whole ``entity_resolution`` executor.
+        """
+        document = selected_document()
+        document["pipeline"]["preset"] = "canonical/2"
+        document["components"]["entity_resolution"]["appearance"] = {
+            "backend": "entity-appearance-comparison-v1",
+            "entity-appearance-comparison-v1": {
+                "embedding_space_id": "clip-vit-b32",
+                "min_supporting_similarity": 0.8,
+            },
+        }
+
+        def provide(config: Any, secrets: Any) -> object:
+            return object()  # um FeatureVectorSource real não importa aqui, só a propagação
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "entity_resolution",
+            "--dry-run",
+            "--json",
+            providers={"entity_resolution.appearance": provide},
+        )
+
+        assert code == 0, out + err
+        assert "entity_resolution" in _json(out)["executors"]["registered"]
+
     def test_an_injected_executor_overrides_the_one_composed_from_configuration(
         self, tmp_path: Path
     ) -> None:
@@ -326,9 +363,6 @@ class TestInspectPlan:
             "geometric_mapping",
             "sensor_association",
             "semantic_fusion",
-            "semantic_mapping",
-            "entity_resolution",
-            "spatial_relations",
         ]
         assert document["plan_digest"].startswith("sha256:")
 

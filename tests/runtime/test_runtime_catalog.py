@@ -12,7 +12,13 @@ from contextmap.runtime import (
     check_selection,
     resolve_effective_config,
 )
-from contextmap.runtime.catalog import CANONICAL_PRESET, COMPONENTS, PRESETS
+from contextmap.runtime.catalog import (
+    CANONICAL_PRESET,
+    COMPONENTS,
+    EXTENDED_PRESET,
+    EXTENDED_PROFILE_ID,
+    PRESETS,
+)
 from contextmap.semantic_fusion import (
     BASELINE_ACCUMULATION_POLICY_ID,
     GEOMETRY_OVERLAP_SUPPORT_POLICY_ID,
@@ -111,13 +117,15 @@ class TestCatalogAgainstCapabilities:
         }
 
     def test_every_available_stage_names_an_implemented_capability(self) -> None:
-        for stage in CANONICAL_PRESET.stages:
+        # EXTENDED_PRESET é o superconjunto de estágios declarados: cobre canonical/1 e os
+        # três estágios que só canonical/2 adiciona, sem duplicar a checagem por preset.
+        for stage in EXTENDED_PRESET.stages:
             if stage.available:
                 assert _package_exists(stage.capability), stage.stage_id
 
     def test_every_unavailable_stage_names_a_capability_that_is_still_missing(self) -> None:
         # Quando a capability passar a existir, o catálogo precisa ser atualizado junto.
-        for stage in CANONICAL_PRESET.stages:
+        for stage in EXTENDED_PRESET.stages:
             if not stage.available:
                 assert not _package_exists(stage.capability), (
                     f"{stage.capability} now exists: mark stage {stage.stage_id!r} available"
@@ -126,7 +134,7 @@ class TestCatalogAgainstCapabilities:
 
     def test_every_component_belongs_to_exactly_one_stage_of_its_capability(self) -> None:
         owners: dict[str, list[str]] = {}
-        for stage in CANONICAL_PRESET.stages:
+        for stage in EXTENDED_PRESET.stages:
             for component_id in stage.components:
                 assert component_id in COMPONENTS
                 assert COMPONENTS[component_id].capability == stage.capability
@@ -135,26 +143,34 @@ class TestCatalogAgainstCapabilities:
         assert all(len(stages) == 1 for stages in owners.values())
 
     def test_only_the_point_representation_stage_is_optional_and_off_by_default(self) -> None:
-        optional = [stage.stage_id for stage in CANONICAL_PRESET.stages if stage.optional]
+        optional = [stage.stage_id for stage in EXTENDED_PRESET.stages if stage.optional]
 
         assert optional == ["point_representation"]
-        assert not CANONICAL_PRESET.stage("point_representation").default_enabled
+        assert not EXTENDED_PRESET.stage("point_representation").default_enabled
 
     def test_every_input_is_wired_to_a_stage_that_produces_its_contract(self) -> None:
-        stages = {stage.stage_id: stage for stage in CANONICAL_PRESET.stages}
+        stages = {stage.stage_id: stage for stage in EXTENDED_PRESET.stages}
 
-        for stage in CANONICAL_PRESET.stages:
+        for stage in EXTENDED_PRESET.stages:
             for item in stage.inputs:
                 assert item.source in stages, f"{stage.stage_id}.{item.name}"
                 assert stages[item.source].output == item.contract, f"{stage.stage_id}.{item.name}"
 
     def test_every_stage_declares_what_it_produces(self) -> None:
-        assert all(stage.output for stage in CANONICAL_PRESET.stages)
+        assert all(stage.output for stage in EXTENDED_PRESET.stages)
 
     def test_the_canonical_topology_resolves_without_structural_problems(self) -> None:
         from contextmap.runtime import resolve_effective_config, resolve_plan
 
         plan = resolve_plan(resolve_effective_config())
+
+        assert plan.problems == ()
+        assert plan.order is not None
+
+    def test_the_extended_topology_resolves_without_structural_problems(self) -> None:
+        from contextmap.runtime import resolve_effective_config, resolve_plan
+
+        plan = resolve_plan(resolve_effective_config(profile=EXTENDED_PROFILE_ID))
 
         assert plan.problems == ()
         assert plan.order is not None
@@ -165,6 +181,53 @@ class TestCatalogAgainstCapabilities:
     def test_an_unknown_stage_lookup_fails_loudly(self) -> None:
         with pytest.raises(KeyError):
             CANONICAL_PRESET.stage("nope")
+
+
+class TestProfileIdentity:
+    """Blocker #1 of the PR #540 review: a preset id must never change topology.
+
+    ``canonical/1`` ended at ``semantic_fusion`` on ``dev`` before this milestone; any
+    configuration, run or experiment that recorded that id as its profile must keep meaning
+    exactly that topology. The extended topology (``semantic_mapping``, ``entity_resolution``,
+    ``spatial_relations``) is a distinct, explicitly versioned profile, ``canonical/2``.
+    """
+
+    def test_canonical_1_topology_is_unchanged_from_before_this_milestone(self) -> None:
+        assert CANONICAL_PROFILE_ID == "canonical/1"
+        assert [stage.stage_id for stage in CANONICAL_PRESET.stages] == [
+            "ingestion",
+            "visual_perception",
+            "state_estimation",
+            "geometric_mapping",
+            "sensor_association",
+            "point_representation",
+            "semantic_fusion",
+        ]
+        assert CANONICAL_PRESET.stages[-1].output == "SemanticFusionRunArtifact"
+
+    def test_canonical_2_is_a_distinct_profile_that_extends_canonical_1(self) -> None:
+        assert EXTENDED_PROFILE_ID == "canonical/2"
+        assert EXTENDED_PROFILE_ID != CANONICAL_PROFILE_ID
+        assert PRESETS[EXTENDED_PROFILE_ID] is EXTENDED_PRESET
+
+        canonical_ids = [stage.stage_id for stage in CANONICAL_PRESET.stages]
+        extended_ids = [stage.stage_id for stage in EXTENDED_PRESET.stages]
+
+        # canonical/2 estende canonical/1: os mesmos estágios, na mesma ordem, mais os três
+        # novos ao final -- nunca uma topologia diferente disfarçada do mesmo prefixo.
+        assert extended_ids[: len(canonical_ids)] == canonical_ids
+        assert extended_ids[len(canonical_ids) :] == [
+            "semantic_mapping",
+            "entity_resolution",
+            "spatial_relations",
+        ]
+
+    def test_every_known_preset_has_a_unique_topology(self) -> None:
+        topologies = {
+            preset_id: tuple(stage.stage_id for stage in preset.stages)
+            for preset_id, preset in PRESETS.items()
+        }
+        assert len(set(topologies.values())) == len(topologies)
 
 
 class TestRealisticConfigurationFile:

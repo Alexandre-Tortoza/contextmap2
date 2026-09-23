@@ -984,17 +984,17 @@ def _compose_entity_resolution(context: _Context) -> dict[str, object]:
 def _compose_spatial_relations(context: _Context) -> dict[str, object]:
     from contextmap.spatial_relations import RelationsRunPolicies
 
+    geometry_summary = _construct(context, "spatial_relations.geometry_summary")
     policies = RelationsRunPolicies(
         frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
         candidate=_construct(context, "spatial_relations.candidate"),
+        geometry_summary=geometry_summary,
         geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
         contact=_construct_optional(context, "spatial_relations.contact_predicate"),
     )
     return {
         "spatial_relations_policies": policies,
-        "spatial_relations_geometry_summary": _construct(
-            context, "spatial_relations.geometry_summary"
-        ),
+        "spatial_relations_geometry_summary": geometry_summary,
     }
 
 

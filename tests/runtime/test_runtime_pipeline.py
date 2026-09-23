@@ -39,13 +39,8 @@ CANONICAL_ORDER = [
     "geometric_mapping",
     "sensor_association",
     "semantic_fusion",
-    "semantic_mapping",
-    "entity_resolution",
-    "spatial_relations",
 ]
-# Um alvo em `semantic_fusion` só puxa suas próprias dependências: os estágios seguintes
-# (semantic_mapping em diante) não fazem parte da execução alvo, então ficam fora daqui.
-IMPLEMENTED = CANONICAL_ORDER[:6]
+IMPLEMENTED = CANONICAL_ORDER
 
 
 def _ready(_name: str) -> bool:
