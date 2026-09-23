@@ -254,6 +254,12 @@ def _stages() -> tuple[ScenarioStage, ...]:
         ScenarioStage(
             stage_id="semantic_mapping",
             capability="semantic_mapping",
+            components=(
+                ComponentSelection(
+                    component_id="semantic_mapping.geometry_summary",
+                    backend="entity-geometry-summary-v1",
+                ),
+            ),
             rationale="Materializes entities from fused evidence without cross-support merging.",
         ),
         ScenarioStage(

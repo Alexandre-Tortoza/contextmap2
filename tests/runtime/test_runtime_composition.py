@@ -903,6 +903,29 @@ class TestComposeExecutors:
         assert "point_representation" not in executors
         assert "semantic_mapping" not in executors
 
+    def test_semantic_mapping_composes_only_when_map_id_and_code_digest_are_both_given(
+        self, tmp_path: Path
+    ) -> None:
+        """Neither identity is configuration: this function never invents one (issue #177)."""
+        from contextmap.runtime.executors import SemanticMappingExecutor
+        from contextmap.semantic_mapping import SemanticMapId
+
+        without_identity = compose_executors(
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert "semantic_mapping" not in without_identity
+
+        with_identity = compose_executors(
+            effective_from(tmp_path, _extended_document()),
+            module_available=lambda _name: True,
+            environ={},
+            semantic_map_id=SemanticMapId("semantic-map--test"),
+            code_digest="sha256:" + "cd" * 32,
+        )
+        assert isinstance(with_identity["semantic_mapping"], SemanticMappingExecutor)
+
     def test_spatial_relations_executor_reads_geometry_summary_only_from_its_policies(
         self, tmp_path: Path
     ) -> None:

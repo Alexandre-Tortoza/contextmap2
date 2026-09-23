@@ -30,17 +30,22 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 SCENARIO_SCHEMA = "contextmap.e2e.scenario/v1"
 ACCEPTANCE_REPORT_SCHEMA = "contextmap.e2e.acceptance-report/v1"
 SCENARIO_ID = "solution-1-canonical"
-SCENARIO_VERSION = "1.0.1"
+SCENARIO_VERSION = "1.0.2"
 """Version of the frozen scenario; any change to a frozen decision needs a new one.
 
-1.0.1 fixes the runtime-selection completeness bug that #540's real catalog wiring for
+1.0.1 fixed the runtime-selection completeness bug that #540's real catalog wiring for
 ``entity_resolution``/``spatial_relations`` exposed: those capabilities, and the policy
 components ``geometric_mapping``/``sensor_association`` already had, now declare catalog
 components and therefore need an explicit backend selected (the runtime never chooses one on
-the caller's behalf, even when a policy has a single option). The profile now also resolves
-against ``canonical/2`` instead of ``canonical/1``, since that is the preset whose topology
-actually includes semantic mapping, entity resolution and spatial relations. Neither change
-alters the dataset, the gates, the ablation-only list or any stage's scientific rationale.
+the caller's behalf, even when a policy has a single option). The profile also started
+resolving against ``canonical/2`` instead of ``canonical/1``, since that is the preset whose
+topology actually includes semantic mapping, entity resolution and spatial relations.
+
+1.0.2 fixes the same class of gap for ``semantic_mapping``: it now declares a real catalog
+component (``semantic_mapping.geometry_summary``, needed to compose a
+``SemanticMappingExecutor`` automatically, see :data:`contextmap.runtime.catalog.
+CONTEXT_PROFILE_ID`), so the profile needs an explicit selection for it too. Neither this nor
+1.0.1 alters the dataset, the gates, the ablation-only list or any stage's scientific rationale.
 """
 
 CROSS_STAGE = "cross_stage"

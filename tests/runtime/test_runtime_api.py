@@ -134,7 +134,7 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     bare = Runtime().status()
 
     assert status.workspace == str(tmp_path / "ws")
-    assert status.profiles == ("canonical/1", "canonical/2")
+    assert status.profiles == ("canonical/1", "canonical/2", "canonical/3")
     assert set(status.schemas) == {"configuration", "plan", "run", "reuse", "catalog"}
     assert status.verifier_configured is True
     assert status.executors == tuple(sorted(PLAN_ORDER))

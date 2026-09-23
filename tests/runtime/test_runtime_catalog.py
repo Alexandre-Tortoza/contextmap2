@@ -15,6 +15,8 @@ from contextmap.runtime import (
 from contextmap.runtime.catalog import (
     CANONICAL_PRESET,
     COMPONENTS,
+    CONTEXT_PRESET,
+    CONTEXT_PROFILE_ID,
     EXTENDED_PRESET,
     EXTENDED_PROFILE_ID,
     PRESETS,
@@ -175,6 +177,15 @@ class TestCatalogAgainstCapabilities:
         assert plan.problems == ()
         assert plan.order is not None
 
+    def test_the_context_map_topology_resolves_without_structural_problems(self) -> None:
+        from contextmap.runtime import resolve_effective_config, resolve_plan
+
+        plan = resolve_plan(resolve_effective_config(profile=CONTEXT_PROFILE_ID))
+
+        assert plan.problems == ()
+        assert plan.order is not None
+        assert plan.order[-1] == "context_map"
+
     def test_the_canonical_profile_is_a_known_preset(self) -> None:
         assert PRESETS[CANONICAL_PROFILE_ID] is CANONICAL_PRESET
 
@@ -221,6 +232,20 @@ class TestProfileIdentity:
             "entity_resolution",
             "spatial_relations",
         ]
+
+    def test_canonical_3_is_a_distinct_profile_that_extends_canonical_2(self) -> None:
+        assert CONTEXT_PROFILE_ID == "canonical/3"
+        assert CONTEXT_PROFILE_ID != EXTENDED_PROFILE_ID
+        assert PRESETS[CONTEXT_PROFILE_ID] is CONTEXT_PRESET
+
+        extended_ids = [stage.stage_id for stage in EXTENDED_PRESET.stages]
+        context_ids = [stage.stage_id for stage in CONTEXT_PRESET.stages]
+
+        # canonical/3 estende canonical/2: os mesmos estágios, na mesma ordem, mais o
+        # context_map final -- nunca uma topologia diferente disfarçada do mesmo prefixo.
+        assert context_ids[: len(extended_ids)] == extended_ids
+        assert context_ids[len(extended_ids) :] == ["context_map"]
+        assert CONTEXT_PRESET.stages[-1].output == "ContextMapArtifact"
 
     def test_every_known_preset_has_a_unique_topology(self) -> None:
         topologies = {

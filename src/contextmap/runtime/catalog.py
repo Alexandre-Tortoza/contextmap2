@@ -27,11 +27,21 @@ topology that adds ``semantic_mapping``, ``entity_resolution`` and ``spatial_rel
 EXTENDED_PROFILE_ID = "canonical/2"
 """Versioned identity of the topology that extends :data:`CANONICAL_PROFILE_ID`.
 
-It is ``canonical/1``'s stages, unchanged and in the same order, plus ``semantic_mapping``
-(structural: it has no component or executor of its own yet), ``entity_resolution`` and
-``spatial_relations``. A version identifier is never reused for a different topology (see
-:class:`RuntimePreset`), so the extended topology is a new profile, not a mutation of
-``canonical/1``.
+It is ``canonical/1``'s stages, unchanged and in the same order, plus ``semantic_mapping``,
+``entity_resolution`` and ``spatial_relations``. A version identifier is never reused for a
+different topology (see :class:`RuntimePreset`), so the extended topology is a new profile, not
+a mutation of ``canonical/1``. See :data:`CONTEXT_PROFILE_ID` for the topology that adds the
+``ContextMapArtifact`` itself.
+"""
+
+CONTEXT_PROFILE_ID = "canonical/3"
+"""Versioned identity of the topology that extends :data:`EXTENDED_PROFILE_ID` to the final
+``ContextMapArtifact``.
+
+It is ``canonical/2``'s stages, unchanged and in the same order, plus ``context_map``: the
+repository's public product, assembled from the Entity Resolution and Spatial Relations runs it
+already composed. Neither ``canonical/1`` nor ``canonical/2`` ever gains this stage -- a preset's
+topology is fixed for good (see :class:`RuntimePreset`).
 """
 
 _ROSBAGS_HINT = "pip install 'contextmap[ros1]'"
@@ -47,6 +57,7 @@ FUSION = "SemanticFusionRunArtifact"
 ENTITIES = "SemanticEntityArtifact"
 RESOLUTION = "EntityResolutionRunArtifact"
 RELATIONS = "SpatialRelationsRunArtifact"
+CONTEXT_MAP = "ContextMapArtifact"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -357,6 +368,11 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         optional=True,
     ),
     _component(
+        "semantic_mapping",
+        "geometry_summary",
+        BackendSpec(backend_id="entity-geometry-summary-v1"),
+    ),
+    _component(
         "spatial_relations",
         "frame_conventions",
         BackendSpec(backend_id="map-frame-conventions-v1"),
@@ -507,6 +523,7 @@ _EXTENDED_STAGES: tuple[StageDeclaration, ...] = (
     StageDeclaration(
         stage_id="semantic_mapping",
         capability="semantic_mapping",
+        components=("semantic_mapping.geometry_summary",),
         inputs=(
             StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
             StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
@@ -560,8 +577,33 @@ EXTENDED_PRESET = RuntimePreset(
     stages=CANONICAL_PRESET.stages + _EXTENDED_STAGES,
 )
 
+_CONTEXT_MAP_STAGE = StageDeclaration(
+    stage_id="context_map",
+    capability="artifact",
+    inputs=(
+        StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+        StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+        StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+        StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
+    ),
+    output=CONTEXT_MAP,
+)
+"""The stage :data:`CONTEXT_PROFILE_ID` adds on top of :data:`EXTENDED_PROFILE_ID`."""
+
+CONTEXT_PRESET = RuntimePreset(
+    preset_id=CONTEXT_PROFILE_ID,
+    description=(
+        "canonical/2's topology, unchanged, extended to the ContextMapArtifact: the "
+        "repository's public product, assembled by reference from the Entity Resolution and "
+        "Spatial Relations runs this preset already composes. No new scientific inference "
+        "happens here -- assembly only translates decisions those two capabilities already made."
+    ),
+    stages=(*EXTENDED_PRESET.stages, _CONTEXT_MAP_STAGE),
+)
+
 PRESETS: Mapping[str, RuntimePreset] = {
     CANONICAL_PRESET.preset_id: CANONICAL_PRESET,
     EXTENDED_PRESET.preset_id: EXTENDED_PRESET,
+    CONTEXT_PRESET.preset_id: CONTEXT_PRESET,
 }
 """Known presets. A profile of the same identity starts from each of them."""

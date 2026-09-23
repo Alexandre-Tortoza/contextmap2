@@ -104,6 +104,15 @@ def selected_document() -> dict[str, Any]:
                 },
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
             },
+            "semantic_mapping": {
+                "geometry_summary": {
+                    "backend": "entity-geometry-summary-v1",
+                    "entity-geometry-summary-v1": {
+                        "sparse_point_threshold": 3,
+                        "connectivity_radius_m": 0.5,
+                    },
+                },
+            },
             "entity_resolution": {
                 "retrieval": {
                     "backend": "entity-candidate-retrieval-v1",

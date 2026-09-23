@@ -51,7 +51,7 @@
       "reason": "The baseline resolves on geometry; extra evidence is an ablation."
     }
   ],
-  "digest": "sha256:9bffcbe318f940358a89d91104bf0be83843a413cc2d5c9b459fa124a34eb812",
+  "digest": "sha256:33e1969498d11b55d808f5a816cb4d826a99441001e1b4df5b60287c34c0ab18",
   "gates": [
     {
       "capability": "ingestion",
@@ -457,7 +457,14 @@
     },
     {
       "capability": "semantic_mapping",
-      "components": [],
+      "components": [
+        {
+          "backend": "entity-geometry-summary-v1",
+          "component_id": "semantic_mapping.geometry_summary",
+          "external_service": false,
+          "model": null
+        }
+      ],
       "rationale": "Materializes entities from fused evidence without cross-support merging.",
       "stage_id": "semantic_mapping"
     },
@@ -519,51 +526,132 @@
     }
   ],
   "subject": {
-    "dataset_id": "contextmap-ci-subset",
-    "evidence_class": "fake_contract",
+    "dataset_id": "corridor-02",
+    "evidence_class": "real",
     "external_inputs": [
       {
-        "digest": null,
-        "location": "ExternalPoseMeasurement observations of the synthetic sequence",
+        "digest": "sha256:cddb6739230ded86c57412e768e071e5cd6d62a5de5ff310618032ca2e38be0a",
+        "location": "corridor-02-gt.txt",
         "name": "pose_source",
         "role": "pose_input"
       }
     ],
-    "note": "Synthetic formulas with no GPU, network or model. It rehearses the contracts between stages and protects regressions; it is never evidence that Solution 1 is validated.",
-    "reference_set": {
-      "digest": "sha256:752df30cbd3a5f85b6ab0ea1606c9071e602a83769bb8ebcecc93c0ceff62742",
-      "reference_set_id": "contextmap-ci-subset",
-      "version": "1.0.1"
-    },
+    "note": "Real recorded 90 s window of corridor-02 (a straight run plus turns, pose gaps <= 605 ms). The sequence artifact holds no pose observations, so the trajectory is read from the dataset trajectory file as a declared pose input, which makes trajectory accuracy against that same file not applicable. No annotated reference set exists for it yet: gates that need annotations are blocked, not scored.",
+    "reference_set": null,
     "selection": {
-      "clock_id": "fixture:header",
-      "end_ns": 2000000000,
-      "image_count": 3,
-      "imu_count": 0,
-      "lidar_scan_count": 3,
+      "clock_id": "corridor-02-header",
+      "end_ns": 1646000152984117000,
+      "image_count": 2160,
+      "imu_count": 17983,
+      "lidar_scan_count": 892,
       "selected_images": [
         {
-          "nearest_lidar_id": "scan-0000",
-          "observation_id": "frame-0000",
-          "timestamp_ns": 0
+          "nearest_lidar_id": "velodyne_points-003358",
+          "observation_id": "camera_1_image_raw-008026",
+          "timestamp_ns": 1646000064964188570
         },
         {
-          "nearest_lidar_id": "scan-0001",
-          "observation_id": "frame-0001",
-          "timestamp_ns": 1000000000
+          "nearest_lidar_id": "velodyne_points-003403",
+          "observation_id": "camera_1_image_raw-008134",
+          "timestamp_ns": 1646000069486096762
         },
         {
-          "nearest_lidar_id": "scan-0002",
-          "observation_id": "frame-0002",
-          "timestamp_ns": 2000000000
+          "nearest_lidar_id": "velodyne_points-003447",
+          "observation_id": "camera_1_image_raw-008242",
+          "timestamp_ns": 1646000073967267474
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003492",
+          "observation_id": "camera_1_image_raw-008350",
+          "timestamp_ns": 1646000078489180274
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003537",
+          "observation_id": "camera_1_image_raw-008458",
+          "timestamp_ns": 1646000082970349730
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003582",
+          "observation_id": "camera_1_image_raw-008566",
+          "timestamp_ns": 1646000087492300082
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003626",
+          "observation_id": "camera_1_image_raw-008674",
+          "timestamp_ns": 1646000091973457570
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003671",
+          "observation_id": "camera_1_image_raw-008783",
+          "timestamp_ns": 1646000096495447267
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003715",
+          "observation_id": "camera_1_image_raw-008890",
+          "timestamp_ns": 1646000100976737607
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003760",
+          "observation_id": "camera_1_image_raw-008999",
+          "timestamp_ns": 1646000105498635220
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003804",
+          "observation_id": "camera_1_image_raw-009106",
+          "timestamp_ns": 1646000109979812590
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003849",
+          "observation_id": "camera_1_image_raw-009215",
+          "timestamp_ns": 1646000114501684605
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003894",
+          "observation_id": "camera_1_image_raw-009322",
+          "timestamp_ns": 1646000118982863445
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003938",
+          "observation_id": "camera_1_image_raw-009430",
+          "timestamp_ns": 1646000123464043605
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-003983",
+          "observation_id": "camera_1_image_raw-009538",
+          "timestamp_ns": 1646000127985987661
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-004027",
+          "observation_id": "camera_1_image_raw-009646",
+          "timestamp_ns": 1646000132467167757
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-004072",
+          "observation_id": "camera_1_image_raw-009754",
+          "timestamp_ns": 1646000136989077333
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-004117",
+          "observation_id": "camera_1_image_raw-009862",
+          "timestamp_ns": 1646000141470196866
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-004162",
+          "observation_id": "camera_1_image_raw-009970",
+          "timestamp_ns": 1646000145991985178
+        },
+        {
+          "nearest_lidar_id": "velodyne_points-004206",
+          "observation_id": "camera_1_image_raw-010078",
+          "timestamp_ns": 1646000150473153922
         }
       ],
-      "selection_identity": null,
-      "start_ns": 0
+      "selection_identity": "sha256:dc641b345ffc142cbc50452bbaacef2433990478295f4720feb0f165ee4ed1c4",
+      "start_ns": 1646000062984117000
     },
-    "sequence_artifact_id": null,
-    "sequence_manifest_digest": null,
-    "subject_id": "ci-synthetic-subset"
+    "sequence_artifact_id": "e145f73f8d894f18b96ef1f55ca308c2",
+    "sequence_manifest_digest": "sha256:74d39984385d63de00480249d1fe9d774f639e6172c89f5ceb0eafa078cc468d",
+    "subject_id": "corridor-02-sample"
   },
-  "version": "1.0.1"
+  "version": "1.0.2"
 }
