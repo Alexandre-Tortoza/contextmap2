@@ -13,6 +13,38 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from contextmap.artifact import (
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID,
+    ArtifactKind,
+    ContextMapId,
+    ContextMapMetadata,
+    DeclaredCapabilities,
+    MapCapability,
+    MapCreation,
+    ObservationWindow,
+    PolicyRef,
+    SourceSequence,
+    UpstreamArtifact,
+    artifact_digest,
+    assemble_context_map_with_metrics,
+    estimator_local_map_frame,
+    write_context_map_with_metrics,
+)
+from contextmap.entity_resolution import (
+    CandidateRetrievalPolicy,
+    ComparisonChannels,
+    ConservativeResolutionPolicy,
+    EntityResolutionRunId,
+    EntityResolutionRunReader,
+    EntityResolutionRunWriter,
+    GeometryComparisonPolicy,
+    MatchChannel,
+    MatchEvidenceBuilder,
+    lineage_from_mapping_manifest,
+    materialize_resolved_entities,
+    resolve_candidate_pairs,
+    retrieve_candidate_sets,
+)
 from contextmap.evaluation.ci_fixtures import (
     CI_FIXTURE_ID,
     LANDMARKS,
@@ -52,6 +84,16 @@ from contextmap.semantic_fusion import (
     build_fusion_supports,
     group_by_physical_observation,
 )
+from contextmap.semantic_mapping import (
+    EntityMaterializationPolicy,
+    GeometrySummaryPolicy,
+    SemanticMapId,
+    SemanticMappingRunId,
+    SemanticMappingRunReader,
+    SemanticMappingRunWriter,
+    lineage_from_fusion_manifest,
+    materialize_entities,
+)
 from contextmap.sensor_association import (
     DiagnosticTolerances,
     OcclusionPolicy,
@@ -65,6 +107,21 @@ from contextmap.sensor_association import (
     SpatialObservationId,
 )
 from contextmap.sensor_association.service import AssociationFrameInput
+from contextmap.shared import SourceTimestamp
+from contextmap.spatial_relations import (
+    AxisDirection,
+    CandidatePolicy,
+    FrameConventions,
+    RelationPredicate,
+    RelationsRunPolicies,
+    SpatialRelationsRunId,
+    SpatialRelationsRunReader,
+    SpatialRelationsRunWriter,
+    decide_relations,
+    generate_relation_candidates,
+    lineage_from_resolution_manifest,
+    resolved_entity_geometries,
+)
 from contextmap.state_estimation import (
     BODY_ENDPOINT,
     GeometryRequirements,
@@ -158,6 +215,10 @@ class SyntheticChain:
     fusion_excluded: tuple[ExcludedObservation, ...]
     fusion: SemanticFusionRunReader
     spatial_observations: dict[SpatialObservationId, SpatialObservation]
+    mapping: SemanticMappingRunReader
+    resolution: EntityResolutionRunReader
+    relations: SpatialRelationsRunReader
+    context_map_dir: Path
 
 
 def _ingest(workspace: Path) -> SequenceArtifactReader:
@@ -446,6 +507,200 @@ def _fuse(
     return outcomes, build.excluded, SemanticFusionRunReader(directory)
 
 
+_MAPPING_GEOMETRY_SUMMARY = GeometrySummaryPolicy(
+    sparse_point_threshold=3, connectivity_radius_m=0.5
+)
+_UP_AXIS = AxisDirection.POSITIVE_Z
+_SEMANTIC_MAP_ID = SemanticMapId("semantic-map-ci")
+
+
+def _materialize(
+    workspace: Path, fusion: SemanticFusionRunReader, geometry: GeometricMapArtifactReader
+) -> SemanticMappingRunReader:
+    materialization = materialize_entities(
+        fusion.iter_outcomes(),
+        fusion_manifest=fusion.manifest,
+        geometry=geometry.geometry(),
+        semantic_map_id=_SEMANTIC_MAP_ID,
+        policy=EntityMaterializationPolicy(geometry=_MAPPING_GEOMETRY_SUMMARY),
+        code_version="test",
+    )
+    directory = workspace / "semantic_mapping"
+    SemanticMappingRunWriter(
+        output_dir=directory,
+        sequence_name=fusion.manifest.sequence_name,
+        run_id=SemanticMappingRunId("mapping-run-0001"),
+        run_index=1,
+        semantic_map_id=_SEMANTIC_MAP_ID,
+        lineage=lineage_from_fusion_manifest(fusion.manifest),
+        code_version="test",
+        code_digest="sha256:" + "cd" * 32,
+    ).write(materialization.entities, rejections=materialization.rejections)
+    return SemanticMappingRunReader(directory)
+
+
+def _resolve(workspace: Path, mapping: SemanticMappingRunReader) -> EntityResolutionRunReader:
+    entities = list(mapping.iter_entities())
+    candidate_sets = retrieve_candidate_sets(
+        entities, CandidateRetrievalPolicy(centroid_radius_m=20.0, bounds_margin_m=0.1)
+    )
+    builder = MatchEvidenceBuilder(
+        ComparisonChannels(
+            geometry=GeometryComparisonPolicy(
+                min_shared_support_jaccard=0.5,
+                min_bounds_iou=0.5,
+                min_bounds_containment=0.9,
+                min_conflict_gap_m=0.5,
+                min_extent_ratio=0.3,
+            )
+        )
+    )
+    resolutions = resolve_candidate_pairs(
+        entities,
+        candidate_sets,
+        builder,
+        ConservativeResolutionPolicy(
+            use_channels=(MatchChannel.GEOMETRY,), min_supporting_channels=1
+        ),
+        code_version="test",
+    )
+    run_id = EntityResolutionRunId("resolution-run-0001")
+    materialization = materialize_resolved_entities(
+        entities,
+        [item.decision for item in resolutions],
+        resolution_run_id=run_id,
+        code_version="test",
+    )
+    directory = workspace / "entity_resolution"
+    EntityResolutionRunWriter(
+        output_dir=directory,
+        run_id=run_id,
+        lineage=lineage_from_mapping_manifest(mapping.manifest),
+        code_version="test",
+    ).write(candidate_sets=candidate_sets, resolutions=resolutions, materialization=materialization)
+    return EntityResolutionRunReader(directory)
+
+
+def _relate(
+    workspace: Path, resolution: EntityResolutionRunReader, geometry: GeometricMapArtifactReader
+) -> SpatialRelationsRunReader:
+    conventions = FrameConventions(
+        map_frame=str(REFERENCE_FRAME), up_axis=_UP_AXIS, forward_axis=AxisDirection.POSITIVE_X
+    )
+    candidate_policy = CandidatePolicy(
+        predicates=(RelationPredicate.NEXT_TO,), proximity_radius_m=2.0, directional_radius_m=2.0
+    )
+    source = geometry.geometry()
+    entities = resolved_entity_geometries(
+        resolution.resolved_entities(), source=source, policy=_MAPPING_GEOMETRY_SUMMARY
+    )
+    # O raio generoso garante ao menos um candidato geometricamente real entre a palete e o poste
+    # (~1.36 m de separação): nenhum avaliador geométrico/de contato foi selecionado, então o
+    # candidato fica honestamente UNRESOLVED, nunca decidido sem evidência.
+    candidates = generate_relation_candidates(
+        entities, policy=candidate_policy, conventions=conventions
+    )
+    decisions = decide_relations(candidates, [])
+    directory = workspace / "spatial_relations"
+    SpatialRelationsRunWriter(
+        output_dir=directory,
+        run_id=SpatialRelationsRunId("relations-run-0001"),
+        lineage=lineage_from_resolution_manifest(resolution.manifest),
+        policies=RelationsRunPolicies(
+            frame_conventions=conventions,
+            candidate=candidate_policy,
+            geometry_summary=_MAPPING_GEOMETRY_SUMMARY,
+        ),
+        code_version="test",
+    ).write(candidates=candidates, evidence=[], decisions=decisions)
+    return SpatialRelationsRunReader(directory)
+
+
+def _observation_window(clock_id: str, *, start_ns: int, end_ns: int) -> ObservationWindow:
+    def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
+        seconds, nanoseconds = divmod(total_nanoseconds, 1_000_000_000)
+        return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=clock_id)
+
+    return ObservationWindow(start=_timestamp(start_ns), end=_timestamp(end_ns))
+
+
+def _assemble(
+    workspace: Path,
+    geometry: GeometricMapArtifactReader,
+    resolution: EntityResolutionRunReader,
+    relations: SpatialRelationsRunReader,
+) -> Path:
+    geometry_manifest = geometry.manifest
+    bounds = geometry.geometry().geometric_map.bounds
+    predicates = sorted(
+        {relation.predicate for relation in relations.iter_relations()},
+        key=lambda predicate: predicate.value,
+    )
+    metadata = ContextMapMetadata(
+        creation=MapCreation(
+            assembly_policy=PolicyRef(policy_id=CONTEXT_MAP_ASSEMBLY_POLICY_ID, version="1"),
+            code_version="test",
+            configuration_fingerprint=None,
+        ),
+        source_sequences=(
+            SourceSequence(
+                sequence_artifact_id=str(geometry_manifest.sequence_artifact_id),
+                selection_id=geometry_manifest.selection_id,
+            ),
+        ),
+        frame=estimator_local_map_frame(
+            frame_id=str(geometry_manifest.map_frame), up_direction=_UP_AXIS.vector
+        ),
+        bounds=bounds,
+        time_bounds=_observation_window(
+            geometry_manifest.clock_id,
+            start_ns=geometry_manifest.start_time_ns,
+            end_ns=geometry_manifest.end_time_ns,
+        ),
+        capabilities=DeclaredCapabilities(
+            content=(MapCapability.ENTITIES, MapCapability.GEOMETRY, MapCapability.RELATIONS),
+            relation_predicates=tuple(predicates),
+        ),
+    )
+    sequence_dir = workspace / "ingestion"
+    geometry_dir = workspace / "geometric_mapping"
+    resolution_dir = workspace / "entity_resolution"
+    relations_dir = workspace / "spatial_relations"
+    sequence_lineage = (
+        UpstreamArtifact(
+            artifact_id=str(geometry_manifest.sequence_artifact_id),
+            kind=ArtifactKind.SEQUENCE,
+            content_identity=artifact_digest(sequence_dir),
+            configuration_fingerprint=None,
+            code_version=None,
+            model_identities=(),
+        ),
+    )
+    result = assemble_context_map_with_metrics(
+        context_map_id=ContextMapId("context-map-ci-0001"),
+        metadata=metadata,
+        geometric_map_location=geometry_dir,
+        entity_resolution_location=resolution_dir,
+        spatial_relations_location=relations_dir,
+        additional_lineage=sequence_lineage,
+    )
+    location_by_kind = {
+        ArtifactKind.GEOMETRIC_MAP: geometry_dir,
+        ArtifactKind.ENTITY_RESOLUTION_RUN: resolution_dir,
+        ArtifactKind.SPATIAL_RELATIONS_RUN: relations_dir,
+    }
+    upstream_locations = {
+        item.artifact_id: location_by_kind[item.kind]
+        for item in result.context_map.lineage
+        if item.kind.is_structural
+    }
+    directory = workspace / "context_map"
+    write_context_map_with_metrics(
+        result.context_map, output_dir=directory, upstream_locations=upstream_locations
+    )
+    return directory
+
+
 @contextmanager
 def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
     """Run every stage over the synthetic sequence and keep the geometry reader open."""
@@ -475,6 +730,10 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
         fusion_outcomes, excluded, fusion = _fuse(
             workspace, sequence, geometry, associations, results, runs
         )
+        mapping = _materialize(workspace, fusion, geometry)
+        resolution = _resolve(workspace, mapping)
+        relations = _relate(workspace, resolution, geometry)
+        context_map_dir = _assemble(workspace, geometry, resolution, relations)
         yield SyntheticChain(
             sequence=sequence,
             trajectory=trajectory,
@@ -491,6 +750,10 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
                 for frame in outcome.frames
                 for item in frame.observations
             },
+            mapping=mapping,
+            resolution=resolution,
+            relations=relations,
+            context_map_dir=context_map_dir,
         )
 
 

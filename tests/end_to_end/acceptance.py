@@ -12,6 +12,11 @@ from collections.abc import Iterable
 
 from chain import SyntheticChain, cross_stage_inputs
 
+from contextmap.artifact import (
+    Severity,
+    ValidationLevel,
+    validate_context_map_artifact,
+)
 from contextmap.evaluation.canonical_scenario import canonical_ci_scenario
 from contextmap.evaluation.cross_stage import (
     CrossStageReport,
@@ -27,6 +32,8 @@ from contextmap.evaluation.end_to_end import (
 )
 
 _CONTRACT = EvidenceClass.FAKE_CONTRACT
+# check_cross_stage() has no inputs for these boundaries yet (issue #178); running the chain
+# through them (issue #172) does not, by itself, make the cross-stage checker verify them.
 _MISSING = ("entity_resolution", "spatial_relations", "artifact")
 
 
@@ -59,6 +66,18 @@ def stage_artifacts(chain: SyntheticChain) -> dict[str, ArtifactRecord]:
             artifact_id=str(chain.fusion.manifest.run_id),
             digest=inventory_digest(chain.fusion.manifest),
         ),
+        "semantic_mapping": ArtifactRecord(
+            artifact_id=str(chain.mapping.manifest.run_id),
+            digest=inventory_digest(chain.mapping.manifest),
+        ),
+        "entity_resolution": ArtifactRecord(
+            artifact_id=str(chain.resolution.manifest.run_id),
+            digest=inventory_digest(chain.resolution.manifest),
+        ),
+        "spatial_relations": ArtifactRecord(
+            artifact_id=str(chain.relations.manifest.run_id),
+            digest=inventory_digest(chain.relations.manifest),
+        ),
     }
 
 
@@ -69,12 +88,24 @@ def rerun_is_equivalent(first: SyntheticChain, second: SyntheticChain) -> bool:
         (first.trajectory.manifest, second.trajectory.manifest),
         (first.geometry.manifest, second.geometry.manifest),
         (first.fusion.manifest, second.fusion.manifest),
+        (first.mapping.manifest, second.mapping.manifest),
+        (first.resolution.manifest, second.resolution.manifest),
+        (first.relations.manifest, second.relations.manifest),
         *(
             (a[1].manifest, b[1].manifest)
             for a, b in zip(first.associations, second.associations, strict=True)
         ),
     ]
-    return all(_inventory(left) == _inventory(right) for left, right in pairs)
+    identities = (
+        validate_context_map_artifact(
+            chain.context_map_dir, level=ValidationLevel.STRUCTURAL
+        ).content_identity
+        for chain in (first, second)
+    )
+    return (
+        all(_inventory(left) == _inventory(right) for left, right in pairs)
+        and len(set(identities)) == 1
+    )
 
 
 def _findings_for(report: CrossStageReport, capability: str) -> list[str]:
@@ -154,12 +185,41 @@ def contract_results(
         ref("semantic_fusion"),
         "fusion verifies; repeated inference grouped by physical frame, no claim dropped",
     )
+    results["entity_resolution.identity_lineage"] = _decide(
+        "entity_resolution.identity_lineage",
+        "entity_resolution",
+        chain.resolution.verify_integrity(),
+        ref("entity_resolution"),
+        "resolution run verifies; every merge, split or keep decision records its evidence",
+    )
+    results["spatial_relations.reference_integrity"] = _decide(
+        "spatial_relations.reference_integrity",
+        "spatial_relations",
+        chain.relations.verify_integrity(),
+        ref("spatial_relations"),
+        "relations run verifies; every relation references a resolved entity of the run",
+    )
+    context_map_validation = validate_context_map_artifact(
+        chain.context_map_dir, level=ValidationLevel.FULL
+    )
+    results["artifact.integrity"] = _decide(
+        "artifact.integrity",
+        "artifact",
+        [f.message for f in context_map_validation.findings if f.severity is Severity.ERROR],
+        [f"artifact:{context_map_validation.context_map_id}"],
+        "context map validates: full closure, no dangling reference, no unlisted file",
+    )
     for gate_id in (
         "geometric_mapping.quality_report",
         "visual_perception.region_quality",
         "visual_perception.semantic_quality",
         "sensor_association.projection_quality",
         "semantic_fusion.reference_recovery",
+        # As duas linhas abaixo são gates de qualidade (GateKind.REPORT) que precisam de anotações
+        # de referência (IDENTITY/RELATIONS): esta chain nunca as fabrica, mesmo tendo evidência
+        # estrutural real para os gates de integridade acima.
+        "entity_resolution.identity_quality",
+        "spatial_relations.relation_quality",
     ):
         results[gate_id] = GateResult.not_evaluated(
             gate_id, detail="the chain does not run this evaluator; its own tests cover it"
@@ -168,18 +228,6 @@ def contract_results(
         "visual_perception.evidence_completeness",
         detail="the perception evidence is canned and in memory; no perception run artifact",
     )
-    for gate_id, capability in (
-        ("entity_resolution.identity_lineage", "entity_resolution"),
-        ("entity_resolution.identity_quality", "entity_resolution"),
-        ("spatial_relations.reference_integrity", "spatial_relations"),
-        ("spatial_relations.relation_quality", "spatial_relations"),
-        ("artifact.integrity", "artifact"),
-    ):
-        results[gate_id] = GateResult.blocked(
-            gate_id,
-            blocked_by=(capability,),
-            detail=f"the {capability} capability is not implemented on this branch",
-        )
     for result in cross_stage_gate_results(
         cross,
         evidence_class=_CONTRACT,
@@ -210,6 +258,13 @@ def contract_results(
     return list(results.values())
 
 
+def final_artifact(chain: SyntheticChain) -> ArtifactRecord:
+    """The exact identity of the chain's ContextMapArtifact."""
+    validation = validate_context_map_artifact(chain.context_map_dir, level=ValidationLevel.FULL)
+    assert validation.context_map_id is not None and validation.content_identity is not None
+    return ArtifactRecord(artifact_id=validation.context_map_id, digest=validation.content_identity)
+
+
 def contract_report(
     chain: SyntheticChain, *, rerun: SyntheticChain | None = None
 ) -> AcceptanceReport:
@@ -222,9 +277,10 @@ def contract_report(
         code_version="test",
         results=contract_results(chain, rerun=rerun),
         stage_artifacts=stage_artifacts(chain),
+        final_artifact=final_artifact(chain),
         limitations=(
             "synthetic formulas and canned model output: contract evidence, never real evidence",
-            "the perception stage is in memory; entity resolution, spatial relations and the "
-            "final artifact are not implemented on this branch",
+            "entity resolution and spatial relations run with no geometric/contact evaluator "
+            "selected, so every relation candidate stays honestly UNRESOLVED",
         ),
     )

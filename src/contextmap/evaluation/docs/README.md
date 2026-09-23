@@ -164,8 +164,8 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 ### Subconjunto de fixtures para CI
 
 - `generate_ci_fixture_subset()`/`build_synthetic_sequence()` — gera, só com fórmulas, uma sequência sintética canônica (RGB, LiDAR, pose, calibração), o reference set do subconjunto e o catálogo; commitado em `tests/fixtures/ci_subset/<versão>/`.
-- `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
-- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A regressão entre módulos que ele sustenta é parcial: a cadeia "da ingestão até o artifact final" (#172) depende de fusão multi-vista, do `ContextMapArtifact` e de Entity Resolution/Spatial Relations.
+- `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash.
+- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A cadeia "da ingestão até o artifact final" (#172) existe como uma segunda regressão, `tests/end_to_end/chain.py`/`acceptance.py`: roda o código real de todo estágio -- incluindo fusão multi-vista, Entity Resolution, Spatial Relations e a montagem do `ContextMapArtifact` -- sobre o subconjunto sintético, sem GPU nem rede, e valida o round-trip completo do artifact final.
 
 ### Registro de métricas e relatório comum
 
