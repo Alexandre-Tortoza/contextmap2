@@ -129,6 +129,7 @@ from contextmap.state_estimation import (
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
     ArtifactReference,
+    BackendProvenance,
     PerceptionRun,
     PerceptionRunId,
     PerceptionRunReader,
@@ -136,8 +137,16 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionDiscovery,
+    RegionId,
+    SceneContext,
+    SemanticClaim,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
     SemanticInterpreter,
+    SemanticRequestId,
+    SemanticVisualView,
     SourceImage,
+    VisualViewKind,
     assemble_perception_result,
     box_mask_shape,
     execute_stage_graph,
@@ -549,6 +558,119 @@ class _DeferredFeaturePayloadSink:
         self._writer.add_feature_payload(feature, source_observation_id, array)  # type: ignore[arg-type]
 
 
+class _LegacySemanticInterpreterBridge:
+    """Adapts a real ``SemanticInterpreter`` (``interpret()``) to the pipeline's legacy shape.
+
+    ``CANONICAL_PRESET_V1``'s ``scene_interpretation``/``region_interpretation`` stages still
+    dispatch through the pre-request-contract shape (``interpret_scene``/``interpret_regions``),
+    but no real backend (Qwen, Gemini, Florence-2) implements it any more -- all three finished
+    migrating to :class:`~contextmap.visual_perception.SemanticInterpreter`'s ``interpret()``
+    port. This bridges the one remaining caller of the legacy shape to the real port: one
+    single-view request per call (the whole frame for a scene, one tight crop per region), the
+    minimum evidence the request contract requires. It does not implement the multi-view/prompt
+    policy work multi-view semantic requests still need (#524, #529, #547, #549) -- that is
+    real, separately-tracked capability work, not a runtime concern.
+    """
+
+    def __init__(
+        self, *, interpreter: SemanticInterpreter, run_id: PerceptionRunId, view_root: Path
+    ) -> None:
+        """Bind the bridge to the real interpreter, this run's identity, and its view directory."""
+        self._interpreter = interpreter
+        self._run_id = run_id
+        self._view_root = view_root
+        self._views_dir = view_root / "outputs" / "semantic-views"
+        self._views_dir.mkdir(parents=True, exist_ok=True)
+        provenance = interpreter.backend_provenance()
+        self._configuration_fingerprint = provenance.configuration_fingerprint or provenance.model
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Pass through the wrapped interpreter's provenance unchanged."""
+        return self._interpreter.backend_provenance()
+
+    def _write_view(self, name: str, pil_image: object) -> tuple[str, str]:
+        target = self._views_dir / name
+        pil_image.save(target)  # type: ignore[attr-defined]
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        return f"outputs/semantic-views/{name}", digest
+
+    def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
+        """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
+        import importlib
+
+        image_module = importlib.import_module("PIL.Image")
+        pil_image = image_module.open(self._view_root / image.payload_reference).convert("RGB")
+        reference, digest = self._write_view(f"{image.source_observation_id}__scene.png", pil_image)
+        view = SemanticVisualView(
+            view_id=f"v-{image.source_observation_id}-scene",
+            kind=VisualViewKind.FULL_FRAME,
+            payload_reference=reference,
+            source_observation_id=image.source_observation_id,
+            sha256=digest,
+        )
+        request = SemanticInterpretationRequest(
+            request_id=SemanticRequestId(f"scene-{image.source_observation_id}"),
+            source_observation_id=image.source_observation_id,
+            perception_result_id=perception_result_id_for(
+                run_id=self._run_id, source_observation_id=image.source_observation_id
+            ),
+            mode=SemanticInterpretationMode.SCENE,
+            visual_views=(view,),
+            prompt_template_id="scene/v1",
+            requested_output_schema="semantic-response/1",
+            configuration_fingerprint=self._configuration_fingerprint,
+        )
+        return self._interpreter.interpret(request).parsed.scene_context
+
+    def interpret_regions(
+        self, image: PreparedImage, regions: Sequence[Region2D]
+    ) -> Sequence[SemanticClaim]:
+        """Build one single-view REGION request per region (tight crop) and delegate."""
+        import importlib
+
+        image_module = importlib.import_module("PIL.Image")
+        frame = image_module.open(self._view_root / image.payload_reference).convert("RGB")
+        claims: list[SemanticClaim] = []
+        for region in regions:
+            box = region.bounding_box
+            crop = frame.crop(
+                (
+                    int(box.x),
+                    int(box.y),
+                    int(box.x + box.width),
+                    int(box.y + box.height),
+                )
+            )
+            reference, digest = self._write_view(
+                f"{image.source_observation_id}__{region.region_id}__tight_crop.png", crop
+            )
+            view = SemanticVisualView(
+                view_id=f"v-{image.source_observation_id}-{region.region_id}",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference=reference,
+                source_observation_id=image.source_observation_id,
+                sha256=digest,
+                region_id=RegionId(str(region.region_id)),
+            )
+            request = SemanticInterpretationRequest(
+                request_id=SemanticRequestId(
+                    f"region-{image.source_observation_id}-{region.region_id}"
+                ),
+                source_observation_id=image.source_observation_id,
+                perception_result_id=perception_result_id_for(
+                    run_id=self._run_id, source_observation_id=image.source_observation_id
+                ),
+                mode=SemanticInterpretationMode.REGION,
+                visual_views=(view,),
+                region_id=RegionId(str(region.region_id)),
+                prompt_template_id="region/v1",
+                requested_output_schema="semantic-response/1",
+                configuration_fingerprint=self._configuration_fingerprint,
+            )
+            claims.extend(self._interpreter.interpret(request).parsed.claims)
+        return tuple(claims)
+
+
 def _materialize_prepared_image(image: ImageObservation, root: Path) -> PreparedImage:
     """Decode one raw observation into an RGB/L PNG file a real backend can open.
 
@@ -728,6 +850,9 @@ class VisualPerceptionExecutor:
                 feature_stage_id="region_feature_extraction",
                 mask_source=_RegionInlineMaskSource(),
             )
+            semantic_bridge = _LegacySemanticInterpreterBridge(
+                interpreter=self._semantic_interpreter, run_id=run_id, view_root=scratch
+            )
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={
@@ -738,8 +863,8 @@ class VisualPerceptionExecutor:
                     "region_feature_extraction": (
                         lambda _parameters: self._region_features(region_scope)
                     ),
-                    "scene_interpretation": lambda _parameters: self._semantic_interpreter,
-                    "region_interpretation": lambda _parameters: self._semantic_interpreter,
+                    "scene_interpretation": lambda _parameters: semantic_bridge,
+                    "region_interpretation": lambda _parameters: semantic_bridge,
                 },
             )
             writer = PerceptionRunWriter(

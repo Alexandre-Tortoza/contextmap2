@@ -1490,6 +1490,13 @@ class TestComposeVisualPerceptionExecutor:
                 ]
 
         class _FakeSemanticInterpreter:
+            """Implements the real ``interpret()`` port, like every real backend does today.
+
+            The executor bridges this to its own legacy ``interpret_scene``/``interpret_regions``
+            dispatch (see ``_LegacySemanticInterpreterBridge``); a fake standing in for a real
+            backend must match what a real backend implements.
+            """
+
             def backend_provenance(self) -> BackendProvenance:
                 return BackendProvenance(
                     backend_id="fake_semantic_interpreter",
@@ -1499,13 +1506,43 @@ class TestComposeVisualPerceptionExecutor:
                     version="0.1",
                 )
 
-            def interpret_scene(self, image: PreparedImage) -> None:
-                return None
+            def interpret(self, request: Any) -> object:
+                import json
 
-            def interpret_regions(
-                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
-            ) -> list[object]:
-                return []
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",  # type: ignore[attr-defined]
+                    prompt_template_id=request.prompt_template_id,  # type: ignore[attr-defined]
+                    output_schema_version=request.requested_output_schema,  # type: ignore[attr-defined]
+                )
+                return SemanticInterpretationExecution(
+                    request=request,  # type: ignore[arg-type]
+                    rendered_prompt=rendered,
+                    raw_response=raw_response,
+                    parsed=parse_semantic_response(
+                        raw_response,
+                        request,  # type: ignore[arg-type]
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
 
         executor = VisualPerceptionExecutor(
             region_discovery=_FakeRegionDiscovery(),  # type: ignore[arg-type]
@@ -1676,6 +1713,13 @@ class TestComposeVisualPerceptionExecutor:
                 ]
 
         class _FakeSemanticInterpreter:
+            """Implements the real ``interpret()`` port, like every real backend does today.
+
+            The executor bridges this to its own legacy ``interpret_scene``/``interpret_regions``
+            dispatch (see ``_LegacySemanticInterpreterBridge``); a fake standing in for a real
+            backend must match what a real backend implements.
+            """
+
             def backend_provenance(self) -> BackendProvenance:
                 return BackendProvenance(
                     backend_id="fake_semantic_interpreter",
@@ -1685,13 +1729,43 @@ class TestComposeVisualPerceptionExecutor:
                     version="0.1",
                 )
 
-            def interpret_scene(self, image: PreparedImage) -> None:
-                return None
+            def interpret(self, request: Any) -> object:
+                import json
 
-            def interpret_regions(
-                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
-            ) -> list[object]:
-                return []
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",  # type: ignore[attr-defined]
+                    prompt_template_id=request.prompt_template_id,  # type: ignore[attr-defined]
+                    output_schema_version=request.requested_output_schema,  # type: ignore[attr-defined]
+                )
+                return SemanticInterpretationExecution(
+                    request=request,  # type: ignore[arg-type]
+                    rendered_prompt=rendered,
+                    raw_response=raw_response,
+                    parsed=parse_semantic_response(
+                        raw_response,
+                        request,  # type: ignore[arg-type]
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
 
         class _FakeAlphaClipRuntime:
             def encode(
