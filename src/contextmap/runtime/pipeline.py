@@ -788,6 +788,7 @@ def run_plan(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    provider_overrides: Sequence[str] = (),
     reuse: ReusePolicy | None = None,
     journal: RunJournal | None = None,
     events: EventSink | None = None,
@@ -818,6 +819,11 @@ def run_plan(
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
+        provider_overrides: Component identities whose caller-supplied provider won over a
+            ``resources.providers`` target the effective configuration also declared for it
+            (see ``contextmap.runtime.composition.compose``'s ``on_provider_override``);
+            recorded on the ``run_planned`` event so the override is part of the run's own
+            trail, not just silently applied. Empty on every ordinary run.
         reuse: How to decide between reusing and recomputing, or ``None`` to always run.
         journal: Persists the run's lifecycle, status and execution record. Its directory is
             the run root: each stage receives ``<run>/<stage_id>`` as its output directory.
@@ -849,6 +855,7 @@ def run_plan(
         provided={
             stage: [ref.artifact_id for ref in refs] for stage, refs in execution.reused.items()
         },
+        provider_overrides=list(provider_overrides),
     )
     if resume_from is not None:
         emitter.emit(

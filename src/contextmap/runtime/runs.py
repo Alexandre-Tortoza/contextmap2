@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -523,6 +523,7 @@ def resume_plan(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    provider_overrides: Sequence[str] = (),
     journal: RunJournal | None = None,
     events: EventSink | None = None,
     cancellation: CancellationToken | None = None,
@@ -545,6 +546,9 @@ def resume_plan(
         environ: Environment to look secrets up in.
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
+        provider_overrides: Component identities whose caller-supplied provider won over a
+            declared ``resources.providers`` target for it; see :func:`~contextmap.runtime.
+            pipeline.run_plan`.
         journal: The journal of the new run.
         events: An extra receiver of the run's events.
         cancellation: A cooperative cancellation handle.
@@ -567,6 +571,7 @@ def resume_plan(
         environ=environ,
         module_available=module_available,
         provided_runtimes=provided_runtimes,
+        provider_overrides=provider_overrides,
         reuse=reuse,
         journal=journal,
         events=events,

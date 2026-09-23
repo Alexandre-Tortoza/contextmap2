@@ -197,13 +197,17 @@ class ClipExtraction:
     Attributes:
         features: One global feature or one feature per input region.
         embedding_space: Exact CLIP projected image space identity.
-        array: Batch payload; each row is persisted separately.
+            ``None`` when ``features`` is empty (region-scoped call with
+            zero accepted regions, #380) — no view was ever encoded, so
+            no space identity exists to report.
+        array: Batch payload; each row is persisted separately. Shape
+            ``(0, 0)`` when ``features`` is empty.
         views: Exact source view corresponding to each array row.
         diagnostics: Timing and warning evidence.
     """
 
     features: Sequence[VisualFeature]
-    embedding_space: EmbeddingSpace
+    embedding_space: EmbeddingSpace | None
     array: NDArray[Any]
     views: Sequence[ClipView]
     diagnostics: ClipDiagnostics
@@ -285,6 +289,18 @@ class ClipVisualFeatureBackend:
     ) -> ClipExtraction:
         """Build explicit views, encode them, and queue canonical payloads."""
         views, view_warnings = _build_views(image=image, regions=regions, config=self._config)
+        if not views:
+            import numpy as np
+
+            return ClipExtraction(
+                features=(),
+                embedding_space=None,
+                array=np.empty((0, 0), dtype=self._config.precision),
+                views=(),
+                diagnostics=ClipDiagnostics(
+                    elapsed_seconds=0.0, view_count=0, warnings=view_warnings
+                ),
+            )
         native = self._runtime.encode(image, views)
         if native.array.shape[0] != len(views):
             raise ClipInferenceError(
@@ -480,7 +496,10 @@ def _build_views(
         box = BoundingBox2D(x=0, y=0, width=image.width, height=image.height)
         return (_make_view(image=image, region_id=None, box=box, config=config),), ()
     if not regions:
-        raise ClipInferenceError("region-scoped CLIP requires at least one region")
+        # Zero accepted regions is a legitimate Region Discovery outcome
+        # (#380), not an error: no views means no CLIP call and zero
+        # features, never a stage failure.
+        return (), ()
     if any(not region.is_accepted for region in regions):
         raise ClipInferenceError("region-scoped CLIP accepts only frozen accepted regions")
 

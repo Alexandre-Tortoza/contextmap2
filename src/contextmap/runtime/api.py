@@ -669,16 +669,21 @@ class Runtime:
             build on its own, such as ``ingestion``'s ``IngestionStageExecutor`` (it needs a
             concrete request that is never part of a configuration). A stage with neither a
             composed nor a supplied executor is blocked by preflight.
+        providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
+            Qwen, Gemini, Florence-2 and every other backend ``compose_executors`` builds
+            through a ``RuntimeProvider``, for example ``entity_resolution.appearance`` or
+            ``visual_perception``'s four backends), keyed by component identity
+            (``"<capability>.<slot>"``), in the exact shape
+            :func:`~contextmap.runtime.composition.compose_executors` already expects. An
+            entry here for a component whose configuration also declares a
+            ``resources.providers`` target still wins over that declared target, and the
+            override is recorded on the run's own ``run_planned`` event. Without either a
+            provider given here or a declared target, a component that needs one is composed
+            as absent, exactly like an incomplete selection, never with a substitute.
         verifier: Tells whether an indexed artifact still exists and is intact. Reuse and resume
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
             configuration when omitted.
-        providers: Model runtimes or clients for backends :func:`~contextmap.runtime.
-            composition.compose_executors` cannot load on its own, keyed by component
-            identity (``"<capability>.<slot>"``); see :data:`~contextmap.runtime.composition.
-            RuntimeProvider`. Without an entry here, a component that needs one (for example
-            ``entity_resolution.appearance``) is composed as absent, exactly like an
-            incomplete selection, never with a substitute.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed; defaults
             to a metadata lookup that never imports the module.
@@ -690,9 +695,9 @@ class Runtime:
         *,
         workspace: str | os.PathLike[str] | None = None,
         executors: Mapping[str, StageExecutor] | None = None,
+        providers: Mapping[str, RuntimeProvider] | None = None,
         verifier: Callable[[ArtifactRef], bool] | None = None,
         adapter_factory: SourceAdapterFactory | None = None,
-        providers: Mapping[str, RuntimeProvider] | None = None,
         environ: Mapping[str, str] | None = None,
         module_available: Callable[[str], bool] | None = None,
         clock: Callable[[], str] | None = None,
@@ -700,9 +705,9 @@ class Runtime:
         """Create a runtime; nothing is loaded and nothing is discovered."""
         self._workspace = None if workspace is None else Path(workspace)
         self._executors = dict(executors or {})
+        self._providers = dict(providers or {})
         self._verifier = verifier
         self._adapter_factory = adapter_factory
-        self._providers = dict(providers or {})
         self._environ = environ
         self._module_available = module_available
         self._clock = clock
@@ -925,7 +930,8 @@ class Runtime:
         """
         workspace = self._workspace_for(config)
         scoped = self._scope(config, targets, provided, catalog)
-        executors = self._executors_for(config)
+        provider_overrides: list[str] = []
+        executors = self._executors_for(config, provider_overrides)
         previous: Path | None = None
         if resume is not None:
             if reuse is None:
@@ -948,6 +954,7 @@ class Runtime:
                     reuse=reuse,
                     environ=self._environ,
                     module_available=self._module_available,
+                    provider_overrides=provider_overrides,
                     journal=journal,
                     events=guard,
                     cancellation=cancellation,
@@ -960,6 +967,7 @@ class Runtime:
                     executors,
                     environ=self._environ,
                     module_available=self._module_available,
+                    provider_overrides=provider_overrides,
                     reuse=reuse,
                     journal=journal,
                     events=guard,
@@ -1220,21 +1228,32 @@ class Runtime:
                 )
         return tuple(warnings)
 
-    def _executors_for(self, config: EffectiveConfig) -> Mapping[str, StageExecutor]:
+    def _executors_for(
+        self, config: EffectiveConfig, provider_overrides: list[str] | None = None
+    ) -> Mapping[str, StageExecutor]:
         """Merge the executors composed from ``config`` with the ones given at construction.
 
         ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
-        ``geometric_mapping``, ``sensor_association`` and ``semantic_fusion``) from ``config``
-        alone; a stage it cannot build for any reason is simply absent, never raised (see its
-        own docstring). Whatever this runtime was constructed with in ``executors`` (a test
-        double, a stage composition cannot build such as ``ingestion``, or an explicit
-        override) is layered on top and always wins.
+        ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once a runtime
+        provider is available for every backend that needs one -- explicitly through
+        ``self._providers``, or declared as a ``resources.providers`` target in ``config``
+        itself -- ``visual_perception``) from ``config`` alone; a stage it cannot build for any
+        reason is simply absent, never raised (see its own docstring). Whatever this runtime was
+        constructed with in ``executors`` (a test double, a stage composition cannot build such
+        as ``ingestion``, or an explicit override) is layered on top and always wins.
+
+        Args:
+            config: The resolved configuration.
+            provider_overrides: When given, receives (by mutation) the component identities
+                where ``self._providers`` won over a ``resources.providers`` target ``config``
+                also declared, so :meth:`run` can record it on the run's own trail.
         """
         composed = compose_executors(
             config,
             providers=self._providers,
             environ=self._environ,
             module_available=self._module_available,
+            on_provider_override=None if provider_overrides is None else provider_overrides.append,
         )
         return {**composed, **self._executors}
 

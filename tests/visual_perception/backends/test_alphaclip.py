@@ -22,8 +22,11 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionId,
+    StageDefinition,
+    StageStatus,
     VisualFeature,
     embedding_space_fingerprint,
+    execute_stage_graph,
     feature_id_for,
     write_feature_index,
 )
@@ -224,6 +227,7 @@ def test_alphaclip_has_distinct_embedding_space_from_ordinary_clip() -> None:
 
     extraction = backend.extract_masked(_image(), (region,))
     alpha_space = extraction.embedding_space
+    assert alpha_space is not None
     clip_space = EmbeddingSpace(
         family="clip",
         model="ViT-B/16",
@@ -260,6 +264,51 @@ def test_invalid_numerical_payload_is_rejected_before_persistence(
         backend.extract_masked(_image(), (region,))
 
     assert sink.calls == []
+
+
+def test_region_mode_with_zero_regions_succeeds_with_zero_features() -> None:
+    """A legitimate empty discovery result must not fail AlphaCLIP (#380)."""
+    backend, runtime, sink = _backend(masks={}, array=np.ones((1, 2), dtype=np.float32))
+
+    features = backend.extract(_image(), regions=())
+
+    assert features == ()
+    assert runtime.calls == []
+    assert sink.calls == []
+
+    extraction = backend.extract_masked(_image(), regions=())
+    assert extraction.features == ()
+    assert extraction.embedding_space is None
+    assert extraction.views == ()
+    assert extraction.diagnostics.request_count == 0
+
+
+def test_stage_graph_succeeds_when_region_discovery_finds_nothing() -> None:
+    """A zero-region upstream stage must not turn the feature stage FAILED (#380)."""
+    backend, _, _ = _backend(masks={}, array=np.ones((1, 2), dtype=np.float32))
+    stages = (
+        StageDefinition(
+            stage_id="region_discovery",
+            capability="region_discovery",
+            run=lambda _context: (),
+        ),
+        StageDefinition(
+            stage_id="region_feature_extraction",
+            capability="feature_extractor",
+            run=lambda context: backend.extract(
+                _image(),
+                regions=context["region_discovery"],  # type: ignore[arg-type]
+            ),
+            depends_on=frozenset({"region_discovery"}),
+        ),
+    )
+
+    outcomes = {outcome.stage_id: outcome for outcome in execute_stage_graph(stages)}
+
+    assert outcomes["region_discovery"].status is StageStatus.SUCCEEDED
+    assert outcomes["region_feature_extraction"].status is StageStatus.SUCCEEDED
+    assert outcomes["region_feature_extraction"].error is None
+    assert outcomes["region_feature_extraction"].output == ()
 
 
 def test_extract_port_returns_same_persisted_features_and_diagnostics() -> None:

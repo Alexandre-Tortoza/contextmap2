@@ -235,13 +235,17 @@ class AlphaClipExtraction:
     Attributes:
         features: One canonical region feature per request.
         embedding_space: Distinct AlphaCLIP projection-space identity.
-        array: Batch payload, persisted one row per feature.
+            ``None`` when ``features`` is empty (zero accepted regions,
+            #380) — no request was ever encoded, so no space identity
+            exists to report.
+        array: Batch payload, persisted one row per feature. Shape
+            ``(0, 0)`` when ``features`` is empty.
         views: Exact region/mask transformations corresponding to rows.
         diagnostics: Timing, memory, and warning evidence.
     """
 
     features: Sequence[VisualFeature]
-    embedding_space: EmbeddingSpace
+    embedding_space: EmbeddingSpace | None
     array: NDArray[Any]
     views: Sequence[AlphaClipView]
     diagnostics: AlphaClipDiagnostics
@@ -339,7 +343,23 @@ class AlphaClipRegionFeatureBackend:
     ) -> AlphaClipExtraction:
         """Decode frozen masks, build views, run AlphaCLIP, and queue payloads."""
         if not regions:
-            raise AlphaClipInferenceError("AlphaCLIP requires at least one region")
+            # Zero accepted regions is a legitimate Region Discovery outcome
+            # (#380), not an error: no requests means no AlphaCLIP call and
+            # zero features, never a stage failure.
+            import numpy as np
+
+            return AlphaClipExtraction(
+                features=(),
+                embedding_space=None,
+                array=np.empty((0, 0), dtype=self._config.precision),
+                views=(),
+                diagnostics=AlphaClipDiagnostics(
+                    elapsed_seconds=0.0,
+                    peak_memory_bytes=None,
+                    request_count=0,
+                    warnings=(),
+                ),
+            )
         if any(not region.is_accepted for region in regions):
             raise AlphaClipInferenceError("AlphaCLIP accepts only frozen accepted regions")
 

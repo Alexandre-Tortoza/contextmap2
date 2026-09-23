@@ -2,18 +2,23 @@
 
 Este documento descreve `src/contextmap/sensor_association/membership.py`.
 
-Com a geometria projetada na imagem preparada e filtrada por visibilidade, `associate_regions(resolution, perception_result)` responde, para cada ponto visível: **quais máscaras de `Region2D` congeladas contêm o seu pixel preparado?** A resposta é zero, uma ou várias regiões, e é mantida assim.
+Com a geometria projetada na imagem preparada e filtrada por visibilidade, `associate_regions(resolution, perception_result, *, mask_loader=None)` responde, para cada ponto visível: **quais máscaras de `Region2D` congeladas contêm o seu pixel preparado?** A resposta é zero, uma ou várias regiões, e é mantida assim.
 
 ```mermaid
 flowchart LR
     V["VisibilityResolution<br/>(pontos visíveis, pixel preparado)"] --> M["associate_regions"]
-    R["PerceptionResult<br/>(Region2D com máscara inline)"] --> M
+    R["PerceptionResult<br/>(Region2D com máscara inline<br/>ou mask_reference)"] --> M
+    L["RegionMaskLoader<br/>(opcional, ex. MaskStoreReader)"] -.-> M
     M --> I1["região → geometria"]
     M --> I2["geometria → regiões"]
     M --> S["estatísticas de suporte"]
     I1 --> O["build_spatial_observations"]
     O --> SO["SpatialObservation<br/>(por região)"]
 ```
+
+## Máscara por referência (#378)
+
+Um `PerceptionRunArtifact` reaberto do disco nunca materializa pixels de máscara em `Region2D.mask` (`PerceptionRunReader.list_results()`); a região carrega só `mask_reference`. `associate_regions()` resolve isso com um `mask_loader: RegionMaskLoader | None` opcional — um Protocol local (`load(source_observation_id, region_id) -> InlineMask`) que não assume nenhum backend de armazenamento específico. `MaskStoreReader.load` (`contextmap.visual_perception.mask_store`) já satisfaz essa forma; `SensorAssociationExecutor` (runtime) passa `PerceptionRunReader(...).mask_store()`. Sem `mask_loader` (o default), uma região sem máscara inline permanece `NO_INLINE_MASK`, exatamente como antes de #378 — nada muda para quem já não precisava reabrir um run persistido.
 
 ## Regra (`mask-membership-v1`)
 
@@ -39,7 +44,7 @@ Vão para `FrameMembership.skipped`, com o motivo, em vez de sumirem:
 | Motivo | Quando |
 | --- | --- |
 | `REJECTED` | o candidato foi rejeitado pela normalização, então não está no conjunto canônico congelado |
-| `NO_INLINE_MASK` | a região só tem caixa, ou a máscara está por referência; o pertencimento à máscara não pode ser avaliado |
+| `NO_INLINE_MASK` | a região não tem nenhuma máscara resolvível: só caixa, ou a máscara está por referência sem um `mask_loader` capaz de resolvê-la |
 
 ## Espaço de coordenadas
 

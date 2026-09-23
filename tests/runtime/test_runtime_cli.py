@@ -155,6 +155,85 @@ class TestDryRun:
             "semantic_fusion",
         }.issubset(executors["registered"])
 
+    def test_supplying_providers_composes_visual_perception_through_the_cli(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #1 of the PR #535 review: ``providers=`` now reaches the CLI's own path.
+
+        ``sam3`` (region discovery) and ``qwen`` (semantic interpretation) -- the default
+        fixture's backends -- have no bundled model loader (``composition.py``): without a
+        ``RuntimeProvider`` for each, ``compose_executors`` honestly leaves
+        ``visual_perception`` out, and the installed binary could never compose it, even
+        through a Python embedder, because ``main()`` had nowhere to receive one. ``main()``
+        now accepts ``providers=`` in the exact shape ``compose_executors(providers=...)`` (and
+        every other ``RuntimeProvider`` caller) already expects, so real backend selection
+        composes through the CLI's own ``_executors_for()``, not a hand-built executor
+        standing in for the whole stage.
+        """
+        providers = {
+            "visual_perception.region_discovery": lambda _config, _secrets: object(),
+            "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "visual_perception",
+            "--dry-run",
+            "--json",
+            providers=providers,
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert "visual_perception" in executors["registered"]
+        assert "visual_perception" not in executors["missing"]
+
+    def test_a_declared_provider_target_composes_visual_perception_with_no_python_providers(
+        self, tmp_path: Path
+    ) -> None:
+        """The decisive proof that #507's real gap is closed.
+
+        The acceptance criterion of #507 is that ``visual_perception`` runs through the
+        *installed* ``contextmap run``/``contextmap stage`` binary with no Python wrapper.
+        ``test_supplying_providers_composes_visual_perception_through_the_cli`` above only
+        proves Python embedding: it still calls ``main(providers=...)`` by hand, which the
+        installed console script (``contextmap = contextmap.runtime.cli:main``) never does --
+        it calls ``main(argv)`` with no ``providers`` keyword at all. This test simulates
+        exactly that call: ``sam3`` (region discovery) and ``qwen`` (semantic interpretation)
+        -- the two backends with no bundled model loader -- instead get their runtime from a
+        ``resources.providers`` target declared in the configuration file itself, resolved by
+        ``contextmap.runtime.composition.resolve_provider`` from a real importable module
+        (``runtime_provider_fixtures``, a sibling test module).
+        """
+        document = _document()
+        document["resources"]["providers"] = {
+            "visual_perception.region_discovery": (
+                "runtime_provider_fixtures:load_region_discovery"
+            ),
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "visual_perception",
+            "--dry-run",
+            "--json",
+            # Nenhum `providers=` é passado: exatamente a chamada que o binário instalado faz.
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert "visual_perception" in executors["registered"]
+        assert "visual_perception" not in executors["missing"]
+
     def test_a_provider_given_to_main_reaches_an_optional_entity_resolution_channel(
         self, tmp_path: Path
     ) -> None:
@@ -308,7 +387,7 @@ class TestConfigurationFlags:
         config = _json(out)["config"]
         assert code == 0
         assert config["policies"]["debug_level"] == "full"  # a flag vence o --set
-        assert config["resources"] == {"device": "cuda", "workspace": "ws"}
+        assert config["resources"] == {"device": "cuda", "workspace": "ws", "providers": {}}
         assert config["inputs"]["sequence"] == "S1"
 
     def test_a_numeric_looking_sequence_stays_a_string(self, tmp_path: Path) -> None:
@@ -410,6 +489,51 @@ class TestRun:
         execution = json.loads((run_dir / "execution.json").read_text("utf-8"))["document"]
         assert execution["order"] == ["ingestion", "state_estimation", "geometric_mapping"]
         assert "run-0001" in out
+
+    def test_a_provider_override_is_recorded_in_the_runs_own_trail(self, tmp_path: Path) -> None:
+        """Item 4 of the #507 fix: a caller-supplied provider that wins over a declared
+        ``resources.providers`` target for the same component is visible in the run's own
+        record, not just silently applied. This only ever happens through a Python embedder
+        that passes ``providers=`` -- an ordinary CLI invocation never does, so it never
+        triggers this branch (see ``test_a_declared_provider_target_composes_...`` above)."""
+        document = _document()
+        document["resources"]["providers"] = {
+            "visual_perception.region_discovery": (
+                "runtime_provider_fixtures:load_region_discovery"
+            ),
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+        log: list[str] = []
+        workspace = tmp_path / "ws"
+        executors = {
+            "ingestion": Stage("ingestion", "SequenceArtifact", log),
+            "visual_perception": Stage("visual_perception", "PerceptionRunArtifact", log),
+        }
+        # Provider explícito só para region_discovery: vence o alvo declarado *apenas* para
+        # esse componente; semantic_interpretation continua resolvido pelo alvo declarado.
+        explicit_providers = {
+            "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "visual_perception",
+            "--workspace",
+            str(workspace),
+            executors=executors,
+            providers=explicit_providers,
+        )
+
+        assert code == 0, out + err
+        run_dir = workspace / "S1" / "run-0001"
+        first_event = json.loads((run_dir / "events.jsonl").read_text("utf-8").splitlines()[0])
+        assert first_event["kind"] == "run_planned"
+        assert first_event["data"]["provider_overrides"] == ["visual_perception.region_discovery"]
 
     def test_every_run_gets_its_own_directory_and_never_overwrites_a_previous_one(
         self, tmp_path: Path

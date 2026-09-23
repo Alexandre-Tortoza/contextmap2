@@ -506,6 +506,59 @@ def test_a_runtime_with_no_injected_executors_still_composes_them_from_configura
         assert stage not in report.missing_executors
 
 
+def test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade(
+    tmp_path: Path,
+) -> None:
+    """``providers=`` reaches the facade's own composition path exactly like the CLI's.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader: without a ``RuntimeProvider`` for
+    each, ``visual_perception`` stays a genuine ``missing_executors`` entry (see
+    ``test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration``).
+    Supplying them through ``Runtime(providers=...)`` -- not a hand-built executor for the
+    whole stage -- lets ``compose_executors`` build the real thing.
+    """
+    providers = {
+        "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+    }
+    runtime = Runtime(
+        workspace=tmp_path / "ws", providers=providers, module_available=_ready, environ={}
+    )
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
+def test_a_declared_provider_target_lets_visual_perception_compose_with_no_python_providers(
+    tmp_path: Path,
+) -> None:
+    """The facade's counterpart of the CLI's decisive #507 proof.
+
+    Unlike ``test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade``
+    above, this ``Runtime`` is constructed with no ``providers=`` at all: the runtime for
+    ``sam3``/``qwen`` instead comes from a ``resources.providers`` target declared in the
+    resolved configuration, resolved lazily by
+    ``contextmap.runtime.composition.resolve_provider`` from a real importable module.
+    """
+    runtime = Runtime(workspace=tmp_path / "ws", module_available=_ready, environ={})
+    targets = json.dumps(
+        {
+            "visual_perception.region_discovery": "runtime_provider_fixtures:load_region_discovery",
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+    )
+    config = _config(runtime, tmp_path, f"resources.providers={targets}")
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
 def test_a_provider_given_to_runtime_reaches_an_optional_entity_resolution_channel(
     tmp_path: Path,
 ) -> None:

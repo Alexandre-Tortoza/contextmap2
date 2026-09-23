@@ -279,6 +279,81 @@ class TestBackendScoping:
         assert component.parameters["device"] == "cpu"
 
 
+class TestResourceProviders:
+    """``resources.providers``: declarative ``RuntimeProvider`` targets (#507's real gap)."""
+
+    def test_parses_a_declared_target_per_component(self, tmp_path: Path) -> None:
+        document = _sam3_document()
+        document["resources"] = {
+            "providers": {REGION: "pkg.loaders:load_sam3", INTERPRETER: "pkg.loaders:load_qwen"}
+        }
+        file = _write(tmp_path / "a.json", document)
+
+        resources = resolve_effective_config(files=[file]).config.resources
+
+        assert dict(resources.providers) == {
+            REGION: "pkg.loaders:load_sam3",
+            INTERPRETER: "pkg.loaders:load_qwen",
+        }
+
+    def test_defaults_to_an_empty_mapping(self) -> None:
+        assert dict(resolve_effective_config().config.resources.providers) == {}
+
+    def test_rejects_a_non_string_or_empty_target(self, tmp_path: Path) -> None:
+        document = {"resources": {"providers": {REGION: "", INTERPRETER: 3}}}
+        file = _write(tmp_path / "a.json", document)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            resolve_effective_config(files=[file])
+
+        paths = {problem.path for problem in excinfo.value.problems}
+        assert paths == {f"resources.providers.{REGION}", f"resources.providers.{INTERPRETER}"}
+
+    def test_a_later_file_adds_to_the_declared_targets_without_wiping_earlier_ones(
+        self, tmp_path: Path
+    ) -> None:
+        first = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        second = _write(tmp_path / "b.json", {"resources": {"providers": {INTERPRETER: "pkg:b"}}})
+
+        resources = resolve_effective_config(files=[first, second]).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:a", INTERPRETER: "pkg:b"}
+
+    def test_an_override_replaces_the_whole_declared_providers_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        # component_id já contém um ponto ("visual_perception.region_discovery"), então um
+        # override pontual não consegue nomear uma única chave sem ambiguidade com o próprio
+        # separador de caminho: o override substitui o mapa inteiro, como em qualquer outro
+        # valor JSON (a fusão chave a chave é exclusiva de camadas de arquivo).
+        file = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        replacement = json.dumps({REGION: "pkg:b"})
+
+        resources = resolve_effective_config(
+            files=[file], overrides=[f"resources.providers={replacement}"]
+        ).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:b"}
+
+    def test_round_trips_through_to_document(self) -> None:
+        target = {"visual_perception.region_discovery": "pkg:load"}
+
+        config = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps(target)}"]
+        ).config
+
+        assert config.to_document()["resources"]["providers"] == target
+
+    def test_changes_the_digest(self) -> None:
+        base = resolve_effective_config().digest
+
+        changed = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps({REGION: 'pkg:a'})}"]
+        ).digest
+
+        assert changed != base
+
+
 class TestStructuralValidation:
     @pytest.mark.parametrize(
         ("document", "fragment"),

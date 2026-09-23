@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import runtime_provider_fixtures
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
 from runtime_fixtures import unavailable_context_map  # noqa: F401
 
@@ -21,11 +22,13 @@ from contextmap.runtime.composition import (
     compose,
     compose_executors,
     composed_stages,
+    resolve_provider,
 )
 from contextmap.runtime.errors import (
     BackendConfigurationError,
     BackendRuntimeMissingError,
     BackendUnavailableError,
+    ProviderConfigurationError,
     StageUnavailableError,
 )
 from contextmap.semantic_fusion import (
@@ -46,6 +49,8 @@ from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDis
 
 REGION = "visual_perception.region_discovery"
 INTERPRETER = "visual_perception.semantic_interpretation"
+DENSE_FEATURES = "visual_perception.dense_features"
+REGION_FEATURES = "visual_perception.region_features"
 
 
 class _Recorder:
@@ -610,6 +615,184 @@ class TestExplicitFailures:
             _compose(tmp_path, document=document)
 
 
+class TestResolveProvider:
+    """Unit tests for resolving a ``"module:attribute"`` string into a callable."""
+
+    def test_resolves_a_real_importable_target(self) -> None:
+        provider = resolve_provider(REGION, "runtime_provider_fixtures:load_region_discovery")
+
+        assert provider is runtime_provider_fixtures.load_region_discovery
+
+    @pytest.mark.parametrize(
+        "target",
+        ["no-colon-at-all", ":load_region_discovery", "runtime_provider_fixtures:", ":"],
+    )
+    def test_rejects_a_malformed_target(self, target: str) -> None:
+        with pytest.raises(ProviderConfigurationError) as error:
+            resolve_provider(REGION, target)
+
+        assert error.value.component_id == REGION
+        assert error.value.target == target
+
+    def test_rejects_a_module_that_cannot_be_imported(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="could not be imported"):
+            resolve_provider(REGION, "no_such_package_exists_for_contextmap:load")
+
+    def test_rejects_an_attribute_the_module_does_not_have(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="no attribute"):
+            resolve_provider(REGION, "runtime_provider_fixtures:does_not_exist")
+
+    def test_rejects_an_attribute_that_is_not_callable(self) -> None:
+        with pytest.raises(ProviderConfigurationError, match="not callable"):
+            resolve_provider(REGION, "runtime_provider_fixtures:not_callable")
+
+
+class TestDeclaredProviderTargets:
+    """``resources.providers``: a declared target resolved lazily by the composition root.
+
+    This is the config-driven counterpart of ``providers=``: a caller of the installed
+    ``contextmap`` binary, which never passes ``providers=`` at all, still gets a real
+    backend composed when the effective configuration names a ``"module:attribute"``
+    target for it (#507's real, previously unmet acceptance criterion).
+    """
+
+    def test_a_declared_target_supplies_the_runtime_with_no_explicit_provider(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},  # isola o slot sob teste
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert isinstance(composed.region_discovery, Sam3RegionDiscovery)
+
+    def test_ensure_available_skips_the_module_check_for_a_declared_target(
+        self, tmp_path: Path
+    ) -> None:
+        """dense_features' own bundled loader needs torch/transformers/PIL -- but a
+        declared provider supplies the runtime instead, so composing it must never demand
+        those modules be importable (composition.py's own module docstring)."""
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            DENSE_FEATURES: "runtime_provider_fixtures:load_dense_features",
+            REGION_FEATURES: "runtime_provider_fixtures:load_region_features",
+        }
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers=_providers(recorder),  # region_discovery e semantic_interpretation
+            module_available=lambda _name: False,  # nada está instalado
+            environ={},
+        )
+
+        assert composed.dense_features is not None
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        composed.dense_features(scope)
+        assert runtime_provider_fixtures.CALLS[-1][0] == "dense_features"
+
+    def test_an_explicit_provider_wins_over_a_declared_target_and_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        explicit = recorder.provider("explicit-sam3")
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        composed = compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={REGION: explicit, INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert composed.region_discovery is not None
+        assert overrides == [REGION]
+        # o provider explícito de fato construiu o backend, não o alvo declarado.
+        assert recorder.calls[0][0] is not None
+
+    def test_no_override_is_reported_when_only_a_declared_target_exists(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        compose(
+            effective_from(tmp_path, document),
+            stages=["visual_perception"],
+            providers={INTERPRETER: recorder.provider("qwen")},
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert overrides == []
+
+    def test_an_unresolvable_declared_target_raises_a_provider_configuration_error(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {REGION: "not-a-valid-target"}
+
+        with pytest.raises(ProviderConfigurationError) as error:
+            compose(
+                effective_from(tmp_path, document),
+                stages=["visual_perception"],
+                providers={INTERPRETER: recorder.provider("qwen")},
+                module_available=lambda _name: True,
+                environ={},
+            )
+
+        assert error.value.component_id == REGION
+
+    def test_compose_executors_reports_the_override_through_its_own_callback(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["resources"]["providers"] = {
+            REGION: "runtime_provider_fixtures:load_region_discovery"
+        }
+        overrides: list[str] = []
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+            on_provider_override=overrides.append,
+        )
+
+        assert "visual_perception" in executors
+        assert overrides == [REGION]
+
+
 class TestStagesAndExtensionPoints:
     def test_a_stage_that_is_not_selected_is_not_built(self, tmp_path: Path) -> None:
         document = selected_document()
@@ -712,6 +895,9 @@ class TestComposeExecutors:
         assert isinstance(executors["entity_resolution"], EntityResolutionExecutor)
         assert isinstance(executors["spatial_relations"], SpatialRelationsExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
+        # visual_perception fica de fora aqui porque a seleção padrão usa sam3, que não tem
+        # loader embutido (precisa de um provider) -- não porque falte um VisualPerceptionExecutor
+        # (#507); ver TestComposeVisualPerceptionExecutor para composição bem-sucedida.
         assert "ingestion" not in executors
         assert "visual_perception" not in executors
         assert "point_representation" not in executors
@@ -1135,6 +1321,468 @@ class TestComposeExecutors:
             "fingerprint": expected_policy.fingerprint(),
             "parameters": dataclasses.asdict(expected_policy),
         }
+
+
+class TestComposeVisualPerceptionExecutor:
+    """#507: ``visual_perception`` gets a real, wired ``VisualPerceptionExecutor``.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader, so a real provider for both is
+    required for the four variation points to compose successfully -- exactly like
+    ``TestCanonicalComposition`` already needs for those two slots individually.
+    """
+
+    def test_composes_a_real_executor_when_all_four_slots_are_selected(
+        self, tmp_path: Path
+    ) -> None:
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" in executors
+        executor = executors["visual_perception"]
+        assert isinstance(executor, VisualPerceptionExecutor)
+        # Backends de verdade, não um stub type-compatible: region_discovery e
+        # semantic_interpreter já vêm prontos; dense_features/region_features são
+        # fábricas run-scoped que, quando chamadas, devolvem o adapter real.
+        assert isinstance(executor._region_discovery, Sam3RegionDiscovery)  # type: ignore[attr-defined]
+        assert isinstance(executor._semantic_interpreter, QwenSemanticInterpreter)  # type: ignore[attr-defined]
+        scope = FeatureBuildScope(
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="dense_feature_extraction",
+            source_artifact_id="run-0001",
+            payload_sink=object(),
+            prepared_image_root=tmp_path,
+        )
+        assert isinstance(executor._dense_features(scope), DinoV3DenseFeatureBackend)  # type: ignore[attr-defined]
+        assert isinstance(executor._region_features(scope), ClipVisualFeatureBackend)  # type: ignore[attr-defined]
+
+    def test_an_incomplete_visual_perception_selection_leaves_it_out_not_fabricated(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        del document["components"]["visual_perception"]["semantic_interpretation"]
+
+        recorder = _Recorder()
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "visual_perception" not in executors
+        # Nenhum estágio irmão paga pelo problema de visual_perception (#507).
+        assert "state_estimation" in executors
+
+    def test_composed_executor_actually_runs_and_produces_a_real_perception_run_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """Prove the executor's own orchestration (#507), not the backends' science.
+
+        Region discovery, feature extraction and semantic interpretation are
+        deterministic fakes injected directly (constructing the real ``Sam3``/``DINOv3``/
+        ``CLIP``/``Qwen`` backends would need real weights and, for two of them, a real
+        model runtime) -- but the sequence, the prepared-image materialization, the
+        resolved stage graph, the assembled ``PerceptionResult`` and the written/reopened
+        ``PerceptionRunArtifact`` are all real. See the milestone PR for the separate,
+        real-backend GPU validation this local test cannot perform.
+        """
+        pytest.importorskip("PIL")  # Pillow decodes/writes the prepared-image PNG; not a base dep.
+
+        from collections.abc import Sequence
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+
+        class _FakeRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeFeatureExtractor:
+            def __init__(self, scope: FeatureScope) -> None:
+                self._scope = scope
+
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id=f"fake_{self._scope.value}_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return self._scope
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                if self._scope is FeatureScope.DENSE:
+                    return [
+                        VisualFeature(
+                            feature_id=FeatureId("feature-dense-0000"),
+                            scope=FeatureScope.DENSE,
+                            embedding_space_id="fake-dense-space",
+                            shape=(2,),
+                            dtype="float32",
+                            payload_reference=f"{image.source_observation_id}-dense.npy",
+                            provenance=self.backend_provenance(),
+                        )
+                    ]
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId(f"feature-{region.region_id}"),
+                        scope=FeatureScope.REGION,
+                        embedding_space_id="fake-region-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-{region.region_id}.npy",
+                        provenance=self.backend_provenance(),
+                        region_id=region.region_id,
+                    )
+                    for region in regions
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.DENSE),  # type: ignore[arg-type]
+            region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            for index in range(2):
+                writer.add_observation(
+                    ImageObservation(
+                        observation_id=SourceObservationId(f"frame-{index:04d}"),
+                        sensor_id=SensorId("camera_1"),
+                        frame_id=FrameId("camera_1_optical"),
+                        timestamp=SourceTimestamp(
+                            seconds=index, nanoseconds=0, clock_id="fixture:header"
+                        ),
+                        provenance=SourceProvenance(
+                            source_type="fixture", source_path="fixtures/images"
+                        ),
+                        width=2,
+                        height=2,
+                        encoding=ImageEncoding.BGR8,
+                        data=pixels,
+                    )
+                )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        assert (output_dir / "manifest.json").is_file()
+        # O diretório de rascunho das imagens preparadas nunca sobrevive à execução.
+        assert list(workspace.glob(".tmp-*")) == []
+
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert {str(result.source_observation_id) for result in results} == {
+            "frame-0000",
+            "frame-0001",
+        }
+        for result in results:
+            assert len(result.regions) == 1
+            assert len(result.features) == 2  # one dense + one region feature
+
+    def test_a_mask_conditioned_region_features_backend_gets_the_region_own_mask(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #2 of the PR #535 review: the executor now supplies a real ``mask_source``.
+
+        ``region_features=alphaclip`` used to compose into an executor that failed
+        deterministically the moment any image was processed: ``VisualPerceptionExecutor``
+        built its region-features scope with ``mask_source=None``, and AlphaCLIP's own
+        composition factory (``composition.py``'s ``_alphaclip``, left unmodified here)
+        refuses exactly that. This runs the real ``_alphaclip`` factory through the real
+        executor, with a mask-based fake region-discovery backend that attaches an inline
+        mask to its one region -- exactly what SAM2/SAM3 do -- and a fake AlphaCLIP model
+        runtime standing in for the SDK.
+        """
+        pytest.importorskip("PIL")
+
+        from collections.abc import Sequence
+
+        import numpy as np
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImageEncoding,
+            ImageObservation,
+            SensorId,
+            SequenceArtifactId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import VisualPerceptionExecutor, inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            FeatureId,
+            FeatureScope,
+            InlineMask,
+            PerceptionRunReader,
+            PreparedImage,
+            Region2D,
+            RegionId,
+            VisualFeature,
+        )
+        from contextmap.visual_perception.backends.alphaclip import AlphaClipNativeOutput
+
+        class _FakeMaskedRegionDiscovery:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: PreparedImage) -> list[Region2D]:
+                return [
+                    Region2D(
+                        region_id=RegionId("region-0000"),
+                        bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
+                        provenance=self.backend_provenance(),
+                        mask_reference="masks/region-0000.npy",
+                        mask=InlineMask(width=2, height=2, data=(True, True, True, True)),
+                        image_width=2,
+                        image_height=2,
+                    )
+                ]
+
+        class _FakeDenseFeatureExtractor:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_dense_feature_extractor",
+                    capability="feature_extractor",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def required_scope(self) -> FeatureScope:
+                return FeatureScope.DENSE
+
+            def extract(
+                self, image: PreparedImage, regions: Sequence[Region2D] = ()
+            ) -> Sequence[VisualFeature]:
+                return [
+                    VisualFeature(
+                        feature_id=FeatureId("feature-dense-0000"),
+                        scope=FeatureScope.DENSE,
+                        embedding_space_id="fake-dense-space",
+                        shape=(2,),
+                        dtype="float32",
+                        payload_reference=f"{image.source_observation_id}-dense.npy",
+                        provenance=self.backend_provenance(),
+                    )
+                ]
+
+        class _FakeSemanticInterpreter:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret_scene(self, image: PreparedImage) -> None:
+                return None
+
+            def interpret_regions(
+                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
+            ) -> list[object]:
+                return []
+
+        class _FakeAlphaClipRuntime:
+            def encode(
+                self, image: PreparedImage, requests: Sequence[Any]
+            ) -> AlphaClipNativeOutput:
+                return AlphaClipNativeOutput(
+                    array=np.array([[1.0, 2.0]] * len(requests), dtype=np.float32),
+                    elapsed_seconds=0.01,
+                    peak_memory_bytes=None,
+                )
+
+        document = selected_document()
+        document["components"]["visual_perception"]["region_features"] = {
+            "backend": "alphaclip",
+            "alphaclip": {
+                "model_name": "ViT-B/16",
+                "base_checkpoint_path": "clip.pt",
+                "alpha_checkpoint_path": "alpha.pt",
+                "checkpoint_fingerprint": "sha256:" + "1" * 64,
+            },
+        }
+        recorder = _Recorder()
+        providers = {
+            **_providers(recorder),
+            "visual_perception.region_features": lambda _config, _secrets: _FakeAlphaClipRuntime(),
+        }
+        composed = compose(
+            effective_from(tmp_path, document),
+            providers=providers,
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert composed.region_features is not None
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=_FakeMaskedRegionDiscovery(),  # type: ignore[arg-type]
+            dense_features=lambda _scope: _FakeDenseFeatureExtractor(),  # type: ignore[arg-type]
+            region_features=composed.region_features,
+            semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+
+        workspace = tmp_path / "ws"
+        ingestion_dir = workspace / "corridor-02" / "run-0001" / "ingestion"
+        pixels = bytes([10, 20, 30] * (2 * 2))  # 2x2 bgr8, solid color
+        with SequenceArtifactWriter(
+            output_dir=ingestion_dir,
+            sequence_name="corridor-02",
+            artifact_id=SequenceArtifactId("sequence-0001"),
+        ) as writer:
+            writer.add_observation(
+                ImageObservation(
+                    observation_id=SourceObservationId("frame-0000"),
+                    sensor_id=SensorId("camera_1"),
+                    frame_id=FrameId("camera_1_optical"),
+                    timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:header"),
+                    provenance=SourceProvenance(
+                        source_type="fixture", source_path="fixtures/images"
+                    ),
+                    width=2,
+                    height=2,
+                    encoding=ImageEncoding.BGR8,
+                    data=pixels,
+                )
+            )
+            manifest = writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(manifest.artifact_id),
+            content_hash=inventory_digest(manifest.file_inventory),
+            location="corridor-02/run-0001/ingestion",
+        )
+        output_dir = workspace / "corridor-02" / "run-0001" / "visual_perception"
+        request = StageRequest(
+            stage_id="visual_perception",
+            inputs={"sequence": (sequence_ref,)},
+            components={},
+            config_digest="sha256:test",
+            output_dir=output_dir,
+            workspace=workspace,
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.contract == "PerceptionRunArtifact"
+        reader = PerceptionRunReader(output_dir)
+        assert reader.verify_integrity() == []
+        results = reader.list_results()
+        assert len(results) == 1
+        assert len(results[0].regions) == 1
+        assert len(results[0].features) == 2  # one dense + one AlphaCLIP region feature
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:

@@ -5,7 +5,10 @@ import json
 import numpy as np
 import pytest
 from perception_builders import (
+    OBSERVATION_ID,
     RESULT_ID,
+    RUN_ID,
+    SEQUENCE_ID,
     make_claim,
     make_feature,
     make_region,
@@ -46,10 +49,14 @@ from contextmap.sensor_association.serialization import (
 )
 from contextmap.sensor_association.visibility import OcclusionPolicy, resolve_visibility
 from contextmap.visual_perception import (
+    CANONICAL_PRESET_V1,
     BoundingBox,
     CropOperation,
     ExclusionRegion,
     FeatureScope,
+    InlineMask,
+    PerceptionRunReader,
+    PerceptionRunWriter,
     RegionId,
     ResizeOperation,
 )
@@ -447,3 +454,82 @@ def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
         )
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.regions[0].region_id = RegionId("changed")  # type: ignore[misc]
+
+
+# --- Mask persisted by reference (#378) -------------------------------------
+
+
+class _DictMaskLoader:
+    """A minimal fake ``RegionMaskLoader`` for tests: no store, no filesystem."""
+
+    def __init__(self, masks: dict[tuple[SourceObservationId, RegionId], InlineMask]) -> None:
+        self._masks = masks
+
+    def load(self, source_observation_id: SourceObservationId, region_id: RegionId) -> InlineMask:
+        return self._masks[(source_observation_id, region_id)]
+
+
+def test_a_region_with_only_a_mask_reference_is_resolved_through_the_loader() -> None:
+    frame = scene_frame((100, 100, 3.0))
+    mask = _rect(90, 90, 110, 110)
+    region = dataclasses.replace(
+        make_region("region-A", mask),
+        mask=None,
+        mask_reference="outputs/masks/frame-0001/region-A.npy",
+    )
+    result = make_result([region])
+    loader = _DictMaskLoader({(OBSERVATION_ID, A): mask})
+
+    membership = associate_regions(resolve_visibility(frame, POLICY), result, mask_loader=loader)
+
+    assert membership.skipped == ()
+    assert membership.points_of(A).tolist() == [0]
+
+
+def test_a_mask_reference_without_a_loader_is_still_skipped() -> None:
+    """No ``mask_loader`` keeps the previous, explicit behavior (#378)."""
+    frame = scene_frame((100, 100, 3.0))
+    region = dataclasses.replace(
+        make_region("region-A", _rect(90, 90, 110, 110)),
+        mask=None,
+        mask_reference="outputs/masks/frame-0001/region-A.npy",
+    )
+    result = make_result([region])
+
+    membership = associate_regions(resolve_visibility(frame, POLICY), result)
+
+    assert membership.skipped == (SkippedRegion(region_id=A, reason=SkipReason.NO_INLINE_MASK),)
+
+
+def test_mask_membership_keeps_working_after_a_run_is_persisted_and_reopened(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Regression test for #378: association survives a real persist/reopen round trip."""
+    frame = scene_frame((100, 100, 3.0))
+    mask = _rect(90, 90, 110, 110)
+    result = make_result([make_region("region-A", mask)])
+
+    writer = PerceptionRunWriter(
+        output_dir=tmp_path / "run-0001",
+        sequence_name="corridor-02",
+        run_id=RUN_ID,
+        run_index=1,
+        sequence_artifact_id=SEQUENCE_ID,
+        selection_id="sha256:aaaa",
+        enabled_capabilities=frozenset({"region_discovery"}),
+        pipeline_preset=CANONICAL_PRESET_V1,
+        configuration_digest="sha256:test",
+    )
+    writer.add_result(result)
+    writer.finalize()
+
+    reader = PerceptionRunReader(tmp_path / "run-0001")
+    reopened_result = reader.result(OBSERVATION_ID)
+    # Sanity check: the reopened region no longer carries pixels inline (#378).
+    assert reopened_result.regions[0].mask is None
+    assert reopened_result.regions[0].mask_reference is not None
+
+    membership = associate_regions(
+        resolve_visibility(frame, POLICY), reopened_result, mask_loader=reader.mask_store()
+    )
+
+    assert membership.skipped == ()
+    assert membership.points_of(A).tolist() == [0]

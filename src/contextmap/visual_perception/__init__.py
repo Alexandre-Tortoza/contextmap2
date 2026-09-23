@@ -95,6 +95,16 @@ from contextmap.visual_perception.image_preparation import (
     SourceImage,
     prepare_image,
 )
+from contextmap.visual_perception.mask_store import (
+    MASK_INDEX_FILENAME,
+    MASK_INDEX_SCHEMA_VERSION,
+    MaskPayloadEntry,
+    MaskPayloadIntegrityError,
+    MaskStoreError,
+    MaskStoreReader,
+    MaskStoreWriter,
+    write_mask_index,
+)
 from contextmap.visual_perception.models import (
     BackendProvenance,
     BoundingBox2D,
@@ -224,6 +234,8 @@ __all__ = [
     "FEATURE_INDEX_SCHEMA_VERSION",
     "FEATURE_METRICS_PATH",
     "KNOWN_CAPABILITIES",
+    "MASK_INDEX_FILENAME",
+    "MASK_INDEX_SCHEMA_VERSION",
     "POOLING_POLICY",
     "SEMANTIC_DEBUG_ROOT",
     "ArtifactReference",
@@ -269,6 +281,11 @@ __all__ = [
     "HypothesisRole",
     "IncompleteRunArtifactError",
     "InlineMask",
+    "MaskPayloadEntry",
+    "MaskPayloadIntegrityError",
+    "MaskStoreError",
+    "MaskStoreReader",
+    "MaskStoreWriter",
     "MergeDecision",
     "MergeKind",
     "NormalizationConfig",
@@ -382,5 +399,6 @@ __all__ = [
     "validate_semantic_request",
     "write_feature_diagnostics",
     "write_feature_index",
+    "write_mask_index",
     "write_semantic_audit",
 ]

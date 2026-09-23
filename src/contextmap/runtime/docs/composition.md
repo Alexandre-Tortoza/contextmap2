@@ -4,12 +4,13 @@
 
 ```mermaid
 flowchart LR
-    EFF["EffectiveConfig"] --> C["compose()"]
-    PROV["providers<br/>(runtimes do chamador)"] --> C
+    EFF["EffectiveConfig<br/>(inclui resources.providers)"] --> C["compose()"]
+    PROV["providers<br/>(runtimes do chamador Python)"] --> C
     ENV["ambiente<br/>(segredos e módulos)"] --> C
     C --> CFG["configuração da própria capability<br/>build_config()"]
     CFG --> AV["módulos e segredos<br/>disponíveis?"]
-    AV --> RT["runtime<br/>(empacotado ou provider)"]
+    AV --> RES["runtime resolvido<br/>explícito > resources.providers > empacotado"]
+    RES --> RT["runtime<br/>(empacotado, provider explícito ou resolve_provider())"]
     RT --> OUT["ComposedRuntime<br/>ports das capabilities"]
 ```
 
@@ -22,10 +23,11 @@ flowchart LR
 
 ## API
 
-- `compose(effective, providers=..., stages=..., environ=..., module_available=...)` devolve um `ComposedRuntime`.
+- `compose(effective, providers=..., stages=..., environ=..., module_available=..., on_provider_override=...)` devolve um `ComposedRuntime`.
 - `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `dense_features`, `region_features`, `semantic_interpreter`, `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances`, `association_pose_policy`, `entity_retrieval_policy`, `entity_comparison_channels`, `entity_resolution_policy` e `spatial_relations_policies` (que já inclui a política de geometry summary — `SpatialRelationsExecutor` a lê só dali, nunca de um segundo parâmetro, revisão do PR #540). Um campo é `None` quando seu estágio não foi composto.
-- `compose_executors(effective, providers=..., environ=..., module_available=...)` devolve um `dict[str, StageExecutor]`: é a contraparte automática de `compose()` para o DAG (ver seção própria abaixo).
+- `compose_executors(effective, providers=..., environ=..., module_available=..., on_provider_override=...)` devolve um `dict[str, StageExecutor]`: é a contraparte automática de `compose()` para o DAG (ver seção própria abaixo).
 - `RuntimeProvider` é `Callable[[config, ResolvedSecrets], runtime]`: recebe a configuração da capability, já validada, e **somente** os segredos que aquele backend declara.
+- `resolve_provider(component_id, target)` resolve um alvo `"module:attribute"` declarado em `resources.providers` (configuração) no `RuntimeProvider` que ele nomeia — ver a seção própria abaixo. `on_provider_override(component_id)` é chamado quando um `providers=` explícito vence um alvo declarado para o **mesmo** componente (nunca em uma execução comum pelo `contextmap` instalado, que nunca passa `providers=`).
 - `FeatureBuildScope` reúne o estado de execução de que um extrator de features precisa (run, estágio, artifact, sink de payload, raiz das imagens preparadas, fonte de máscaras). Um extrator escreve seus payloads no run que o possui, então só pode ser construído quando esse run existe; por isso `dense_features` e `region_features` são factories que recebem o escopo, e a configuração é validada já em `compose()`.
 
 ## De onde vem cada runtime
@@ -62,7 +64,27 @@ Alguns backends recebem, além da própria configuração, um segundo objeto de 
 2. os módulos opcionais e os segredos declarados no catálogo;
 3. o runtime (provider ou loader empacotado).
 
-Assim um checkpoint inválido ou um limiar fora da faixa falha antes de qualquer modelo ser pedido. Os erros são `BackendConfigurationError`, `BackendUnavailableError`, `BackendRuntimeMissingError` e `StageUnavailableError`, todos `CompositionError`.
+Assim um checkpoint inválido ou um limiar fora da faixa falha antes de qualquer modelo ser pedido. Os erros são `BackendConfigurationError`, `BackendUnavailableError`, `BackendRuntimeMissingError`, `ProviderConfigurationError` e `StageUnavailableError`, todos `CompositionError`.
+
+## Providers declarados em configuração (`resources.providers`)
+
+Um `RuntimeProvider` é um `Callable` Python: um `providers={...}` em `compose()`/`compose_executors()` só existe para quem embute o runtime (uma API Python, um teste, um futuro TUI). O binário `contextmap` **instalado** — `contextmap run`/`contextmap stage`, chamando `main(argv)` sem nenhum `providers=` — nunca tem como construir esse dicionário: ele só recebe o que a configuração descreve. Por isso um backend sem loader empacotado (SAM2, SAM3, Qwen, Gemini, Florence-2 hoje) também aceita seu provider como um **alvo declarado em configuração**, sob `resources.providers`:
+
+```json
+{
+  "resources": {
+    "providers": {
+      "visual_perception.region_discovery": "meu_pkg.contextmap_loaders:load_sam3"
+    }
+  }
+}
+```
+
+- **Formato.** O valor é `"módulo:atributo"` — nunca `eval`, nunca uma expressão. `resolve_provider(component_id, target)` (em `composition.py`, perto da própria definição de `RuntimeProvider`) faz `target.partition(":")`, importa o módulo com `importlib.import_module` e lê o atributo com `getattr`. O atributo importado **é** o provider — não existe uma fábrica intermediária que o embrulhe; ele já precisa satisfazer o contrato de `RuntimeProvider` diretamente (`Callable[[config, ResolvedSecrets], runtime]`).
+- **Onde mora.** `resources.providers` é um novo campo de `ResourcesConfig` (`config.py`), ao lado de `device`/`workspace`: é uma decisão de composição/implantação (qual processo fornece qual runtime), nunca um parâmetro científico do backend, então nunca mistura com `components.<capability>.<slot>.<backend>`. Ele flui pelas mesmas camadas que qualquer outro campo (perfil < arquivos < overrides, mesclagem chave a chave em camadas de arquivo) e participa do digest da configuração efetiva automaticamente, porque `RuntimeConfig.to_document()` já o inclui.
+- **Precedência.** Em `_Context.runtime()`/`_Context.optional_runtime()` (`composition.py`): um `providers=` explícito para um componente sempre vence, mesmo quando a configuração também declara um alvo para o mesmo componente; só na ausência do explícito é que o alvo declarado é resolvido; só na ausência de ambos é que `BackendRuntimeMissingError` é levantado, exatamente como antes. Quando o explícito de fato vence sobre um declarado (os dois existem para o mesmo componente — só acontece com um chamador Python), isso é reportado via `on_provider_override(component_id)` e acaba registrado no evento `run_planned` do próprio run (campo `provider_overrides`), nunca aplicado silenciosamente. Uma execução comum pelo binário instalado nunca passa `providers=`, então esse ramo nunca é exercitado nela.
+- **Preguiça.** Um alvo declarado só é resolvido (importado) quando aquele componente está **de fato** sendo composto — nunca antecipadamente para o documento inteiro. Isso preserva a garantia já documentada no topo deste arquivo: compor uma configuração importa só os backends que ela seleciona. `ensure_available()` também para de exigir os módulos opcionais do backend quando um provider é esperado (explícito **ou** declarado): aquele import pesado é responsabilidade do provider, nunca de `contextmap.runtime`.
+- **Postura de segurança.** Um alvo `resources.providers` é código Python executado em tempo de execução: só a sintaxe `"módulo:atributo"` é aceita, nenhum módulo é instalado automaticamente, e a resolução é sempre pontual (nunca eager para o documento inteiro). Isso é a **mesma** fronteira de confiança de qualquer outra configuração que nomeia código executável — configuração de origem não confiável nunca deve ser resolvida assim. Não há sandbox nem allowlist (não há um problema concreto que os justifique hoje).
 
 ## Estágios
 
@@ -76,25 +98,26 @@ Assim um checkpoint inválido ou um limiar fora da faixa falha antes de qualquer
 
 ## `compose_executors`: os executores reais do DAG
 
-`compose_executors(effective, providers=..., environ=..., module_available=...)` é a contraparte automática de `compose()` para a execução: em vez de devolver backends e políticas soltos, ela os embrulha na classe concreta de `contextmap.runtime.executors` que cada estágio do DAG precisa, indexada por `stage_id`. É o que deixa o binário `contextmap` instalado executar o DAG real sem um chamador Python montando executores à mão.
+`compose_executors(effective, providers=..., environ=..., module_available=..., on_provider_override=...)` é a contraparte automática de `compose()` para a execução: em vez de devolver backends e políticas soltos, ela os embrulha na classe concreta de `contextmap.runtime.executors` que cada estágio do DAG precisa, indexada por `stage_id`. É o que deixa o binário `contextmap` instalado executar o DAG real sem um chamador Python montando executores à mão **e** sem um chamador Python montando providers à mão: `resources.providers` supre o segundo caso (ver seção acima).
 
-Hoje ela compõe `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `entity_resolution` e `spatial_relations`: cada um precisa só da configuração efetiva e dos artifacts upstream que o próprio DAG já entrega. Ela **nunca** levanta: um estágio que não pode ser composto por qualquer motivo (seleção incompleta, um parâmetro que o backend rejeita, um módulo/segredo ausente) fica simplesmente ausente do dicionário devolvido, um estágio de cada vez — o fracasso de `sensor_association` nunca custa o executor de `state_estimation`. A ausência é honesta: o `missing_executors`/"no executor is registered" do preflight já explica por que aquele estágio não vai rodar.
+Hoje ela compõe `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `entity_resolution` e `spatial_relations` incondicionalmente, e `visual_perception` quando cada backend selecionado que não empacota loader tem um `RuntimeProvider` disponível — explícito em `providers`, declarado em `resources.providers`, ou os dois (o explícito vence): cada um precisa só da configuração efetiva, dos `providers` recebidos e dos artifacts upstream que o próprio DAG já entrega. Ela **nunca** levanta: um estágio que não pode ser composto por qualquer motivo (seleção incompleta, um parâmetro que o backend rejeita, um módulo/segredo ausente, um provider que faltou ou que não pôde ser resolvido) fica simplesmente ausente do dicionário devolvido, um estágio de cada vez — o fracasso de `sensor_association` nunca custa o executor de `state_estimation`. A ausência é honesta: o `missing_executors`/"no executor is registered" do preflight já explica por que aquele estágio não vai rodar.
 
 Casos que ficam de fora, deliberadamente:
 
 - **`ingestion`.** `IngestionStageExecutor` precisa de um `IngestionRequest` concreto (caminho da fonte, tópicos, tolerância de sincronização) que nunca é parte de uma `EffectiveConfig` — é o que os próprios flags do comando `ingest` constroem. O caminho canônico é rodar `contextmap ingest` primeiro e alimentar o artifact publicado a `run`/`stage` como entrada fornecida ou selecionada; um chamador que queira `ingestion` dentro de `run_plan` ainda injeta um `IngestionStageExecutor` explicitamente.
-- **`visual_perception` e `point_representation`.** Não têm executor real ainda (backends dependentes de GPU/modelo); continuam ausentes, exatamente como antes.
+- **`visual_perception`.** Desde #507, `VisualPerceptionExecutor` é montado quando os quatro pontos de variação (`region_discovery`, `dense_features`, `region_features`, `semantic_interpretation`) estão selecionados e disponíveis ao mesmo tempo — uma seleção parcial nunca gera um executor parcial (mesmo padrão `except (ConfigurationError, CompositionError): return None` dos outros quatro estágios). `region_discovery`/`semantic_interpretation` não empacotam loader, então isso também exige um `RuntimeProvider` para cada um — via `providers` (só chamador Python) **ou** via `resources.providers` na própria configuração (também o binário instalado, ver seção acima); sem nenhum dos dois, `compose()` levanta `BackendRuntimeMissingError` e a ausência é honesta, exatamente como para qualquer outro backend sem loader. Ver [`executors.md`](executors.md#visualperceptionexecutor-507).
+- **`point_representation`.** Não tem executor real ainda (backend dependente de GPU/modelo, `ptv3`); continua ausente, exatamente como antes.
 - **`semantic_fusion` com a política quality-aware.** `SemanticFusionExecutor` só roda a acumulação `baseline-evidence-accumulation-v1`; se o backend selecionado for `quality-aware-evidence-accumulation-v1`, o estágio fica de fora em vez de rodar com a política errada.
 - **`semantic_mapping`.** Faz parte da topologia (é a fonte de `entities`), mas não tem componente de catálogo nem executor: `compose_executors` nunca a compõe. Seu artifact precisa ser suprido (`provided`/`inputs.selections`) para que `entity_resolution` rode; sem isso, o preflight reporta a lacuna explicitamente.
 - **`entity_resolution`** monta sempre o canal de geometria (obrigatório) e só monta `semantic`, `temporal`, `appearance` e `representation` quando o respectivo componente foi selecionado; um canal não selecionado é `None` no `ComparisonChannels`, nunca uma política padrão. `appearance`/`representation`, quando selecionados, ainda dependem de um `RuntimeProvider` (`FeatureVectorSource`/`RepresentationVectorSource`); sem ele, a composição do estágio falha e ele fica ausente, honestamente.
 - **`spatial_relations`** monta sempre `frame_conventions`, `candidate` e `geometry_summary`; `geometric`/`contact` são `None` quando seus componentes não foram selecionados.
 
-`cli.py` e `Runtime` (`api.py`) mesclam o resultado de `compose_executors` com os executores que o chamador forneceu explicitamente, e o explícito sempre vence — assim um teste, ou um chamador que precise substituir um estágio, continua podendo.
+`cli.py` (`main(providers=...)`) e `Runtime` (`api.py`, `Runtime(providers=...)`) repassam `providers` para `compose_executors` na mesma forma e mesclam o resultado com os executores que o chamador forneceu explicitamente, e o explícito sempre vence — assim um teste, ou um chamador que precise substituir um estágio, continua podendo.
 
 ## Lacunas conhecidas
 
-- **Loaders de modelo não empacotados.** O repositório não tem código que carregue SAM2, SAM3, Florence-2, Qwen, Gemini, PTv3 ou os `FeatureVectorSource`/`RepresentationVectorSource` de aparência/representação; esses backends dependem de um `RuntimeProvider`. Nenhum é escolhido por padrão, e a falta de provider é um erro explícito, nunca um fallback.
+- **Loaders de modelo não empacotados.** O repositório não tem código que carregue SAM2, SAM3, Florence-2, Qwen, Gemini, PTv3 ou os `FeatureVectorSource`/`RepresentationVectorSource` de aparência/representação; esses backends dependem de um `RuntimeProvider`, fornecido por um chamador Python (`providers=`) ou declarado em `resources.providers` (resolvido por `resolve_provider`, ver seção acima — inclusive pelo binário `contextmap` instalado, sem wrapper Python). Nenhum é escolhido por padrão, e a falta de provider é um erro explícito, nunca um fallback.
 - **Preset interno de Visual Perception.** A composition root entrega os backends atrás dos ports; ela não monta o `PipelinePreset` interno da percepção. O `CANONICAL_PRESET_V1` ainda usa as operações legadas `interpret_scene`/`interpret_regions`, que Qwen, Gemini e Florence-2 **não** implementam (eles implementam `interpret(request)`), então promover a política de construção de `SemanticInterpretationRequest` continua sendo uma decisão de `visual_perception`, registrada em [`docs/runtime-composition.md`](../../../../docs/runtime-composition.md).
-- **`visual_perception` e `point_representation` sem executor.** Sem um executor real, `compose_executors` nunca os compõe; um run que os inclua precisa de um executor injetado (por exemplo um teste) ou fica bloqueado no preflight, explicitamente.
+- **`point_representation` sem executor.** Sem um executor real, `compose_executors` nunca o compõe; um run que o inclua precisa de um executor injetado (por exemplo um teste) ou fica bloqueado no preflight, explicitamente.
 - **`semantic_mapping` sem componente de catálogo e sem executor.** É um estágio real de `canonical/2` (não existe em `canonical/1`, que termina em `semantic_fusion`), mas ainda roda inteiramente fora da composição automática; sua entrada em `entity_resolution` só existe hoje via artifact suprido.
 - **A montagem do `ContextMapArtifact` (`context_map`).** Ainda não é um estágio de `canonical/1` nem de `canonical/2`; é tratada por outro milestone (End-to-End Validation), que também reconcilia `catalog.py`/`composition.py`/`executors.py` com o que este documento descreve.

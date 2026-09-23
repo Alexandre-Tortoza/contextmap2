@@ -40,6 +40,7 @@ from contextmap.runtime.composition import (
     RuntimeProvider,
     compose,
     compose_executors,
+    resolve_provider,
 )
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
@@ -75,6 +76,7 @@ from contextmap.runtime.errors import (
     PipelineError,
     PlanDocumentError,
     PreflightError,
+    ProviderConfigurationError,
     ResumeError,
     ReuseError,
     RunCancelledError,
@@ -204,6 +206,7 @@ __all__ = [
     "PoliciesConfig",
     "PreflightError",
     "PreflightReport",
+    "ProviderConfigurationError",
     "ResolvedPipelinePlan",
     "ResolvedSecrets",
     "ResolvedSelections",
@@ -265,6 +268,7 @@ __all__ = [
     "read_run",
     "resolve_effective_config",
     "resolve_plan",
+    "resolve_provider",
     "resolve_secrets",
     "resolve_selections",
     "resume_plan",

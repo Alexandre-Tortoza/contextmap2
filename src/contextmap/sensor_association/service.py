@@ -50,6 +50,7 @@ from contextmap.sensor_association.membership import (
     COVERAGE_DEFINITIONS_VERSION,
     MEMBERSHIP_POLICY_ID,
     FrameMembership,
+    RegionMaskLoader,
     associate_regions,
     build_spatial_observations,
 )
@@ -135,6 +136,10 @@ class SensorAssociationRequest:
         dense_channels: The declared dense-feature evidence channels.
         state_estimation_run_id: The persisted state-estimation run the trajectory came from.
         code_version: Code revision that produces the run, when known.
+        mask_loader: Resolves a region's mask when a frame's perception result was
+            reopened from a persisted run and no longer carries it inline (#378), for
+            example that run's ``PerceptionRunReader.mask_store()``. ``None`` keeps a
+            region without an inline mask and no resolvable reference as skipped.
     """
 
     sequence_artifact_id: SequenceArtifactId
@@ -149,6 +154,7 @@ class SensorAssociationRequest:
     dense_channels: tuple[DenseChannel, ...] = ()
     state_estimation_run_id: StateEstimationRunId | None = None
     code_version: str | None = None
+    mask_loader: RegionMaskLoader | None = None
 
 
 @dataclass(frozen=True, kw_only=True, eq=False)
@@ -249,7 +255,9 @@ class SensorAssociationService:
                 rejected.append(projection)
                 continue
             resolution = resolve_visibility(projection, request.occlusion_policy)
-            membership = associate_regions(resolution, frame_input.perception_result)
+            membership = associate_regions(
+                resolution, frame_input.perception_result, mask_loader=request.mask_loader
+            )
             observations = build_spatial_observations(
                 membership,
                 configuration_fingerprint=fingerprint,

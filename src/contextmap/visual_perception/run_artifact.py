@@ -21,7 +21,7 @@ import hashlib
 import json
 import shutil
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -46,10 +46,18 @@ from contextmap.visual_perception.feature_store import (
     FeatureStoreWriter,
     write_feature_index,
 )
+from contextmap.visual_perception.mask_store import (
+    MASK_INDEX_FILENAME,
+    MaskStoreReader,
+    MaskStoreWriter,
+    write_mask_index,
+)
 from contextmap.visual_perception.models import (
     FeatureId,
     PerceptionResult,
     PerceptionRunId,
+    Region2D,
+    RegionId,
     VisualFeature,
 )
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
@@ -74,12 +82,16 @@ if TYPE_CHECKING:
 
     from contextmap.visual_perception.pipeline import PipelinePreset
 
-SCHEMA_VERSION = "0.4.0"
+SCHEMA_VERSION = "0.5.0"
 """Perception run artifact schema version written and understood by this module.
 
-Bumped to ``0.4.0`` when canonical semantic evidence and execution audit
-records changed the persisted result and output contracts. This is a pre-1.0
-schema, so no compatibility reader for historical manifests is kept.
+Bumped to ``0.5.0`` when a region's mask stopped being inlined as a JSON
+pixel array in ``outputs/results.jsonl`` and moved to a compact,
+lazily-loaded ``outputs/masks/`` store referenced by ``mask_reference``
+(#378; see ``docs/run_artifact.md``). Bumped to ``0.4.0`` when canonical
+semantic evidence and execution audit records changed the persisted
+result and output contracts. This is a pre-1.0 schema, so no
+compatibility reader for historical manifests is kept.
 """
 
 _MANIFEST_FILENAME = "manifest.json"
@@ -89,6 +101,7 @@ _METRICS_FILENAME = "metrics/stage-timings.jsonl"
 _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
 _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
+_MASKS_DIRNAME = "outputs/masks"
 
 
 class RunArtifactError(Exception):
@@ -659,12 +672,71 @@ class PerceptionRunWriter:
         if unused:
             raise RunArtifactError(f"semantic view payloads are not referenced: {unused!r}")
 
+    def _write_masks(
+        self, file_entries: list[RunArtifactFileEntry]
+    ) -> dict[tuple[SourceObservationId, RegionId], str]:
+        """Persist every queued region's mask compactly and return its new reference.
+
+        Masks are never opt-in the way feature payloads are (:meth:`add_feature_payload`):
+        every region that arrives with a materialized ``mask`` through
+        :meth:`add_result` is persisted here (#378), keyed by
+        ``(source_observation_id, region_id)`` since ``RegionId`` is local to
+        one result. ``outputs/results.jsonl`` never inlines the pixel array;
+        it only ever carries the returned artifact-relative reference.
+
+        Returns:
+            A mapping from ``(source_observation_id, region_id)`` to the
+            artifact-relative ``mask_reference`` to use when encoding that
+            region, for every region that had a mask to persist.
+        """
+        pending = [
+            (result.source_observation_id, region.region_id, region.mask)
+            for result in self._results
+            for region in result.regions
+            if region.mask is not None
+        ]
+        if not pending:
+            return {}
+
+        mask_store_root = self._tmp_dir / _MASKS_DIRNAME
+        mask_store = MaskStoreWriter(mask_store_root)
+        references: dict[tuple[SourceObservationId, RegionId], str] = {}
+        for source_observation_id, region_id, mask in pending:
+            entry = mask_store.write(
+                region_id=region_id,
+                source_observation_id=source_observation_id,
+                mask=mask,
+            )
+            references[(source_observation_id, region_id)] = (
+                f"{_MASKS_DIRNAME}/{entry.payload_reference}"
+            )
+
+        write_mask_index(mask_store_root, mask_store.entries())
+        for entry in mask_store.entries():
+            file_entries.append(
+                RunArtifactFileEntry(
+                    path=f"{_MASKS_DIRNAME}/{entry.payload_reference}",
+                    size_bytes=entry.size_bytes,
+                    content_hash=entry.content_hash,
+                )
+            )
+        index_path = mask_store_root / MASK_INDEX_FILENAME
+        file_entries.append(
+            _file_entry(f"{_MASKS_DIRNAME}/{MASK_INDEX_FILENAME}", index_path.read_bytes())
+        )
+        return references
+
     def _write_contents(self) -> RunArtifactManifest:
         file_entries: list[RunArtifactFileEntry] = []
 
+        mask_references = self._write_masks(file_entries)
+        effective_results = [
+            _with_persisted_masks(result, mask_references) for result in self._results
+        ]
+
         results_content = "".join(
             f"{json.dumps(encode_perception_result(result), sort_keys=True)}\n"
-            for result in self._results
+            for result in effective_results
         )
         results_path = self._tmp_dir / _RESULTS_FILENAME
         results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -814,6 +886,21 @@ class PerceptionRunReader:
         """
         return FeatureStoreReader.open(self._root / _FEATURES_DIRNAME)
 
+    def mask_store(self) -> MaskStoreReader:
+        """Open this run's region-mask payload store, without loading any pixels.
+
+        ``list_results()`` never materializes mask pixels (#378): a
+        decoded ``Region2D.mask`` is always ``None``. A consumer that
+        needs the actual pixels for a region whose ``mask_reference`` is
+        set (e.g. Sensor Association mask membership) loads and
+        hash-verifies them on demand through this reader.
+
+        Returns:
+            A reader over ``outputs/masks/`` — empty (no
+            ``region_keys()``) when no region of this run carried a mask.
+        """
+        return MaskStoreReader.open(self._root / _MASKS_DIRNAME)
+
     def list_results(self) -> list[PerceptionResult]:
         """Return every result in this run.
 
@@ -935,6 +1022,40 @@ def _validate_semantic_raw_response_reference(
             "semantic provenance raw_response_reference does not match the materialized path: "
             f"expected {expected_reference!r}, found {sorted(mismatches, key=str)!r}"
         )
+
+
+def _with_persisted_masks(
+    result: PerceptionResult, mask_references: dict[tuple[SourceObservationId, RegionId], str]
+) -> PerceptionResult:
+    """Return ``result`` with each mask-bearing region's persisted reference attached.
+
+    ``encode_region()`` never inlines pixel data (#378): it only ever
+    encodes ``mask_reference``. This builds the exact ``Region2D`` view
+    that reference belongs to, without mutating ``result`` or the
+    original in-memory mask.
+    """
+    if not mask_references:
+        return result
+    patched_regions = tuple(
+        _region_with_mask_reference(result.source_observation_id, region, mask_references)
+        for region in result.regions
+    )
+    if patched_regions == result.regions:
+        return result
+    return replace(result, regions=patched_regions)
+
+
+def _region_with_mask_reference(
+    source_observation_id: SourceObservationId,
+    region: Region2D,
+    mask_references: dict[tuple[SourceObservationId, RegionId], str],
+) -> Region2D:
+    if region.mask is None:
+        return region
+    reference = mask_references.get((source_observation_id, region.region_id))
+    if reference is None:
+        return region
+    return replace(region, mask_reference=reference)
 
 
 def _file_entry(relative_path: str, data: bytes) -> RunArtifactFileEntry:
