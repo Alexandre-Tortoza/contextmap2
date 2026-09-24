@@ -1,0 +1,85 @@
+# Real canonical run of corridor-02 through ContextMapArtifact (issue #177)
+
+This is the audit trail for the first real, end-to-end execution of the Solution 1 canonical
+pipeline over corridor-02, from the real ingested sequence (issue #554/#176) and the real
+auxiliary pose sequence (issue #555) through every downstream stage to a real, hash-verified
+`ContextMapArtifact`. Not committed application code -- a real experiment run against the MAIN
+checkout's `outputs/` (untracked, gitignored), matching the convention already established by
+`experiments/semantic-fusion-corridor-02-20260921/` and the corridor-02 re-ingestion experiment.
+
+Each script is a thin driver: it builds the real executor from `contextmap.runtime.executors`
+with a hand-built `StageRequest`/`ArtifactRef` pointing at the previous stage's real, already
+-verified output, and calls `.execute()` directly -- the same executors `compose_executors()`/
+`run_plan()` would build automatically, just wired by hand since this is a one-off, order-known
+run rather than a `contextmap run` invocation over a resolved plan.
+
+## Result
+
+```text
+01_state_estimation.py     -> StateEstimationRunArtifact   b13c6e588aeef1e5142f890399e190b9
+                               5522 poses, 0 gaps, ExternalPose over the #555 bridge
+02_geometric_mapping.py    -> GeometricMapArtifact          d6ed712aa1a77b91dc93fd951273d938
+03_sensor_association.py   -> SensorAssociationRunArtifact  ec435f284cef18bc1980cfd0188022a4
+04_semantic_fusion.py      -> SemanticFusionRunArtifact     7253ce0b68b142d58f52a528ace9af13
+05_semantic_mapping.py     -> SemanticEntityArtifact        c9137c48ca2baa50425101497eee6947
+06_entity_resolution.py    -> EntityResolutionRunArtifact   07616fecdb889fb0cf492f230e812706
+07_spatial_relations.py    -> SpatialRelationsRunArtifact   ca6f0ab8478d46ceb7691ef35114bd8b
+08_context_map.py          -> ContextMapArtifact            57484aa0948006e9deb4db5b2bd1c4da
+                               entity_count=170  relation_count=10852
+```
+
+Every stage's own `verify_integrity()` (or, for `context_map`, `ContextMapArtifactReader.open(
+..., verify_hashes=True)`) returned clean. The final `ContextMapArtifact`'s dependency closure
+records all six real upstream artifacts by content identity (`entity_resolution_run`,
+`geometric_map`, `semantic_fusion_run`, `semantic_map`, `sequence`, `spatial_relations_run`).
+
+Upstream real artifacts this run consumed (produced earlier, not by these scripts):
+
+```text
+SequenceArtifact (bag):   outputs/ingest-real/sequences/corridor-02/720a486de8d44c16a9d3d2ff9fa7b1a4
+SequenceArtifact (pose):  outputs/ingest-real/sequences/corridor-02-pose/e2d832c152b1493999082d4f67210b5b
+PerceptionRunArtifact:    outputs/e2e-real/visual_perception/workspace/corridor-02/run-0001/visual_perception
+```
+
+All new artifacts from this run live under `outputs/e2e-real/run-0001/<stage>/`.
+
+## What is real vs. reused-without-independent-tuning
+
+- **state_estimation, geometric_mapping, sensor_association, semantic_fusion**: policy values
+  (lookup interpolation gaps, occlusion cell size, geometry-overlap thresholds, ...) match the
+  real precedent already validated against this exact dataset in
+  `outputs/validation/2026-09-21/{state_estimation,geometric_mapping}/scripts/` and
+  `experiments/semantic-fusion-corridor-02-20260921/scripts/{s01..s04}.py`.
+- **semantic_mapping, entity_resolution, spatial_relations, context_map**: **no real precedent
+  exists anywhere for these four stages on this dataset** -- this is the first time they have
+  ever run against real corridor-02 data. Their policy values (entity materialization geometry
+  summary, candidate retrieval radius, geometry/contact predicate thresholds) are reused as-is
+  from `tests/end_to_end/test_runtime_chain.py`'s synthetic-chain construction -- the only
+  currently-endorsed real parameterization of these policies in the codebase. They are **not**
+  independently tuned for corridor-02's real physical scale (a ~90 s, tens-of-meters corridor
+  traversal, vs. the synthetic fixture's much smaller synthetic scene). `map_frame="map"` and
+  `up_axis=AxisDirection.POSITIVE_Z`/`forward_axis=POSITIVE_X` do match corridor-02's real
+  geometric map frame and the standard ROS body-frame convention.
+- The resulting `relation_count=10852` over `entity_count=170` (~64 relations/entity) is high
+  enough to be worth a closer look before this run is treated as final acceptance evidence for
+  #177/#178 -- plausibly the candidate/proximity thresholds carried over from the synthetic
+  fixture are too permissive at corridor-02's real scale. Flagged for follow-up, not fixed here:
+  changing a spatial-relations threshold is a scientific decision (AGENTS.md #22), out of scope
+  for "run the pipeline."
+
+## Semantic quality of the perception evidence this run consumed
+
+The upstream `PerceptionRunArtifact` had 76/120 (63%) successful semantic interpretations
+(Qwen3-VL-4B-Instruct, nf4) -- consistent with the already-documented real behavior of this
+exact model/quantization on this exact dataset (58% in
+`src/contextmap/evaluation/docs/semantic-interpretation.md`; dominant failure: the model
+omitting the required `confidence` field). This is expected, already-characterized model
+behavior, not a defect in this run.
+
+## Environment
+
+Non-GPU stages (`01` through `08`) ran with the worktree's own editable-installed venv
+(`.venv/bin/python`, no ML dependencies needed). The upstream `PerceptionRunArtifact` this run
+consumes was produced separately with the real ML stack in
+`/home/alexmrtr/.cache/contextmap2-audit/venv` (torch/transformers/sam2/bitsandbytes), documented
+in its own `outputs/e2e-real/visual_perception/reports/*.json`.
