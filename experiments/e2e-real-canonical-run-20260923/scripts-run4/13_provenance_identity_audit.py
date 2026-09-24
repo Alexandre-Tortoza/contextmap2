@@ -81,9 +81,40 @@ def audit_visual_perception(run_dir: Path) -> None:
     print("visual_perception:")
     # configuration_digest is defined to change whenever a resolved backend's identity changes
     # (ResolvedPipeline.configuration_digest's own docstring), so it already pins backend/model
-    # identity transitively; also spot-check the per-request backend identity real executions
-    # carry individually.
+    # identity transitively, but the gate asks for the exact backend/model/revision identity
+    # itself, not just proof that a hash summarizing it exists -- PR #438 review, fourth round.
+    # Check the real per-region/per-feature/per-semantic-execution provenance directly below.
     _require("visual_perception", "configuration_digest", manifest.configuration_digest)
+
+    results = reader.list_results()
+    _require("visual_perception", "results_count", len(results) or None)
+    backends: dict[str, tuple[str, str]] = {}
+    missing_region_provenance = 0
+    missing_feature_provenance = 0
+    for result in results:
+        for region in result.regions:
+            if region.provenance.model and region.provenance.version:
+                backends[region.provenance.backend_id] = (
+                    region.provenance.model, region.provenance.version
+                )
+            else:
+                missing_region_provenance += 1
+        for feature in result.features:
+            if feature.provenance.model and feature.provenance.version:
+                backends[feature.provenance.backend_id] = (
+                    feature.provenance.model, feature.provenance.version
+                )
+            else:
+                missing_feature_provenance += 1
+    ok = missing_region_provenance == 0 and missing_feature_provenance == 0 and bool(backends)
+    print(f"  [{'OK' if ok else 'MISSING'}] region/feature backend identities = {backends!r}")
+    if not ok:
+        _FAILURES.append(
+            f"visual_perception region/feature provenance: {missing_region_provenance} regions "
+            f"and {missing_feature_provenance} features missing model/version, "
+            f"{len(backends)} distinct backend identities found"
+        )
+
     executions = reader.list_semantic_executions()
     _require("visual_perception", "semantic_executions_count", len(executions) or None)
     # PR #438 review, third round: the prior audit only checked executions[0], while the report
@@ -102,6 +133,24 @@ def audit_visual_perception(run_dir: Path) -> None:
             f"{len(missing_fingerprints)} of {len(executions)} executions"
         )
 
+    # PR #438 review, fourth round: configuration_digest is a strong aggregate hash, but the
+    # gate itself asks for the exact model/revision identity -- check it directly per execution,
+    # not just that a fingerprint of it exists.
+    missing_model_identity = [
+        str(execution.request.request_id)
+        for execution in executions
+        if not (execution.effective_configuration.get("model")
+                and execution.effective_configuration.get("revision"))
+    ]
+    ok = not missing_model_identity
+    label = f"semantic effective_configuration.{{model,revision}} (checked over all {len(executions)})"
+    print(f"  [{'OK' if ok else 'MISSING'}] {label} = {'present on every execution' if ok else missing_model_identity[:5]!r}")
+    if not ok:
+        _FAILURES.append(
+            f"visual_perception semantic effective_configuration model/revision missing on "
+            f"{len(missing_model_identity)} of {len(executions)} executions"
+        )
+
 
 def audit_semantic_fusion(run_dir: Path) -> None:
     manifest = SemanticFusionRunReader(run_dir).manifest
@@ -113,6 +162,13 @@ def audit_semantic_fusion(run_dir: Path) -> None:
         manifest.support_configuration_fingerprint,
     )
     _require("semantic_fusion", "fusion_policy_id", manifest.fusion_policy_id)
+    # PR #438 review, fourth round: support_configuration_fingerprint was checked but its
+    # sibling fusion_configuration_fingerprint never was -- a real gap, not a redundant check.
+    _require(
+        "semantic_fusion",
+        "fusion_configuration_fingerprint",
+        manifest.fusion_configuration_fingerprint,
+    )
 
 
 def audit_semantic_mapping(run_dir: Path) -> None:
@@ -127,21 +183,60 @@ def audit_semantic_mapping(run_dir: Path) -> None:
     _require("semantic_mapping", "code_digest", manifest.code_digest)
 
 
+_ENTITY_RESOLUTION_EXPECTED_ROLES = frozenset(
+    {"candidate_retrieval", "channel_geometry", "materialization", "resolution"}
+)
+
+
 def audit_entity_resolution(run_dir: Path) -> None:
     manifest = EntityResolutionRunReader(run_dir).manifest
     print("entity_resolution:")
-    _require("entity_resolution", "policies_count", len(manifest.policies) or None)
+    roles = {record.role for record in manifest.policies}
+    # PR #438 review, fourth round: 4 records present says nothing about which 4 -- assert the
+    # actual expected role set, not just a count that 4 semantically-wrong records would also
+    # satisfy.
+    ok = roles == _ENTITY_RESOLUTION_EXPECTED_ROLES
+    print(f"  [{'OK' if ok else 'MISMATCH'}] roles = {sorted(roles)!r}")
+    if not ok:
+        _FAILURES.append(
+            f"entity_resolution.policies has roles {sorted(roles)!r}, "
+            f"expected {sorted(_ENTITY_RESOLUTION_EXPECTED_ROLES)!r}"
+        )
     for record in manifest.policies:
         _require(
             "entity_resolution", f"policies[{record.role}].policy_id", record.policy.policy_id
         )
+        # PR #438 review, fourth round: policy_id was checked but PolicyRef's own second field,
+        # configuration_fingerprint, never was -- a real gap, not implied by policy_id alone.
+        _require(
+            "entity_resolution",
+            f"policies[{record.role}].configuration_fingerprint",
+            record.policy.configuration_fingerprint,
+        )
+
+
+_SPATIAL_RELATIONS_EXPECTED_ROLES = frozenset(
+    {"candidate", "contact", "decision", "frame_conventions", "geometric", "geometry_summary",
+     "observation"}
+)
 
 
 def audit_spatial_relations(run_dir: Path) -> None:
     manifest = SpatialRelationsRunReader(run_dir).manifest
     print("spatial_relations:")
-    _require("spatial_relations", "policies_count", len(manifest.policies) or None)
+    roles = set(manifest.policies)
+    ok = roles == _SPATIAL_RELATIONS_EXPECTED_ROLES
+    print(f"  [{'OK' if ok else 'MISMATCH'}] roles = {sorted(roles)!r}")
+    if not ok:
+        _FAILURES.append(
+            f"spatial_relations.policies has roles {sorted(roles)!r}, "
+            f"expected {sorted(_SPATIAL_RELATIONS_EXPECTED_ROLES)!r}"
+        )
     for role, record in sorted(manifest.policies.items()):
+        # The "observation" role names its rule via "rule_id", not "policy_id" (it is a rule
+        # record, not a full policy) -- a real, benign shape difference, not a missing identity.
+        identity = record.get("policy_id") or record.get("rule_id")
+        _require("spatial_relations", f"policies[{role}].policy_id_or_rule_id", identity)
         _require("spatial_relations", f"policies[{role}].fingerprint", record.get("fingerprint"))
     _require("spatial_relations", "taxonomy_version", manifest.taxonomy_version)
 
