@@ -67,6 +67,23 @@ All new artifacts from this run live under `outputs/e2e-real/run-0001/<stage>/`.
   changing a spatial-relations threshold is a scientific decision (AGENTS.md #22), out of scope
   for "run the pipeline."
 
+  **Follow-up investigation (issue #178, this session): the threshold is not the cause.**
+  `manifest.relation_count`/`ContextMap.relations` count every relation *record* regardless of
+  `RelationState`, by design (`manifest.py`: "Records in the relation table"; AGENTS.md #4 --
+  an ambiguous or rejected candidate is preserved as explicit knowledge, never silently dropped).
+  The real breakdown of the 10852 records: **914 (8.4%) `SUPPORTED`**, 8668 (79.9%) `UNRESOLVED`
+  (`insufficient_evidence`, "no measured channel decided: geometry (ambiguous)"), 1270 (11.7%)
+  `REJECTED`. 914 confirmed relations over 170 entities is ~5.4/entity, an unremarkable number for
+  a real corridor scene -- not high. Candidate generation itself is conservative, not permissive:
+  of the 14365 possible entity pairs, only 207 (1.4%) fall within `CandidatePolicy.
+  proximity_radius_m=0.6` and 884 (6.2%) within `directional_radius_m=2.0`, computed directly from
+  the real resolved entities' `bounds_center_m` (2713 unique pairs end up with at least one
+  relation record, at most 4 per pair -- two predicates, `next_to`/`touching`, in each direction).
+  **Recommendation: no threshold change needed.** If a future report wants a "confirmed relations"
+  headline metric distinct from the raw record count, filter by `state == RelationState.SUPPORTED`
+  rather than reading `manifest.relation_count` directly -- the field itself is accurately named
+  and documented, the earlier flag above simply read it without checking the state breakdown.
+
 ## Semantic quality of the perception evidence this run consumed
 
 The upstream `PerceptionRunArtifact` had 76/120 (63%) successful semantic interpretations
@@ -75,6 +92,25 @@ exact model/quantization on this exact dataset (58% in
 `src/contextmap/evaluation/docs/semantic-interpretation.md`; dominant failure: the model
 omitting the required `confidence` field). This is expected, already-characterized model
 behavior, not a defect in this run.
+
+## Cross-stage check against the real run (issue #178)
+
+`scripts/09_cross_stage.py` builds a real `CrossStageInputs` from every reader above (ingestion
+through `ContextMapArtifact`) and runs `contextmap.evaluation.cross_stage.check_cross_stage()` --
+the first time this check has run against real artifacts rather than the synthetic CI fixture.
+
+```text
+checks_run: lineage_closure=31  coordinate_consistency=1160714  evidence_traceability=58795
+            physical_observation_identity=813
+findings: 0
+notes: the trajectory records no calibration identity (ExternalPose does not consume
+       calibration) -- calibration lineage is verified between the map and the associations only
+```
+
+**Zero findings across all four gates**, over 1.2M total assertions: no lineage break, no
+coordinate-frame discontinuity, no lost traceability from `ContextMapArtifact` back to source
+evidence, and no physical observation duplicated into distinct downstream evidence. The one note
+is an expected, already-documented limitation of the `external_pose` backend, not a defect.
 
 ## Environment
 
