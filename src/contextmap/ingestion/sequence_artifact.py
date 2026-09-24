@@ -544,11 +544,17 @@ class IndexEntry(NamedTuple):
             persisted or meaningful across a different artifact.
         observation_id: Identity of the observation this entry describes.
         timestamp: Capture time in the source's own clock domain.
+        modality: The observation's modality (``"image"``, ``"lidar"``,
+            ``"imu"``, ``"pose"``), exactly as recorded in the index. It is
+            here so a consumer that only wants one modality can select it
+            while paying the index cost, never the payload-decoding cost of
+            :meth:`SequenceArtifactReader.list_observations`.
     """
 
     offset: int
     observation_id: SourceObservationId
     timestamp: SourceTimestamp
+    modality: str
 
 
 class SequenceArtifactReader:
@@ -763,6 +769,7 @@ class SequenceArtifactReader:
                     offset=offset,
                     observation_id=SourceObservationId(record["observation_id"]),
                     timestamp=SourceTimestamp(**record["timestamp"]),
+                    modality=record["modality"],
                 )
 
     def observation_at(self, offset: int, *, load_payload: bool = True) -> SourceObservation:

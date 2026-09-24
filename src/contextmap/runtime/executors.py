@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -462,15 +462,20 @@ class SensorAssociationExecutor:
         calibration = sequence.read_calibration()
         if calibration is None:
             raise ExecutorError("the sequence artifact carries no calibration")
-        images = {
-            str(item.observation_id): item
-            for item in sequence.list_observations()
-            if isinstance(item, ImageObservation)
-        }
+        # Só as imagens são decodificadas: list_observations() decodificaria também os 364 MB de
+        # pointcloud e os 20781 registros de IMU do corridor-02, que esta associação nunca usa
+        # (#511). O payload das imagens em si continua necessário — _frame() hasheia image.data.
+        images: dict[str, ImageObservation] = {}
+        for entry in sequence.iter_index():
+            if entry.modality != "image":
+                continue
+            observation = sequence.observation_at(entry.offset)
+            if isinstance(observation, ImageObservation):
+                images[str(entry.observation_id)] = observation
         perception = PerceptionRunReader(_one(request, "perception"))
         frames = tuple(
             self._frame(images[str(result.source_observation_id)], result)
-            for result in perception.list_results()
+            for result in perception.iter_results()
             if str(result.source_observation_id) in images
         )
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
@@ -551,7 +556,7 @@ class SemanticFusionExecutor:
             )
         association = SensorAssociationRunReader(_one(request, "association"))
         perception = PerceptionRunReader(_one(request, "perception"))
-        results = {result.result_id: result for result in perception.list_results()}
+        results = {result.result_id: result for result in perception.iter_results()}
         observations = list(association.observations())
         described = perception.manifest
         run = PerceptionRun(
@@ -562,10 +567,13 @@ class SemanticFusionExecutor:
             enabled_capabilities=frozenset(described.enabled_capabilities),
             backend_provenance={},
         )
+        # Pelo índice, não por list_observations(): esta fusão só precisa do timestamp de cada
+        # imagem, e decodificar a sequência inteira para isso custava os 2,6 GB de payload do
+        # corridor-02 (#514). O índice já carrega identidade, timestamp e modalidade.
         timestamps = {
-            item.observation_id: item.timestamp
-            for item in SequenceArtifactReader(_one(request, "sequence")).list_observations()
-            if isinstance(item, ImageObservation)
+            entry.observation_id: entry.timestamp
+            for entry in SequenceArtifactReader(_one(request, "sequence")).iter_index()
+            if entry.modality == "image"
         }
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
             source = geometry.geometry()
@@ -990,9 +998,21 @@ class VisualPerceptionExecutor:
         """Process every image observation of the ``sequence`` input and reference the run."""
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
-        images = tuple(
-            item for item in sequence.list_observations() if isinstance(item, ImageObservation)
-        )
+
+        def images() -> Iterator[ImageObservation]:
+            """Decodifica uma imagem por vez, guiado pelo índice.
+
+            O laço abaixo consome um frame de cada vez, então materializar a sequência inteira
+            custaria os 2,2 GB de RGB do corridor-02 (mais 364 MB de pointcloud e 20781
+            registros de IMU que este estágio nem usa) sem nenhum ganho (#511).
+            """
+            for entry in sequence.iter_index():
+                if entry.modality != "image":
+                    continue
+                observation = sequence.observation_at(entry.offset)
+                if isinstance(observation, ImageObservation):
+                    yield observation
+
         identity = request.identity()
         run_id = PerceptionRunId(identity)
         payload_sink = _DeferredFeaturePayloadSink()
@@ -1053,7 +1073,7 @@ class VisualPerceptionExecutor:
             )
             payload_sink.bind(writer)
 
-            for image in images:
+            for image in images():
                 prepared = _materialize_prepared_image(image, scratch)
                 result_id = perception_result_id_for(
                     run_id=run_id, source_observation_id=image.observation_id
