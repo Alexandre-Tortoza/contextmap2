@@ -7,9 +7,8 @@ wrong geometry. Each stage validates its own artifact; this module validates the
 capabilities. It never repairs an invalid upstream artifact: a broken boundary becomes
 a finding that names the capability that broke the contract.
 
-The checks cover the stages that exist today (ingestion to semantic fusion). Entity
-resolution, spatial relations and the final artifact are reported as unverified
-boundaries, so a gate that depends on them is blocked instead of passed. See
+The checks cover the whole canonical run, ingestion through the final
+``ContextMapArtifact`` (issue #178). See
 ``src/contextmap/evaluation/docs/end-to-end.md``.
 """
 
@@ -18,6 +17,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from contextmap.artifact import ArtifactKind, ContextMap
+from contextmap.entity_resolution import (
+    EntityResolutionRunManifest,
+    ResolvedEntity,
+    ResolvedEntityReference,
+)
 from contextmap.evaluation.end_to_end import EvidenceClass, GateResult
 from contextmap.geometric_mapping import (
     GeometricMapArtifactManifest,
@@ -25,11 +30,19 @@ from contextmap.geometric_mapping import (
 )
 from contextmap.ingestion import SequenceArtifactManifest
 from contextmap.semantic_fusion import FusionOutcome, SemanticFusionRunManifest
+from contextmap.semantic_fusion import fused_evidence_id_for as _fused_evidence_id_for
+from contextmap.semantic_mapping import (
+    Entity,
+    EntityEvidenceLinks,
+    EntityReference,
+    SemanticMappingRunManifest,
+)
 from contextmap.sensor_association import (
     SensorAssociationRunManifest,
     SpatialObservation,
     SpatialObservationId,
 )
+from contextmap.spatial_relations import Relation, SpatialRelationsRunManifest
 from contextmap.state_estimation import StateEstimationRunManifest
 from contextmap.visual_perception import PerceptionResult, PerceptionResultId, PerceptionRun
 
@@ -43,6 +56,10 @@ _GEOMETRIC_MAPPING = "geometric_mapping"
 _VISUAL_PERCEPTION = "visual_perception"
 _SENSOR_ASSOCIATION = "sensor_association"
 _SEMANTIC_FUSION = "semantic_fusion"
+_SEMANTIC_MAPPING = "semantic_mapping"
+_ENTITY_RESOLUTION = "entity_resolution"
+_SPATIAL_RELATIONS = "spatial_relations"
+_ARTIFACT = "artifact"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -63,6 +80,13 @@ class CrossStageInputs:
         spatial_observations: Every spatial observation of those runs, by identity.
         fusion: Manifest of the semantic fusion run.
         fusion_outcomes: The supports and fused evidence of that run.
+        mapping: Manifest of the semantic mapping run.
+        entities: Its materialized entities, by reference.
+        resolution: Manifest of the entity resolution run.
+        resolved_entities: Its resolved entities, by reference.
+        relations: Manifest of the spatial relations run.
+        relation_records: Its relations.
+        context_map: The final, portable artifact the run produced.
     """
 
     sequence: SequenceArtifactManifest
@@ -75,6 +99,13 @@ class CrossStageInputs:
     spatial_observations: Mapping[SpatialObservationId, SpatialObservation]
     fusion: SemanticFusionRunManifest
     fusion_outcomes: Sequence[FusionOutcome]
+    mapping: SemanticMappingRunManifest
+    entities: Mapping[EntityReference, Entity]
+    resolution: EntityResolutionRunManifest
+    resolved_entities: Mapping[ResolvedEntityReference, ResolvedEntity]
+    relations: SpatialRelationsRunManifest
+    relation_records: Sequence[Relation]
+    context_map: ContextMap
     sequence_calibration_identity: str | None = None
 
 
@@ -123,7 +154,8 @@ def check_cross_stage(inputs: CrossStageInputs) -> CrossStageReport:
     """Check the boundaries between the stage artifacts of one run.
 
     Args:
-        inputs: The manifests and objects of every stage from ingestion to fusion.
+        inputs: The manifests and objects of every stage from ingestion to the final
+            ``ContextMapArtifact``.
 
     Returns:
         The findings and the number of checks each gate ran. The inputs are not modified.
@@ -191,7 +223,7 @@ def cross_stage_gate_results(
                     gate_id,
                     blocked_by=unverified_boundaries,
                     detail=(
-                        f"boundaries up to semantic_fusion verified ({summary}); "
+                        f"verified boundaries had no finding ({summary}); "
                         f"not yet verifiable: {', '.join(unverified_boundaries)}"
                     ),
                 )
@@ -328,6 +360,51 @@ def _check_lineage(inputs: CrossStageInputs, collector: _Collector) -> None:
         f"{sorted(consumed_perception)} out of {sorted(perception_ids)}",
     )
 
+    mapping, resolution, relations = inputs.mapping, inputs.resolution, inputs.relations
+    expect(_SEMANTIC_MAPPING, "mapping sequence", mapping.lineage.sequence_artifact_id, sequence_id)
+    expect(_SEMANTIC_MAPPING, "mapping map", mapping.lineage.geometric_map_id, geometry.map_id)
+    expect(_SEMANTIC_MAPPING, "mapping fusion run", mapping.lineage.fusion_run_id, fusion.run_id)
+
+    expect(
+        _ENTITY_RESOLUTION,
+        "resolution sequence",
+        resolution.lineage.sequence_artifact_id,
+        sequence_id,
+    )
+    expect(
+        _ENTITY_RESOLUTION, "resolution map", resolution.lineage.geometric_map_id, geometry.map_id
+    )
+    expect(
+        _ENTITY_RESOLUTION,
+        "resolution mapping run",
+        resolution.lineage.semantic_mapping_run_id,
+        mapping.run_id,
+    )
+
+    expect(_SPATIAL_RELATIONS, "relations map", relations.lineage.geometric_map_id, geometry.map_id)
+    expect(
+        _SPATIAL_RELATIONS,
+        "relations resolution run",
+        relations.lineage.entity_resolution_run_id,
+        resolution.run_id,
+    )
+
+    upstream_by_kind = {item.kind: item for item in inputs.context_map.lineage}
+    for label, kind, run_id in (
+        ("geometric map", ArtifactKind.GEOMETRIC_MAP, geometry.map_id),
+        ("entity resolution run", ArtifactKind.ENTITY_RESOLUTION_RUN, resolution.run_id),
+        ("spatial relations run", ArtifactKind.SPATIAL_RELATIONS_RUN, relations.run_id),
+    ):
+        entry = upstream_by_kind.get(kind)
+        collector.expect(
+            LINEAGE_CLOSURE,
+            _ARTIFACT,
+            entry is not None,
+            f"context map lineage names no {label}",
+        )
+        if entry is not None:
+            expect(_ARTIFACT, f"context map {label}", entry.artifact_id, run_id)
+
 
 def _check_coordinates(inputs: CrossStageInputs, collector: _Collector) -> None:
     trajectory, geometry = inputs.trajectory, inputs.geometry
@@ -389,6 +466,42 @@ def _check_coordinates(inputs: CrossStageInputs, collector: _Collector) -> None:
                 f"support {support.fusion_support_id}",
                 reference,
             )
+
+    for entity_ref, entity in inputs.entities.items():
+        for reference in entity.geometry.geometry_refs:
+            _expect_reference(
+                inputs, collector, _SEMANTIC_MAPPING, f"entity {entity_ref.entity_id}", reference
+            )
+
+    for resolved_ref, resolved in inputs.resolved_entities.items():
+        for reference in resolved.geometry.geometry_refs:
+            _expect_reference(
+                inputs,
+                collector,
+                _ENTITY_RESOLUTION,
+                f"resolved entity {resolved_ref.resolved_entity_id}",
+                reference,
+            )
+
+    context_map = inputs.context_map
+    collector.expect(
+        COORDINATE_CONSISTENCY,
+        _ARTIFACT,
+        str(context_map.geometry_ref.map_id) == str(geometry.map_id),
+        f"context map geometry {context_map.geometry_ref.map_id!r} differs from the run's map "
+        f"{geometry.map_id!r}",
+    )
+    collector.expect(
+        COORDINATE_CONSISTENCY,
+        _ARTIFACT,
+        str(context_map.metadata.frame.frame_id) == str(geometry.map_frame),
+        f"context map frame {context_map.metadata.frame.frame_id!r} differs from the run's map "
+        f"frame {geometry.map_frame!r}",
+    )
+    for context_entity in context_map.entities:
+        for reference in context_entity.geometry_refs:
+            label = f"context entity {context_entity.entity_id}"
+            _expect_reference(inputs, collector, _ARTIFACT, label, reference)
 
 
 def _expect_reference(
@@ -521,6 +634,121 @@ def _check_traceability(inputs: CrossStageInputs, collector: _Collector) -> None
             f"{label} cites claims {sorted(cited - all_claims)} that no perception result contains",
         )
 
+    real_support_ids = {
+        str(outcome.support.fusion_support_id) for outcome in inputs.fusion_outcomes
+    }
+
+    def expect_evidence_links(capability: str, label: str, links: EntityEvidenceLinks) -> None:
+        for ref in links.fused_evidence:
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                capability,
+                str(ref.fusion_run_id) == str(inputs.fusion.run_id),
+                f"{label} cites fused evidence of fusion run {ref.fusion_run_id!r}, not "
+                f"{inputs.fusion.run_id!r}",
+            )
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                capability,
+                str(ref.fusion_support_id) in real_support_ids,
+                f"{label} cites fused evidence over support {ref.fusion_support_id!r}, which the "
+                "fusion run never produced",
+            )
+            expected_evidence_id = _fused_evidence_id_for(fusion_support_id=ref.fusion_support_id)
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                capability,
+                str(ref.fused_evidence_id) == str(expected_evidence_id),
+                f"{label} names fused evidence {ref.fused_evidence_id!r}, expected "
+                f"{expected_evidence_id!r} for support {ref.fusion_support_id!r}",
+            )
+        known_observations = {str(key) for key in inputs.spatial_observations}
+        cited_observations = {str(ident) for ident in links.spatial_observation_ids}
+        collector.expect(
+            EVIDENCE_TRACEABILITY,
+            capability,
+            cited_observations <= known_observations,
+            f"{label} cites spatial observations "
+            f"{sorted(cited_observations - known_observations)} that no association produced",
+        )
+
+    for entity_ref, entity in inputs.entities.items():
+        expect_evidence_links(_SEMANTIC_MAPPING, f"entity {entity_ref.entity_id}", entity.evidence)
+
+    known_entities = set(inputs.entities)
+    for resolved_ref, resolved in inputs.resolved_entities.items():
+        label = f"resolved entity {resolved_ref.resolved_entity_id}"
+        member_refs = {member.entity_ref for member in resolved.members}
+        collector.expect(
+            EVIDENCE_TRACEABILITY,
+            _ENTITY_RESOLUTION,
+            member_refs <= known_entities,
+            f"{label} merges members {sorted(str(ref) for ref in member_refs - known_entities)} "
+            "that semantic mapping never materialized",
+        )
+        expect_evidence_links(_ENTITY_RESOLUTION, label, resolved.evidence)
+
+    known_resolved = set(inputs.resolved_entities)
+    for relation in inputs.relation_records:
+        label = f"relation {relation.relation_id}"
+        for endpoint_name, endpoint in (
+            ("subject", relation.subject_entity_ref),
+            ("object", relation.object_entity_ref),
+        ):
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                _SPATIAL_RELATIONS,
+                endpoint in known_resolved,
+                f"{label} names {endpoint_name} {endpoint!r}, which entity resolution never "
+                "produced",
+            )
+
+    relations_by_id = {relation.relation_id: relation for relation in inputs.relation_records}
+    known_context_entities = {entity.entity_id: entity for entity in inputs.context_map.entities}
+    for context_entity in inputs.context_map.entities:
+        label = f"context entity {context_entity.entity_id}"
+        collector.expect(
+            EVIDENCE_TRACEABILITY,
+            _ARTIFACT,
+            context_entity.source in known_resolved,
+            f"{label} sources resolved entity {context_entity.source!r}, which entity "
+            "resolution never produced",
+        )
+        if context_entity.source in inputs.resolved_entities:
+            member_refs = {
+                member.entity_ref
+                for member in inputs.resolved_entities[context_entity.source].members
+            }
+            named = set(context_entity.member_entities)
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                _ARTIFACT,
+                named <= member_refs,
+                f"{label} names members {sorted(str(ref) for ref in named - member_refs)} that "
+                "its resolved entity does not have",
+            )
+    for context_relation in inputs.context_map.relations:
+        label = f"context relation {context_relation.relation_id}"
+        source = relations_by_id.get(context_relation.source_relation_id)
+        collector.expect(
+            EVIDENCE_TRACEABILITY,
+            _ARTIFACT,
+            source is not None and context_relation.source_run_id == inputs.relations.run_id,
+            f"{label} names relation {context_relation.source_relation_id!r} of run "
+            f"{context_relation.source_run_id!r}, which spatial relations never produced",
+        )
+        for endpoint_name, context_endpoint in (
+            ("subject", context_relation.subject),
+            ("object", context_relation.object),
+        ):
+            collector.expect(
+                EVIDENCE_TRACEABILITY,
+                _ARTIFACT,
+                context_endpoint.entity_id in known_context_entities,
+                f"{label} names {endpoint_name} {context_endpoint!r}, which the map does not "
+                "contain",
+            )
+
 
 def _check_physical_identity(inputs: CrossStageInputs, collector: _Collector) -> None:
     """Repeated inference over one physical frame must stay one physical observation.
@@ -564,3 +792,23 @@ def _check_physical_identity(inputs: CrossStageInputs, collector: _Collector) ->
                     f"{group.physical_observation_id!r}, but it is over "
                     f"{None if member is None else member.source_observation_id!r}",
                 )
+
+    # Merging entities (issue #178) must not lose or fabricate physical evidence: a resolved
+    # entity's physical observations are exactly the union of its members' own, never more
+    # (evidence invented by the merge) or fewer (evidence dropped by the merge).
+    for resolved_ref, resolved in inputs.resolved_entities.items():
+        label = f"resolved entity {resolved_ref.resolved_entity_id}"
+        member_physical: set[str] = set()
+        for resolved_member in resolved.members:
+            entity = inputs.entities.get(resolved_member.entity_ref)
+            if entity is None:
+                continue
+            member_physical |= {str(ident) for ident in entity.evidence.physical_observation_ids}
+        resolved_physical = {str(ident) for ident in resolved.evidence.physical_observation_ids}
+        collector.expect(
+            PHYSICAL_OBSERVATION_IDENTITY,
+            _ENTITY_RESOLUTION,
+            resolved_physical == member_physical,
+            f"{label} lists physical observations {sorted(resolved_physical)}, but its members "
+            f"together are over {sorted(member_physical)}",
+        )

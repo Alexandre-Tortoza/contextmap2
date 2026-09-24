@@ -32,9 +32,9 @@ from contextmap.evaluation.end_to_end import (
 )
 
 _CONTRACT = EvidenceClass.FAKE_CONTRACT
-# check_cross_stage() has no inputs for these boundaries yet (issue #178); running the chain
-# through them (issue #172) does not, by itself, make the cross-stage checker verify them.
-_MISSING = ("entity_resolution", "spatial_relations", "artifact")
+# check_cross_stage() now covers every boundary through the ContextMapArtifact (issue #178):
+# nothing is left unverified for the synthetic chain.
+_MISSING: tuple[str, ...] = ()
 
 
 def _inventory(manifest: object) -> dict[str, str]:
