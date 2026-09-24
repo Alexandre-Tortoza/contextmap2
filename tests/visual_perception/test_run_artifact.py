@@ -1290,3 +1290,45 @@ def test_the_run_writes_the_debug_directory_for_a_failed_interpretation(tmp_path
     assert (root / "parse-failure.json").is_file()
     assert (root / "raw-response.txt").read_text(encoding="utf-8") == failed.raw_response
     assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+
+def test_a_run_with_semantic_attempts_always_writes_the_failures_stream(tmp_path: Path) -> None:
+    """An absent failures file must mean "predates the stream", never "zero failures".
+
+    Writing it only when a failure occurred made those two indistinguishable, so a run could
+    report a 0% parse-failure rate simply because it never tracked them.
+    """
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+    manifest = writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    failures_file = run_dir / "outputs" / "semantic-interpretation-failures.jsonl"
+    assert failures_file.is_file(), "a run that attempted interpretation must declare its failures"
+    assert failures_file.read_text(encoding="utf-8") == "", "zero failures is an empty file"
+    assert any(
+        entry.path == "outputs/semantic-interpretation-failures.jsonl"
+        for entry in manifest.file_inventory
+    )
+    assert PerceptionRunReader(run_dir).list_failed_semantic_interpretations() == []
+
+
+def test_a_run_without_any_semantic_attempt_writes_no_failures_stream(tmp_path: Path) -> None:
+    """A run that never called a semantic backend has nothing to declare."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    assert not (_run_dir(tmp_path) / "outputs" / "semantic-interpretation-failures.jsonl").exists()

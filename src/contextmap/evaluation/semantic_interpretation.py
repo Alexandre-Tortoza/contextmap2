@@ -507,6 +507,112 @@ class EvidenceVariantComparison:
     entries: tuple[EvidenceVariantEntry, ...]
 
 
+@dataclass(frozen=True, kw_only=True)
+class SemanticAttemptAccounting:
+    """How many real backend calls a run made, and how many became canonical claims.
+
+    Counting only materialized executions overstates the stage: a run where a third of the
+    responses were rejected by the parser looked as good as one where none were. These three
+    numbers come from the two contractual streams of the artifact, reconciled by
+    ``request_id`` — never from ``StageOutcome``, never inferred.
+
+    Attributes:
+        attempted: Distinct requests the backend actually answered, parsed or not.
+        parsed: Requests whose response became a ``ParsedSemanticResponse``.
+        parse_failed: Requests whose response was observed but rejected by the parser.
+    """
+
+    attempted: int
+    parsed: int
+    parse_failed: int
+
+    def __post_init__(self) -> None:
+        """Reject counts that cannot describe one reconciled run."""
+        for name, value in (
+            ("attempted", self.attempted),
+            ("parsed", self.parsed),
+            ("parse_failed", self.parse_failed),
+        ):
+            if value < 0:
+                raise SemanticEvaluationError(f"semantic attempt {name} must be non-negative")
+        if self.attempted != self.parsed + self.parse_failed:
+            raise SemanticEvaluationError(
+                "semantic attempts do not reconcile: "
+                f"attempted={self.attempted} != parsed={self.parsed} + "
+                f"parse_failed={self.parse_failed}"
+            )
+
+    @property
+    def parse_failure_rate(self) -> float | None:
+        """Share of attempts the parser rejected, or ``None`` when nothing was attempted.
+
+        ``0/0`` is undefined, not zero: a run that issued no semantic request has no failure
+        rate to report, and returning ``0.0`` would read as a perfect stage.
+        """
+        if self.attempted == 0:
+            return None
+        return self.parse_failed / self.attempted
+
+    @classmethod
+    def from_request_ids(
+        cls, *, parsed_ids: frozenset[str], failed_ids: frozenset[str]
+    ) -> SemanticAttemptAccounting:
+        """Build the accounting of one run from the request ids of both streams.
+
+        Raises:
+            SemanticEvaluationError: If a request id appears in both streams, which would make
+                ``attempted`` ambiguous — one attempt has exactly one outcome.
+        """
+        both = parsed_ids & failed_ids
+        if both:
+            raise SemanticEvaluationError(
+                f"semantic request ids appear in both streams of one run: {sorted(both)!r}"
+            )
+        return cls(
+            attempted=len(parsed_ids | failed_ids),
+            parsed=len(parsed_ids),
+            parse_failed=len(failed_ids),
+        )
+
+
+def account_semantic_attempts(reader: Any) -> SemanticAttemptAccounting:
+    """Count one run's semantic attempts from its two contractual streams.
+
+    Args:
+        reader: An open ``PerceptionRunReader``. A run written before the failures stream
+            existed simply has none, which is not an error.
+
+    Returns:
+        The reconciled accounting of that single run.
+
+    Raises:
+        SemanticEvaluationError: If a request id appears in both streams.
+    """
+    parsed_ids = frozenset(
+        str(execution.request.request_id) for execution in reader.iter_semantic_executions()
+    )
+    failed_ids = frozenset(
+        str(failed.request.request_id) for failed in reader.iter_failed_semantic_interpretations()
+    )
+    return SemanticAttemptAccounting.from_request_ids(parsed_ids=parsed_ids, failed_ids=failed_ids)
+
+
+def aggregate_semantic_attempts(
+    accountings: Iterable[SemanticAttemptAccounting],
+) -> SemanticAttemptAccounting:
+    """Sum per-run accountings that were each already reconciled.
+
+    Reconciliation is per run on purpose: two runs may legitimately issue the same
+    ``request_id``, and unioning ids across runs would report that reuse as a collision.
+    """
+    totals = list(accountings)
+    return SemanticAttemptAccounting(
+        attempted=sum(item.attempted for item in totals),
+        parsed=sum(item.parsed for item in totals),
+        parse_failed=sum(item.parse_failed for item in totals),
+    )
+
+
 def evaluate_semantic_interpretation(
     *,
     context: SemanticEvaluationContext,

@@ -914,7 +914,11 @@ class PerceptionRunWriter:
                     _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
                 )
 
-        if self._semantic_failures:
+        if self._semantic_failures or self._semantic_executions:
+            # Escrito sempre que houve tentativa semantica, mesmo vazio: a ausencia do arquivo
+            # precisa significar "run anterior a este stream", nunca "zero falhas". Sem isso,
+            # um run que nunca rastreou falhas reporta 0% de parse failure e parece perfeito.
+            #
             # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
             # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
             # (e todo artifact ja escrito sob esta versao de schema).
