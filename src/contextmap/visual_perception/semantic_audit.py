@@ -11,7 +11,10 @@ from contextmap.visual_perception.semantic_requests import encode_semantic_reque
 from contextmap.visual_perception.serialization import encode_claim, encode_scene_context
 
 if TYPE_CHECKING:
-    from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
+    from contextmap.visual_perception.semantic_backend import (
+        FailedSemanticInterpretation,
+        SemanticInterpretationExecution,
+    )
 
 SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 """Run-relative root for non-contractual semantic diagnostics."""
@@ -56,12 +59,22 @@ def redact_semantic_secrets(value: Any) -> Any:
 def write_semantic_audit(
     *,
     run_root: Path,
-    execution: SemanticInterpretationExecution,
+    execution: SemanticInterpretationExecution | FailedSemanticInterpretation,
     debug_level: SemanticDebugLevel,
 ) -> tuple[str, ...]:
-    """Write request/prompt/parsed/final diagnostics according to the debug level."""
+    """Write request/prompt/outcome/diagnostics for one attempt, per the debug level.
+
+    Accepts either outcome of a real backend call. Both land in the same
+    ``debug/40-semantic-interpretation/<request-id>/`` directory and share request, prompt,
+    diagnostics and (at ``FULL``) the raw response; they differ only in how the outcome is
+    recorded — ``parsed-response.json`` for an execution that materialized, or
+    ``parse-failure.json`` for one the parser rejected. One writer, so the two can never drift
+    apart.
+    """
     if debug_level is SemanticDebugLevel.NONE:
         return ()
+    from contextmap.visual_perception.semantic_backend import FailedSemanticInterpretation
+
     request_id = str(execution.request.request_id)
     request_path = PurePosixPath(request_id)
     if request_path.name != request_id or request_id in {".", ".."}:
@@ -69,6 +82,26 @@ def write_semantic_audit(
     relative_root = f"{SEMANTIC_DEBUG_ROOT}/{request_id}"
     root = run_root / relative_root
     root.mkdir(parents=True, exist_ok=True)
+    if isinstance(execution, FailedSemanticInterpretation):
+        return _write_shared_audit(
+            root=root,
+            relative_root=relative_root,
+            execution=execution,
+            debug_level=debug_level,
+            outcome={
+                "parse-failure.json": json.dumps(
+                    {
+                        "kind": execution.failure.kind,
+                        "message": execution.failure.message,
+                        "raw_response_sha256": execution.raw_response_sha256,
+                        "occurred_at": execution.occurred_at,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            },
+        )
     parsed = {
         "abstained": execution.parsed.abstained,
         "raw_response_sha256": execution.parsed.raw_response_sha256,
@@ -82,6 +115,33 @@ def write_semantic_audit(
             else encode_scene_context(execution.parsed.scene_context)
         ),
     }
+    outcome = {"parsed-response.json": json.dumps(parsed, indent=2, sort_keys=True) + "\n"}
+    if execution.parsed.scene_context is None:
+        outcome["semantic-claims.json"] = (
+            json.dumps(parsed["claims"], indent=2, sort_keys=True) + "\n"
+        )
+    else:
+        outcome["scene-context.json"] = (
+            json.dumps(parsed["scene_context"], indent=2, sort_keys=True) + "\n"
+        )
+    return _write_shared_audit(
+        root=root,
+        relative_root=relative_root,
+        execution=execution,
+        debug_level=debug_level,
+        outcome=outcome,
+    )
+
+
+def _write_shared_audit(
+    *,
+    root: Path,
+    relative_root: str,
+    execution: SemanticInterpretationExecution | FailedSemanticInterpretation,
+    debug_level: SemanticDebugLevel,
+    outcome: dict[str, str],
+) -> tuple[str, ...]:
+    """Write what both outcomes share, plus the caller's outcome-specific files."""
     records: dict[str, str] = {
         "request.json": json.dumps(
             redact_semantic_secrets(encode_semantic_request(execution.request)),
@@ -90,7 +150,6 @@ def write_semantic_audit(
         )
         + "\n",
         "prompt.txt": execution.rendered_prompt.text,
-        "parsed-response.json": json.dumps(parsed, indent=2, sort_keys=True) + "\n",
         "diagnostics.json": json.dumps(
             redact_semantic_secrets(
                 {
@@ -107,15 +166,8 @@ def write_semantic_audit(
             sort_keys=True,
         )
         + "\n",
+        **outcome,
     }
-    if execution.parsed.scene_context is None:
-        records["semantic-claims.json"] = (
-            json.dumps(parsed["claims"], indent=2, sort_keys=True) + "\n"
-        )
-    else:
-        records["scene-context.json"] = (
-            json.dumps(parsed["scene_context"], indent=2, sort_keys=True) + "\n"
-        )
     if debug_level is SemanticDebugLevel.FULL:
         records["raw-response.txt"] = execution.raw_response
     for filename, content in records.items():

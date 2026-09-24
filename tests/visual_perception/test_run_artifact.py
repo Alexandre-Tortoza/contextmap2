@@ -1228,3 +1228,65 @@ def test_a_failure_view_payload_is_inventoried_even_without_any_success(tmp_path
     assert reader.verify_integrity() == []
     assert (run_dir / view.payload_reference).read_bytes() == _SEMANTIC_VIEW_PAYLOAD
     assert any(entry.path == view.payload_reference for entry in manifest.file_inventory)
+
+
+def test_a_failed_interpretation_gets_the_same_per_request_debug_directory(
+    tmp_path: Path,
+) -> None:
+    """Item 2 of the PR #438 re-review: debug/<request-id>/ must exist for both outcomes.
+
+    Non-canonical, but it is where a human goes to diagnose a rejected response, and it was
+    part of the agreed shape. One generalized writer, not a second implementation that can
+    drift from the successful one.
+    """
+    failed = _failed_semantic_interpretation()
+    written = write_semantic_audit(
+        run_root=tmp_path,
+        execution=failed,
+        debug_level=SemanticDebugLevel.FULL,
+    )
+
+    root = tmp_path / "debug" / "40-semantic-interpretation" / str(failed.request.request_id)
+    assert root.is_dir()
+    assert {path.name for path in root.iterdir()} == {
+        "request.json",
+        "prompt.txt",
+        "diagnostics.json",
+        "parse-failure.json",
+        "raw-response.txt",
+    }
+    # The rejected response is readable verbatim, which is the whole point.
+    assert (root / "raw-response.txt").read_text(encoding="utf-8") == failed.raw_response
+    recorded = json.loads((root / "parse-failure.json").read_text(encoding="utf-8"))
+    assert recorded["kind"] == "SemanticResponseParseError"
+    assert recorded["message"] == failed.failure.message
+    assert recorded["raw_response_sha256"] == failed.raw_response_sha256
+    assert all(path.startswith("debug/40-semantic-interpretation/") for path in written)
+
+
+def test_a_failed_interpretation_writes_no_debug_when_disabled(tmp_path: Path) -> None:
+    """SemanticDebugLevel.NONE stays authoritative for failures too."""
+    written = write_semantic_audit(
+        run_root=tmp_path,
+        execution=_failed_semantic_interpretation(),
+        debug_level=SemanticDebugLevel.NONE,
+    )
+
+    assert written == ()
+    assert not (tmp_path / "debug").exists()
+
+
+def test_the_run_writes_the_debug_directory_for_a_failed_interpretation(tmp_path: Path) -> None:
+    """The per-request debug dir must appear in a finalized run, not only when called directly."""
+    failed = _failed_semantic_interpretation()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_semantic_view_payload(failed.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_failed_semantic_interpretation(failed)
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    root = run_dir / "debug" / "40-semantic-interpretation" / str(failed.request.request_id)
+    assert (root / "parse-failure.json").is_file()
+    assert (root / "raw-response.txt").read_text(encoding="utf-8") == failed.raw_response
+    assert PerceptionRunReader(run_dir).verify_integrity() == []

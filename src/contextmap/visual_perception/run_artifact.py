@@ -903,6 +903,17 @@ class PerceptionRunWriter:
                 _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
             )
 
+        for failed in self._semantic_failures:
+            # Mesmo diretorio por request das execucoes bem-sucedidas, mesmo writer.
+            for relative_path in write_semantic_audit(
+                run_root=self._tmp_dir,
+                execution=failed,
+                debug_level=self._semantic_debug_level,
+            ):
+                file_entries.append(
+                    _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
+                )
+
         if self._semantic_failures:
             # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
             # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
