@@ -53,7 +53,7 @@ flowchart LR
 
 - **`outputs/results.jsonl`, não `outputs/results.parquet`.** Mesma decisão e mesmo motivo da issue #39 de Ingestion: nenhuma dependência de runtime nova (`pyarrow`/`pandas`) se justifica ainda; JSON Lines é inspecionável com ferramentas de texto padrão. Revisitar se o volume de resultados tornar leitura linha-a-linha um gargalo real.
 - **`outputs/results.jsonl` continua canônico para metadata; `outputs/features/feature-index.jsonl` indexa apenas payloads numéricos opt-in.** Cada `PerceptionResult` carrega suas `regions`/`features`/`claims`; o feature index não duplica esse contrato, apenas liga a chave `(source_observation_id, feature_id)` ao arquivo `.npy`, hash e metadata necessária para leitura lazy. `finalize()` valida essa referência cruzada antes de publicar o artifact.
-- **Máscara de região nunca inlina pixels em `outputs/results.jsonl` (#378).** Ao contrário de payloads de feature, persistir a máscara não é opt-in: toda região com `mask` materializado é persistida automaticamente por `finalize()` em `outputs/masks/` (bit-packed, ver [`mask_store.md`](mask_store.md)), e a região grava apenas `mask_reference`. `PerceptionRunReader.list_results()` nunca materializa pixels; `PerceptionRunReader.mask_store()` carrega e verifica o hash sob demanda.
+- **Máscara de região nunca inlina pixels em `outputs/results.jsonl` (#378).** Ao contrário de payloads de feature, persistir a máscara não é opt-in: toda região com `mask` materializado é persistida automaticamente em `outputs/masks/` (bit-packed, ver [`mask_store.md`](mask_store.md)), e a região grava apenas `mask_reference`. `PerceptionRunReader.list_results()` nunca materializa pixels; `PerceptionRunReader.mask_store()` carrega e verifica o hash sob demanda.
 - **Views semânticas são outputs contratuais.** Cada `SemanticVisualView` possui SHA-256 obrigatório e referencia um arquivo abaixo de `outputs/semantic-views/`. `add_semantic_view_payload()` valida o hash antes de enfileirar os bytes (na persistência; a inferência já verifica o mesmo hash em cada runtime, ver [Integridade das views](semantic-interpretation.md#integridade-das-views-na-inferência)); `finalize()` exige que toda view de toda execução possua payload inventariado e rejeita payloads sem request correspondente.
 - **`debug/` só existe quando há conteúdo real.** Feature Extraction
   materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava
@@ -64,9 +64,24 @@ flowchart LR
   qualquer serialização.
 - **`config.yaml`, `lineage.json`, `environment.json`, `events.jsonl` não são escritos no v0.** Nenhum destes tem produtor real ainda (configuração efetiva de backend, lineage de artefatos upstream, ambiente de execução, eventos granulares) — `manifest.json` já cobre a metadata mínima autoritativa (run_id, índice, sequência, seleção, capabilities, contagens). Adicionar esses arquivos vazios/parciais agora seria estrutura sem conteúdo real.
 
-## Escrita atômica
+## Escrita atômica e incremental
 
-Mesmo padrão de `contextmap.ingestion.sequence_artifact`: `PerceptionRunWriter.finalize()` escreve em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), roda uma checagem de consistência interna, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e uma falha remove o temporário e não deixa nada. O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
+Mesmo padrão de `contextmap.ingestion.sequence_artifact`, agora nas duas metades: **atômica e streaming**. O writer monta o run em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), criado na primeira escrita, roda uma checagem de consistência interna em `finalize()`, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e qualquer falha remove o temporário e não deixa nada. O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
+
+Cada payload pesado é gravado **no momento em que é adicionado**, não em `finalize()`:
+
+| Chamada | O que vai para o disco na hora | O que fica em memória |
+| --- | --- | --- |
+| `add_result()` | máscaras de cada região, em `outputs/masks/` | o resultado já com `mask_reference` e sem pixels |
+| `add_feature_payload()` | o `.npy` em `outputs/features/` | só a metadata da feature |
+| `add_semantic_view_payload()` | os bytes em `outputs/semantic-views/` | só `(sha256, size_bytes)` |
+| `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error` |
+
+Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **mesma** tupla de `Region2D` com máscaras que `add_result()` recebe, e as métricas de estágio nunca serializam esse `output`: retê-lo guardaria os pixels uma segunda vez.
+
+O motivo é medido, não hipotético: uma `InlineMask` de 640x480 é uma tuple de 307200 ponteiros (~2,36 MB), então as 7828 regiões de um run real de 360 frames custavam ~18 GB só de máscaras — e outro tanto pelos `StageOutcome` retidos — antes de `finalize()` sequer começar. Depois da mudança, o crescimento de RSS do writer não escala com o número de frames; o que permanece é O(N) apenas em metadata leve (ids, hashes, contagens), medido em ~0,04 MB por frame.
+
+`finalize()` passa a fazer só o que é inerentemente global: validar os invariantes entre frames, escrever `mask-index.jsonl`/`feature-index.jsonl`, o `manifest.json`, o `README.md`, conferir o inventário e publicar por rename.
 
 `add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
 

@@ -48,6 +48,7 @@ from contextmap.visual_perception import (
     render_semantic_prompt,
     write_semantic_audit,
 )
+from contextmap.visual_perception import run_artifact as run_artifact_module
 from contextmap.visual_perception.region_models import InlineMask
 
 _PROVENANCE = BackendProvenance(
@@ -58,6 +59,14 @@ _PROVENANCE = BackendProvenance(
 def _run_dir(tmp_path: Path, run_index: int = 1) -> Path:
     """Diretório final escolhido pelo chamador; o leitor abre exatamente este caminho."""
     return tmp_path / f"run-{run_index:04d}"
+
+
+def _current_rss_bytes() -> int:
+    """RSS corrente do processo, não o pico (`ru_maxrss` é monotônico e esconderia a liberação)."""
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    pytest.skip("VmRSS unavailable on this platform")
 
 
 def _result(
@@ -844,3 +853,260 @@ def test_a_run_with_no_masks_has_an_empty_mask_store(tmp_path: Path) -> None:
 
     reader = PerceptionRunReader(_run_dir(tmp_path))
     assert reader.mask_store().region_keys() == ()
+
+
+def test_iter_results_streams_instead_of_materializing_every_result(tmp_path: Path) -> None:
+    """A reader must be able to walk a run without holding all of it (#517)."""
+    writer = _write_run(tmp_path)
+    for index in range(5):
+        writer.add_result(_result(f"frame-{index:04d}", "run-0001"))
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    streamed = reader.iter_results()
+    assert not isinstance(streamed, list), "iter_results() must be lazy, not a built list"
+    assert [r.source_observation_id for r in streamed] == [
+        r.source_observation_id for r in reader.list_results()
+    ]
+
+
+def test_result_lookup_stops_at_the_match_instead_of_decoding_the_whole_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """result() used to call list_results(), so one lookup cost the entire run (#517)."""
+    writer = _write_run(tmp_path)
+    for index in range(20):
+        writer.add_result(_result(f"frame-{index:04d}", "run-0001"))
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    decoded = 0
+    real_decode = run_artifact_module.decode_perception_result
+
+    def counting_decode(payload: dict[str, object]) -> PerceptionResult:
+        nonlocal decoded
+        decoded += 1
+        return real_decode(payload)
+
+    monkeypatch.setattr(run_artifact_module, "decode_perception_result", counting_decode)
+    found = reader.result(SourceObservationId("frame-0000"))
+
+    assert found.source_observation_id == SourceObservationId("frame-0000")
+    assert decoded == 1, f"looking up the first result decoded {decoded} of 20 results"
+
+
+def test_iter_semantic_executions_streams_instead_of_materializing(tmp_path: Path) -> None:
+    """Each execution carries its full raw_response text, so eager reads scale badly."""
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    streamed = reader.iter_semantic_executions()
+    assert not isinstance(streamed, list), "iter_semantic_executions() must be lazy"
+    assert list(streamed) == [execution]
+
+
+def _masked_result(observation_id: str, mask: InlineMask) -> PerceptionResult:
+    region = Region2D(
+        region_id=RegionId("region-0001"),
+        bounding_box=BoundingBox2D(x=0, y=0, width=mask.width, height=mask.height),
+        provenance=_PROVENANCE,
+        source_observation_id=SourceObservationId(observation_id),
+        image_width=mask.width,
+        image_height=mask.height,
+        area_pixels=float(sum(mask.data)),
+        mask=mask,
+    )
+    return PerceptionResult(
+        result_id=PerceptionResultId(f"run-0001--{observation_id}"),
+        source_observation_id=SourceObservationId(observation_id),
+        run_id=PerceptionRunId("run-0001"),
+        sequence_artifact_id="corridor-02-a1b2c3",
+        created_at="2026-01-01T00:00:00+00:00",
+        regions=(region,),
+    )
+
+
+def _staging_dir(tmp_path: Path, run_index: int = 1) -> Path:
+    staging = [p for p in tmp_path.iterdir() if p.name.startswith(f".tmp-run-{run_index:04d}-")]
+    assert len(staging) == 1, f"expected exactly one staging directory, found {staging}"
+    return staging[0]
+
+
+def test_mask_pixels_reach_disk_when_the_result_is_added_not_at_finalize(
+    tmp_path: Path,
+) -> None:
+    """A mask must not sit in RAM until finalize().
+
+    Two real 360-frame runs died holding every frame's mask: a 640x480 InlineMask is a
+    tuple of 307200 pointers (~2.36 MB measured), so 7828 regions cost ~18 GB before
+    finalize() ever ran.
+    """
+    writer = _write_run(tmp_path)
+    writer.add_result(_masked_result("frame-0001", _full_frame_mask()))
+
+    masks = list((_staging_dir(tmp_path) / "outputs" / "masks").rglob("*.npy"))
+    assert masks, "add_result() must persist the mask instead of buffering its pixels"
+
+
+def test_writer_memory_does_not_grow_with_the_number_of_masked_results(
+    tmp_path: Path,
+) -> None:
+    """Peak RSS must not scale with frame count; this is the property the campaign needs."""
+    frames = 40
+    retained_bytes_if_buffered = frames * 640 * 480 * 8  # ~98 MB of pointers
+
+    writer = _write_run(tmp_path)
+    before = _current_rss_bytes()
+    for index in range(frames):
+        writer.add_result(_masked_result(f"frame-{index:04d}", _full_frame_mask()))
+    growth = _current_rss_bytes() - before
+
+    assert growth < retained_bytes_if_buffered // 4, (
+        f"writer grew {growth / 2**20:.1f} MB over {frames} masked results; "
+        f"buffering them all would cost ~{retained_bytes_if_buffered / 2**20:.0f} MB"
+    )
+
+
+def test_feature_arrays_reach_disk_when_added_not_at_finalize(tmp_path: Path) -> None:
+    """Dense DINOv2 payloads are megabytes per frame; they must not queue up in RAM."""
+    feature = _dense_feature()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", features=(feature,)))
+    writer.add_feature_payload(
+        feature,
+        SourceObservationId("frame-0001"),
+        np.zeros((2, 2), dtype="float32"),
+    )
+
+    payloads = list((_staging_dir(tmp_path) / "outputs" / "features").rglob("*.npy"))
+    assert payloads, "add_feature_payload() must persist the array instead of buffering it"
+
+
+def test_writer_memory_does_not_grow_with_the_number_of_feature_payloads(
+    tmp_path: Path,
+) -> None:
+    """A real run queues one dense array per frame; 1500 frames must not cost 1500 arrays."""
+    frames = 30
+    rows = cols = 768  # 2.25 MB per array, the order of a real DINOv2 dense payload
+    retained_bytes_if_buffered = frames * rows * cols * 4
+
+    writer = _write_run(tmp_path)
+    before = _current_rss_bytes()
+    for index in range(frames):
+        feature = replace(
+            _dense_feature(f"feature-dense-{index:04d}"),
+            shape=(rows, cols),
+            payload_reference=f"frame-{index:04d}/feature-dense-{index:04d}.npy",
+        )
+        writer.add_feature_payload(
+            feature,
+            SourceObservationId(f"frame-{index:04d}"),
+            # np.zeros() would not fault its pages in, so it would not show up in RSS at all.
+            np.full((rows, cols), float(index), dtype="float32"),
+        )
+    growth = _current_rss_bytes() - before
+
+    assert growth < retained_bytes_if_buffered // 4, (
+        f"writer grew {growth / 2**20:.1f} MB over {frames} dense payloads; "
+        f"buffering them all would cost ~{retained_bytes_if_buffered / 2**20:.0f} MB"
+    )
+
+
+def test_semantic_view_payloads_reach_disk_when_added_not_at_finalize(tmp_path: Path) -> None:
+    """The exact pixels sent to the VLM are megabytes per frame; they must not be buffered."""
+    view = _semantic_execution().request.visual_views[0]
+    writer = _write_run(tmp_path)
+    writer.add_semantic_view_payload(view, _SEMANTIC_VIEW_PAYLOAD)
+
+    written = (_staging_dir(tmp_path) / view.payload_reference).is_file()
+    assert written, "add_semantic_view_payload() must persist the bytes instead of buffering them"
+
+
+def test_writer_memory_does_not_grow_with_the_number_of_view_payloads(tmp_path: Path) -> None:
+    """A real frame sends ~6 views; 1500 frames must not hold 9000 encoded images."""
+    views = 60
+    payload_bytes = 1 << 20  # 1 MB, the order of one encoded 640x480 frame
+    writer = _write_run(tmp_path)
+
+    before = _current_rss_bytes()
+    for index in range(views):
+        payload = bytes((index % 251,)) * payload_bytes
+        view = SemanticVisualView(
+            view_id=f"view-{index:04d}",
+            kind=VisualViewKind.FULL_FRAME,
+            payload_reference=f"outputs/semantic-views/view-{index:04d}.jpg",
+            source_observation_id=SourceObservationId(f"frame-{index:04d}"),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        writer.add_semantic_view_payload(view, payload)
+    growth = _current_rss_bytes() - before
+
+    assert growth < (views * payload_bytes) // 4, (
+        f"writer grew {growth / 2**20:.1f} MB over {views} view payloads; "
+        f"buffering them all would cost ~{views * payload_bytes / 2**20:.0f} MB"
+    )
+
+
+def test_writer_memory_does_not_grow_with_retained_stage_outputs(tmp_path: Path) -> None:
+    """The real driver hands the region_discovery outcome straight to add_stage_outcomes().
+
+    Its ``output`` is the same tuple of mask-bearing Region2D that add_result() receives, so
+    retaining the StageOutcome retains the pixels a second time — and stage timings only ever
+    serialize stage_id/status/duration_ms/error, never the output.
+    """
+    frames = 40
+    retained_bytes_if_buffered = frames * 640 * 480 * 8
+
+    writer = _write_run(tmp_path)
+    before = _current_rss_bytes()
+    for index in range(frames):
+        observation_id = f"frame-{index:04d}"
+        result = _masked_result(observation_id, _full_frame_mask())
+        writer.add_stage_outcomes(
+            (
+                StageOutcome(
+                    stage_id="region_discovery",
+                    status=StageStatus.SUCCEEDED,
+                    output=result.regions,
+                    duration_ms=1.0,
+                ),
+            )
+        )
+    growth = _current_rss_bytes() - before
+
+    assert growth < retained_bytes_if_buffered // 4, (
+        f"writer grew {growth / 2**20:.1f} MB over {frames} stage outcomes; "
+        f"retaining their outputs would cost ~{retained_bytes_if_buffered / 2**20:.0f} MB"
+    )
+
+
+def test_masks_added_one_by_one_are_all_readable_after_finalize(tmp_path: Path) -> None:
+    """Streaming the masks out must not lose or mix up any of them."""
+    masks = {
+        f"frame-{index:04d}": _full_frame_mask(width=8, height=4 + index) for index in range(5)
+    }
+    writer = _write_run(tmp_path)
+    for observation_id, mask in masks.items():
+        writer.add_result(_masked_result(observation_id, mask))
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.verify_integrity() == []
+    store = reader.mask_store()
+    for observation_id, mask in masks.items():
+        loaded = store.load(SourceObservationId(observation_id), RegionId("region-0001"))
+        assert loaded == mask

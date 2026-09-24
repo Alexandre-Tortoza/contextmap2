@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -237,13 +237,20 @@ class PerceptionRunWriter:
         self._semantic_debug_level = semantic_debug_level
         self._final_dir = output_dir
         self._tmp_dir = output_dir.parent / f".tmp-{output_dir.name}-{uuid4().hex[:8]}"
+        self._staging_created = False
+        self._mask_store: MaskStoreWriter | None = None
         self._results: list[PerceptionResult] = []
         self._source_observation_ids: set[SourceObservationId] = set()
-        self._stage_outcomes: list[StageOutcome] = []
+        # Só o registro leve (stage_id/status/duration_ms/error) fica retido: o `output` de
+        # region_discovery é a mesma tupla de Region2D com máscaras que add_result() recebe.
+        self._stage_outcome_records: list[dict[str, Any]] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
-        self._semantic_view_payloads: dict[str, bytes] = {}
-        self._feature_payloads: list[tuple[VisualFeature, SourceObservationId, NDArray[Any]]] = []
+        # reference -> (sha256, size_bytes); os bytes vao direto para o disco ao serem
+        # adicionados, entao o writer nunca retem as imagens enviadas ao backend.
+        self._semantic_view_payloads: dict[str, tuple[str, int]] = {}
+        self._feature_store: FeatureStoreWriter | None = None
+        self._feature_payloads: list[tuple[VisualFeature, SourceObservationId]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
         self._finalized = False
@@ -277,8 +284,52 @@ class PerceptionRunWriter:
                 "duplicate source_observation_id in perception run: "
                 f"{result.source_observation_id!r}"
             )
-        self._results.append(result)
+        self._results.append(self._persist_result_masks(result))
         self._source_observation_ids.add(result.source_observation_id)
+
+    def _ensure_staging(self) -> Path:
+        """Create the temporary run directory on first use and return it."""
+        if not self._staging_created:
+            self._tmp_dir.mkdir(parents=True, exist_ok=False)
+            self._staging_created = True
+        return self._tmp_dir
+
+    def _discard_staging(self) -> None:
+        """Remove the temporary directory, so an unpublished run leaves nothing behind."""
+        if self._staging_created:
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._staging_created = False
+
+    def _persist_result_masks(self, result: PerceptionResult) -> PerceptionResult:
+        """Persist this result's masks now and return it carrying references instead of pixels.
+
+        A 640x480 ``InlineMask`` is a tuple of 307200 pointers (~2.36 MB measured), so
+        buffering every frame's masks until :meth:`finalize` cost ~18 GB on a real 360-frame
+        run. Writing them here lets the caller release the pixels as soon as this returns,
+        exactly as :class:`~contextmap.ingestion.sequence_artifact.SequenceArtifactWriter`
+        does for observation payloads.
+        """
+        if all(region.mask is None for region in result.regions):
+            return result
+        try:
+            if self._mask_store is None:
+                self._mask_store = MaskStoreWriter(self._ensure_staging() / _MASKS_DIRNAME)
+            references: dict[tuple[SourceObservationId, RegionId], str] = {}
+            for region in result.regions:
+                if region.mask is None:
+                    continue
+                entry = self._mask_store.write(
+                    region_id=region.region_id,
+                    source_observation_id=result.source_observation_id,
+                    mask=region.mask,
+                )
+                references[(result.source_observation_id, region.region_id)] = (
+                    f"{_MASKS_DIRNAME}/{entry.payload_reference}"
+                )
+        except BaseException:
+            self._discard_staging()
+            raise
+        return _with_persisted_masks(result, references)
 
     def add_stage_outcomes(self, outcomes: Sequence[StageOutcome]) -> None:
         """Record stage outcomes (timings/status) to be written by :meth:`finalize`.
@@ -293,7 +344,7 @@ class PerceptionRunWriter:
         """
         if self._finalized:
             raise RunArtifactError("cannot add stage outcomes after finalize()")
-        self._stage_outcomes.extend(outcomes)
+        self._stage_outcome_records.extend(_encode_stage_outcome(outcome) for outcome in outcomes)
         for outcome in outcomes:
             if outcome.status is StageStatus.SUCCEEDED and isinstance(
                 outcome.output, SemanticInterpretationExecution
@@ -328,11 +379,20 @@ class PerceptionRunWriter:
                 f"expected {view.sha256!r}, found {digest!r}"
             )
         existing = self._semantic_view_payloads.get(view.payload_reference)
-        if existing is not None and existing != payload:
-            raise RunArtifactError(
-                f"conflicting semantic view payload for {view.payload_reference!r}"
-            )
-        self._semantic_view_payloads[view.payload_reference] = payload
+        if existing is not None:
+            if existing[0] != digest:
+                raise RunArtifactError(
+                    f"conflicting semantic view payload for {view.payload_reference!r}"
+                )
+            return
+        try:
+            payload_path = self._ensure_staging() / view.payload_reference
+            payload_path.parent.mkdir(parents=True, exist_ok=True)
+            payload_path.write_bytes(payload)
+        except BaseException:
+            self._discard_staging()
+            raise
+        self._semantic_view_payloads[view.payload_reference] = (digest, len(payload))
 
     def add_feature_payload(
         self,
@@ -361,7 +421,15 @@ class PerceptionRunWriter:
         """
         if self._finalized:
             raise RunArtifactError("cannot add feature payloads after finalize()")
-        self._feature_payloads.append((feature, source_observation_id, array))
+        try:
+            if self._feature_store is None:
+                self._feature_store = FeatureStoreWriter(self._ensure_staging() / _FEATURES_DIRNAME)
+            self._feature_store.write(feature, source_observation_id, array)
+        except BaseException:
+            self._discard_staging()
+            raise
+        # Só a metadata fica retida: as validações de finalize() nunca leem o array.
+        self._feature_payloads.append((feature, source_observation_id))
 
     def add_feature_diagnostic(self, diagnostic: FeatureExtractionDiagnostic) -> None:
         """Queue one structured Feature Extraction audit event.
@@ -397,15 +465,15 @@ class PerceptionRunWriter:
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
-        if self._final_dir.exists():
-            raise RunArtifactError(f"perception run artifact already exists: {self._final_dir}")
-        self._validate_feature_payload_references()
-        self._validate_feature_diagnostics()
-        self._validate_semantic_execution_materialization()
-        self._validate_semantic_view_payloads()
-
-        self._tmp_dir.mkdir(parents=True, exist_ok=False)
         try:
+            if self._final_dir.exists():
+                raise RunArtifactError(f"perception run artifact already exists: {self._final_dir}")
+            self._validate_feature_payload_references()
+            self._validate_feature_diagnostics()
+            self._validate_semantic_execution_materialization()
+            self._validate_semantic_view_payloads()
+
+            self._ensure_staging()
             manifest = self._write_contents()
             problems = _check_file_inventory(self._tmp_dir, manifest)
             if problems:
@@ -413,8 +481,9 @@ class PerceptionRunWriter:
                     f"internal consistency check failed before finalize: {problems}"
                 )
             self._tmp_dir.rename(self._final_dir)
+            self._staging_created = False
         except BaseException:
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._discard_staging()
             raise
 
         self._finalized = True
@@ -445,7 +514,7 @@ class PerceptionRunWriter:
             "region_id",
             "provenance",
         )
-        for feature, source_observation_id, _array in self._feature_payloads:
+        for feature, source_observation_id in self._feature_payloads:
             key = (source_observation_id, feature.feature_id)
             matches = features_by_key.get(key, [])
             if len(matches) != 1:
@@ -604,7 +673,7 @@ class PerceptionRunWriter:
                 )
             payload_keys = {
                 (source_observation_id, feature.feature_id)
-                for feature, source_observation_id, _array in self._feature_payloads
+                for feature, source_observation_id in self._feature_payloads
             }
             for feature_reference in request.visual_features:
                 feature_matches = [
@@ -672,47 +741,21 @@ class PerceptionRunWriter:
         if unused:
             raise RunArtifactError(f"semantic view payloads are not referenced: {unused!r}")
 
-    def _write_masks(
-        self, file_entries: list[RunArtifactFileEntry]
-    ) -> dict[tuple[SourceObservationId, RegionId], str]:
-        """Persist every queued region's mask compactly and return its new reference.
+    def _write_mask_index(self, file_entries: list[RunArtifactFileEntry]) -> None:
+        """Index the masks already persisted by :meth:`_persist_result_masks`.
 
         Masks are never opt-in the way feature payloads are (:meth:`add_feature_payload`):
-        every region that arrives with a materialized ``mask`` through
-        :meth:`add_result` is persisted here (#378), keyed by
-        ``(source_observation_id, region_id)`` since ``RegionId`` is local to
-        one result. ``outputs/results.jsonl`` never inlines the pixel array;
-        it only ever carries the returned artifact-relative reference.
-
-        Returns:
-            A mapping from ``(source_observation_id, region_id)`` to the
-            artifact-relative ``mask_reference`` to use when encoding that
-            region, for every region that had a mask to persist.
+        every region that arrives with a materialized ``mask`` through :meth:`add_result`
+        is persisted right there (#378), keyed by ``(source_observation_id, region_id)``
+        since ``RegionId`` is local to one result. Only the index and the inventory
+        entries are left for finalize, so this costs nothing per frame.
         """
-        pending = [
-            (result.source_observation_id, region.region_id, region.mask)
-            for result in self._results
-            for region in result.regions
-            if region.mask is not None
-        ]
-        if not pending:
-            return {}
+        if self._mask_store is None:
+            return
 
         mask_store_root = self._tmp_dir / _MASKS_DIRNAME
-        mask_store = MaskStoreWriter(mask_store_root)
-        references: dict[tuple[SourceObservationId, RegionId], str] = {}
-        for source_observation_id, region_id, mask in pending:
-            entry = mask_store.write(
-                region_id=region_id,
-                source_observation_id=source_observation_id,
-                mask=mask,
-            )
-            references[(source_observation_id, region_id)] = (
-                f"{_MASKS_DIRNAME}/{entry.payload_reference}"
-            )
-
-        write_mask_index(mask_store_root, mask_store.entries())
-        for entry in mask_store.entries():
+        write_mask_index(mask_store_root, self._mask_store.entries())
+        for entry in self._mask_store.entries():
             file_entries.append(
                 RunArtifactFileEntry(
                     path=f"{_MASKS_DIRNAME}/{entry.payload_reference}",
@@ -724,19 +767,15 @@ class PerceptionRunWriter:
         file_entries.append(
             _file_entry(f"{_MASKS_DIRNAME}/{MASK_INDEX_FILENAME}", index_path.read_bytes())
         )
-        return references
 
     def _write_contents(self) -> RunArtifactManifest:
         file_entries: list[RunArtifactFileEntry] = []
 
-        mask_references = self._write_masks(file_entries)
-        effective_results = [
-            _with_persisted_masks(result, mask_references) for result in self._results
-        ]
+        self._write_mask_index(file_entries)
 
         results_content = "".join(
             f"{json.dumps(encode_perception_result(result), sort_keys=True)}\n"
-            for result in effective_results
+            for result in self._results
         )
         results_path = self._tmp_dir / _RESULTS_FILENAME
         results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -744,8 +783,7 @@ class PerceptionRunWriter:
         file_entries.append(_file_entry(_RESULTS_FILENAME, results_content.encode("utf-8")))
 
         metrics_content = "".join(
-            f"{json.dumps(_encode_stage_outcome(outcome), sort_keys=True)}\n"
-            for outcome in self._stage_outcomes
+            f"{json.dumps(record, sort_keys=True)}\n" for record in self._stage_outcome_records
         )
         metrics_path = self._tmp_dir / _METRICS_FILENAME
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -753,11 +791,17 @@ class PerceptionRunWriter:
         file_entries.append(_file_entry(_METRICS_FILENAME, metrics_content.encode("utf-8")))
 
         if self._semantic_executions:
-            for payload_reference, payload in sorted(self._semantic_view_payloads.items()):
-                payload_path = self._tmp_dir / payload_reference
-                payload_path.parent.mkdir(parents=True, exist_ok=True)
-                payload_path.write_bytes(payload)
-                file_entries.append(_file_entry(payload_reference, payload))
+            # Os bytes ja foram gravados em add_semantic_view_payload(); so falta inventaria-los.
+            for payload_reference, (digest, size_bytes) in sorted(
+                self._semantic_view_payloads.items()
+            ):
+                file_entries.append(
+                    RunArtifactFileEntry(
+                        path=payload_reference,
+                        size_bytes=size_bytes,
+                        content_hash=f"sha256:{digest}",
+                    )
+                )
 
             semantic_records: list[dict[str, Any]] = []
             for execution in self._semantic_executions:
@@ -788,13 +832,11 @@ class PerceptionRunWriter:
                 _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
             )
 
-        if self._feature_payloads:
+        if self._feature_store is not None:
             feature_store_root = self._tmp_dir / _FEATURES_DIRNAME
-            feature_store = FeatureStoreWriter(feature_store_root)
-            for feature, source_observation_id, array in self._feature_payloads:
-                feature_store.write(feature, source_observation_id, array)
-            write_feature_index(feature_store_root, feature_store.entries())
-            for entry in feature_store.entries():
+            # Os arrays ja foram gravados em add_feature_payload(); aqui so resta o indice.
+            write_feature_index(feature_store_root, self._feature_store.entries())
+            for entry in self._feature_store.entries():
                 file_entries.append(
                     RunArtifactFileEntry(
                         path=f"{_FEATURES_DIRNAME}/{entry.payload_reference}",
@@ -901,27 +943,39 @@ class PerceptionRunReader:
         """
         return MaskStoreReader.open(self._root / _MASKS_DIRNAME)
 
-    def list_results(self) -> list[PerceptionResult]:
-        """Return every result in this run.
+    def iter_results(self) -> Iterator[PerceptionResult]:
+        """Yield each result in turn, decoding one line of ``outputs/results.jsonl`` at a time.
 
-        Returns:
-            All results, decoded from ``outputs/results.jsonl``.
+        Prefer this to :meth:`list_results` whenever the caller processes results one by
+        one: a run's resident cost then does not grow with its frame count. The same
+        ``Region2D.mask`` rule applies — pixels are never materialized here, only
+        ``mask_reference`` (see :meth:`mask_store`).
         """
         results_path = self._root / _RESULTS_FILENAME
-        results: list[PerceptionResult] = []
         with results_path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 stripped = line.strip()
                 if stripped:
-                    results.append(decode_perception_result(json.loads(stripped)))
-        return results
+                    yield decode_perception_result(json.loads(stripped))
 
-    def list_semantic_executions(self) -> list[SemanticInterpretationExecution]:
-        """Return persisted semantic requests, prompts, responses, and diagnostics."""
+    def list_results(self) -> list[PerceptionResult]:
+        """Return every result in this run.
+
+        Returns:
+            All results, decoded from ``outputs/results.jsonl``. This holds the whole run
+            in memory; :meth:`iter_results` streams it instead.
+        """
+        return list(self.iter_results())
+
+    def iter_semantic_executions(self) -> Iterator[SemanticInterpretationExecution]:
+        """Yield each persisted semantic execution in turn.
+
+        Every record carries its full ``raw_response`` text, so a run's executions are
+        markedly heavier than its results; stream them unless all are needed at once.
+        """
         executions_path = self._root / _SEMANTIC_EXECUTIONS_FILENAME
         if not executions_path.is_file():
-            return []
-        executions: list[SemanticInterpretationExecution] = []
+            return
         with executions_path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 stripped = line.strip()
@@ -930,12 +984,15 @@ class PerceptionRunReader:
                 record = json.loads(stripped)
                 raw_reference = record["raw_response_reference"]
                 try:
-                    executions.append(decode_semantic_execution(record))
+                    yield decode_semantic_execution(record)
                 except (ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(
                         f"invalid semantic execution record for {raw_reference!r}: {error}"
                     ) from error
-        return executions
+
+    def list_semantic_executions(self) -> list[SemanticInterpretationExecution]:
+        """Return persisted semantic requests, prompts, responses, and diagnostics."""
+        return list(self.iter_semantic_executions())
 
     def result(self, source_observation_id: SourceObservationId) -> PerceptionResult:
         """Return this run's result for one physical observation.
@@ -950,7 +1007,7 @@ class PerceptionRunReader:
             RunArtifactError: If this run has no result for that
                 observation.
         """
-        for result in self.list_results():
+        for result in self.iter_results():
             if result.source_observation_id == source_observation_id:
                 return result
         raise RunArtifactError(f"no result for source_observation_id={source_observation_id!r}")
@@ -1055,7 +1112,9 @@ def _region_with_mask_reference(
     reference = mask_references.get((source_observation_id, region.region_id))
     if reference is None:
         return region
-    return replace(region, mask_reference=reference)
+    # Os pixels ja estao no mask store; solta-los aqui e o que impede a RAM de crescer
+    # com o numero de frames (uma mascara 640x480 custa ~2,36 MB viva).
+    return replace(region, mask_reference=reference, mask=None)
 
 
 def _file_entry(relative_path: str, data: bytes) -> RunArtifactFileEntry:
