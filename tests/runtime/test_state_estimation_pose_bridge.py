@@ -16,18 +16,21 @@ import pytest
 from contextmap.ingestion import (
     ExternalPoseMeasurement,
     FrameId,
+    FullSequenceSelection,
     ImuObservation,
     SensorId,
     SequenceArtifactId,
+    SequenceArtifactReader,
     SequenceArtifactWriter,
     SourceObservationId,
     SourceProvenance,
+    selection_identity,
 )
 from contextmap.ingestion.sequence_provenance import SequenceProvenance
 from contextmap.runtime import ArtifactRef, StageRequest
 from contextmap.runtime.executors import ExecutorError, StateEstimationExecutor
 from contextmap.shared import SourceTimestamp
-from contextmap.state_estimation import GeometryPreflightError
+from contextmap.state_estimation import GeometryPreflightError, StateEstimationRunReader
 from contextmap.state_estimation.backends.external_pose import (
     ExternalPoseConfig,
     ExternalPoseEstimator,
@@ -181,6 +184,34 @@ class TestGroundTruthSafeguard:
 
         executor.execute(request)  # does not raise: the opt-in let it through
 
+    def test_a_disjoint_clock_ground_truth_pose_is_still_ignored_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        """The ground-truth safeguard must be checked before clock plausibility: a run in the
+        default ``operational_only`` mode drops a ground-truth-tagged auxiliary pose unconditio-
+        nally, so an incompatible clock on data that was never going to be used must not block
+        the run either -- exactly the same outcome as a well-behaved ground-truth pose."""
+        far_future = 100_000_000
+        poses = [_pose(i, seconds=far_future + i, pose_role="ground_truth") for i in range(3)]
+        executor = StateEstimationExecutor(_estimator())
+        request = _request(tmp_path, pose_observations=poses)
+
+        with pytest.raises(GeometryPreflightError):
+            executor.execute(request)
+
+    def test_a_disjoint_clock_ground_truth_pose_is_rejected_with_the_opt_in(
+        self, tmp_path: Path
+    ) -> None:
+        """With the opt-in, the ground-truth pose is no longer dropped, so it must actually pass
+        the clock check like any other merged auxiliary sequence."""
+        far_future = 100_000_000
+        poses = [_pose(i, seconds=far_future + i, pose_role="ground_truth") for i in range(3)]
+        executor = StateEstimationExecutor(_estimator(), allow_ground_truth_trajectory=True)
+        request = _request(tmp_path, pose_observations=poses)
+
+        with pytest.raises(ExecutorError, match="clock"):
+            executor.execute(request)
+
 
 class TestPoseRoleValidation:
     def test_missing_pose_role_on_the_auxiliary_sequence_fails_loudly(self, tmp_path: Path) -> None:
@@ -214,3 +245,93 @@ class TestClockCompatibilityValidation:
 
         with pytest.raises(ExecutorError, match="clock"):
             executor.execute(request)
+
+
+class TestAuxiliaryLineageIsPersisted:
+    """A ``StateEstimationRunArtifact`` must name every artifact that actually contributed to
+    its trajectory, so a consumer holding only this run can close the lineage of every pose it
+    carries -- not just the main sequence's."""
+
+    def test_a_merged_auxiliary_pose_is_named_in_the_run_s_own_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        poses = [_pose(i, seconds=i, pose_role="odometry") for i in range(3)]
+        executor = StateEstimationExecutor(_estimator())
+        request = _request(tmp_path, pose_observations=poses)
+
+        executor.execute(request)
+
+        assert request.output_dir is not None
+        run = StateEstimationRunReader(request.output_dir)
+        manifest = run.manifest
+        assert manifest.auxiliary_sequence_artifact_id == SequenceArtifactId("pose-sequence")
+        assert manifest.auxiliary_selection_id == selection_identity(
+            SequenceArtifactId("pose-sequence"), FullSequenceSelection()
+        )
+
+        # A consumer holding only this run must be able to close the lineage of every pose: open
+        # the artifact the manifest itself names, and confirm each pose's source observations
+        # actually resolve in it.
+        pose_dir = tmp_path / "ws" / "run-0001" / "pose_ingestion"
+        pose_sequence = SequenceArtifactReader(pose_dir)
+        pose_observation_ids = {
+            observation.observation_id for observation in pose_sequence.list_observations()
+        }
+        trajectory = run.trajectory()
+        for pose in trajectory.poses:
+            assert set(pose.provenance.source_observation_ids) <= pose_observation_ids
+
+    def test_a_dropped_ground_truth_auxiliary_leaves_no_auxiliary_lineage(
+        self, tmp_path: Path
+    ) -> None:
+        """The default safeguard drops the ground-truth pose from the merge entirely; since it
+        never contributed, the manifest must not claim it did. The main sequence carries its own
+        operational poses here, so the run succeeds independently of the dropped auxiliary."""
+        workspace = tmp_path / "ws"
+        main_dir = workspace / "run-0001" / "ingestion"
+        _write_sequence(
+            main_dir,
+            artifact_id="main-sequence",
+            observations=[_pose(i, seconds=i, pose_role="odometry") for i in range(3)],
+        )
+        pose_dir = workspace / "run-0001" / "pose_ingestion"
+        _write_sequence(
+            pose_dir,
+            artifact_id="pose-sequence",
+            observations=[_pose(i, seconds=i, pose_role="ground_truth") for i in range(3)],
+        )
+        request = StageRequest(
+            stage_id="state_estimation",
+            inputs={
+                "sequence": (
+                    ArtifactRef(
+                        stage_id="ingestion",
+                        contract="SequenceArtifact",
+                        artifact_id="main-sequence",
+                        content_hash="sha256:main",
+                        location="run-0001/ingestion",
+                    ),
+                ),
+                "pose_sequence": (
+                    ArtifactRef(
+                        stage_id="pose_ingestion",
+                        contract="SequenceArtifact",
+                        artifact_id="pose-sequence",
+                        content_hash="sha256:pose",
+                        location="run-0001/pose_ingestion",
+                    ),
+                ),
+            },
+            components={},
+            config_digest="test",
+            output_dir=workspace / "run-0001" / "state_estimation",
+            workspace=workspace,
+        )
+        executor = StateEstimationExecutor(_estimator())  # no ground-truth opt-in: default
+
+        executor.execute(request)
+
+        assert request.output_dir is not None
+        manifest = StateEstimationRunReader(request.output_dir).manifest
+        assert manifest.auxiliary_sequence_artifact_id is None
+        assert manifest.auxiliary_selection_id is None

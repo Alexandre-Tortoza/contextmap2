@@ -1386,13 +1386,24 @@ class TestComposeExecutors:
         Chains the same real entity_resolution -> spatial_relations construction as
         ``test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts``,
         one hop further, feeding the composed executor the real geometric map, the real
-        spatial-relations run it just produced, and a minimal stand-in sequence directory (only
-        its manifest identity matters to ``artifact_digest``).
+        spatial-relations run it just produced, and a real, minimal sequence artifact whose
+        identity matches the one the geometric map was actually built over (issue #438 review:
+        ``ContextMapExecutor`` now opens and verifies this, so a stand-in with an unrelated
+        identity is no longer accepted).
         """
         import json
 
         from runtime_entities import make_entity
 
+        from contextmap.ingestion import (
+            FrameId,
+            ImuObservation,
+            SensorId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.ingestion.sequence_provenance import SequenceProvenance
         from contextmap.runtime import ArtifactRef
         from contextmap.runtime.executors import inventory_digest
         from contextmap.runtime.pipeline import StageRequest
@@ -1403,7 +1414,7 @@ class TestComposeExecutors:
             SemanticMappingRunId,
             SemanticMappingRunWriter,
         )
-        from contextmap.shared import AtomicRunDirectory
+        from contextmap.shared import SourceTimestamp
         from contextmap.visual_perception import PerceptionRunId
 
         workspace = tmp_path / "ws"
@@ -1496,19 +1507,36 @@ class TestComposeExecutors:
                 workspace=workspace,
             )
         )
-        # Sequence stand-in: só a identidade do manifesto importa para artifact_digest().
+        # Sequence real, mínima: ContextMapExecutor agora abre este artifact e exige que sua
+        # identidade seja exatamente a que o mapa geométrico foi construído sobre
+        # (``geometry_manifest.sequence_artifact_id``, "aligned-sequence" -- ver
+        # ``_write_aligned_geometric_map``), não um stand-in com identidade arbitrária.
         sequence_dir = workspace / "corridor-02" / "sequence"
-        with AtomicRunDirectory(sequence_dir) as run:
-            run.write_text("outputs/summary.json", "{}")
-            run.publish(
-                manifest={"artifact_id": "sequence-0001", "schema_version": "0.1.0"},
-                readme="# sequence\n",
+        with SequenceArtifactWriter(
+            output_dir=sequence_dir,
+            sequence_name="corridor-02",
+            artifact_id=geometry_manifest.sequence_artifact_id,
+        ) as sequence_writer:
+            sequence_writer.add_observation(
+                ImuObservation(
+                    observation_id=SourceObservationId("imu-0000"),
+                    sensor_id=SensorId("imu"),
+                    frame_id=FrameId("imu"),
+                    timestamp=SourceTimestamp(
+                        seconds=0, nanoseconds=0, clock_id="fixture:aligned-map"
+                    ),
+                    provenance=SourceProvenance(source_type="fixture", source_path="fixtures/imu"),
+                )
             )
+            sequence_writer.set_provenance(
+                SequenceProvenance(source_type="fixture", source_path="fixtures/imu")
+            )
+            sequence_manifest = sequence_writer.finalize()
         sequence_ref = ArtifactRef(
             stage_id="ingestion",
             contract="SequenceArtifact",
-            artifact_id="sequence-0001",
-            content_hash=inventory_digest(()),
+            artifact_id=str(sequence_manifest.artifact_id),
+            content_hash=inventory_digest(sequence_manifest.file_inventory),
             location=sequence_dir.relative_to(workspace).as_posix(),
         )
 
@@ -1825,6 +1853,25 @@ class TestComposeVisualPerceptionExecutor:
         for result in results:
             assert len(result.regions) == 1
             assert len(result.features) == 2  # one dense + one region feature
+
+        # The legacy scene/region dispatch (`_LegacySemanticInterpreterBridge`) reduces every
+        # real `interpret()` call to the `SceneContext`/`SemanticClaim` the stage graph needs,
+        # but the real `SemanticInterpretationExecution` evidence (rendered prompt, raw
+        # response, diagnostics) and its view payload must still be recoverable from the
+        # finalized artifact -- one execution per image (scene) plus one per region.
+        from contextmap.visual_perception.backends._semantic_views import read_view_payload
+
+        semantic_executions = reader.list_semantic_executions()
+        assert {
+            str(execution.request.source_observation_id) for execution in semantic_executions
+        } == {"frame-0000", "frame-0001"}
+        assert {execution.request.mode.value for execution in semantic_executions} == {
+            "scene",
+            "region",
+        }
+        for execution in semantic_executions:
+            for view in execution.request.visual_views:
+                assert read_view_payload(output_dir, view) is not None
 
     def test_a_mask_conditioned_region_features_backend_gets_the_region_own_mask(
         self, tmp_path: Path

@@ -348,50 +348,62 @@ def _raw_source_timestamp(observation: SourceObservation) -> SourceTimestamp:
     return observation.timestamp
 
 
-class ClockCompatibilityError(ValueError):
-    """Raised when two observation sequences' clock relationship cannot be trusted (issue #555)."""
+class ClockPlausibilityError(ValueError):
+    """Raised when two observation sequences' clock relationship fails a plausibility check.
+
+    Issue #555.
+    """
 
 
-def validate_cross_source_clock_compatibility(
+def validate_cross_source_clock_plausibility(
     primary: Sequence[SourceObservation], auxiliary: Sequence[SourceObservation]
 ) -> None:
-    """Verify two observation sequences can be safely merged onto one shared clock.
+    """Reject an implausible clock relationship before two observation sequences are merged.
 
     Two sources declaring the same ``timestamp_clock_id`` string is an *assertion*, not
     evidence (issue #555): before a caller -- for example, a runtime executor merging a main
-    sequence with an auxiliary pose sequence -- combines their observations, it must verify
-    the two actually line up in that clock, never trust the label alone. This checks each
-    sequence's *published* (already timestamp-policy-corrected) ``observation.timestamp``,
+    sequence with an auxiliary pose sequence -- combines their observations, it must at least
+    rule out the wrong-epoch defect issue #554 fixed, never trust the label alone. This checks
+    each sequence's *published* (already timestamp-policy-corrected) ``observation.timestamp``,
     not the pre-correction raw value :func:`diagnose_source_clock` reconstructs -- merging
-    happens on the corrected clock, so that is the relationship that must be verified.
+    happens on the corrected clock, so that is the relationship that must be checked.
+
+    This is a plausibility/sanity check, not proof of temporal alignment: a matching
+    ``clock_id`` with overlapping ranges rules out the specific wrong-epoch defect this
+    function was written against, but it does not prove the two sources share the same time
+    base. Two independent recordings that happen to overlap in the same epoch, or two sources
+    with a real, undetected offset smaller than the sequence's own duration, both pass this
+    check without actually being aligned. A caller must not treat a passing call as proof the
+    merge is temporally correct, only as evidence the specific defect this function targets is
+    absent.
 
     Args:
         primary: Observations of the main sequence.
         auxiliary: Observations of the auxiliary sequence to be merged with it.
 
     Raises:
-        ClockCompatibilityError: If either sequence is empty (nothing to validate against), if
+        ClockPlausibilityError: If either sequence is empty (nothing to check against), if
             either sequence itself spans more than one ``clock_id``, if the two sequences use
             different clocks, or if their timestamp ranges in the shared clock do not overlap --
             a matching ``clock_id`` string with disjoint ranges is exactly the wrong-epoch defect
-            issue #554 fixed, and is never accepted as compatible.
+            issue #554 fixed, and is never accepted as plausible.
     """
     if not primary or not auxiliary:
-        raise ClockCompatibilityError(
-            "cannot validate clock compatibility against an empty observation sequence"
+        raise ClockPlausibilityError(
+            "cannot check clock plausibility against an empty observation sequence"
         )
     primary_clocks = {observation.timestamp.clock_id for observation in primary}
     auxiliary_clocks = {observation.timestamp.clock_id for observation in auxiliary}
     if len(primary_clocks) != 1 or len(auxiliary_clocks) != 1:
-        raise ClockCompatibilityError(
-            "cannot validate clock compatibility: each sequence must use exactly one clock_id "
+        raise ClockPlausibilityError(
+            "cannot check clock plausibility: each sequence must use exactly one clock_id "
             f"(primary uses {sorted(primary_clocks)!r}, "
             f"auxiliary uses {sorted(auxiliary_clocks)!r})"
         )
     (primary_clock,) = primary_clocks
     (auxiliary_clock,) = auxiliary_clocks
     if primary_clock != auxiliary_clock:
-        raise ClockCompatibilityError(
+        raise ClockPlausibilityError(
             f"primary sequence uses clock {primary_clock!r} but auxiliary sequence uses "
             f"{auxiliary_clock!r} -- merging across different clocks is not supported yet; a "
             "declared offset/transform between them must be explicit, never inferred from naming"
@@ -401,12 +413,12 @@ def validate_cross_source_clock_compatibility(
     primary_range = (min(primary_seconds), max(primary_seconds))
     auxiliary_range = (min(auxiliary_seconds), max(auxiliary_seconds))
     if primary_range[1] < auxiliary_range[0] or auxiliary_range[1] < primary_range[0]:
-        raise ClockCompatibilityError(
+        raise ClockPlausibilityError(
             f"primary sequence spans [{primary_range[0]:.6f}, {primary_range[1]:.6f}]s on clock "
             f"{primary_clock!r} but auxiliary sequence spans [{auxiliary_range[0]:.6f}, "
             f"{auxiliary_range[1]:.6f}]s with no overlap -- sharing a clock_id does not mean the "
             "two sequences were recorded over the same physical timeframe; the relationship is "
-            "unverifiable and the two artifacts cannot be safely merged"
+            "implausible and the two artifacts cannot be safely merged"
         )
 
 

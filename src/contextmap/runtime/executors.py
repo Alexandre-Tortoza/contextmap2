@@ -68,7 +68,7 @@ from contextmap.geometric_mapping import (
     assemble_geometry_inputs_from_artifacts,
 )
 from contextmap.ingestion import (
-    ClockCompatibilityError,
+    ClockPlausibilityError,
     FullSequenceSelection,
     ImageEncoding,
     ImageObservation,
@@ -76,7 +76,7 @@ from contextmap.ingestion import (
     SourceObservation,
     SourceObservationId,
     selection_identity,
-    validate_cross_source_clock_compatibility,
+    validate_cross_source_clock_plausibility,
 )
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
@@ -164,12 +164,15 @@ from contextmap.visual_perception import (
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreter,
     SemanticRequestId,
     SemanticVisualView,
     SourceImage,
+    StageOutcome,
+    StageStatus,
     VisualViewKind,
     assemble_perception_result,
     box_mask_shape,
@@ -291,19 +294,30 @@ class StateEstimationExecutor:
 
         When the optional ``pose_sequence`` input is present (issue #555's auxiliary pose
         bridge), its observations are merged in after its clock relationship with ``sequence``
-        is explicitly validated and its declared ``pose_role`` is checked -- never merged on a
-        matching ``timestamp_clock_id`` string alone. ``StateEstimationRequest`` never learns
-        that two artifacts contributed; the runtime's own per-stage input lineage (this
-        method's ``request.inputs``) already records both, with no new domain field.
+        passes an explicit plausibility check (never accepted on a matching
+        ``timestamp_clock_id`` string alone) and its declared ``pose_role`` is checked. When the
+        merge actually contributes observations, ``StateEstimationRequest`` also names the
+        auxiliary artifact and selection explicitly (``auxiliary_sequence_artifact_id``/
+        ``auxiliary_selection_id``), so the trajectory's own persisted provenance stays
+        self-portable even when a reader only has the ``StateEstimationRunArtifact``.
         """
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
         observations: tuple[SourceObservation, ...] = tuple(sequence.list_observations())
 
+        auxiliary_sequence_artifact_id = None
+        auxiliary_selection_id = None
         pose_path = _optional_one(request, "pose_sequence")
         if pose_path is not None:
-            auxiliary = tuple(SequenceArtifactReader(pose_path).list_observations())
-            observations = observations + self._select_auxiliary_pose(observations, auxiliary)
+            pose_sequence = SequenceArtifactReader(pose_path)
+            auxiliary = tuple(pose_sequence.list_observations())
+            merged = self._select_auxiliary_pose(observations, auxiliary)
+            observations = observations + merged
+            if merged:
+                auxiliary_sequence_artifact_id = pose_sequence.manifest.artifact_id
+                auxiliary_selection_id = selection_identity(
+                    pose_sequence.manifest.artifact_id, FullSequenceSelection()
+                )
 
         identity = request.identity()
         outcome = execute_state_estimation(
@@ -316,6 +330,8 @@ class StateEstimationExecutor:
                 ),
                 observations=observations,
                 calibration=sequence.read_calibration(),
+                auxiliary_sequence_artifact_id=auxiliary_sequence_artifact_id,
+                auxiliary_selection_id=auxiliary_selection_id,
             ),
             downstream=self._downstream,
         )
@@ -341,17 +357,23 @@ class StateEstimationExecutor:
             ``"ground_truth"`` and :attr:`_allow_ground_truth_trajectory` is not set.
 
         Raises:
-            ExecutorError: If the two sequences' clock relationship cannot be verified (issue
-                #555 requires this before ever combining two artifacts' observations), or if
-                ``auxiliary`` does not declare one single, recognized ``pose_role``.
+            ExecutorError: If ``auxiliary`` does not declare one single, recognized
+                ``pose_role``, or if the two sequences' clock relationship fails the
+                plausibility check (issue #555 requires this before ever combining two
+                artifacts' observations). The ground-truth safeguard is checked *before* the
+                clock check: a ground-truth-tagged auxiliary sequence that will be dropped
+                anyway must not block the run just because its clock is implausible --
+                ``operational_only`` must behave exactly as if the auxiliary sequence were
+                never configured, including when it is malformed in a way that is irrelevant to
+                a dropped sequence.
         """
-        try:
-            validate_cross_source_clock_compatibility(primary, auxiliary)
-        except ClockCompatibilityError as error:
-            raise ExecutorError(f"cannot merge auxiliary pose sequence: {error}") from error
         pose_role = self._auxiliary_pose_role(auxiliary)
         if pose_role == _GROUND_TRUTH_POSE_ROLE and not self._allow_ground_truth_trajectory:
             return ()
+        try:
+            validate_cross_source_clock_plausibility(primary, auxiliary)
+        except ClockPlausibilityError as error:
+            raise ExecutorError(f"cannot merge auxiliary pose sequence: {error}") from error
         return tuple(auxiliary)
 
     @staticmethod
@@ -687,6 +709,15 @@ class _LegacySemanticInterpreterBridge:
     minimum evidence the request contract requires. It does not implement the multi-view/prompt
     policy work multi-view semantic requests still need (#524, #529, #547, #549) -- that is
     real, separately-tracked capability work, not a runtime concern.
+
+    Each ``interpret()`` call answers with a real :class:`~contextmap.visual_perception.
+    SemanticInterpretationExecution` -- the rendered prompt, the raw response, diagnostics and
+    the effective configuration, not just the parsed claims/scene context the legacy shape
+    returns. A request that fails schema conformance raises before returning one, so every
+    execution this bridge collects (:meth:`evidence`) already succeeded; ``interpret_scene``/
+    ``interpret_regions`` still return the reduced value the stage graph needs, but the caller
+    (:class:`VisualPerceptionExecutor`) also registers every collected execution and its view
+    payload with the writer, so this evidence is never silently dropped.
     """
 
     def __init__(
@@ -700,16 +731,29 @@ class _LegacySemanticInterpreterBridge:
         self._views_dir.mkdir(parents=True, exist_ok=True)
         provenance = interpreter.backend_provenance()
         self._configuration_fingerprint = provenance.configuration_fingerprint or provenance.model
+        self._evidence: list[tuple[SemanticInterpretationExecution, SemanticVisualView, bytes]] = []
 
     def backend_provenance(self) -> BackendProvenance:
         """Pass through the wrapped interpreter's provenance unchanged."""
         return self._interpreter.backend_provenance()
 
-    def _write_view(self, name: str, pil_image: object) -> tuple[str, str]:
+    def evidence(
+        self,
+    ) -> tuple[tuple[SemanticInterpretationExecution, SemanticVisualView, bytes], ...]:
+        """Return every successful semantic execution collected so far, with its view payload.
+
+        Returns:
+            One ``(execution, view, payload)`` triple per real ``interpret()`` call that
+            returned (a failed call raises instead, so nothing failed is ever collected here).
+        """
+        return tuple(self._evidence)
+
+    def _write_view(self, name: str, pil_image: object) -> tuple[str, str, bytes]:
         target = self._views_dir / name
         pil_image.save(target)  # type: ignore[attr-defined]
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
-        return f"outputs/semantic-views/{name}", digest
+        payload = target.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        return f"outputs/semantic-views/{name}", digest, payload
 
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
         """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
@@ -717,7 +761,9 @@ class _LegacySemanticInterpreterBridge:
 
         image_module = importlib.import_module("PIL.Image")
         pil_image = image_module.open(self._view_root / image.payload_reference).convert("RGB")
-        reference, digest = self._write_view(f"{image.source_observation_id}__scene.png", pil_image)
+        reference, digest, payload = self._write_view(
+            f"{image.source_observation_id}__scene.png", pil_image
+        )
         view = SemanticVisualView(
             view_id=f"v-{image.source_observation_id}-scene",
             kind=VisualViewKind.FULL_FRAME,
@@ -737,7 +783,9 @@ class _LegacySemanticInterpreterBridge:
             requested_output_schema="semantic-response/1",
             configuration_fingerprint=self._configuration_fingerprint,
         )
-        return self._interpreter.interpret(request).parsed.scene_context
+        execution = self._interpreter.interpret(request)
+        self._evidence.append((execution, view, payload))
+        return execution.parsed.scene_context
 
     def interpret_regions(
         self, image: PreparedImage, regions: Sequence[Region2D]
@@ -758,7 +806,7 @@ class _LegacySemanticInterpreterBridge:
                     int(box.y + box.height),
                 )
             )
-            reference, digest = self._write_view(
+            reference, digest, payload = self._write_view(
                 f"{image.source_observation_id}__{region.region_id}__tight_crop.png", crop
             )
             view = SemanticVisualView(
@@ -784,7 +832,9 @@ class _LegacySemanticInterpreterBridge:
                 requested_output_schema="semantic-response/1",
                 configuration_fingerprint=self._configuration_fingerprint,
             )
-            claims.extend(self._interpreter.interpret(request).parsed.claims)
+            execution = self._interpreter.interpret(request)
+            self._evidence.append((execution, view, payload))
+            claims.extend(execution.parsed.claims)
         return tuple(claims)
 
 
@@ -1026,6 +1076,22 @@ class VisualPerceptionExecutor:
                 writer.add_result(result)
                 writer.add_stage_outcomes(outcomes)
 
+            # A bridge acima reduz cada execução real a ``SceneContext``/``SemanticClaim`` antes
+            # de devolvê-la aos ``outcomes`` que ``assemble_perception_result()`` precisa; sem
+            # isto, a evidência real da execução (prompt renderizado, resposta bruta,
+            # diagnostics) e o payload da view nunca chegariam ao writer.
+            for execution, view, payload in semantic_bridge.evidence():
+                stage_id = (
+                    "scene_interpretation"
+                    if execution.request.mode is SemanticInterpretationMode.SCENE
+                    else "region_interpretation"
+                )
+                outcome = StageOutcome(
+                    stage_id=stage_id, status=StageStatus.SUCCEEDED, output=execution
+                )
+                writer.add_stage_outcomes((outcome,))
+                writer.add_semantic_view_payload(view, payload)
+
             manifest = writer.finalize()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -1191,16 +1257,43 @@ class ContextMapExecutor:
         self._code_version = code_version
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Assemble and write the final ``ContextMap`` from this run's real upstream artifacts."""
+        """Assemble and write the final ``ContextMap`` from this run's real upstream artifacts.
+
+        Raises:
+            ExecutorError: If the ``sequence`` input is not the artifact the ``geometry`` input
+                was actually built over. ``ArtifactKind.SEQUENCE`` is not a structural
+                dependency (:attr:`~contextmap.artifact.ArtifactKind.is_structural`), so
+                :class:`~contextmap.artifact.ContextMapArtifactWriter` never opens or verifies
+                it; without this check, a caller wiring the wrong ``sequence`` run could publish
+                a lineage entry whose ``artifact_id`` (taken from the geometry manifest) and
+                ``content_identity`` (the digest of whatever directory was actually passed)
+                silently name two different artifacts.
+        """
         output = _output(request)
         sequence_dir = _one(request, "sequence")
         geometry_dir = _one(request, "geometry")
         resolution_dir = _one(request, "entities")
         relations_dir = _one(request, "relations")
 
+        sequence = SequenceArtifactReader(sequence_dir)
         with GeometricMapArtifactReader(geometry_dir) as geometry_reader:
             geometry_manifest = geometry_reader.manifest
             bounds = geometry_reader.geometry().geometric_map.bounds
+        if sequence.manifest.artifact_id != geometry_manifest.sequence_artifact_id:
+            raise ExecutorError(
+                f"stage {request.stage_id!r} was given sequence "
+                f"{sequence.manifest.artifact_id!r}, but the geometric map it was also given "
+                f"was built over sequence {geometry_manifest.sequence_artifact_id!r}"
+            )
+        expected_selection_id = selection_identity(
+            sequence.manifest.artifact_id, FullSequenceSelection()
+        )
+        if geometry_manifest.selection_id != expected_selection_id:
+            raise ExecutorError(
+                f"stage {request.stage_id!r} was given a sequence selection "
+                f"{expected_selection_id!r} that does not match the geometric map's own "
+                f"selection {geometry_manifest.selection_id!r}"
+            )
         relations_reader = SpatialRelationsRunReader(relations_dir)
         predicates = sorted(
             {relation.predicate for relation in relations_reader.iter_relations()},

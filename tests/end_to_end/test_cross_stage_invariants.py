@@ -87,6 +87,63 @@ def test_a_trajectory_of_another_sequence_is_a_state_estimation_lineage_break(
     }
 
 
+def test_an_auxiliary_sequence_that_matches_the_trajectory_passes(chain: SyntheticChain) -> None:
+    """Issue #555's bridge: a trajectory that names an auxiliary sequence, given the matching
+    artifact, closes lineage exactly like the primary sequence does."""
+    inputs = cross_stage_inputs(chain)
+    baseline_checks = check_cross_stage(inputs).checks_run[LINEAGE_CLOSURE]
+    trajectory = replace(
+        inputs.trajectory,
+        auxiliary_sequence_artifact_id=inputs.sequence.artifact_id,
+        auxiliary_selection_id="selection-of-pose-sequence",
+    )
+
+    report = check_cross_stage(
+        replace(inputs, trajectory=trajectory, auxiliary_sequence=inputs.sequence)
+    )
+
+    assert report.findings == ()
+    assert report.checks_run[LINEAGE_CLOSURE] == baseline_checks + 1
+
+
+def test_an_auxiliary_sequence_that_does_not_match_the_trajectory_breaks_lineage(
+    chain: SyntheticChain,
+) -> None:
+    inputs = cross_stage_inputs(chain)
+    trajectory = replace(
+        inputs.trajectory,
+        auxiliary_sequence_artifact_id=SequenceArtifactId("pose-sequence"),
+        auxiliary_selection_id="selection-of-pose-sequence",
+    )
+    mismatched_auxiliary = replace(
+        inputs.sequence, artifact_id=SequenceArtifactId("another-pose-sequence")
+    )
+
+    findings = _findings(
+        replace(inputs, trajectory=trajectory, auxiliary_sequence=mismatched_auxiliary)
+    )
+
+    assert {(f.gate_id, f.failing_capability) for f in findings} >= {
+        (LINEAGE_CLOSURE, "state_estimation")
+    }
+
+
+def test_a_named_auxiliary_sequence_that_is_not_supplied_is_a_stated_limitation(
+    chain: SyntheticChain,
+) -> None:
+    inputs = cross_stage_inputs(chain)
+    trajectory = replace(
+        inputs.trajectory,
+        auxiliary_sequence_artifact_id=SequenceArtifactId("pose-sequence"),
+        auxiliary_selection_id="selection-of-pose-sequence",
+    )
+
+    report = check_cross_stage(replace(inputs, trajectory=trajectory))
+
+    assert report.findings == ()
+    assert any("auxiliary sequence artifact" in note for note in report.notes)
+
+
 def test_a_map_built_from_another_trajectory_run_breaks_lineage_at_geometry(
     chain: SyntheticChain,
 ) -> None:

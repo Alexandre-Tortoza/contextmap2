@@ -124,7 +124,7 @@ Os enunciados completos de cada gate (requisito e evidência) estão no snapshot
 
 | Gate | O que verifica |
 |---|---|
-| `cross_stage.lineage_closure` | todo artifact declara a mesma sequência; mapa, associações e fusão apontam para a trajetória, o run de estado, o mapa e os runs de percepção e de associação exatos que foram consumidos; a calibração do mapa e das associações é a mesma e é a do artifact de sequência (quando informada) |
+| `cross_stage.lineage_closure` | todo artifact declara a mesma sequência; mapa, associações e fusão apontam para a trajetória, o run de estado, o mapa e os runs de percepção e de associação exatos que foram consumidos; a calibração do mapa e das associações é a mesma e é a do artifact de sequência (quando informada); quando a trajetória nomeia uma sequência de pose auxiliar (issue #555) e o cenário fornece `CrossStageInputs.auxiliary_sequence`, o id nomeado bate com o artifact real — sem a sequência auxiliar suprida, isto vira uma limitação declarada (`notes`), nunca um gate silenciosamente aprovado |
 | `cross_stage.coordinate_consistency` | o frame do mapa é o de referência da trajetória e ambos usam o mesmo relógio; toda referência de geometria de uma observação ou suporte aponta para o mapa do run **e resolve nele** |
 | `cross_stage.evidence_traceability` | toda observação espacial aponta para um resultado, região e claims de percepção que existem; todo suporte de fusão cita observações que uma associação produziu; nenhuma claim mantida pela associação some da contribuição da fusão |
 | `cross_stage.physical_observation_identity` | a fusão tem um grupo por frame físico das observações do suporte (inferência repetida não vira observação nova) e cada observação está no grupo do seu frame |

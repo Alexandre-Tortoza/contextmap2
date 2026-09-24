@@ -87,6 +87,10 @@ class CrossStageInputs:
         relations: Manifest of the spatial relations run.
         relation_records: Its relations.
         context_map: The final, portable artifact the run produced.
+        auxiliary_sequence: Manifest of the auxiliary pose sequence (issue #555's bridge), when
+            the caller supplies it and the trajectory names one -- both sides must agree for the
+            check to run; ``None`` when there is nothing to compare against, which is recorded
+            as a note, not silently skipped.
     """
 
     sequence: SequenceArtifactManifest
@@ -107,6 +111,7 @@ class CrossStageInputs:
     relation_records: Sequence[Relation]
     context_map: ContextMap
     sequence_calibration_identity: str | None = None
+    auxiliary_sequence: SequenceArtifactManifest | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -254,6 +259,21 @@ def _check_lineage(inputs: CrossStageInputs, collector: _Collector) -> None:
     expect(
         _STATE_ESTIMATION, "state estimation sequence", trajectory.sequence_artifact_id, sequence_id
     )
+    if trajectory.auxiliary_sequence_artifact_id is None:
+        pass  # issue #555: no auxiliary pose sequence contributed to this trajectory.
+    elif inputs.auxiliary_sequence is None:
+        collector.notes.append(
+            "the trajectory names an auxiliary sequence artifact "
+            f"({trajectory.auxiliary_sequence_artifact_id!r}) but it was not supplied to these "
+            "checks, so its lineage closure was not verified"
+        )
+    else:
+        expect(
+            _STATE_ESTIMATION,
+            "state estimation auxiliary sequence",
+            trajectory.auxiliary_sequence_artifact_id,
+            inputs.auxiliary_sequence.artifact_id,
+        )
     expect(_GEOMETRIC_MAPPING, "geometric map sequence", geometry.sequence_artifact_id, sequence_id)
     expect(_SEMANTIC_FUSION, "fusion sequence", fusion.lineage.sequence_artifact_id, sequence_id)
     for run in inputs.perception_runs:

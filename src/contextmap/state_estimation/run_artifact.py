@@ -57,8 +57,12 @@ from contextmap.state_estimation.serialization import (
 )
 from contextmap.state_estimation.service import StateEstimationOutcome
 
-SCHEMA_VERSION = "0.1.0"
-"""State Estimation run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""State Estimation run artifact schema version written and understood by this module.
+
+Bumped from ``0.1.0`` for issue #555's ``auxiliary_sequence_artifact_id``/
+``auxiliary_selection_id`` manifest fields.
+"""
 
 StateEstimationRunId = NewType("StateEstimationRunId", str)
 """Identity of one State Estimation run, local to its capability and sequence."""
@@ -113,6 +117,12 @@ class StateEstimationRunManifest:
         sequence_name: Name of the processed sequence.
         sequence_artifact_id: Canonical sequence artifact consumed.
         selection_id: Deterministic identity of the sequence selection.
+        auxiliary_sequence_artifact_id: The auxiliary pose sequence actually merged into this
+            trajectory (issue #555), or ``None`` when none contributed. See
+            :attr:`~contextmap.state_estimation.TrajectoryProvenance.
+            auxiliary_sequence_artifact_id`.
+        auxiliary_selection_id: Deterministic identity of the auxiliary sequence's selection,
+            alongside ``auxiliary_sequence_artifact_id``. ``None`` under the same condition.
         trajectory_id: Identity of the persisted trajectory.
         estimator: Backend and configuration identity.
         calibration_identity: Hash of the calibration the estimator used.
@@ -142,6 +152,8 @@ class StateEstimationRunManifest:
     sequence_name: str
     sequence_artifact_id: SequenceArtifactId
     selection_id: str
+    auxiliary_sequence_artifact_id: SequenceArtifactId | None
+    auxiliary_selection_id: str | None
     trajectory_id: TrajectoryId
     estimator: EstimatorProvenance
     calibration_identity: str | None
@@ -346,6 +358,12 @@ class StateEstimationRunWriter:
             "sequence_name": self._sequence_name,
             "sequence_artifact_id": str(provenance.sequence_artifact_id),
             "selection_id": provenance.selection_id,
+            "auxiliary_sequence_artifact_id": (
+                None
+                if provenance.auxiliary_sequence_artifact_id is None
+                else str(provenance.auxiliary_sequence_artifact_id)
+            ),
+            "auxiliary_selection_id": provenance.auxiliary_selection_id,
             "trajectory_id": str(trajectory.trajectory_id),
             "estimator": {
                 "backend_id": provenance.estimator.backend_id,
@@ -515,6 +533,12 @@ def _load_manifest(run_dir: Path) -> StateEstimationRunManifest:
         sequence_name=raw["sequence_name"],
         sequence_artifact_id=SequenceArtifactId(raw["sequence_artifact_id"]),
         selection_id=raw["selection_id"],
+        auxiliary_sequence_artifact_id=(
+            None
+            if raw.get("auxiliary_sequence_artifact_id") is None
+            else SequenceArtifactId(raw["auxiliary_sequence_artifact_id"])
+        ),
+        auxiliary_selection_id=raw.get("auxiliary_selection_id"),
         trajectory_id=TrajectoryId(raw["trajectory_id"]),
         estimator=EstimatorProvenance(
             backend_id=estimator["backend_id"],
@@ -679,12 +703,19 @@ def _projection_csv(trajectory: Trajectory, *, second_axis: int) -> str:
 
 def _render_readme(run_id: StateEstimationRunId, run_index: int, trajectory: Trajectory) -> str:
     provenance = trajectory.provenance
+    auxiliary_line = (
+        f"- Auxiliary sequence artifact: `{provenance.auxiliary_sequence_artifact_id}` "
+        f"(selection `{provenance.auxiliary_selection_id}`)\n"
+        if provenance.auxiliary_sequence_artifact_id is not None
+        else ""
+    )
     return (
         f"# State estimation run {run_index:04d}\n"
         "\n"
         f"- Run ID: `{run_id}`\n"
         f"- Sequence artifact: `{provenance.sequence_artifact_id}`\n"
         f"- Selection: `{provenance.selection_id}`\n"
+        f"{auxiliary_line}"
         f"- Backend: `{provenance.estimator.backend_id}` "
         f"(version `{provenance.estimator.backend_version}`)\n"
         f"- Frames: `{trajectory.reference_frame}` <- `{trajectory.body_frame}` (T_parent_child)\n"
