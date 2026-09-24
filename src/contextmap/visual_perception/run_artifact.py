@@ -250,7 +250,7 @@ class PerceptionRunWriter:
         self._stage_outcome_records: list[dict[str, Any]] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
-        self._semantic_failure_records: list[dict[str, Any]] = []
+        self._semantic_failures: list[FailedSemanticInterpretation] = []
         # reference -> (sha256, size_bytes); os bytes vao direto para o disco ao serem
         # adicionados, entao o writer nunca retem as imagens enviadas ao backend.
         self._semantic_view_payloads: dict[str, tuple[str, int]] = {}
@@ -427,7 +427,9 @@ class PerceptionRunWriter:
                 f"duplicate semantic request_id in perception run: {request_id!r}"
             )
         self._semantic_request_ids.add(request_id)
-        self._semantic_failure_records.append(encode_failed_semantic_interpretation(failed))
+        # Guardado como objeto, nao codificado: finalize() aplica as mesmas invariantes de
+        # identidade e de evidencia de entrada que valem para as execucoes bem-sucedidas.
+        self._semantic_failures.append(failed)
 
     def add_feature_payload(
         self,
@@ -506,6 +508,7 @@ class PerceptionRunWriter:
             self._validate_feature_payload_references()
             self._validate_feature_diagnostics()
             self._validate_semantic_execution_materialization()
+            self._validate_failed_semantic_interpretations()
             self._validate_semantic_view_payloads()
 
             self._ensure_staging()
@@ -683,22 +686,33 @@ class PerceptionRunWriter:
                 f"for {context}"
             ) from error
 
-    def _validate_semantic_execution_materialization(self) -> None:
-        """Require every semantic execution to match canonical persisted evidence."""
-        for execution in self._semantic_executions:
-            matches = [
-                result
-                for result in self._results
-                if result.result_id == execution.request.perception_result_id
-                and result.source_observation_id == execution.request.source_observation_id
-            ]
-            if len(matches) != 1:
-                raise RunArtifactError(
-                    "semantic execution does not resolve to exactly one result: "
-                    f"request_id={execution.request.request_id!r}, matches={len(matches)}"
-                )
-            result = matches[0]
-            request = execution.request
+    def _validate_semantic_request_evidence(self, request: Any) -> PerceptionResult:
+        """Require one semantic request to name evidence this run actually persisted.
+
+        Shared by both streams: whether the response parsed or not, the request had to be
+        issued against a real result, a real region, real features whose payloads exist and a
+        real scene context. Only claim materialization differs, since a rejected response
+        produced no claims.
+
+        Returns:
+            The single result the request resolves to.
+
+        Raises:
+            RunArtifactError: If any referenced evidence does not resolve exactly.
+        """
+        matches = [
+            result
+            for result in self._results
+            if result.result_id == request.perception_result_id
+            and result.source_observation_id == request.source_observation_id
+        ]
+        if len(matches) != 1:
+            raise RunArtifactError(
+                "semantic request does not resolve to exactly one result: "
+                f"request_id={request.request_id!r}, matches={len(matches)}"
+            )
+        result = matches[0]
+        if True:
             if request.region_id is not None and all(
                 region.region_id != request.region_id for region in result.regions
             ):
@@ -744,6 +758,22 @@ class PerceptionRunWriter:
                         "semantic scene_context_reference does not resolve exactly: "
                         f"{context_reference.evidence_id!r}"
                     )
+        return result
+
+    def _validate_failed_semantic_interpretations(self) -> None:
+        """Hold failures to the same identity and input-evidence invariants as successes.
+
+        A contractual stream must not accept a record naming a result, region, feature or
+        scene context that does not belong to this run. Claim materialization is deliberately
+        excluded: a rejected response produced none.
+        """
+        for failed in self._semantic_failures:
+            self._validate_semantic_request_evidence(failed.request)
+
+    def _validate_semantic_execution_materialization(self) -> None:
+        """Require every semantic execution to match canonical persisted evidence."""
+        for execution in self._semantic_executions:
+            result = self._validate_semantic_request_evidence(execution.request)
             missing_claims = [
                 claim.claim_id for claim in execution.parsed.claims if claim not in result.claims
             ]
@@ -759,10 +789,17 @@ class PerceptionRunWriter:
                 )
 
     def _validate_semantic_view_payloads(self) -> None:
-        """Require every referenced semantic view to be content-addressed in this run."""
+        """Require every referenced semantic view to be content-addressed in this run.
+
+        Both streams count. The view of a rejected response is the exact visual evidence that
+        produced it, so a failure naming a payload this run never persisted leaves the artifact
+        citing evidence nobody can recover.
+        """
         referenced: dict[str, str] = {}
-        for execution in self._semantic_executions:
-            for view in execution.request.visual_views:
+        requests = [execution.request for execution in self._semantic_executions]
+        requests.extend(failed.request for failed in self._semantic_failures)
+        for request in requests:
+            for view in request.visual_views:
                 previous_hash = referenced.setdefault(view.payload_reference, view.sha256)
                 if previous_hash != view.sha256:
                     raise RunArtifactError(
@@ -825,19 +862,18 @@ class PerceptionRunWriter:
         metrics_path.write_text(metrics_content, encoding="utf-8")
         file_entries.append(_file_entry(_METRICS_FILENAME, metrics_content.encode("utf-8")))
 
-        if self._semantic_executions:
-            # Os bytes ja foram gravados em add_semantic_view_payload(); so falta inventaria-los.
-            for payload_reference, (digest, size_bytes) in sorted(
-                self._semantic_view_payloads.items()
-            ):
-                file_entries.append(
-                    RunArtifactFileEntry(
-                        path=payload_reference,
-                        size_bytes=size_bytes,
-                        content_hash=f"sha256:{digest}",
-                    )
+        # Os bytes ja foram gravados em add_semantic_view_payload(); so falta inventaria-los.
+        # Independente de haver execucao bem-sucedida: uma view pode pertencer so a uma failure.
+        for payload_reference, (digest, size_bytes) in sorted(self._semantic_view_payloads.items()):
+            file_entries.append(
+                RunArtifactFileEntry(
+                    path=payload_reference,
+                    size_bytes=size_bytes,
+                    content_hash=f"sha256:{digest}",
                 )
+            )
 
+        if self._semantic_executions:
             semantic_records: list[dict[str, Any]] = []
             for execution in self._semantic_executions:
                 raw_reference = _semantic_raw_response_reference(execution)
@@ -867,13 +903,13 @@ class PerceptionRunWriter:
                 _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
             )
 
-        if self._semantic_failure_records:
+        if self._semantic_failures:
             # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
             # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
             # (e todo artifact ja escrito sob esta versao de schema).
             failures_content = "".join(
-                f"{json.dumps(record, sort_keys=True)}\n"
-                for record in self._semantic_failure_records
+                f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
+                for failed in self._semantic_failures
             )
             failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
             failures_path.parent.mkdir(parents=True, exist_ok=True)

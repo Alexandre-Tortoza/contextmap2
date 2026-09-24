@@ -2286,11 +2286,13 @@ class TestSemanticBridgeStreamsItsEvidence:
                 )
 
         recorded: list[Any] = []
+        recorded_views: list[tuple[str, int]] = []
 
         class _RecordingWriter:
             def add_stage_outcomes(self, outcomes: Any) -> None: ...
 
-            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None: ...
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None:
+                recorded_views.append((view.payload_reference, len(payload)))
 
             def add_failed_semantic_interpretation(self, failed: Any) -> None:
                 recorded.append(failed)
@@ -2308,3 +2310,9 @@ class TestSemanticBridgeStreamsItsEvidence:
         assert len(recorded) == 1, "the rejected response must be recorded before the stage fails"
         assert recorded[0].raw_response == raw
         assert recorded[0].failure.kind == "SemanticResponseParseError"
+        # The view that produced the rejected response must reach the artifact too, otherwise
+        # it stays in the scratch the executor deletes and the reference dangles.
+        assert [reference for reference, _ in recorded_views] == [
+            view.payload_reference for view in recorded[0].request.visual_views
+        ]
+        assert all(size > 0 for _, size in recorded_views)

@@ -801,6 +801,13 @@ class _LegacySemanticInterpreterBridge:
                 raise ExecutorError(
                     "semantic bridge used before bind(): no writer to record the failure in"
                 ) from failed
+            # As views entram antes da failure: elas sao a evidencia visual exata que produziu
+            # a resposta rejeitada, e sem isto ficariam so no scratch, que o executor apaga --
+            # o artifact citaria um payload_reference irrecuperavel.
+            for view in failed.failure.request.visual_views:
+                self._writer.add_semantic_view_payload(
+                    view, (self._view_root / view.payload_reference).read_bytes()
+                )
             self._writer.add_failed_semantic_interpretation(failed.failure)
             raise
 

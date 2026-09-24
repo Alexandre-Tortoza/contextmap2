@@ -1144,6 +1144,8 @@ def test_failed_semantic_interpretations_are_a_first_class_output(tmp_path: Path
     failed = _failed_semantic_interpretation()
     writer = _write_run(tmp_path)
     writer.add_result(_result("frame-0001", "run-0001"))
+    # The view that produced the rejected response is evidence too, so it must be persisted.
+    writer.add_semantic_view_payload(failed.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
     writer.add_failed_semantic_interpretation(failed)
     manifest = writer.finalize()
 
@@ -1191,3 +1193,38 @@ def test_failed_interpretations_share_the_attempt_identity_with_successes(
     assert parsed_ids == {"region-request-0001"}
     assert failed_ids == {"region-request-0002"}
     assert not (parsed_ids & failed_ids), "one attempt must not appear in both streams"
+
+
+def test_a_failure_view_reference_without_its_payload_is_refused(tmp_path: Path) -> None:
+    """P1 of the PR #438 re-review: a dangling view reference must not pass as integral.
+
+    The failed interpretation names a view by payload_reference and SHA-256. If those bytes
+    never reach the artifact they stay in the executor's scratch, which is deleted, leaving
+    the artifact citing visual evidence nobody can recover -- exactly the evidence that
+    produced the rejected response.
+    """
+    failed = _failed_semantic_interpretation()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_failed_semantic_interpretation(failed)
+
+    with pytest.raises(RunArtifactError, match="missing semantic view payload"):
+        writer.finalize()
+
+
+def test_a_failure_view_payload_is_inventoried_even_without_any_success(tmp_path: Path) -> None:
+    """The view of a failed call is contractual evidence on its own."""
+    failed = _failed_semantic_interpretation()
+    view = failed.request.visual_views[0]
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_semantic_view_payload(view, _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_failed_semantic_interpretation(failed)
+    manifest = writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    reader = PerceptionRunReader(run_dir)
+    assert reader.verify_integrity() == []
+    assert (run_dir / view.payload_reference).read_bytes() == _SEMANTIC_VIEW_PAYLOAD
+    assert any(entry.path == view.payload_reference for entry in manifest.file_inventory)
