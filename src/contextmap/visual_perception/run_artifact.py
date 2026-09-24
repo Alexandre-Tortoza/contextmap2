@@ -66,8 +66,11 @@ from contextmap.visual_perception.semantic_audit import (
     write_semantic_audit,
 )
 from contextmap.visual_perception.semantic_backend import (
+    FailedSemanticInterpretation,
     SemanticInterpretationExecution,
+    decode_failed_semantic_interpretation,
     decode_semantic_execution,
+    encode_failed_semantic_interpretation,
     encode_semantic_execution,
 )
 from contextmap.visual_perception.semantic_requests import SemanticVisualView
@@ -99,6 +102,7 @@ _README_FILENAME = "README.md"
 _RESULTS_FILENAME = "outputs/results.jsonl"
 _METRICS_FILENAME = "metrics/stage-timings.jsonl"
 _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
+_SEMANTIC_FAILURES_FILENAME = "outputs/semantic-interpretation-failures.jsonl"
 _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
 _MASKS_DIRNAME = "outputs/masks"
@@ -246,6 +250,7 @@ class PerceptionRunWriter:
         self._stage_outcome_records: list[dict[str, Any]] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
+        self._semantic_failure_records: list[dict[str, Any]] = []
         # reference -> (sha256, size_bytes); os bytes vao direto para o disco ao serem
         # adicionados, entao o writer nunca retem as imagens enviadas ao backend.
         self._semantic_view_payloads: dict[str, tuple[str, int]] = {}
@@ -393,6 +398,36 @@ class PerceptionRunWriter:
             self._discard_staging()
             raise
         self._semantic_view_payloads[view.payload_reference] = (digest, len(payload))
+
+    def add_failed_semantic_interpretation(self, failed: FailedSemanticInterpretation) -> None:
+        """Record one real backend call whose response was observed but never materialized.
+
+        The response is evidence even though the parser rejected it, so it is persisted in its
+        own contractual stream (``outputs/semantic-interpretation-failures.jsonl``) instead of
+        being reduced to an error string. Keeping it separate from
+        ``outputs/semantic-interpretations.jsonl`` leaves the success contract, and every
+        artifact already written under this schema version, readable.
+
+        The attempt identity is shared: a reader reconciles ``attempted`` against ``parsed``
+        and ``parse_failed`` through ``request.request_id``, which never appears in both
+        streams.
+
+        Args:
+            failed: The observed-but-unparsed interpretation to persist.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`, or if this run already carries
+                an execution or a failure for the same ``request_id``.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add failed semantic interpretations after finalize()")
+        request_id = str(failed.request.request_id)
+        if request_id in self._semantic_request_ids:
+            raise RunArtifactError(
+                f"duplicate semantic request_id in perception run: {request_id!r}"
+            )
+        self._semantic_request_ids.add(request_id)
+        self._semantic_failure_records.append(encode_failed_semantic_interpretation(failed))
 
     def add_feature_payload(
         self,
@@ -832,6 +867,21 @@ class PerceptionRunWriter:
                 _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
             )
 
+        if self._semantic_failure_records:
+            # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
+            # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
+            # (e todo artifact ja escrito sob esta versao de schema).
+            failures_content = "".join(
+                f"{json.dumps(record, sort_keys=True)}\n"
+                for record in self._semantic_failure_records
+            )
+            failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
+            failures_path.parent.mkdir(parents=True, exist_ok=True)
+            failures_path.write_text(failures_content, encoding="utf-8")
+            file_entries.append(
+                _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
+            )
+
         if self._feature_store is not None:
             feature_store_root = self._tmp_dir / _FEATURES_DIRNAME
             # Os arrays ja foram gravados em add_feature_payload(); aqui so resta o indice.
@@ -989,6 +1039,32 @@ class PerceptionRunReader:
                     raise RunArtifactError(
                         f"invalid semantic execution record for {raw_reference!r}: {error}"
                     ) from error
+
+    def iter_failed_semantic_interpretations(self) -> Iterator[FailedSemanticInterpretation]:
+        """Yield each real backend call whose response was observed but never materialized.
+
+        Empty when the run recorded none, including every run written before this stream
+        existed: its absence is not an error, so artifacts frozen under the same schema
+        version stay readable.
+        """
+        failures_path = self._root / _SEMANTIC_FAILURES_FILENAME
+        if not failures_path.is_file():
+            return
+        with failures_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    yield decode_failed_semantic_interpretation(json.loads(stripped))
+                except (ValueError, KeyError, TypeError) as error:
+                    raise RunArtifactError(
+                        f"invalid failed semantic interpretation record: {error}"
+                    ) from error
+
+    def list_failed_semantic_interpretations(self) -> list[FailedSemanticInterpretation]:
+        """Return every observed-but-unparsed interpretation of this run."""
+        return list(self.iter_failed_semantic_interpretations())
 
     def list_semantic_executions(self) -> list[SemanticInterpretationExecution]:
         """Return persisted semantic requests, prompts, responses, and diagnostics."""

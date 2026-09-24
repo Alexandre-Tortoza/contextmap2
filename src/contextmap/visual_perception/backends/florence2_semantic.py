@@ -32,11 +32,13 @@ from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
     SemanticBackendDiagnostics,
     SemanticInterpretationExecution,
+    semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
     SemanticConfidencePolicy,
     SemanticParseDiagnostic,
     SemanticPromptTemplate,
+    SemanticResponseParseError,
     parse_semantic_response,
     render_semantic_prompt,
 )
@@ -295,12 +297,31 @@ class Florence2SemanticInterpreter:
             ),
         )
         task_text = response.text.strip()
-        parsed = parse_semantic_response(
-            _canonical_response_json(request.mode, task_text),
-            request,
-            provenance,
-            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
-        )
+        try:
+            parsed = parse_semantic_response(
+                _canonical_response_json(request.mode, task_text),
+                request,
+                provenance,
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            )
+        except SemanticResponseParseError as error:
+            # raw_response e o texto da task, como no caminho de sucesso: o envelope canonico
+            # e reconstruivel por TASK_ENVELOPE_POLICY e nao e o que o modelo respondeu.
+            raise semantic_failure_from_parse_error(
+                error,
+                request=request,
+                rendered_prompt=rendered,
+                raw_response=response.text,
+                provenance=provenance,
+                diagnostics=SemanticBackendDiagnostics(
+                    latency_ms=(time.monotonic() - started) * 1000,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    peak_memory_bytes=response.peak_memory_bytes,
+                    warnings=response.warnings,
+                ),
+                effective_configuration=MappingProxyType(self._config.to_dict()),
+            ) from error
         # O hash e o raw_response registram o que o modelo respondeu (o texto da task), não
         # o envelope intermediário; o envelope é reconstruível por TASK_ENVELOPE_POLICY.
         parsed = dataclasses.replace(

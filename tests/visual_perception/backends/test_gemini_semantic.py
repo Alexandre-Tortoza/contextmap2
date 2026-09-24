@@ -7,11 +7,11 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     PerceptionResultId,
+    SemanticInterpretationFailedError,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreter,
     SemanticRequestId,
-    SemanticResponseParseError,
     SemanticVisualView,
     VisualViewKind,
 )
@@ -167,7 +167,8 @@ def test_gemini_exhausted_retries_are_explicit_without_fallback() -> None:
 def test_gemini_rejects_model_reported_confidence() -> None:
     adapter = _adapter(_Client(confidence=0.93))
 
-    with pytest.raises(ValueError, match="confidence must be null"):
+    # Still rejected, but the drifting response is preserved as evidence now.
+    with pytest.raises(SemanticInterpretationFailedError, match="confidence must be null"):
         adapter.interpret(_request(adapter))
 
 
@@ -185,10 +186,13 @@ def test_malformed_structured_output_is_a_parser_failure_and_is_not_retried() ->
     client = _Client(text='{"abstained": false, "claims": [')
     adapter = _adapter(client)
 
-    with pytest.raises(SemanticResponseParseError, match="malformed"):
+    with pytest.raises(SemanticInterpretationFailedError, match="malformed") as raised:
         adapter.interpret(_request(adapter))
 
     assert client.calls == 1
+    # A truncated response is exactly what you need preserved to diagnose the truncation.
+    assert raised.value.failure.raw_response == '{"abstained": false, "claims": ['
+    assert raised.value.failure.failure.kind == "SemanticResponseParseError"
 
 
 def test_an_empty_response_is_an_explicit_provider_failure_not_an_abstention() -> None:

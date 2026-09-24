@@ -2235,3 +2235,76 @@ class TestSemanticBridgeStreamsItsEvidence:
         assert writer.views, "the view payload must reach the writer as soon as interpret() returns"
         assert writer.outcomes, "the execution must reach the writer as soon as interpret() returns"
         assert not getattr(bridge, "_evidence", []), "the bridge must retain no payload"
+
+    def test_a_rejected_response_is_recorded_in_the_artifact_not_lost(self, tmp_path: Path) -> None:
+        """The stage still fails, but the model's real answer reaches the failures stream."""
+        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+        from contextmap.visual_perception import (
+            SemanticBackendDiagnostics,
+            SemanticConfidencePolicy,
+            SemanticInferenceProvenance,
+            SemanticPromptTemplate,
+            render_semantic_prompt,
+            semantic_failure_from_parse_error,
+        )
+        from contextmap.visual_perception.semantic_prompt import SemanticResponseParseError
+
+        raw = '{"abstained": false, "claims": [{"hypothesis": "a door"}]}'
+
+        class _RejectingInterpreter:
+            def backend_provenance(self) -> Any:
+                from contextmap.visual_perception import BackendProvenance
+
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret(self, request: Any) -> object:
+                template = SemanticPromptTemplate.default_for(request.mode)
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raise semantic_failure_from_parse_error(
+                    SemanticResponseParseError(
+                        "claim[0] is missing required fields: ['confidence']", raw_response=raw
+                    ),
+                    request=request,
+                    rendered_prompt=rendered,
+                    raw_response=raw,
+                    provenance=SemanticInferenceProvenance(
+                        backend=self.backend_provenance(),
+                        task_identity=f"fake-{request.mode.value}",
+                        prompt_template_id=request.prompt_template_id,
+                        output_schema_version=request.requested_output_schema,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=3.0),
+                    effective_configuration={"backend": "fake"},
+                )
+
+        recorded: list[Any] = []
+
+        class _RecordingWriter:
+            def add_stage_outcomes(self, outcomes: Any) -> None: ...
+
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None: ...
+
+            def add_failed_semantic_interpretation(self, failed: Any) -> None:
+                recorded.append(failed)
+
+        bridge = _LegacySemanticInterpreterBridge(
+            interpreter=_RejectingInterpreter(),  # type: ignore[arg-type]
+            run_id=PerceptionRunId("run-0001"),
+            view_root=tmp_path,
+        )
+        bridge.bind(_RecordingWriter())  # type: ignore[arg-type]
+
+        with pytest.raises(Exception, match="confidence"):
+            bridge.interpret_scene(self._prepared_image(tmp_path, "frame-0000"))
+
+        assert len(recorded) == 1, "the rejected response must be recorded before the stage fails"
+        assert recorded[0].raw_response == raw
+        assert recorded[0].failure.kind == "SemanticResponseParseError"

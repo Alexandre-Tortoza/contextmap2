@@ -12,6 +12,7 @@ from contextmap.visual_perception import (
     BackendProvenance,
     BoundingBox2D,
     ClaimId,
+    FailedSemanticInterpretation,
     FeatureId,
     FeatureScope,
     IncompleteRunArtifactError,
@@ -1110,3 +1111,83 @@ def test_masks_added_one_by_one_are_all_readable_after_finalize(tmp_path: Path) 
     for observation_id, mask in masks.items():
         loaded = store.load(SourceObservationId(observation_id), RegionId("region-0001"))
         assert loaded == mask
+
+
+def _failed_semantic_interpretation() -> FailedSemanticInterpretation:
+    """A real backend call whose response was observed but rejected by the parser."""
+    from contextmap.visual_perception import SemanticParseFailure
+
+    execution = _semantic_execution()
+    raw = json.dumps({"abstained": False, "claims": [{"hypothesis": "a door"}]})
+    return FailedSemanticInterpretation(
+        request=replace(execution.request, request_id=SemanticRequestId("region-request-0002")),
+        rendered_prompt=execution.rendered_prompt,
+        raw_response=raw,
+        raw_response_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        provenance=execution.parsed.claims[0].provenance,
+        diagnostics=execution.diagnostics,
+        failure=SemanticParseFailure(
+            kind="SemanticResponseParseError",
+            message="claim[0] is missing required fields: ['confidence']",
+        ),
+        effective_configuration={"backend": "fake"},
+        occurred_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def test_failed_semantic_interpretations_are_a_first_class_output(tmp_path: Path) -> None:
+    """PR #438 review: an invalid response is still observed evidence, not a lost log line.
+
+    It gets its own contractual stream so the 0.5.0 success contract, and every artifact
+    already frozen under it, stay readable.
+    """
+    failed = _failed_semantic_interpretation()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_failed_semantic_interpretation(failed)
+    manifest = writer.finalize()
+
+    assert manifest.schema_version == "0.5.0", "the success contract must not break"
+    run_dir = _run_dir(tmp_path)
+    reader = PerceptionRunReader(run_dir)
+    assert reader.verify_integrity() == []
+
+    reopened = reader.list_failed_semantic_interpretations()
+    assert reopened == [failed]
+    # Contractual: inventoried, so losing it is detected.
+    assert any(
+        entry.path == "outputs/semantic-interpretation-failures.jsonl"
+        for entry in manifest.file_inventory
+    )
+
+
+def test_failed_interpretations_share_the_attempt_identity_with_successes(
+    tmp_path: Path,
+) -> None:
+    """attempted = parsed + parse_failed must be reconcilable by request_id, not guessed."""
+    execution = _semantic_execution()
+    failed = _failed_semantic_interpretation()
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    writer.add_stage_outcomes(
+        (
+            StageOutcome(
+                stage_id="semantic_interpretation",
+                status=StageStatus.SUCCEEDED,
+                output=execution,
+                duration_ms=4.0,
+            ),
+        )
+    )
+    writer.add_failed_semantic_interpretation(failed)
+    writer.finalize()
+
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    parsed_ids = {str(e.request.request_id) for e in reader.iter_semantic_executions()}
+    failed_ids = {str(f.request.request_id) for f in reader.iter_failed_semantic_interpretations()}
+
+    assert parsed_ids == {"region-request-0001"}
+    assert failed_ids == {"region-request-0002"}
+    assert not (parsed_ids & failed_ids), "one attempt must not appear in both streams"

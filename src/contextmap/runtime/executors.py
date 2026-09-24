@@ -165,6 +165,7 @@ from contextmap.visual_perception import (
     SceneContext,
     SemanticClaim,
     SemanticInterpretationExecution,
+    SemanticInterpretationFailedError,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreter,
@@ -783,6 +784,26 @@ class _LegacySemanticInterpreterBridge:
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
         return f"outputs/semantic-views/{name}", digest
 
+    def _interpret_preserving_failures(
+        self, request: SemanticInterpretationRequest
+    ) -> SemanticInterpretationExecution:
+        """Run one interpretation, persisting the response even when the parser rejects it.
+
+        The stage still fails — ``execute_stage_graph()`` records the error exactly as before —
+        but the model's real answer is no longer reduced to that error string: it reaches the
+        artifact's own failures stream first, so ``attempted`` can be reconciled against
+        ``parsed`` and ``parse_failed`` instead of being inferred.
+        """
+        try:
+            return self._interpreter.interpret(request)
+        except SemanticInterpretationFailedError as failed:
+            if self._writer is None:
+                raise ExecutorError(
+                    "semantic bridge used before bind(): no writer to record the failure in"
+                ) from failed
+            self._writer.add_failed_semantic_interpretation(failed.failure)
+            raise
+
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
         """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
         import importlib
@@ -809,7 +830,7 @@ class _LegacySemanticInterpreterBridge:
             requested_output_schema="semantic-response/1",
             configuration_fingerprint=self._configuration_fingerprint,
         )
-        execution = self._interpreter.interpret(request)
+        execution = self._interpret_preserving_failures(request)
         self._publish(execution, view)
         return execution.parsed.scene_context
 
@@ -858,7 +879,7 @@ class _LegacySemanticInterpreterBridge:
                 requested_output_schema="semantic-response/1",
                 configuration_fingerprint=self._configuration_fingerprint,
             )
-            execution = self._interpreter.interpret(request)
+            execution = self._interpret_preserving_failures(request)
             self._publish(execution, view)
             claims.extend(execution.parsed.claims)
         return tuple(claims)
