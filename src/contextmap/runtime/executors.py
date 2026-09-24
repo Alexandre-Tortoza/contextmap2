@@ -739,29 +739,49 @@ class _LegacySemanticInterpreterBridge:
         self._views_dir.mkdir(parents=True, exist_ok=True)
         provenance = interpreter.backend_provenance()
         self._configuration_fingerprint = provenance.configuration_fingerprint or provenance.model
-        self._evidence: list[tuple[SemanticInterpretationExecution, SemanticVisualView, bytes]] = []
+        self._writer: PerceptionRunWriter | None = None
+
+    def bind(self, writer: PerceptionRunWriter) -> None:
+        """Bind every subsequent execution to the real writer.
+
+        Same ordering cycle as :class:`_DeferredFeaturePayloadSink`: the bridge has to exist
+        before ``resolve_pipeline()`` can build the stage graph, but the writer needs that
+        graph's ``configuration_digest``. Binding happens before any image is processed, so
+        every execution is forwarded, never buffered.
+        """
+        self._writer = writer
 
     def backend_provenance(self) -> BackendProvenance:
         """Pass through the wrapped interpreter's provenance unchanged."""
         return self._interpreter.backend_provenance()
 
-    def evidence(
-        self,
-    ) -> tuple[tuple[SemanticInterpretationExecution, SemanticVisualView, bytes], ...]:
-        """Return every successful semantic execution collected so far, with its view payload.
+    def _publish(
+        self, execution: SemanticInterpretationExecution, view: SemanticVisualView
+    ) -> None:
+        """Hand one finished execution and its view payload to the writer, retaining neither.
 
-        Returns:
-            One ``(execution, view, payload)`` triple per real ``interpret()`` call that
-            returned (a failed call raises instead, so nothing failed is ever collected here).
+        The payload is read back from the view file only here and dropped as soon as the
+        writer has it. Holding ``(execution, view, payload)`` until the image loop ended cost
+        O(semantic requests x image size) resident and undid the writer's own streaming.
         """
-        return tuple(self._evidence)
+        if self._writer is None:
+            raise ExecutorError("semantic bridge used before bind(): no writer to publish to")
+        stage_id = (
+            "scene_interpretation"
+            if execution.request.mode is SemanticInterpretationMode.SCENE
+            else "region_interpretation"
+        )
+        self._writer.add_stage_outcomes(
+            (StageOutcome(stage_id=stage_id, status=StageStatus.SUCCEEDED, output=execution),)
+        )
+        payload = (self._view_root / view.payload_reference).read_bytes()
+        self._writer.add_semantic_view_payload(view, payload)
 
-    def _write_view(self, name: str, pil_image: object) -> tuple[str, str, bytes]:
+    def _write_view(self, name: str, pil_image: object) -> tuple[str, str]:
         target = self._views_dir / name
         pil_image.save(target)  # type: ignore[attr-defined]
-        payload = target.read_bytes()
-        digest = hashlib.sha256(payload).hexdigest()
-        return f"outputs/semantic-views/{name}", digest, payload
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        return f"outputs/semantic-views/{name}", digest
 
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
         """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
@@ -769,9 +789,7 @@ class _LegacySemanticInterpreterBridge:
 
         image_module = importlib.import_module("PIL.Image")
         pil_image = image_module.open(self._view_root / image.payload_reference).convert("RGB")
-        reference, digest, payload = self._write_view(
-            f"{image.source_observation_id}__scene.png", pil_image
-        )
+        reference, digest = self._write_view(f"{image.source_observation_id}__scene.png", pil_image)
         view = SemanticVisualView(
             view_id=f"v-{image.source_observation_id}-scene",
             kind=VisualViewKind.FULL_FRAME,
@@ -792,7 +810,7 @@ class _LegacySemanticInterpreterBridge:
             configuration_fingerprint=self._configuration_fingerprint,
         )
         execution = self._interpreter.interpret(request)
-        self._evidence.append((execution, view, payload))
+        self._publish(execution, view)
         return execution.parsed.scene_context
 
     def interpret_regions(
@@ -814,7 +832,7 @@ class _LegacySemanticInterpreterBridge:
                     int(box.y + box.height),
                 )
             )
-            reference, digest, payload = self._write_view(
+            reference, digest = self._write_view(
                 f"{image.source_observation_id}__{region.region_id}__tight_crop.png", crop
             )
             view = SemanticVisualView(
@@ -841,7 +859,7 @@ class _LegacySemanticInterpreterBridge:
                 configuration_fingerprint=self._configuration_fingerprint,
             )
             execution = self._interpreter.interpret(request)
-            self._evidence.append((execution, view, payload))
+            self._publish(execution, view)
             claims.extend(execution.parsed.claims)
         return tuple(claims)
 
@@ -1072,6 +1090,7 @@ class VisualPerceptionExecutor:
                 configuration_digest=resolved.configuration_digest(),
             )
             payload_sink.bind(writer)
+            semantic_bridge.bind(writer)
 
             for image in images():
                 prepared = _materialize_prepared_image(image, scratch)
@@ -1095,22 +1114,6 @@ class VisualPerceptionExecutor:
                 )
                 writer.add_result(result)
                 writer.add_stage_outcomes(outcomes)
-
-            # A bridge acima reduz cada execução real a ``SceneContext``/``SemanticClaim`` antes
-            # de devolvê-la aos ``outcomes`` que ``assemble_perception_result()`` precisa; sem
-            # isto, a evidência real da execução (prompt renderizado, resposta bruta,
-            # diagnostics) e o payload da view nunca chegariam ao writer.
-            for execution, view, payload in semantic_bridge.evidence():
-                stage_id = (
-                    "scene_interpretation"
-                    if execution.request.mode is SemanticInterpretationMode.SCENE
-                    else "region_interpretation"
-                )
-                outcome = StageOutcome(
-                    stage_id=stage_id, status=StageStatus.SUCCEEDED, output=execution
-                )
-                writer.add_stage_outcomes((outcome,))
-                writer.add_semantic_view_payload(view, payload)
 
             manifest = writer.finalize()
         finally:

@@ -2128,3 +2128,110 @@ def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path)
 
     after = {name for name in ("torch", "transformers") if name in sys.modules}
     assert after <= before
+
+
+class TestSemanticBridgeStreamsItsEvidence:
+    """PR #438 review: the bridge must not hold view payloads until the image loop ends."""
+
+    @staticmethod
+    def _fake_interpreter() -> Any:
+        from contextmap.visual_perception import BackendProvenance
+
+        class _Fake:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret(self, request: Any) -> object:
+                import json
+
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",
+                    prompt_template_id=request.prompt_template_id,
+                    output_schema_version=request.requested_output_schema,
+                )
+                return SemanticInterpretationExecution(
+                    request=request,
+                    rendered_prompt=rendered,
+                    raw_response=raw,
+                    parsed=parse_semantic_response(
+                        raw,
+                        request,
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
+
+        return _Fake()
+
+    @staticmethod
+    def _prepared_image(view_root: Path, observation_id: str) -> Any:
+        from PIL import Image
+
+        from contextmap.ingestion import SourceObservationId
+        from contextmap.visual_perception import PreparedImage
+
+        prepared_dir = view_root / "prepared"
+        prepared_dir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (16, 12), (10, 20, 30)).save(prepared_dir / f"{observation_id}.png")
+        return PreparedImage(
+            source_observation_id=SourceObservationId(observation_id),
+            payload_reference=f"prepared/{observation_id}.png",
+            width=16,
+            height=12,
+        )
+
+    def test_each_execution_reaches_the_writer_before_the_next_frame(self, tmp_path: Path) -> None:
+        """_write_view() read the bytes back and kept them in self._evidence for the whole run.
+
+        That is O(semantic requests x image size) resident, which undoes the writer's streaming.
+        """
+        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+
+        class _RecordingWriter:
+            def __init__(self) -> None:
+                self.outcomes: list[object] = []
+                self.views: list[tuple[str, int]] = []
+
+            def add_stage_outcomes(self, outcomes: Any) -> None:
+                self.outcomes.extend(outcomes)
+
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None:
+                self.views.append((view.payload_reference, len(payload)))
+
+        writer = _RecordingWriter()
+        bridge = _LegacySemanticInterpreterBridge(
+            interpreter=self._fake_interpreter(),
+            run_id=PerceptionRunId("run-0001"),
+            view_root=tmp_path,
+        )
+        bridge.bind(writer)  # type: ignore[arg-type]
+
+        bridge.interpret_scene(self._prepared_image(tmp_path, "frame-0000"))
+
+        assert writer.views, "the view payload must reach the writer as soon as interpret() returns"
+        assert writer.outcomes, "the execution must reach the writer as soon as interpret() returns"
+        assert not getattr(bridge, "_evidence", []), "the bridge must retain no payload"
