@@ -1,9 +1,18 @@
-> **Superseded by `scripts-run2/` and `acceptance-report-run0002.{json,md}`.** A PR #438 review
-> found that `run-0001` (below) was produced under `StateEstimationRunArtifact` `schema_version`
-> `"0.1.0"`, whose `TrajectoryProvenance` never recorded which artifact the merged auxiliary
-> poses actually came from -- so `cross_stage.lineage_closure` never actually verified the
-> artifact that drove the trajectory. `run-0001` is kept below for history; do not cite it as
-> lineage/reproducibility/recovery evidence. See `acceptance-report-run0002.md` for the current
+> **Superseded by `scripts-run3/` and `acceptance-report-run0003.{json,md}`.** Two PR #438 review
+> rounds found real gaps in the *evidence*, not the pipeline's science:
+>
+> - Round 1: `run-0001` was produced under `StateEstimationRunArtifact` `schema_version` `"0.1.0"`,
+>   whose `TrajectoryProvenance` never recorded which artifact the merged auxiliary poses actually
+>   came from -- `cross_stage.lineage_closure` never verified the artifact that drove the
+>   trajectory. Fixed and regenerated as `run-0002` / `scripts-run2/` / `acceptance-report-run0002`.
+> - Round 2: `run-0002`'s own `code_version` was stale (the dev venv's editable install had
+>   silently frozen at a commit 23 behind), and its report's `runtime.provenance_identity`/
+>   `reproducibility.rerun_equivalence` gates were argued from spot-checks/cardinality rather than
+>   systematic/content evidence. Fixed and regenerated as `run-0003` / `scripts-run3/` /
+>   `acceptance-report-run0003`.
+>
+> `run-0001` and `run-0002` are kept below for history; do not cite either as lineage/
+> reproducibility/recovery/provenance evidence. See `acceptance-report-run0003.md` for the current
 > evidence and exactly what was regenerated vs. reused.
 
 # Real canonical run of corridor-02 through ContextMapArtifact (issue #177)
