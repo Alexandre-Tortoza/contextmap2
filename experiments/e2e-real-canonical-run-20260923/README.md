@@ -1,29 +1,34 @@
-> **Superseded by `scripts-run4/` and `acceptance-report-run0004.{json,md}`.** Three PR #438
-> review rounds found real gaps in the *evidence*, not the pipeline's science:
+> **Superseded by `scripts-run5/` and `acceptance-report-run0005.{json,md}`.** Four PR #438
+> review rounds found real gaps in the *evidence*; the fifth found a real gap in the *pipeline's
+> reproducibility itself*:
 >
 > - Round 1: `run-0001` was produced under `StateEstimationRunArtifact` `schema_version` `"0.1.0"`,
 >   whose `TrajectoryProvenance` never recorded which artifact the merged auxiliary poses actually
->   came from -- `cross_stage.lineage_closure` never verified the artifact that drove the
->   trajectory. Fixed and regenerated as `run-0002` / `scripts-run2/` / `acceptance-report-run0002`.
-> - Round 2: `run-0002`'s own `code_version` was stale (the dev venv's editable install had
->   silently frozen at a commit 23 behind), and its report's `runtime.provenance_identity`/
->   `reproducibility.rerun_equivalence` gates were argued from spot-checks/cardinality rather than
->   systematic/content evidence. Fixed and regenerated as `run-0003` / `scripts-run3/` /
->   `acceptance-report-run0003`.
-> - Round 3: `run-0003`'s own audit still skipped `context_map` and the two `SequenceArtifact`s'
->   own provenance, and checked only 1 of 76 real semantic executions while claiming all 76;
->   `ContextMapExecutor` itself hardcoded `configuration_fingerprint=None` (a real code fix, not
->   just an evidence fix); the reproducibility comparator ignored each entity's ambiguity status
->   and each relation's decided state/uncertainty kinds, so a relation flipping
->   `SUPPORTED` -> `UNRESOLVED` between runs would still have reported equivalence. Fixed and
+>   came from. Fixed and regenerated as `run-0002` / `scripts-run2/` / `acceptance-report-run0002`.
+> - Round 2: `run-0002`'s own `code_version` was stale (dev-venv issue), and `runtime.
+>   provenance_identity`/`reproducibility.rerun_equivalence` were spot-checks. Fixed and
+>   regenerated as `run-0003` / `scripts-run3/` / `acceptance-report-run0003`.
+> - Round 3: `run-0003`'s audit still skipped `context_map` and both `SequenceArtifact`s' own
+>   provenance; `ContextMapExecutor` hardcoded `configuration_fingerprint=None` (a real code fix);
+>   the reproducibility comparator ignored ambiguity status and relation state. Fixed and
 >   regenerated as `run-0004` / `scripts-run4/` / `acceptance-report-run0004`.
+> - Round 4: the provenance audit still missed `semantic_fusion.fusion_configuration_fingerprint`,
+>   `PolicyRef.configuration_fingerprint` for entity_resolution/spatial_relations policies, and
+>   real per-backend identity for visual_perception. Fixed in place (no rerun needed).
+> - Round 5: completing `reproducibility.rerun_equivalence` per the frozen scenario 1.0.4 text
+>   required an actual second, independent real Visual Perception execution (SAM2+DINOv2+CLIP+
+>   Qwen3-VL-4B) over the same 20 real frames -- never done in any prior round. **That real
+>   experiment found region discovery perfectly reproducible (0/20 mismatches) but Qwen3-VL-4B's
+>   semantic claims only 32.2% (29/90) exactly reproducible between the two runs.** This is a
+>   real, measured negative result, recorded as `reproducibility.rerun_equivalence = FAILED`, not
+>   forced to a passing status the data does not support. See `acceptance-report-run0005.md`.
 >
-> `run-0001`, `run-0002` and `run-0003/context_map` are kept below for history; do not cite them
-> as lineage/reproducibility/recovery/provenance evidence. `run-0003`'s
-> `state_estimation`..`spatial_relations` stages are **not** superseded (`run-0004` reuses them
-> unchanged by reference), and `run-0001`'s `PerceptionRunArtifact` is **not** superseded either.
-> See `acceptance-report-run0004.md` for the current evidence and exactly what was regenerated vs.
-> reused.
+> **Solution 1 is not yet ready for v0.1.0 under this campaign's own release-readiness policy**
+> (`unmet_required_gates(kinds={INVARIANT})` is no longer empty). `run-0001` through
+> `run-0004/context_map` are kept below for history; do not cite them as lineage/reproducibility/
+> recovery/provenance evidence. `run-0001`'s `PerceptionRunArtifact` remains valid evidence for
+> `visual_perception.evidence_completeness`. See `acceptance-report-run0005.md` for the full
+> picture and recommended next steps.
 
 # Real canonical run of corridor-02 through ContextMapArtifact (issue #177)
 
