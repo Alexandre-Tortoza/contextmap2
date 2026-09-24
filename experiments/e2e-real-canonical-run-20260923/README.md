@@ -1,3 +1,11 @@
+> **Superseded by `scripts-run2/` and `acceptance-report-run0002.{json,md}`.** A PR #438 review
+> found that `run-0001` (below) was produced under `StateEstimationRunArtifact` `schema_version`
+> `"0.1.0"`, whose `TrajectoryProvenance` never recorded which artifact the merged auxiliary
+> poses actually came from -- so `cross_stage.lineage_closure` never actually verified the
+> artifact that drove the trajectory. `run-0001` is kept below for history; do not cite it as
+> lineage/reproducibility/recovery evidence. See `acceptance-report-run0002.md` for the current
+> evidence and exactly what was regenerated vs. reused.
+
 # Real canonical run of corridor-02 through ContextMapArtifact (issue #177)
 
 This is the audit trail for the first real, end-to-end execution of the Solution 1 canonical
