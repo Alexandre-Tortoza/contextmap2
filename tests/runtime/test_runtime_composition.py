@@ -2189,14 +2189,16 @@ class TestSemanticBridgeStreamsItsEvidence:
 
     @staticmethod
     def _prepared_image(view_root: Path, observation_id: str) -> Any:
-        from PIL import Image
+        # Pillow is not a dependency of this project (the bridge itself reaches it through
+        # importlib for that reason), so the test skips instead of failing where it is absent.
+        image_module = pytest.importorskip("PIL.Image")
 
         from contextmap.ingestion import SourceObservationId
         from contextmap.visual_perception import PreparedImage
 
         prepared_dir = view_root / "prepared"
         prepared_dir.mkdir(parents=True, exist_ok=True)
-        Image.new("RGB", (16, 12), (10, 20, 30)).save(prepared_dir / f"{observation_id}.png")
+        image_module.new("RGB", (16, 12), (10, 20, 30)).save(prepared_dir / f"{observation_id}.png")
         return PreparedImage(
             source_observation_id=SourceObservationId(observation_id),
             payload_reference=f"prepared/{observation_id}.png",
