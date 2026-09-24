@@ -1,0 +1,98 @@
+{
+ "issue": 181,
+ "based_on": "experiments/e2e-real-canonical-run-20260923 (issue #177)",
+ "method": "each stage except visual_perception re-executed once from real upstream inputs into outputs/e2e-real/run-0001-profiled/<stage> (run-0001 itself untouched); wall time and peak RSS measured via resource.getrusage(RUSAGE_CHILDREN) in a fresh OS process per stage (scripts-profiled/_run_one.py); storage bytes/file counts measured directly on the real run-0001 artifacts",
+ "environment": {
+  "cpu_count": 16,
+  "ram_gib": 39,
+  "gpu": "NVIDIA GeForce RTX 3060 8GB"
+ },
+ "stages": {
+  "state_estimation": {
+   "wall_time_seconds": 2.819,
+   "peak_rss_mb": 2700.9,
+   "storage_bytes": 3628109,
+   "files_written": 9,
+   "device": "n/a (CPU)",
+   "artifact_id": "b13c6e588aeef1e5142f890399e190b9",
+   "content_hash_matches_run_0001": true
+  },
+  "geometric_mapping": {
+   "wall_time_seconds": 15.133,
+   "peak_rss_mb": 1432.5,
+   "storage_bytes": 1051513457,
+   "files_written": 10,
+   "device": "n/a (CPU)",
+   "artifact_id": "d6ed712aa1a77b91dc93fd951273d938",
+   "content_hash_matches_run_0001": true
+  },
+  "sensor_association": {
+   "wall_time_seconds": 177.842,
+   "peak_rss_mb": 24964.9,
+   "storage_bytes": 3366563,
+   "files_written": 10,
+   "device": "n/a (CPU)",
+   "artifact_id": "ec435f284cef18bc1980cfd0188022a4",
+   "content_hash_matches_run_0001": true,
+   "note": "outlier: ~64% of the machine's 39 GiB RAM; algorithmic/working-set cost, not I/O (storage output is tiny)"
+  },
+  "semantic_fusion": {
+   "wall_time_seconds": 6.252,
+   "peak_rss_mb": 2746.7,
+   "storage_bytes": 2712103,
+   "files_written": 12,
+   "device": "n/a (CPU)",
+   "artifact_id": "7253ce0b68b142d58f52a528ace9af13",
+   "content_hash_matches_run_0001": true
+  },
+  "visual_perception": {
+   "wall_time_seconds": {"phase1_region_and_features": 91.0, "phase2_qwen_semantic": 656.7},
+   "peak_rss_mb": null,
+   "peak_gpu_mb": {"phase1": 4988.6, "phase2": 3245.7},
+   "storage_bytes": 80468205,
+   "files_written": 1437,
+   "device": "CUDA (RTX 3060)",
+   "precision": {"sam2_dinov2_clip": "float32", "qwen3_vl_4b": "nf4 (bitsandbytes)"},
+   "source": "outputs/e2e-real/visual_perception/reports/31_pipeline_semantic_sam2_canonical-1-0-4.json (not re-run: already real, ~12 min of GPU/Qwen generation)"
+  },
+  "semantic_mapping": {
+   "wall_time_seconds": 31.192,
+   "peak_rss_mb": 521.0,
+   "storage_bytes": 1725013,
+   "files_written": 13,
+   "device": "n/a (CPU)",
+   "artifact_id": "c9137c48ca2baa50425101497eee6947",
+   "content_hash_matches_run_0001": true
+  },
+  "entity_resolution": {
+   "wall_time_seconds": 6.693,
+   "peak_rss_mb": 285.4,
+   "storage_bytes": 73784494,
+   "files_written": 15,
+   "device": "n/a (CPU)",
+   "artifact_id": "07616fecdb889fb0cf492f230e812706",
+   "content_hash_matches_run_0001": true
+  },
+  "spatial_relations": {
+   "wall_time_seconds": 45.75,
+   "peak_rss_mb": 648.4,
+   "storage_bytes": 27737723,
+   "files_written": 8,
+   "device": "n/a (CPU)",
+   "artifact_id": "ca6f0ab8478d46ceb7691ef35114bd8b",
+   "content_hash_matches_run_0001": true
+  },
+  "context_map": {
+   "wall_time_seconds": 22.788,
+   "peak_rss_mb": 534.4,
+   "storage_bytes": 42877617,
+   "files_written": 10,
+   "device": "n/a (CPU)",
+   "artifact_id": "57484aa0948006e9deb4db5b2bd1c4da",
+   "content_hash_matches_run_0001": true,
+   "entity_count": 170,
+   "relation_count": 10852
+  }
+ },
+ "outstanding_finding": "sensor_association's 24.96 GB peak RSS is a real headroom risk on smaller machines; reported here, not fixed (scientific tuning decision, out of scope for profiling)."
+}
