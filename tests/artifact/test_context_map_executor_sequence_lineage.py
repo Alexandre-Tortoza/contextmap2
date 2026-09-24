@@ -37,6 +37,7 @@ from contextmap.ingestion.sequence_provenance import SequenceProvenance
 from contextmap.runtime import ArtifactRef, StageRequest
 from contextmap.runtime.executors import ContextMapExecutor, ExecutorError
 from contextmap.shared import SourceTimestamp
+from contextmap.spatial_relations import AxisDirection
 
 _CLOCK = "fixture:header"
 
@@ -137,3 +138,42 @@ def test_the_matching_sequence_is_accepted_and_pinned_by_its_own_digest(tmp_path
         )
     assert sequence_entry.content_identity == artifact_digest(correct_sequence_dir)
     assert ref.contract == "ContextMapArtifact"
+
+
+def test_the_manifest_records_a_real_configuration_fingerprint_not_none(tmp_path: Path) -> None:
+    """PR #438 review: ``runtime.provenance_identity`` requires every stage artifact to record
+    an effective configuration digest; ``ContextMapExecutor`` used to hardcode ``None``."""
+    sequence_dir = tmp_path / "ingestion-correct"
+    _write_sequence(sequence_dir, artifact_id="sequence-0001")
+    request = _request(tmp_path, sequence_dir=sequence_dir, output_dir=tmp_path / "context_map")
+
+    ContextMapExecutor(up_axis=AxisDirection.POSITIVE_Z).execute(request)
+
+    with ContextMapArtifactReader.open(tmp_path / "context_map") as reader:
+        fingerprint = reader.manifest.configuration_fingerprint
+    assert fingerprint is not None
+    assert fingerprint.startswith("sha256:")
+
+
+def test_a_different_up_axis_changes_the_configuration_fingerprint(tmp_path: Path) -> None:
+    # Two independent workspaces: `_request`/`_chain` write a fresh geometry/resolution/
+    # relations chain per workspace, and an immutable artifact is never overwritten.
+    workspace_z, workspace_x = tmp_path / "z", tmp_path / "x"
+    sequence_dir_z, sequence_dir_x = workspace_z / "ingestion", workspace_x / "ingestion"
+    _write_sequence(sequence_dir_z, artifact_id="sequence-0001")
+    _write_sequence(sequence_dir_x, artifact_id="sequence-0001")
+
+    request_z = _request(
+        workspace_z, sequence_dir=sequence_dir_z, output_dir=workspace_z / "context_map"
+    )
+    ContextMapExecutor(up_axis=AxisDirection.POSITIVE_Z).execute(request_z)
+    request_x = _request(
+        workspace_x, sequence_dir=sequence_dir_x, output_dir=workspace_x / "context_map"
+    )
+    ContextMapExecutor(up_axis=AxisDirection.POSITIVE_X).execute(request_x)
+
+    with ContextMapArtifactReader.open(workspace_z / "context_map") as reader_z:
+        fingerprint_z = reader_z.manifest.configuration_fingerprint
+    with ContextMapArtifactReader.open(workspace_x / "context_map") as reader_x:
+        fingerprint_x = reader_x.manifest.configuration_fingerprint
+    assert fingerprint_z != fingerprint_x

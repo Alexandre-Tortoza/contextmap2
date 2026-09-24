@@ -1220,6 +1220,28 @@ def _observation_window(clock_id: str, *, start_ns: int, end_ns: int) -> Observa
     return ObservationWindow(start=_timestamp(start_ns), end=_timestamp(end_ns))
 
 
+def _context_map_configuration_fingerprint(
+    *, assembly_policy: PolicyRef, up_direction: tuple[float, float, float] | None
+) -> str:
+    """Deterministic hash of the configuration ``ContextMapExecutor`` actually assembled with.
+
+    ``ContextMapExecutor`` has no backend to select, but it does have two effective inputs of
+    its own that change what it assembles: the assembly policy's identity and the map's
+    declared up direction (``None`` is itself a distinct, meaningful configuration, not an
+    absence of one). ``runtime.provenance_identity`` requires every stage artifact to record an
+    effective configuration digest; this was previously hardcoded to ``None`` (PR #438 review).
+    """
+    payload = json.dumps(
+        {
+            "assembly_policy_id": assembly_policy.policy_id,
+            "assembly_policy_version": assembly_policy.version,
+            "up_direction": up_direction,
+        },
+        sort_keys=True,
+    )
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
 class ContextMapExecutor:
     """Assembles the repository's public product: the ``ContextMap``, by reference.
 
@@ -1255,6 +1277,9 @@ class ContextMapExecutor:
             policy_id=CONTEXT_MAP_ASSEMBLY_POLICY_ID, version="1"
         )
         self._code_version = code_version
+        self._configuration_fingerprint = _context_map_configuration_fingerprint(
+            assembly_policy=self._assembly_policy, up_direction=self._up_direction
+        )
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Assemble and write the final ``ContextMap`` from this run's real upstream artifacts.
@@ -1304,7 +1329,7 @@ class ContextMapExecutor:
             creation=MapCreation(
                 assembly_policy=self._assembly_policy,
                 code_version=self._code_version,
-                configuration_fingerprint=None,
+                configuration_fingerprint=self._configuration_fingerprint,
             ),
             source_sequences=(
                 SourceSequence(
