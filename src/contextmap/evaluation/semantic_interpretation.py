@@ -507,6 +507,19 @@ class EvidenceVariantComparison:
     entries: tuple[EvidenceVariantEntry, ...]
 
 
+class SemanticMeasurementStatus(Enum):
+    """Whether a run's attempt counts can support an exact rate.
+
+    Attributes:
+        COMPLETE: The run recorded both streams, so every attempt has a known outcome.
+        LEGACY_LOWER_BOUND: The run predates the failures stream. ``parse_failed`` is a floor,
+            not a measurement, and no rate can be derived from it.
+    """
+
+    COMPLETE = "complete"
+    LEGACY_LOWER_BOUND = "legacy_lower_bound"
+
+
 @dataclass(frozen=True, kw_only=True)
 class SemanticAttemptAccounting:
     """How many real backend calls a run made, and how many became canonical claims.
@@ -520,11 +533,13 @@ class SemanticAttemptAccounting:
         attempted: Distinct requests the backend actually answered, parsed or not.
         parsed: Requests whose response became a ``ParsedSemanticResponse``.
         parse_failed: Requests whose response was observed but rejected by the parser.
+        measurement_status: Whether these counts can support an exact rate.
     """
 
     attempted: int
     parsed: int
     parse_failed: int
+    measurement_status: SemanticMeasurementStatus = SemanticMeasurementStatus.COMPLETE
 
     def __post_init__(self) -> None:
         """Reject counts that cannot describe one reconciled run."""
@@ -547,15 +562,22 @@ class SemanticAttemptAccounting:
         """Share of attempts the parser rejected, or ``None`` when nothing was attempted.
 
         ``0/0`` is undefined, not zero: a run that issued no semantic request has no failure
-        rate to report, and returning ``0.0`` would read as a perfect stage.
+        rate to report, and returning ``0.0`` would read as a perfect stage. The same holds
+        for ``LEGACY_LOWER_BOUND``, where the failures were never tracked in the first place.
         """
+        if self.measurement_status is SemanticMeasurementStatus.LEGACY_LOWER_BOUND:
+            return None
         if self.attempted == 0:
             return None
         return self.parse_failed / self.attempted
 
     @classmethod
     def from_request_ids(
-        cls, *, parsed_ids: frozenset[str], failed_ids: frozenset[str]
+        cls,
+        *,
+        parsed_ids: frozenset[str],
+        failed_ids: frozenset[str],
+        measurement_status: SemanticMeasurementStatus = SemanticMeasurementStatus.COMPLETE,
     ) -> SemanticAttemptAccounting:
         """Build the accounting of one run from the request ids of both streams.
 
@@ -572,6 +594,7 @@ class SemanticAttemptAccounting:
             attempted=len(parsed_ids | failed_ids),
             parsed=len(parsed_ids),
             parse_failed=len(failed_ids),
+            measurement_status=measurement_status,
         )
 
 
@@ -594,7 +617,17 @@ def account_semantic_attempts(reader: Any) -> SemanticAttemptAccounting:
     failed_ids = frozenset(
         str(failed.request.request_id) for failed in reader.iter_failed_semantic_interpretations()
     )
-    return SemanticAttemptAccounting.from_request_ids(parsed_ids=parsed_ids, failed_ids=failed_ids)
+    return SemanticAttemptAccounting.from_request_ids(
+        parsed_ids=parsed_ids,
+        failed_ids=failed_ids,
+        # Sem tracking so e "legado" quando houve execucao: um run que nunca chamou o
+        # backend semantico nao tem nada a rastrear, e sua contagem e exata (zero de zero).
+        measurement_status=(
+            SemanticMeasurementStatus.COMPLETE
+            if reader.tracks_semantic_failures() or not parsed_ids
+            else SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+        ),
+    )
 
 
 def aggregate_semantic_attempts(
@@ -606,10 +639,18 @@ def aggregate_semantic_attempts(
     ``request_id``, and unioning ids across runs would report that reuse as a collision.
     """
     totals = list(accountings)
+    # Uma run sem tracking contamina o agregado: a campanha nao pode declarar taxa exata
+    # quando parte da evidencia nunca registrou suas falhas.
+    status = (
+        SemanticMeasurementStatus.COMPLETE
+        if all(item.measurement_status is SemanticMeasurementStatus.COMPLETE for item in totals)
+        else SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+    )
     return SemanticAttemptAccounting(
         attempted=sum(item.attempted for item in totals),
         parsed=sum(item.parsed for item in totals),
         parse_failed=sum(item.parse_failed for item in totals),
+        measurement_status=status,
     )
 
 

@@ -14,6 +14,7 @@ import pytest
 
 from contextmap.evaluation import (
     SemanticAttemptAccounting,
+    SemanticMeasurementStatus,
     account_semantic_attempts,
     aggregate_semantic_attempts,
 )
@@ -224,15 +225,72 @@ def test_an_artifact_written_before_the_failures_stream_still_accounts(tmp_path:
     """Runs frozen under the same schema version have no failures file; that is not an error."""
     writer = _writer(tmp_path)
     _finalize(writer, executions=[_execution("run-0001", "req-a", "a")])
-    # Simulates an artifact frozen before the failures stream existed: the current writer
-    # always emits the file, precisely so its absence can only mean "written earlier".
-    failures_file = _run_dir(tmp_path) / "outputs" / "semantic-interpretation-failures.jsonl"
-    failures_file.unlink()
+    _make_legacy(_run_dir(tmp_path))
+    run_dir = _run_dir(tmp_path)
+    # A real artifact from before the stream, not a corrupted one: it must still verify.
+    assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+    accounting = account_semantic_attempts(PerceptionRunReader(run_dir))
+
+    assert accounting.attempted == 1
+    assert accounting.parsed == 1
+    assert accounting.parse_failed == 0
+    # The count is a floor, not a measurement: such a run never tracked its failures, so the
+    # rate must not read as a perfect 0.0.
+    assert accounting.measurement_status is SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+    assert accounting.parse_failure_rate is None
+
+
+def _make_legacy(run_dir: Path) -> None:
+    """Turn a freshly written run into a valid artifact from before the failures stream.
+
+    Deleting the file alone would leave manifest.json citing it, which is a corrupt artifact
+    that verify_integrity() rejects -- not the contract an older run actually had.
+    """
+    failures = "outputs/semantic-interpretation-failures.jsonl"
+    (run_dir / failures).unlink()
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["file_inventory"] = [
+        entry for entry in manifest["file_inventory"] if entry["path"] != failures
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_a_complete_run_declares_its_measurement_complete(tmp_path: Path) -> None:
+    """A run that tracked failures can assert a rate; one that never tracked them cannot."""
+    writer = _writer(tmp_path)
+    _finalize(writer, executions=[_execution("run-0001", "req-a", "a")])
 
     accounting = account_semantic_attempts(PerceptionRunReader(_run_dir(tmp_path)))
 
-    assert accounting == SemanticAttemptAccounting(attempted=1, parsed=1, parse_failed=0)
-    # The count is a floor, not a measurement: such a run never tracked its failures.
+    assert accounting.measurement_status is SemanticMeasurementStatus.COMPLETE
+    assert accounting.parse_failure_rate == 0.0
+
+
+def test_one_legacy_run_makes_the_whole_aggregate_inexact(tmp_path: Path) -> None:
+    """A campaign cannot claim an exact rate when part of its evidence never tracked failures."""
+    _finalize(_writer(tmp_path, 1), executions=[_execution("run-0001", "req-a", "a")])
+    _finalize(
+        _writer(tmp_path, 2),
+        executions=[_execution("run-0002", "req-a", "a")],
+        failures=[_failure("run-0002", "req-b", "b")],
+    )
+    _make_legacy(_run_dir(tmp_path, 1))
+
+    total = aggregate_semantic_attempts(
+        [
+            account_semantic_attempts(PerceptionRunReader(_run_dir(tmp_path, 1))),
+            account_semantic_attempts(PerceptionRunReader(_run_dir(tmp_path, 2))),
+        ]
+    )
+
+    assert total.attempted == 3
+    assert total.parse_failed == 1
+    assert total.measurement_status is SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+    assert total.parse_failure_rate is None
 
 
 def test_a_run_with_no_semantic_attempt_has_an_undefined_failure_rate(tmp_path: Path) -> None:

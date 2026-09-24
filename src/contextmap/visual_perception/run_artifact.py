@@ -1091,6 +1091,16 @@ class PerceptionRunReader:
                         f"invalid semantic execution record for {raw_reference!r}: {error}"
                     ) from error
 
+    def tracks_semantic_failures(self) -> bool:
+        """Whether this run recorded its rejected interpretations at all.
+
+        ``False`` only for a run written before the failures stream existed: the writer emits
+        the file whenever a run attempted interpretation, empty included. A consumer needs
+        this to tell "zero failures, fully tracked" from "never tracked", which otherwise
+        both read as zero.
+        """
+        return (self._root / _SEMANTIC_FAILURES_FILENAME).is_file()
+
     def iter_failed_semantic_interpretations(self) -> Iterator[FailedSemanticInterpretation]:
         """Yield each real backend call whose response was observed but never materialized.
 
