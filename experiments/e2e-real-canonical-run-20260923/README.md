@@ -1,5 +1,5 @@
-> **Superseded by `scripts-run3/` and `acceptance-report-run0003.{json,md}`.** Two PR #438 review
-> rounds found real gaps in the *evidence*, not the pipeline's science:
+> **Superseded by `scripts-run4/` and `acceptance-report-run0004.{json,md}`.** Three PR #438
+> review rounds found real gaps in the *evidence*, not the pipeline's science:
 >
 > - Round 1: `run-0001` was produced under `StateEstimationRunArtifact` `schema_version` `"0.1.0"`,
 >   whose `TrajectoryProvenance` never recorded which artifact the merged auxiliary poses actually
@@ -10,10 +10,20 @@
 >   `reproducibility.rerun_equivalence` gates were argued from spot-checks/cardinality rather than
 >   systematic/content evidence. Fixed and regenerated as `run-0003` / `scripts-run3/` /
 >   `acceptance-report-run0003`.
+> - Round 3: `run-0003`'s own audit still skipped `context_map` and the two `SequenceArtifact`s'
+>   own provenance, and checked only 1 of 76 real semantic executions while claiming all 76;
+>   `ContextMapExecutor` itself hardcoded `configuration_fingerprint=None` (a real code fix, not
+>   just an evidence fix); the reproducibility comparator ignored each entity's ambiguity status
+>   and each relation's decided state/uncertainty kinds, so a relation flipping
+>   `SUPPORTED` -> `UNRESOLVED` between runs would still have reported equivalence. Fixed and
+>   regenerated as `run-0004` / `scripts-run4/` / `acceptance-report-run0004`.
 >
-> `run-0001` and `run-0002` are kept below for history; do not cite either as lineage/
-> reproducibility/recovery/provenance evidence. See `acceptance-report-run0003.md` for the current
-> evidence and exactly what was regenerated vs. reused.
+> `run-0001`, `run-0002` and `run-0003/context_map` are kept below for history; do not cite them
+> as lineage/reproducibility/recovery/provenance evidence. `run-0003`'s
+> `state_estimation`..`spatial_relations` stages are **not** superseded (`run-0004` reuses them
+> unchanged by reference), and `run-0001`'s `PerceptionRunArtifact` is **not** superseded either.
+> See `acceptance-report-run0004.md` for the current evidence and exactly what was regenerated vs.
+> reused.
 
 # Real canonical run of corridor-02 through ContextMapArtifact (issue #177)
 
