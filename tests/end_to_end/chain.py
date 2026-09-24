@@ -16,6 +16,7 @@ from pathlib import Path
 from contextmap.artifact import (
     CONTEXT_MAP_ASSEMBLY_POLICY_ID,
     ArtifactKind,
+    ContextMapArtifactReader,
     ContextMapId,
     ContextMapMetadata,
     DeclaredCapabilities,
@@ -40,6 +41,7 @@ from contextmap.entity_resolution import (
     GeometryComparisonPolicy,
     MatchChannel,
     MatchEvidenceBuilder,
+    ResolvedEntityReference,
     lineage_from_mapping_manifest,
     materialize_resolved_entities,
     resolve_candidate_pairs,
@@ -86,6 +88,7 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.semantic_mapping import (
     EntityMaterializationPolicy,
+    EntityReference,
     GeometrySummaryPolicy,
     SemanticMapId,
     SemanticMappingRunId,
@@ -759,6 +762,7 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
 
 def cross_stage_inputs(chain: SyntheticChain) -> CrossStageInputs:
     """The manifests and objects the cross-stage evaluator reads, taken from the readers."""
+    context_map = ContextMapArtifactReader.open(chain.context_map_dir).context_map()
     return CrossStageInputs(
         sequence=chain.sequence.manifest,
         sequence_calibration_identity=calibration_identity(chain.sequence.read_calibration()),
@@ -771,6 +775,24 @@ def cross_stage_inputs(chain: SyntheticChain) -> CrossStageInputs:
         spatial_observations=chain.spatial_observations,
         fusion=chain.fusion.manifest,
         fusion_outcomes=chain.fusion_outcomes,
+        mapping=chain.mapping.manifest,
+        entities={
+            EntityReference(
+                semantic_map_id=entity.semantic_map_id, entity_id=entity.entity_id
+            ): entity
+            for entity in chain.mapping.iter_entities()
+        },
+        resolution=chain.resolution.manifest,
+        resolved_entities={
+            ResolvedEntityReference(
+                resolution_run_id=resolved.resolution_run_id,
+                resolved_entity_id=resolved.resolved_entity_id,
+            ): resolved
+            for resolved in chain.resolution.resolved_entities().entities
+        },
+        relations=chain.relations.manifest,
+        relation_records=tuple(chain.relations.iter_relations()),
+        context_map=context_map,
     )
 
 

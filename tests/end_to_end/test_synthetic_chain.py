@@ -102,21 +102,28 @@ def test_the_contract_report_decides_only_what_the_chain_checked(tmp_path: Path)
         "spatial_relations.reference_integrity",
         "artifact.integrity",
         "reproducibility.rerun_equivalence",
+        # Issue #178 extended check_cross_stage() through the ContextMapArtifact: the intact
+        # synthetic chain now genuinely passes every cross-stage gate, nothing is unverified.
+        "cross_stage.lineage_closure",
+        "cross_stage.coordinate_consistency",
+        "cross_stage.evidence_traceability",
+        "cross_stage.physical_observation_identity",
     }
     assert all(by_gate[gate].evidence_class is EvidenceClass.FAKE_CONTRACT for gate in passed)
     # Os gates de qualidade que dependem de anotação de referência (IDENTITY/RELATIONS) nunca são
     # fabricados aqui, mesmo com evidência estrutural real para os gates de integridade acima.
     assert by_gate["entity_resolution.identity_quality"].status is GateStatus.NOT_EVALUATED
     assert by_gate["spatial_relations.relation_quality"].status is GateStatus.NOT_EVALUATED
+    assert blocked == {}
     for gate in (
         "cross_stage.lineage_closure",
         "cross_stage.coordinate_consistency",
         "cross_stage.evidence_traceability",
         "cross_stage.physical_observation_identity",
     ):
-        assert blocked[gate] == ("entity_resolution", "spatial_relations", "artifact")
         assert "0 findings" in by_gate[gate].detail
-        # O ExternalPose não registra calibração: a lacuna é declarada, não escondida.
+        # O ExternalPose não registra calibração: a lacuna continua declarada, não escondida,
+        # mesmo com o gate passando de verdade.
         assert "records no calibration identity" in by_gate[gate].detail
 
 
