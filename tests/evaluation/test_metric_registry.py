@@ -190,7 +190,8 @@ def test_evaluators_reject_incompatible_annotation_versions() -> None:
 def test_the_registry_carries_the_metrics_the_optional_technique_protocols_need() -> None:
     registry = default_metric_registry()
 
-    assert registry.registry_version == "2"
+    # 3 desde o cenário 1.0.5, que registrou semantic.rerun_agreement.rate.
+    assert registry.registry_version == "3"
     expected = {
         "association.feature_anchoring.rate": EvaluationStage.SENSOR_ASSOCIATION,
         "fusion.view_consistency.rate": EvaluationStage.SEMANTIC_FUSION,
