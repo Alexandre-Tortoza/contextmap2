@@ -265,12 +265,13 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
     assert reader.verify_integrity() == []
 
 
-class _OmitsConfidenceQwenRuntime:
-    """Reproduces the dominant real failure: the model obeys "never invent confidence".
+class _NonScalarAttributeQwenRuntime:
+    """Reproduces a real failure family that survives the confidence fix.
 
-    The prompt tells it not to invent confidence, the schema marks the key required, and the
-    parser rejects the claim when it is absent. 232 of 284 failed requests in the real
-    150-frame corridor-02 run failed exactly this way.
+    The model returns a list where `attributes` values must be scalars: 163 of the 457
+    rejected responses in the real 360-frame corridor-02 run failed exactly this way. (The
+    once-dominant "missing confidence" family is gone: omitting the key is now legal under
+    UNSCORED_ONLY, since null was its only permitted value.)
     """
 
     def generate(
@@ -290,7 +291,8 @@ class _OmitsConfidenceQwenRuntime:
                             "role": "primary",
                             "category": None,
                             "region_kind": "thing",
-                            "attributes": {},
+                            "attributes": {"features": ["slatted", "wooden"]},
+                            "confidence": None,
                         }
                     ],
                     "scene_context": None,
@@ -315,7 +317,7 @@ def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_stri
         max_new_tokens=128,
         temperature=0.0,
     )
-    adapter = QwenSemanticInterpreter(config=config, runtime=_OmitsConfidenceQwenRuntime())
+    adapter = QwenSemanticInterpreter(config=config, runtime=_NonScalarAttributeQwenRuntime())
     request = _request(adapter)
 
     with pytest.raises(SemanticInterpretationFailedError) as raised:
@@ -325,7 +327,7 @@ def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_stri
     assert "wooden pallet" in failed.raw_response, "the observed response must not be lost"
     assert failed.raw_response_sha256
     assert failed.failure.kind == "SemanticResponseParseError"
-    assert "confidence" in failed.failure.message
+    assert "scalar value" in failed.failure.message
     assert failed.request.request_id == request.request_id, "shares the attempt identity"
     assert failed.provenance.backend.model == config.model
     assert failed.diagnostics.input_tokens == 120

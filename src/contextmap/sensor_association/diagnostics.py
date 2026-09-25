@@ -54,11 +54,24 @@ from contextmap.visual_perception import PreparedImage
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-DIAGNOSTICS_DEFINITIONS_VERSION = "association-diagnostics-v1"
-"""Versioned identity of the diagnostic definitions in this module."""
+DIAGNOSTICS_DEFINITIONS_VERSION = "association-diagnostics-v2"
+"""Versioned identity of the diagnostic definitions in this module.
 
-_NO_REFERENCE = "no trusted reference correspondences were provided"
-_NONE_PROJECTS = "no trusted reference correspondence could be projected"
+``v2`` (#562): a frame's trusted reference now carries a
+:class:`ReprojectionAttempt` with an explicit :class:`ReprojectionOutcome`, so a missing
+residual is counted as one of three distinct facts instead of a single absence; the new
+``REFERENCE_NOT_EVALUATED`` warning separates a candidate policy that evaluated no reference
+geometry from a camera that cannot project it; and the invalid rate is measured over the
+evaluated population rather than the declared one. The identity moves because the definitions
+changed, not because the code did: two runs whose diagnostics mean different things must never
+share it.
+"""
+
+_NONE_PROJECTS = "no evaluated trusted reference correspondence could be projected"
+_NOT_EVALUATED = (
+    "the frame's candidate policy evaluated none of the trusted reference geometry, so the frame "
+    "says nothing about it"
+)
 
 
 class FindingSeverity(Enum):
@@ -88,8 +101,12 @@ class FindingCode(Enum):
             trusted reference exceeds the tolerance.
         REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE: Too many reference correspondences could
             not be projected.
-        NO_REFERENCE_CORRESPONDENCE_PROJECTS: A trusted reference was provided but none of its
-            correspondences could be projected.
+        NO_REFERENCE_CORRESPONDENCE_PROJECTS: A trusted reference was provided, the frame
+            evaluated its geometry, and the camera model could project none of it.
+        REFERENCE_NOT_EVALUATED: A trusted reference was provided but the frame's candidate
+            policy evaluated none of its geometry, so the frame says nothing about it. That is
+            a limitation of the evaluated population, not a projection failure, which is why it
+            is a warning and not a failure.
     """
 
     POSE_TIME_DELTA_EXCEEDS_TOLERANCE = "pose_time_delta_exceeds_tolerance"
@@ -98,6 +115,126 @@ class FindingCode(Enum):
     REPROJECTION_RESIDUAL_EXCEEDS_TOLERANCE = "reprojection_residual_exceeds_tolerance"
     REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE = "reprojection_invalid_rate_exceeds_tolerance"
     NO_REFERENCE_CORRESPONDENCE_PROJECTS = "no_reference_correspondence_projects"
+    REFERENCE_NOT_EVALUATED = "reference_not_evaluated"
+
+
+class ReprojectionOutcome(Enum):
+    """What became of a frame's trusted reference, when one was supplied.
+
+    Attributes:
+        NO_REFERENCE: No trusted reference was supplied for the frame.
+        NOT_EVALUATED: One was, but the frame's candidate policy evaluated none of its
+            geometry, so the frame says nothing about it.
+        NONE_PROJECTABLE: The frame evaluated its geometry and the camera model could project
+            none of it.
+        MEASURED: A residual was measured.
+    """
+
+    NO_REFERENCE = "no_reference"
+    NOT_EVALUATED = "not_evaluated"
+    NONE_PROJECTABLE = "none_projectable"
+    MEASURED = "measured"
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReprojectionAttempt:
+    """What one frame did with a trusted reference, whether or not a residual came out.
+
+    The *attempt* is separate from the *residual* on purpose. "No residual" used to be a
+    single ``None``, which collapsed three different facts -- no reference, a reference the
+    candidate policy never evaluated, and a reference the camera could not project -- and
+    threw away their counts, so a downstream evaluator could neither tell them apart nor
+    report how many correspondences were involved. The attempt is always present and always
+    counted; the residual exists only when something projected.
+
+    Attributes:
+        outcome: Which of the four things happened.
+        reference_id: The trusted correspondence set, or ``None`` when none was supplied.
+        correspondence_count: Correspondences the reference declared.
+        evaluated_count: Of those, the ones whose geometry the frame's candidate policy
+            evaluated. Zero means the frame says nothing about the reference.
+        invalid_count: Of the evaluated ones, those the camera model could not project.
+    """
+
+    outcome: ReprojectionOutcome
+    reference_id: str | None
+    correspondence_count: int
+    evaluated_count: int
+    invalid_count: int
+
+    def __post_init__(self) -> None:
+        """Validate that the counts narrow and match the outcome.
+
+        Raises:
+            ValueError: If a count is negative, they do not narrow from declared through
+                evaluated to invalid, or they contradict ``outcome``. Every state the enum
+                declares is checked, including the two that only a wrong producer could
+                build: counts on a frame that had no reference, and a supplied reference with
+                no correspondences in it.
+        """
+        if min(self.correspondence_count, self.evaluated_count, self.invalid_count) < 0:
+            raise ValueError("reprojection counts must not be negative")
+        if not self.invalid_count <= self.evaluated_count <= self.correspondence_count:
+            raise ValueError(
+                f"reprojection counts must narrow: {self.invalid_count} invalid of "
+                f"{self.evaluated_count} evaluated of {self.correspondence_count} declared"
+            )
+        if (self.outcome is ReprojectionOutcome.NO_REFERENCE) != (self.reference_id is None):
+            raise ValueError("a reference_id exists exactly when a reference was supplied")
+        if self.outcome is ReprojectionOutcome.NO_REFERENCE:
+            # A narrowing acima faz evaluated e invalid seguirem de correspondence_count.
+            if self.correspondence_count:
+                raise ValueError(
+                    f"{self.outcome.value} means no reference existed, so it can count no "
+                    f"correspondences, got {self.correspondence_count}"
+                )
+        elif self.correspondence_count == 0:
+            raise ValueError(
+                f"{self.outcome.value} names a supplied reference, which always declares at "
+                "least one correspondence"
+            )
+        if self.outcome is ReprojectionOutcome.NOT_EVALUATED and self.evaluated_count:
+            raise ValueError(
+                f"{self.outcome.value} means nothing was evaluated, got {self.evaluated_count}"
+            )
+        if self.outcome is ReprojectionOutcome.NONE_PROJECTABLE and (
+            self.evaluated_count == 0 or self.invalid_count != self.evaluated_count
+        ):
+            raise ValueError(
+                f"{self.outcome.value} means every evaluated correspondence is invalid, got "
+                f"{self.invalid_count} of {self.evaluated_count}"
+            )
+        if self.outcome is ReprojectionOutcome.MEASURED and self.invalid_count >= (
+            self.evaluated_count
+        ):
+            raise ValueError(
+                f"{self.outcome.value} needs an evaluated correspondence that projects"
+            )
+
+    @property
+    def unevaluated_count(self) -> int:
+        """Correspondences the frame's candidate policy did not evaluate."""
+        return self.correspondence_count - self.evaluated_count
+
+    @property
+    def invalid_rate(self) -> float | None:
+        """Share of the evaluated correspondences that could not be projected.
+
+        ``None`` when nothing was evaluated, which is not the same as a rate of zero.
+        """
+        return None if self.evaluated_count == 0 else self.invalid_count / self.evaluated_count
+
+    def to_record(self) -> dict[str, Any]:
+        """Return the attempt as JSON primitives, with both populations named."""
+        return {
+            "outcome": self.outcome.value,
+            "reference_id": self.reference_id,
+            "correspondence_count": self.correspondence_count,
+            "evaluated_count": self.evaluated_count,
+            "unevaluated_count": self.unevaluated_count,
+            "invalid_count": self.invalid_count,
+            "invalid_rate": self.invalid_rate,
+        }
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -170,7 +307,9 @@ class TrustedCorrespondences:
 
     Attributes:
         reference_id: Identity of the trusted correspondence set.
-        geometry_indices: ``(K,)`` positions of the map geometry elements.
+        geometry_indices: ``(K,)`` global indices of the map geometry elements, integer
+            dtype, the same identity :func:`~contextmap.geometric_mapping.geometry_id_for`
+            uses.
         observed_pixels: ``(K, 2)`` raw-image pixels where each element was observed.
     """
 
@@ -182,13 +321,24 @@ class TrustedCorrespondences:
         """Validate the reference.
 
         Raises:
-            ValueError: If the reference is unnamed or empty, the arrays disagree in shape, or
-                a pixel is not finite.
+            ValueError: If the reference is unnamed or empty, the arrays disagree in shape, a
+                pixel is not finite, or the indices are not an integer array. A float index
+                names no map element, and because the lookup matches by equality it would be
+                counted as geometry the candidate policy did not evaluate: a malformed
+                reference would read as an effect of the candidate policy, in the one metric
+                that measures that policy. ``NaN`` is worse, since it also defeats the bounds
+                check in :func:`reprojection_statistics`.
         """
         import numpy as np
 
         if not self.reference_id:
             raise ValueError("reference_id must not be empty")
+        if not np.issubdtype(self.geometry_indices.dtype, np.integer):
+            raise ValueError(
+                f"geometry_indices must be an integer array, got dtype "
+                f"{self.geometry_indices.dtype}: a trusted reference names map geometry by its "
+                "global index, never by a value that no element can have"
+            )
         count = self.geometry_indices.shape[0] if self.geometry_indices.ndim == 1 else -1
         if count != self.observed_pixels.shape[0] or self.observed_pixels.shape[1:] != (2,):
             raise ValueError(
@@ -201,6 +351,19 @@ class TrustedCorrespondences:
             raise ValueError("observed_pixels must be finite")
 
 
+def evaluated_correspondences(
+    frame: FrameProjection, correspondences: TrustedCorrespondences
+) -> int:
+    """Count the reference correspondences whose geometry this frame evaluated.
+
+    A frame only evaluates the geometry its candidate policy selected, so a reference may name
+    map elements the frame never looked at. This is the one definition of that count; the
+    residual statistics and the diagnostics both read it rather than each deriving their own.
+    """
+    _, found = frame.rows_for(correspondences.geometry_indices)
+    return int(found.sum())
+
+
 def reprojection_statistics(
     frame: FrameProjection, correspondences: TrustedCorrespondences
 ) -> ReprojectionStatistics | None:
@@ -211,33 +374,41 @@ def reprojection_statistics(
     cannot project is counted as invalid and contributes no residual. The 95th percentile uses
     linear interpolation between order statistics.
 
+    A correspondence names geometry by its **global** map index, so it is looked up in the
+    frame's candidate rows rather than used as one: geometry the frame's candidate policy
+    did not select is reported as unevaluated and contributes no residual.
+
     Args:
-        frame: The projection of the map for one camera frame.
+        frame: The projection of one camera frame's candidate geometry.
         correspondences: The trusted reference.
 
     Returns:
         The statistics, or ``None`` when no correspondence could be projected.
 
     Raises:
-        ValueError: If a correspondence names geometry outside the projected map.
+        ValueError: If a correspondence names geometry outside the map.
     """
     import numpy as np
 
     indices = correspondences.geometry_indices
-    if indices.min() < 0 or indices.max() >= len(frame.projectable):
+    if indices.min() < 0 or indices.max() >= frame.map_point_count:
         raise ValueError(
-            f"geometry_indices must lie within the {len(frame.projectable)} projected elements"
+            f"geometry_indices must lie within the map's {frame.map_point_count} elements"
         )
-    valid = frame.projectable[indices]
+    count = int(indices.shape[0])
+    rows, evaluated = frame.rows_for(indices)
+    valid = np.zeros(count, dtype=bool)
+    valid[evaluated] = frame.projectable[rows[evaluated]]
     valid_count = int(valid.sum())
     if valid_count == 0:
         return None
-    projected = frame.raw_pixels[indices][valid]
+    projected = frame.raw_pixels[rows[valid]]
     residuals = np.hypot(*(projected - correspondences.observed_pixels[valid]).T)
     return ReprojectionStatistics(
         reference_id=correspondences.reference_id,
-        correspondence_count=int(indices.shape[0]),
-        invalid_count=int(indices.shape[0]) - valid_count,
+        correspondence_count=count,
+        invalid_count=int((evaluated & ~valid).sum()),
+        unevaluated_count=count - int(evaluated.sum()),
         mean_px=float(residuals.mean()),
         median_px=float(np.median(residuals)),
         p95_px=float(np.percentile(residuals, 95)),
@@ -305,8 +476,10 @@ class FrameDiagnostics:
         visible_count: Points that are supported and not occluded.
         visible_depth_m: Depth of the visible points, when there are any.
         membership: The region membership summary, when membership was evaluated.
-        reprojection: Residual against a trusted reference, when one was provided.
-        reprojection_unavailable_reason: Why ``reprojection`` is missing, otherwise ``None``.
+        reprojection: Residual against a trusted reference, when one was measured.
+        reprojection_attempt: What the frame did with its trusted reference, always present
+            and always counted, so a missing residual is still an explainable, countable fact
+            rather than an absence.
         dense_sampling: One summary per dense feature map sampled.
         findings: Explicit warnings and failures.
     """
@@ -332,7 +505,7 @@ class FrameDiagnostics:
     visible_depth_m: ValueSummary | None
     membership: MembershipStatistics | None
     reprojection: ReprojectionStatistics | None
-    reprojection_unavailable_reason: str | None
+    reprojection_attempt: ReprojectionAttempt
     dense_sampling: tuple[DenseSamplingSummary, ...]
     findings: tuple[DiagnosticFinding, ...]
 
@@ -391,7 +564,7 @@ class FrameDiagnostics:
             "reprojection": None
             if self.reprojection is None
             else dataclasses.asdict(self.reprojection),
-            "reprojection_unavailable_reason": self.reprojection_unavailable_reason,
+            "reprojection_attempt": self.reprojection_attempt.to_record(),
             "dense_sampling": [
                 {**dataclasses.asdict(summary), "interpolation": summary.interpolation.value}
                 for summary in self.dense_sampling
@@ -475,11 +648,41 @@ def diagnose_frame(
         )
 
     reprojection = None
-    reason: str | None = _NO_REFERENCE
+    attempt = ReprojectionAttempt(
+        outcome=ReprojectionOutcome.NO_REFERENCE,
+        reference_id=None,
+        correspondence_count=0,
+        evaluated_count=0,
+        invalid_count=0,
+    )
     if correspondences is not None:
         reprojection = reprojection_statistics(frame, correspondences)
-        reason = None if reprojection is not None else _NONE_PROJECTS
-        findings.extend(_reprojection_findings(reprojection, tolerances))
+        # "Não avaliado" e "não projetável" são fatos diferentes: o primeiro é a política de
+        # candidatos, o segundo é a câmera. Confundi-los transformava um recorte de alcance em
+        # falha de calibração, e colapsá-los em None fazia o evaluator perder as contagens.
+        declared = int(correspondences.geometry_indices.shape[0])
+        evaluated = evaluated_correspondences(frame, correspondences)
+        if reprojection is not None:
+            outcome, invalid = ReprojectionOutcome.MEASURED, reprojection.invalid_count
+        elif evaluated == 0:
+            outcome, invalid = ReprojectionOutcome.NOT_EVALUATED, 0
+        else:
+            outcome, invalid = ReprojectionOutcome.NONE_PROJECTABLE, evaluated
+        attempt = ReprojectionAttempt(
+            outcome=outcome,
+            reference_id=correspondences.reference_id,
+            correspondence_count=declared,
+            evaluated_count=evaluated,
+            invalid_count=invalid,
+        )
+        findings.extend(
+            _reprojection_findings(
+                reprojection,
+                tolerances,
+                evaluated_count=evaluated,
+                correspondence_count=declared,
+            )
+        )
 
     visible_depth = None
     if resolution.visible_count:
@@ -513,22 +716,47 @@ def diagnose_frame(
         visible_depth_m=visible_depth,
         membership=None if membership is None else membership.statistics(),
         reprojection=reprojection,
-        reprojection_unavailable_reason=reason,
+        reprojection_attempt=attempt,
         dense_sampling=tuple(_dense_summary(samples) for samples in dense_samples),
         findings=tuple(findings),
     )
 
 
 def _reprojection_findings(
-    statistics: ReprojectionStatistics | None, tolerances: DiagnosticTolerances
+    statistics: ReprojectionStatistics | None,
+    tolerances: DiagnosticTolerances,
+    *,
+    evaluated_count: int,
+    correspondence_count: int,
 ) -> list[DiagnosticFinding]:
+    """Findings for one frame's reprojection, keeping the three outcomes apart.
+
+    ``all unevaluated`` is a warning about the evaluated population; ``evaluated but none
+    projectable`` is a failure about the camera; anything else is measured against tolerances.
+    """
     if statistics is None:
+        if evaluated_count == 0:
+            return [
+                DiagnosticFinding(
+                    code=FindingCode.REFERENCE_NOT_EVALUATED,
+                    severity=FindingSeverity.WARNING,
+                    message=(
+                        f"{_NOT_EVALUATED}: none of its {correspondence_count} correspondences "
+                        "name geometry this frame evaluated"
+                    ),
+                    observed=correspondence_count,
+                    tolerance=None,
+                )
+            ]
         return [
             DiagnosticFinding(
                 code=FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS,
                 severity=FindingSeverity.FAILURE,
-                message=_NONE_PROJECTS,
-                observed=None,
+                message=(
+                    f"{_NONE_PROJECTS}: {evaluated_count} of {correspondence_count} were "
+                    "evaluated and none of them projects"
+                ),
+                observed=evaluated_count,
                 tolerance=None,
             )
         ]
@@ -547,7 +775,9 @@ def _reprojection_findings(
                 tolerance=p95_limit,
             )
         )
-    rate = statistics.invalid_count / statistics.correspondence_count
+    # Sobre a população avaliada, nunca sobre a declarada: correspondências que a política de
+    # candidatos excluiu diluiriam a taxa.
+    rate = statistics.invalid_rate
     rate_limit = tolerances.max_reprojection_invalid_rate
     if rate_limit is not None and rate > rate_limit:
         findings.append(
@@ -555,8 +785,10 @@ def _reprojection_findings(
                 code=FindingCode.REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE,
                 severity=FindingSeverity.WARNING,
                 message=(
-                    f"{statistics.invalid_count} of {statistics.correspondence_count} reference "
-                    f"correspondences could not be projected, above the {rate_limit} tolerance"
+                    f"{statistics.invalid_count} of the {statistics.evaluated_count} evaluated "
+                    f"reference correspondences could not be projected, above the {rate_limit} "
+                    f"tolerance ({statistics.unevaluated_count} more were not evaluated and do "
+                    "not count either way)"
                 ),
                 observed=rate,
                 tolerance=rate_limit,
@@ -623,9 +855,12 @@ def time_offset_sweep(
 ) -> tuple[TimeOffsetOutcome, ...]:
     """Measure the reprojection residual as the frame timestamp is shifted, for diagnosis only.
 
-    Each offset re-projects the reference geometry with the pose looked up at the shifted
-    timestamp. The observation, the calibration and every timestamp are left untouched; the
-    sweep only reports, and choosing to act on it is a separate, explicit decision.
+    Each offset re-projects the frame with the pose looked up at the shifted timestamp and
+    measures the residual of the reference against it. The observation, the calibration and
+    every timestamp are left untouched; the sweep only reports, and choosing to act on it is
+    a separate, explicit decision. Each offset selects its own candidates, because a shifted
+    pose moves the camera, so a reference whose geometry falls outside the candidate policy
+    at some offset is reported as unevaluated there.
 
     Args:
         projector: The projector of the map, trajectory and calibration.
@@ -637,20 +872,12 @@ def time_offset_sweep(
     Returns:
         One outcome per offset, in the given order.
     """
-    import numpy as np
-
-    restricted = projector.restricted_to(correspondences.geometry_indices)
-    local = TrustedCorrespondences(
-        reference_id=correspondences.reference_id,
-        geometry_indices=np.arange(correspondences.geometry_indices.shape[0]),
-        observed_pixels=correspondences.observed_pixels,
-    )
     outcomes: list[TimeOffsetOutcome] = []
     for offset in offsets_ns:
         shifted = dataclasses.replace(
             observation, timestamp=_shifted(observation.timestamp, offset)
         )
-        result = restricted.project(shifted, prepared_image)
+        result = projector.project(shifted, prepared_image)
         if isinstance(result, RejectedProjection):
             outcomes.append(
                 TimeOffsetOutcome(offset_ns=offset, statistics=None, rejection=result.rejection)
@@ -659,7 +886,7 @@ def time_offset_sweep(
             outcomes.append(
                 TimeOffsetOutcome(
                     offset_ns=offset,
-                    statistics=reprojection_statistics(result, local),
+                    statistics=reprojection_statistics(result, correspondences),
                     rejection=None,
                 )
             )

@@ -115,6 +115,7 @@ from contextmap.semantic_mapping import (
 )
 from contextmap.sensor_association import (
     AssociationFrameInput,
+    CandidateGeometryPolicy,
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationRequest,
@@ -440,16 +441,18 @@ class SensorAssociationExecutor:
     def __init__(
         self,
         *,
+        candidates: CandidateGeometryPolicy,
         occlusion: OcclusionPolicy,
         tolerances: DiagnosticTolerances,
         pose_policy: LookupPolicy,
         code_version: str | None = None,
     ) -> None:
-        """Bind the executor to the visibility policy, the diagnostic tolerances and the pose rule.
+        """Bind the executor to the candidate, visibility, tolerance and pose rules.
 
         The dense-feature channels are not used: this executor produces the geometry-only
         association, the one evidence channel a run can derive without a feature payload.
         """
+        self._candidates = candidates
         self._occlusion = occlusion
         self._tolerances = tolerances
         self._pose_policy = pose_policy
@@ -465,21 +468,38 @@ class SensorAssociationExecutor:
             raise ExecutorError("the sequence artifact carries no calibration")
         # Só as imagens são decodificadas: list_observations() decodificaria também os 364 MB de
         # pointcloud e os 20781 registros de IMU do corridor-02, que esta associação nunca usa
-        # (#511). O payload das imagens em si continua necessário — _frame() hasheia image.data.
-        images: dict[str, ImageObservation] = {}
-        for entry in sequence.iter_index():
-            if entry.modality != "image":
-                continue
-            observation = sequence.observation_at(entry.offset)
-            if isinstance(observation, ImageObservation):
-                images[str(entry.observation_id)] = observation
+        # (#511). O índice guarda apenas o offset de cada imagem: o payload é lido quando o
+        # frame daquela observação é construído e solto logo depois, porque mantê-los todos
+        # vivos custava 2,19 GB no corridor-02 e faria a entrada escalar com o número de
+        # frames, exatamente o que o #563 removeu do lado da saída.
+        offsets = {
+            str(entry.observation_id): entry.offset
+            for entry in sequence.iter_index()
+            if entry.modality == "image"
+        }
         perception = PerceptionRunReader(_one(request, "perception"))
-        frames = tuple(
-            self._frame(images[str(result.source_observation_id)], result)
-            for result in perception.iter_results()
-            if str(result.source_observation_id) in images
+
+        def frames() -> Iterator[AssociationFrameInput]:
+            for result in perception.iter_results():
+                offset = offsets.get(str(result.source_observation_id))
+                if offset is None:
+                    continue
+                image = sequence.observation_at(offset)
+                if isinstance(image, ImageObservation):
+                    yield self._frame(image, result)
+
+        writer = SensorAssociationRunWriter(
+            output_dir=output,
+            sequence_name=sequence.manifest.sequence_name,
+            run_id=SensorAssociationRunId(request.identity()),
+            run_index=request.run_number(),
         )
-        with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
+        # Cada frame é construído sob demanda, persistido e liberado dentro da transação: nem
+        # a entrada nem o resultado do run ficam inteiros em memória (#563).
+        with (
+            GeometricMapArtifactReader(_one(request, "geometry")) as geometry,
+            writer.transaction() as run,
+        ):
             outcome = SensorAssociationService().run(
                 SensorAssociationRequest(
                     sequence_artifact_id=sequence.manifest.artifact_id,
@@ -490,22 +510,19 @@ class SensorAssociationExecutor:
                     trajectory=TrajectoryLookup(trajectory.trajectory()),
                     pose_policy=self._pose_policy,
                     calibration=calibration,
+                    candidate_policy=self._candidates,
                     occlusion_policy=self._occlusion,
                     tolerances=self._tolerances,
-                    frames=frames,
+                    frames=frames(),
                     state_estimation_run_id=trajectory.manifest.run_id,
                     code_version=self._code_version,
                     # A reopened perception run never inlines mask pixels (#378); this
                     # is how association resolves a region's mask_reference on demand.
                     mask_loader=perception.mask_store(),
-                )
+                ),
+                sink=run,
             )
-        manifest = SensorAssociationRunWriter(
-            output_dir=output,
-            sequence_name=sequence.manifest.sequence_name,
-            run_id=SensorAssociationRunId(request.identity()),
-            run_index=request.run_number(),
-        ).finalize(outcome)
+            manifest = run.finalize(outcome)
         return _reference(request, ASSOCIATION, str(manifest.run_id), manifest.file_inventory)
 
     @staticmethod

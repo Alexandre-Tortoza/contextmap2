@@ -20,6 +20,26 @@ Quando uma associação sai errada, é preciso descobrir se a causa está no alc
 
 ## Layout
 
+## Escrita em streaming
+
+O run é persistido **frame a frame**, não a partir de um resultado inteiro em memória. `SensorAssociationRunWriter.transaction()` abre a transação, que é um `FrameSink`:
+
+```python
+with writer.transaction() as run:
+    outcome = SensorAssociationService().run(request, sink=run)
+    manifest = run.finalize(outcome)
+```
+
+O serviço projeta um frame, resolve, associa, mede, diagnostica, entrega ao sink e **solta** suas referências; a transação acrescenta o payload do frame a streams já abertos (`AtomicRunDirectory.open_binary`, que hasheia enquanto escreve) e não retém **nada** do frame — nem array, nem observação, nem projeção. O pico é `estado estático do mapa + um frame de candidatos/projeção/visibilidade + buffers do writer`. Antes, a associação retinha ~1,17 GB por frame até o fim do run (#563).
+
+A entrada também é streamada: `SensorAssociationRequest.frames` é um `Iterable` consumido **uma vez**, com validação por frame, então um chamador que produz um frame por vez nunca mantém todos os payloads de imagem vivos — o que custava 2,19 GB no corridor-02.
+
+**O termo linear que sobra, nomeado.** O pico **não** é estritamente constante no número de frames, e não se deve afirmar `O(1)`. A transação acumula um registro de tempo por frame, porque o #562 pede os tempos de consulta e de projeção por frame e `metrics/runtime.json` é um documento único, escrito só quando o chamador mediu. São quatro primitivos, ~567 B, ou seja **menos de 1,7 MB em 3.096 frames** — quatro ordens de magnitude abaixo do pico de 4,3 GB do run real de 350 frames. O serviço também guarda o conjunto de observações já vistas (~66 B por frame) para recusar um frame repetido em um único passe, e os frames que a política de pose rejeitou. Em `DebugLevel.FULL` a transação acumula ainda um registro de fonte de feature por canal denso por frame, que é depuração e não dependência a jusante. A regra que esses termos precisam continuar obedecendo é serem **escalares**, nunca um frame ou um array.
+
+`SensorAssociationOutcome` é, por isso, a identidade, as políticas, os fingerprints, os frames rejeitados e `frame_count` do run — não os frames. Um consumidor lê os frames do artifact, que é onde eles estão.
+
+Sair do `with` sem um `finalize()` bem-sucedido — normalmente ou por exceção — descarta tudo o que foi escrito: um run interrompido nunca deixa artifact publicável. `finalize()` recusa um `outcome` cujo `frame_count` não seja o número de frames que a transação de fato persistiu.
+
 O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/sensor_association/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
 
 ```text
@@ -56,7 +76,7 @@ O leitor decodifica esses arquivos com a biblioteca padrão (`array`, `json`).
 
 ## `manifest.json`
 
-Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `geometric_map_id`, `trajectory_id`, `state_estimation_run_id`, `perception_run_ids`, `calibration_identity`, a política de visibilidade (com o fingerprint), a política de pertencimento, as versões das definições, a política de pose, as tolerâncias, `configuration_fingerprint`, `code_version`, contagens (frames, rejeitados, com falha, observações), `finding_counts`, `debug_level`, `schema_version`, `created_at` e o `file_inventory` (tamanho e SHA-256 de cada arquivo contratual, sem o manifest, o README e o `debug/`).
+Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `geometric_map_id`, `trajectory_id`, `state_estimation_run_id`, `perception_run_ids`, `calibration_identity`, a política de candidatos e a de visibilidade (cada uma com o seu fingerprint), a política de pertencimento, as versões das definições, a política de pose, as tolerâncias, `configuration_fingerprint`, `code_version`, contagens (frames, rejeitados, com falha, observações), `finding_counts`, `debug_level`, `schema_version`, `created_at` e o `file_inventory` (tamanho e SHA-256 de cada arquivo contratual, sem o manifest, o README e o `debug/`).
 
 `dense_channels` lista cada canal com sua interpolação e as **fontes de features** exatas que consumiu: artefato de origem, espaço de embedding, transformação e fingerprint da geometria de amostragem, extrator e, se houver, a melhoria de resolução (backend, espaços de entrada e saída e grades), com o número de frames de cada fonte. A proveniência de features nunca é inferida do nome de um arquivo.
 
@@ -88,7 +108,10 @@ Arquivos de debug são escritos mas nunca entram no inventário, então removê-
 - a escrita acontece em um diretório temporário e o run só aparece no caminho final depois de a checagem de inventário passar; uma escrita interrompida não pode parecer um run válido;
 - um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, e reexecutar grava em outro diretório;
 - o writer confere que a geometria de cada observação coincide com o seu pertencimento antes de persistir; uma observação inconsistente nunca é gravada;
+- um run interrompido no meio de um frame não publica nada, e `finalize()` recusa um `outcome` que conte outros frames que os que chegaram à transação;
 - `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest, `IncompleteRunArtifactError`.
+
+O `schema_version` corrente é **`0.2.0`**, o schema de seleção de candidatos (#562): o manifest ganhou `candidate_policy` (obrigatório), cada registro de projeção ganhou `candidates` e `stage_counts`, o `point_count` único **saiu** (ele significaria o tamanho do mapa no `0.1.0` e a população avaliada aqui, e um leitor não teria como distinguir — os dois conceitos agora são `candidates.map_point_count` e `candidates.candidate_count`), e `geometry-support.u32` e os `eligible_indices` densos guardam índices globais de geometria explicitamente, não linhas de candidatos que por acaso coincidiam com eles. Um artifact `0.1.0` é **recusado** com erro claro, não migrado: em `v0.x` um run é reexecutado, nunca reescrito.
 
 `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.
 

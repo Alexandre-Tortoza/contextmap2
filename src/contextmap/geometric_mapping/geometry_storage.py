@@ -28,8 +28,12 @@ import struct
 from array import array
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from contextmap.geometric_mapping.bulk_geometry import (
+    DEFAULT_BLOCK_POINTS,
+    GeometryBlock,
+)
 from contextmap.geometric_mapping.models import (
     Bounds3D,
     GeometricMap,
@@ -46,11 +50,24 @@ from contextmap.geometric_mapping.transformation import TracedTransform, Transfo
 from contextmap.ingestion import FrameId, SourceObservationId
 from contextmap.shared import SourceTimestamp
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 PACKED_POINT = struct.Struct("<3d3dIqI")
 """One geometry record: map xyz, source xyz, scan ordinal, source point index, count."""
 
 AGGREGATED_SOURCE_INDEX = -1
 """Value of the source point index of an aggregated point, which is not one raw measurement."""
+
+_MAP_COORDINATE_DTYPE = "<f8"
+_RECORD_SLOTS = PACKED_POINT.size // 8
+"""Little-endian 8-byte slots one record spans, so it can be viewed as a float64 row."""
+
+if PACKED_POINT.size % 8 or not PACKED_POINT.format.startswith("<3d"):
+    raise AssertionError(
+        f"the packed record {PACKED_POINT.format!r} must start with the three little-endian "
+        "map coordinates and span whole 8-byte slots for the vectorized view to be valid"
+    )
 
 # Registros lidos por vez, para o iterador não materializar o payload inteiro.
 _CHUNK_POINTS = 4096
@@ -310,20 +327,8 @@ class PackedGeometry:
         Raises:
             ValueError: If ``bounds`` is expressed in another frame.
         """
-        if bounds.frame_id != self._map.frame_id:
-            raise ValueError(
-                f"bounds are expressed in frame {bounds.frame_id!r} but the map is in "
-                f"{self._map.frame_id!r}; frames are never reinterpreted"
-            )
         low, high = bounds.minimum_m, bounds.maximum_m
-        frame = self._map.frame_id
-        for scan in self._scans:
-            if scan.bounds is None or not scan.bounds.intersects(bounds):
-                continue
-            first, stop = scan.first_geometry_index, scan.first_geometry_index + scan.geometry_count
-            wholly_inside = bounds.contains(scan.bounds.minimum_m, frame_id=frame) and (
-                bounds.contains(scan.bounds.maximum_m, frame_id=frame)
-            )
+        for first, stop, wholly_inside in self._selected_ranges(bounds):
             for index, row in self._iter_rows(first, stop):
                 if wholly_inside or (
                     low[0] <= row[0] <= high[0]
@@ -331,6 +336,89 @@ class PackedGeometry:
                     and low[2] <= row[2] <= high[2]
                 ):
                     yield self._point_from_row(index, row)
+
+    def iter_blocks(
+        self, *, bounds: Bounds3D | None = None, block_points: int = DEFAULT_BLOCK_POINTS
+    ) -> Iterator[GeometryBlock]:
+        """Iterate the map's coordinates as blocks, with their global indices.
+
+        Implements :class:`~contextmap.geometric_mapping.GeometryBlockSource`. The
+        packed payload is viewed as a strided array of its map coordinates, so no
+        per-point record is decoded: only the coordinates a block actually keeps are
+        copied out. Selection prunes the same scans as :meth:`query_bounds` and applies
+        the same inclusive per-point test, so both boundaries answer identically.
+
+        A block never spans two scans, which keeps each block's rows contiguous in the
+        payload.
+
+        Raises:
+            ValueError: If ``block_points`` is not positive, or ``bounds`` is expressed
+                in another frame.
+        """
+        import numpy as np
+
+        if block_points < 1:
+            raise ValueError(f"block_points must be at least 1, got {block_points}")
+        coordinates = self._coordinate_view()
+        low = None if bounds is None else np.array(bounds.minimum_m, dtype=np.float64)
+        high = None if bounds is None else np.array(bounds.maximum_m, dtype=np.float64)
+        for first, stop, wholly_inside in self._selected_ranges(bounds):
+            for start in range(first, stop, block_points):
+                end = min(start + block_points, stop)
+                slab = coordinates[start:end]
+                if wholly_inside or low is None or high is None:
+                    indices = np.arange(start, end, dtype=np.int64)
+                    kept = np.array(slab, dtype=np.float64)
+                else:
+                    rows = np.flatnonzero(((slab >= low) & (slab <= high)).all(axis=1))
+                    if rows.size == 0:
+                        continue
+                    indices = rows.astype(np.int64) + start
+                    kept = np.array(slab[rows], dtype=np.float64)
+                yield GeometryBlock(
+                    map_id=self._map.map_id,
+                    frame_id=self._map.frame_id,
+                    indices=indices,
+                    coordinates_m=kept,
+                )
+
+    def _coordinate_view(self) -> NDArray[Any]:
+        """Return the payload's map coordinates as a read-only ``(N, 3)`` strided view."""
+        import numpy as np
+
+        slots = np.frombuffer(self._records, dtype=np.dtype(_MAP_COORDINATE_DTYPE))
+        rows: NDArray[Any] = slots.reshape(self._map.point_count, _RECORD_SLOTS)[:, :3]
+        return rows
+
+    def _selected_ranges(self, bounds: Bounds3D | None) -> Iterator[tuple[int, int, bool]]:
+        """Yield ``(first, stop, wholly_inside)`` of every scan a query must read.
+
+        Shared by :meth:`query_bounds` and :meth:`iter_blocks` so the two boundaries
+        can never disagree about which geometry a box selects.
+
+        Raises:
+            ValueError: If ``bounds`` is expressed in another frame than the map.
+        """
+        if bounds is None:
+            for scan in self._scans:
+                if scan.geometry_count:
+                    first = scan.first_geometry_index
+                    yield first, first + scan.geometry_count, True
+            return
+        if bounds.frame_id != self._map.frame_id:
+            raise ValueError(
+                f"bounds are expressed in frame {bounds.frame_id!r} but the map is in "
+                f"{self._map.frame_id!r}; frames are never reinterpreted"
+            )
+        frame = self._map.frame_id
+        for scan in self._scans:
+            if scan.bounds is None or not scan.bounds.intersects(bounds):
+                continue
+            first = scan.first_geometry_index
+            wholly_inside = bounds.contains(scan.bounds.minimum_m, frame_id=frame) and (
+                bounds.contains(scan.bounds.maximum_m, frame_id=frame)
+            )
+            yield first, first + scan.geometry_count, wholly_inside
 
     def rebuild_scan_bounds(self) -> tuple[ScanRecord, ...]:
         """Recompute every scan's bounds from the geometry payload.

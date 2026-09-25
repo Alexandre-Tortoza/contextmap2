@@ -98,6 +98,7 @@ from contextmap.semantic_mapping import (
     materialize_entities,
 )
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationOutcome,
@@ -421,6 +422,7 @@ def _associate(
         trajectory=TrajectoryLookup(trajectory.trajectory()),
         pose_policy=LookupPolicy.exact(),
         calibration=calibration,
+        candidate_policy=CandidateGeometryPolicy(max_range_m=None),
         occlusion_policy=OcclusionPolicy(
             cell_size_px=4, neighborhood_radius_cells=0, depth_margin_m=0.1, depth_margin_ratio=0.02
         ),
@@ -434,16 +436,18 @@ def _associate(
         state_estimation_run_id=trajectory.manifest.run_id,
         code_version="test",
     )
-    outcome = SensorAssociationService().run(request)
     # A cadeia sintética tem uma associação por run de percepção, então cada uma ganha o seu
     # diretório; no runtime há um único `<run>/sensor_association/` por execução.
     directory = workspace / f"sensor_association-{run}"
-    SensorAssociationRunWriter(
+    writer = SensorAssociationRunWriter(
         output_dir=directory,
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId(f"association-{run}"),
         run_index=run_index,
-    ).finalize(outcome)
+    )
+    with writer.transaction() as sink:
+        outcome = SensorAssociationService().run(request, sink=sink)
+        sink.finalize(outcome)
     return outcome, SensorAssociationRunReader(directory)
 
 
@@ -455,12 +459,9 @@ def _fuse(
     results: dict[PerceptionResultId, PerceptionResult],
     runs: tuple[PerceptionRun, ...],
 ) -> tuple[tuple[FusionOutcome, ...], tuple[ExcludedObservation, ...], SemanticFusionRunReader]:
-    observations = [
-        item
-        for outcome, _ in associations
-        for frame in outcome.frames
-        for item in frame.observations
-    ]
+    # As observações vêm do artifact, como qualquer consumidor a jusante as lê: o run não
+    # retém mais os frames em memória (#563).
+    observations = [item for _, reader in associations for item in reader.observations()]
     timestamps = {
         item.observation_id: item.timestamp
         for item in sequence.list_observations()
@@ -749,9 +750,8 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
             fusion=fusion,
             spatial_observations={
                 item.spatial_observation_id: item
-                for outcome, _ in associations
-                for frame in outcome.frames
-                for item in frame.observations
+                for _, reader in associations
+                for item in reader.observations()
             },
             mapping=mapping,
             resolution=resolution,

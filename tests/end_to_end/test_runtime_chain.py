@@ -79,6 +79,7 @@ from contextmap.semantic_mapping import (
     SemanticMappingRunReader,
 )
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationRunReader,
@@ -235,6 +236,7 @@ def _executors() -> dict[str, Any]:
             code_version="test",
         ),
         "sensor_association": SensorAssociationExecutor(
+            candidates=CandidateGeometryPolicy(max_range_m=None),
             occlusion=OcclusionPolicy(
                 cell_size_px=4,
                 neighborhood_radius_cells=0,

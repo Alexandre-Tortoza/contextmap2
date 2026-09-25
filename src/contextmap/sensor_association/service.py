@@ -10,6 +10,16 @@ Dense feature maps are declared as **channels**. A native map and an enhanced ma
 distinct evidence channels of a run and are never merged; a channel is identified by the
 caller, and every frame must provide the dense map of every declared channel.
 
+Execution is **streaming**: each completed frame is handed to a :class:`FrameSink` and then
+released, so no frame's candidate, projection, visibility or observation arrays outlive it and
+the heavy state resident at any moment is one frame's, whatever the run's length. Total memory
+is not independent of the frame count, and this does not claim ``O(1)``: the run still keeps a
+few **scalar** terms per frame — the identities already seen, to refuse a repeated frame in a
+single pass; the frames the pose policy rejected; and, in the sink, one timing record per frame
+because ``metrics/runtime.json`` is a single document. They are kilobytes where the per-frame
+arrays are gigabytes. The result, :class:`SensorAssociationOutcome`, is the run's identity,
+policies and aggregates; the frames themselves live wherever the sink put them.
+
 The service owns no scientific rule of its own: projection, visibility, membership, quality,
 sampling and diagnostics live in their modules, and the runtime supplies the concrete inputs.
 """
@@ -18,17 +28,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
-from contextmap.geometric_mapping import GeometricMap, GeometrySource
+from contextmap.geometric_mapping import GeometricMap, GeometryBlockSource
 from contextmap.ingestion import (
     CalibrationSet,
     ImageObservation,
     SequenceArtifactId,
     SourceObservationId,
 )
+from contextmap.sensor_association.candidate_geometry import CandidateGeometryPolicy
 from contextmap.sensor_association.dense_sampling import (
     SAMPLING_POLICY_ID,
     DenseFeatureSamples,
@@ -45,7 +56,6 @@ from contextmap.sensor_association.diagnostics import (
 )
 from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.frame_projection import FrameProjector, RejectedProjection
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.sensor_association.membership import (
     COVERAGE_DEFINITIONS_VERSION,
     MEMBERSHIP_POLICY_ID,
@@ -126,13 +136,16 @@ class SensorAssociationRequest:
     Attributes:
         sequence_artifact_id: The canonical sequence the run belongs to.
         selection_id: Deterministic identity of the sequence selection.
-        geometry: The read boundary of the persistent map.
+        geometry: The block read boundary of the persistent map.
         trajectory: The pose lookup of the selected state-estimation trajectory.
         pose_policy: Which pose lookups are acceptable for an image timestamp.
         calibration: The canonical calibration, the one the map and the trajectory used.
+        candidate_policy: Which map geometry each frame evaluates, before projection.
         occlusion_policy: The visibility parameters.
         tolerances: The diagnostic tolerances.
-        frames: The camera frames to associate.
+        frames: The camera frames to associate, in order. It is consumed **once**, so a
+            generator is welcome and is what keeps the run's input side bounded too: a caller
+            that yields one frame at a time never holds every image payload at once.
         dense_channels: The declared dense-feature evidence channels.
         state_estimation_run_id: The persisted state-estimation run the trajectory came from.
         code_version: Code revision that produces the run, when known.
@@ -144,13 +157,14 @@ class SensorAssociationRequest:
 
     sequence_artifact_id: SequenceArtifactId
     selection_id: str
-    geometry: GeometrySource
+    geometry: GeometryBlockSource
     trajectory: TrajectoryLookup
     pose_policy: LookupPolicy
     calibration: CalibrationSet
+    candidate_policy: CandidateGeometryPolicy
     occlusion_policy: OcclusionPolicy
     tolerances: DiagnosticTolerances
-    frames: tuple[AssociationFrameInput, ...]
+    frames: Iterable[AssociationFrameInput]
     dense_channels: tuple[DenseChannel, ...] = ()
     state_estimation_run_id: StateEstimationRunId | None = None
     code_version: str | None = None
@@ -180,6 +194,23 @@ class FrameAssociation:
     dense_samples: Mapping[str, DenseFeatureSamples]
 
 
+class FrameSink(Protocol):
+    """Capability port: consume each frame the service completes, one at a time.
+
+    The sink is what makes bounded-memory execution possible: the service hands a frame
+    over and then drops its own reference, so whatever the sink does not keep is
+    collectable before the next frame is projected. A sink that accumulates every frame is
+    a valid choice for a small run, and the choice is the caller's, not the service's.
+    """
+
+    def accept(self, frame: FrameAssociation) -> None:
+        """Take one completed frame.
+
+        Raising aborts the run; a sink that persists must leave nothing publishable behind.
+        """
+        ...
+
+
 @dataclass(frozen=True, kw_only=True, eq=False)
 class SensorAssociationOutcome:
     """The result of an association run, ready to be persisted.
@@ -192,13 +223,15 @@ class SensorAssociationOutcome:
         state_estimation_run_id: The state-estimation run it came from, when there is one.
         calibration_identity: Hash of the calibration used.
         perception_run_ids: The perception runs the frames' evidence came from, sorted.
+        candidate_policy: The candidate rule applied to every frame.
         occlusion_policy: The visibility parameters applied.
         pose_policy: The pose lookup policy applied.
         tolerances: The diagnostic tolerances applied.
         dense_channels: The declared dense-feature channels.
         configuration_fingerprint: Hash of the effective configuration of the run.
         code_version: Code revision that produced the run, when known.
-        frames: The associated frames, in the order given.
+        frame_count: Frames that were associated and handed to the sink, in request order.
+            The frames themselves are not here: they were released as they completed.
         rejected: The frames whose pose the lookup policy rejected.
     """
 
@@ -209,47 +242,61 @@ class SensorAssociationOutcome:
     state_estimation_run_id: StateEstimationRunId | None
     calibration_identity: str
     perception_run_ids: tuple[PerceptionRunId, ...]
+    candidate_policy: CandidateGeometryPolicy
     occlusion_policy: OcclusionPolicy
     pose_policy: LookupPolicy
     tolerances: DiagnosticTolerances
     dense_channels: tuple[DenseChannel, ...]
     configuration_fingerprint: str
     code_version: str | None
-    frames: tuple[FrameAssociation, ...]
+    frame_count: int
     rejected: tuple[RejectedProjection, ...]
 
 
 class SensorAssociationService:
     """Runs Sensor Association over the frames of a sequence selection."""
 
-    def run(self, request: SensorAssociationRequest) -> SensorAssociationOutcome:
-        """Associate every frame of a request.
+    def run(
+        self, request: SensorAssociationRequest, *, sink: FrameSink
+    ) -> SensorAssociationOutcome:
+        """Associate every frame of a request, streaming each one to the sink.
+
+        A frame is projected, resolved, associated, measured, diagnosed, sampled, handed to
+        the sink and then dropped, so no frame's arrays outlive the frame after it.
 
         Args:
             request: The inputs of the run.
+            sink: Where each completed frame goes. Whatever it does not keep is released.
 
         Returns:
-            The per-frame associations and the frames whose pose was rejected.
+            The run's identity, policies, aggregates and the frames whose pose was
+            rejected. The frames are not returned; the sink received them.
 
         Raises:
-            AssociationInputError: If channel or frame identities repeat, a frame lacks the
-                dense map of a declared channel, or any step finds the inputs incompatible.
+            AssociationInputError: If the map cannot be read in blocks, channel or frame
+                identities repeat, a frame lacks the dense map of a declared channel, or any
+                step finds the inputs incompatible.
         """
-        _validate_request(request)
+        channel_ids = _validated_channels(request)
         identity = calibration_identity(request.calibration)
         if identity is None:
             raise AssociationInputError("the calibration set has no identity")
         fingerprint = _configuration_fingerprint(request)
         projector = FrameProjector(
-            cloud=GeometryCloud.from_source(request.geometry),
+            geometry=request.geometry,
+            candidate_policy=request.candidate_policy,
             trajectory=request.trajectory,
             pose_policy=request.pose_policy,
             calibration=request.calibration,
             state_estimation_run_id=request.state_estimation_run_id,
         )
-        frames: list[FrameAssociation] = []
+        frame_count = 0
         rejected: list[RejectedProjection] = []
+        seen_observations: set[SourceObservationId] = set()
+        perception_runs: set[PerceptionRunId] = set()
         for frame_input in request.frames:
+            _validate_frame(frame_input, channel_ids, seen_observations)
+            perception_runs.add(frame_input.perception_result.run_id)
             projection = projector.project(frame_input.observation, frame_input.prepared_image)
             if isinstance(projection, RejectedProjection):
                 rejected.append(projection)
@@ -277,7 +324,7 @@ class SensorAssociationService:
                 )
                 for channel in request.dense_channels
             }
-            frames.append(
+            sink.accept(
                 FrameAssociation(
                     source_observation_id=projection.source_observation_id,
                     resolution=resolution,
@@ -296,6 +343,10 @@ class SensorAssociationService:
                     dense_samples=dense_samples,
                 )
             )
+            frame_count += 1
+            # Solta as referências locais antes do próximo frame: o que o sink não guardou
+            # é coletável agora, e é isso que mantém o pico de memória por frame (#563).
+            del projection, resolution, membership, observations, dense_samples, statistics
         geometric_map = request.geometry.geometric_map
         return SensorAssociationOutcome(
             geometric_map=geometric_map,
@@ -304,38 +355,66 @@ class SensorAssociationService:
             trajectory_id=request.trajectory.trajectory.trajectory_id,
             state_estimation_run_id=request.state_estimation_run_id,
             calibration_identity=identity,
-            perception_run_ids=tuple(sorted({f.perception_result.run_id for f in request.frames})),
+            perception_run_ids=tuple(sorted(perception_runs)),
+            candidate_policy=request.candidate_policy,
             occlusion_policy=request.occlusion_policy,
             pose_policy=request.pose_policy,
             tolerances=request.tolerances,
             dense_channels=request.dense_channels,
             configuration_fingerprint=fingerprint,
             code_version=request.code_version,
-            frames=tuple(frames),
+            frame_count=frame_count,
             rejected=tuple(rejected),
         )
 
 
-def _validate_request(request: SensorAssociationRequest) -> None:
-    channel_ids = [channel.channel_id for channel in request.dense_channels]
+def _validated_channels(request: SensorAssociationRequest) -> tuple[str, ...]:
+    """Check what can be checked before the first frame, and return the declared channels.
+
+    Raises:
+        AssociationInputError: If the map cannot be read in blocks, or channel identities
+            repeat.
+    """
+    if not isinstance(request.geometry, GeometryBlockSource):
+        raise AssociationInputError(
+            "sensor association reads the map in vectorized blocks: "
+            f"{type(request.geometry).__name__} does not implement GeometryBlockSource"
+        )
+    channel_ids = tuple(channel.channel_id for channel in request.dense_channels)
     if len(set(channel_ids)) != len(channel_ids):
-        raise AssociationInputError(f"dense channel identities must be unique, got {channel_ids}")
-    observation_ids = [frame.observation.observation_id for frame in request.frames]
-    if len(set(observation_ids)) != len(observation_ids):
+        raise AssociationInputError(
+            f"dense channel identities must be unique, got {list(channel_ids)}"
+        )
+    return channel_ids
+
+
+def _validate_frame(
+    frame: AssociationFrameInput,
+    channel_ids: tuple[str, ...],
+    seen: set[SourceObservationId],
+) -> None:
+    """Validate one frame as it arrives, so the run never has to hold them all.
+
+    Raises:
+        AssociationInputError: If the frame repeats an observation already processed, or lacks
+            the dense map of a declared channel.
+    """
+    observation_id = frame.observation.observation_id
+    if observation_id in seen:
         raise AssociationInputError("a frame cannot appear twice in a run")
-    for frame in request.frames:
-        missing = [c for c in channel_ids if c not in frame.dense_maps]
-        if missing:
-            raise AssociationInputError(
-                f"frame {frame.observation.observation_id!r} has no dense map for the declared "
-                f"channel(s) {missing}"
-            )
+    seen.add(observation_id)
+    missing = [channel for channel in channel_ids if channel not in frame.dense_maps]
+    if missing:
+        raise AssociationInputError(
+            f"frame {observation_id!r} has no dense map for the declared channel(s) {missing}"
+        )
 
 
 def _configuration_fingerprint(request: SensorAssociationRequest) -> str:
     pose = request.pose_policy
     tolerances = request.tolerances
     payload: dict[str, Any] = {
+        "candidates": request.candidate_policy.to_record(),
         "occlusion": request.occlusion_policy.to_record(),
         "pose_policy": {
             "mode": pose.mode.value,

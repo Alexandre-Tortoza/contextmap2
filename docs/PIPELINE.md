@@ -154,8 +154,8 @@ flowchart TD
 
     subgraph SA["5. Sensor Association"]
         SA_FRAME["AssociationFrameInput<br/>ImageObservation + PreparedImage + PerceptionResult"]
-        SA_CLOUD["GeometryCloud.from_source()<br/>carrega coordenadas autoritativas"]
         SA_POSE["TrajectoryLookup no timestamp RGB"]
+        SA_CAND["select_candidate_geometry()<br/>esfera max_range_m no centro óptico<br/>coordenadas + índices globais<br/>(exato sob RAY_RANGE; ver docs)"]
         SA_EXT["StaticFrameGraph<br/>T_body_camera"]
         SA_CAM["CameraProjection<br/>pinhole / fisheye / MEI"]
         SA_RAWPX["pixel na imagem crua"]
@@ -168,18 +168,18 @@ flowchart TD
         SA_OBS["build_spatial_observations()<br/>SpatialObservation por região"]
         SA_QUAL["derive_observation_quality()<br/>medidas separadas"]
         SA_DIAG["diagnostics<br/>calibração + tempo + reprojeção"]
-        SA_SERVICE["SensorAssociationService"]
+        SA_SERVICE["SensorAssociationService<br/>streaming: um frame por vez"]
         SA_WRITE["SensorAssociationRunWriter"]
         ASSOC["SensorAssociationRunArtifact"]
 
         SEQ --> SA_FRAME
         PERC --> SA_FRAME
-        GEO --> SA_CLOUD
+        GEO --> SA_CAND
         TRAJ --> SA_POSE
         ING_CAL --> SA_EXT
         ING_CAL --> SA_CAM
 
-        SA_CLOUD --> SA_POSE --> SA_EXT --> SA_CAM --> SA_RAWPX --> SA_XFORM --> SA_SUPPORT --> SA_VIS --> SA_MASK --> SA_MEM
+        SA_POSE --> SA_EXT --> SA_CAND --> SA_CAM --> SA_RAWPX --> SA_XFORM --> SA_SUPPORT --> SA_VIS --> SA_MASK --> SA_MEM
         SA_FRAME --> SA_XFORM
         SA_FRAME --> SA_MASK
         SA_MEM --> SA_OBS
@@ -584,15 +584,15 @@ Detalhes: [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md
 
 **Recebe de.**
 
-- Geometric Mapping: `GeometrySource` / `GeometricMapArtifact`.
+- Geometric Mapping: `GeometryBlockSource` / `GeometricMapArtifact`.
 - State Estimation: trajetória e política de lookup.
 - Ingestion: calibração, modelo de câmera e imagem original.
 - Visual Perception: `PreparedImage`, `Region2D`, claims e features.
 
 **Fluxo interno.**
 
-1. `GeometryCloud.from_source()` carrega a geometria autoritativa.
-2. `FrameProjector` resolve `T_map_body(t_rgb)` e `T_body_camera`.
+1. `FrameProjector` resolve `T_map_body(t_rgb)` e `T_body_camera`; a translação composta é o centro óptico no frame do mapa.
+2. `select_candidate_geometry()` escolhe, por `GeometryBlockSource.iter_blocks()`, a geometria dentro da esfera `max_range_m` em torno desse centro, carregando coordenadas autoritativas **e** o índice global de cada linha. Com `max_range_m = None` o candidato é o mapa inteiro, o baseline. O que o recorte garante **depende da `DepthMetric` da câmera**, porque é essa a grandeza que a oclusão compara: sob `RAY_RANGE` (fisheye, MEI) a preservação é **exata**, pois todo excluído está mais longe que todo retido na grandeza comparada; sob `OPTICAL_AXIS` (pinhole) **não é**, porque a regra compara `z` e `z ≤ range`, então um excluído pode ter `z` menor que um retido e, na mesma janela de células, levar embora um suporte. O erro nesse caso só torna um retido **menos** ocluído — entre os retidos, nunca descarta geometria que o mapa inteiro associou. As contagens por frame registram a população avaliada. Ver [`sensor_association/docs/projection_chain.md`](../src/contextmap/sensor_association/docs/projection_chain.md), que detalha os dois casos, e o par adversarial em `tests/sensor_association/test_candidate_equivalence.py`.
 3. O modelo de câmera projeta 3D para pixel na imagem crua.
 4. `raw_to_prepared_transform()` reproduz crop/resize da percepção para levar o pixel ao mesmo espaço em que as máscaras vivem.
 5. Pontos são classificados como behind-camera, outside-image, outside-valid-support ou in-support.
@@ -602,7 +602,8 @@ Detalhes: [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md
 9. Quando mapas densos são fornecidos, `sample_dense_features()` calcula índices/pesos nearest ou bilinear sem duplicar vetores por ponto.
 10. `derive_observation_quality()` mede profundidade, ângulo, borda, visibilidade, densidade, offset temporal e reprojeção quando existe referência confiável.
 11. Diagnostics de calibração, tempo e reprojeção permanecem separados da evidência semântica.
-12. O run é persistido em `SensorAssociationRunArtifact`.
+12. Cada frame concluído é entregue ao `FrameSink` da transação de escrita, persistido e **liberado**; o `SensorAssociationOutcome` carrega identidade, políticas, rejeições e `frame_count`, nunca os frames. O pico de memória é `estado estático do mapa + um frame + buffers do writer`, não `frames x estado por frame`.
+13. O run é publicado atomicamente como `SensorAssociationRunArtifact`; sair da transação sem `finalize()` não deixa artifact algum.
 
 **Estado do executor global.** `SensorAssociationExecutor` atualmente cria `dense_maps={}`, portanto o stage automático usa o caminho de associação geométrica/máscara, apesar de a capability já possuir dense sampling completo.
 

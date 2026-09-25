@@ -66,7 +66,11 @@ if TYPE_CHECKING:
         QualityAwareAccumulationPolicy,
     )
     from contextmap.semantic_mapping import GeometrySummaryPolicy, SemanticMapId
-    from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
+    from contextmap.sensor_association import (
+        CandidateGeometryPolicy,
+        DiagnosticTolerances,
+        OcclusionPolicy,
+    )
     from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
@@ -192,6 +196,9 @@ class ComposedRuntime:
         point_encoder: Point encoder, only when the optional stage is selected.
         support_policy: Semantic Fusion support policy.
         accumulation_policy: Semantic Fusion accumulation policy.
+        association_candidates: Which map geometry each Sensor Association frame evaluates
+            before projection; its range is ``None`` unless ``policies.association_max_range_m``
+            sets one, which keeps the whole map evaluated exactly as before (#562).
         occlusion_policy: Sensor Association visibility rule.
         association_tolerances: Sensor Association diagnostic tolerances.
         association_pose_policy: Pose lookup rule Sensor Association uses per frame.
@@ -225,6 +232,7 @@ class ComposedRuntime:
     occlusion_policy: OcclusionPolicy | None = None
     association_tolerances: DiagnosticTolerances | None = None
     association_pose_policy: LookupPolicy | None = None
+    association_candidates: CandidateGeometryPolicy | None = None
     semantic_mapping_geometry_summary: GeometrySummaryPolicy | None = None
     entity_retrieval_policy: CandidateRetrievalPolicy | None = None
     entity_comparison_channels: ComparisonChannels | None = None
@@ -1052,10 +1060,17 @@ def _compose_geometric_mapping(context: _Context) -> dict[str, object]:
 
 
 def _compose_sensor_association(context: _Context) -> dict[str, object]:
+    from contextmap.sensor_association import CandidateGeometryPolicy
+
     return {
         "occlusion_policy": _construct(context, "sensor_association.occlusion"),
         "association_tolerances": _construct(context, "sensor_association.tolerances"),
         "association_pose_policy": _construct(context, "sensor_association.pose_policy"),
+        # A política de candidatos é um policy cruzado da execução (#562), não um ponto de
+        # variação de backend: o padrão None avalia o mapa inteiro, exatamente como antes.
+        "association_candidates": CandidateGeometryPolicy(
+            max_range_m=context.effective.config.policies.association_max_range_m
+        ),
     }
 
 
@@ -1305,7 +1320,9 @@ def compose_executors(
         assert sensor_association.occlusion_policy is not None
         assert sensor_association.association_tolerances is not None
         assert sensor_association.association_pose_policy is not None
+        assert sensor_association.association_candidates is not None
         executors["sensor_association"] = SensorAssociationExecutor(
+            candidates=sensor_association.association_candidates,
             occlusion=sensor_association.occlusion_policy,
             tolerances=sensor_association.association_tolerances,
             pose_policy=sensor_association.association_pose_policy,

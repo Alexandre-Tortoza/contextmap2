@@ -396,3 +396,67 @@ def test_region_parser_still_rejects_other_missing_or_unexpected_keys() -> None:
             json.dumps({"abstained": False, "claims": [_PRIMARY_CLAIM], "notes": "extra"}),
             request,
         )
+
+
+def test_an_omitted_confidence_parses_as_null_when_only_null_is_legal() -> None:
+    """The dominant real failure: the prompt and the schema contradicted each other.
+
+    `region/v1` instructs the model to "never invent confidence", while the claim schema
+    marked `confidence` required and the parser rejected the claim when the key was absent.
+    Under UNSCORED_ONLY the only legal value is null, so demanding the key is ceremony that
+    cost 246 of 457 rejected responses in a real 360-frame corridor-02 run.
+    """
+    request = _request(SemanticInterpretationMode.REGION)
+    raw = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "wooden pallet",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": "thing",
+                    "attributes": {},
+                }
+            ],
+            "scene_context": None,
+        }
+    )
+
+    parsed = parse_semantic_response(
+        raw,
+        request,
+        _provenance(SemanticInterpretationMode.REGION),
+        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+    )
+
+    assert parsed.claims[0].hypothesis == "wooden pallet"
+    assert parsed.claims[0].confidence is None, "an absent confidence is null, never invented"
+
+
+def test_an_omitted_confidence_is_still_refused_when_a_number_is_meaningful() -> None:
+    """Under MEASURED the value carries information, so its absence stays an error."""
+    request = _request(SemanticInterpretationMode.REGION)
+    raw = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "wooden pallet",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": "thing",
+                    "attributes": {},
+                }
+            ],
+            "scene_context": None,
+        }
+    )
+
+    with pytest.raises(SemanticResponseParseError, match="confidence"):
+        parse_semantic_response(
+            raw,
+            request,
+            _provenance(SemanticInterpretationMode.REGION),
+            confidence_policy=SemanticConfidencePolicy.MEASURED,
+        )
