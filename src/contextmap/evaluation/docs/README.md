@@ -180,6 +180,7 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 - `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.
 - `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.
 - `run_experiment()`/`ExperimentRun`/`ArmExecutor` — executa cada arm por um executor injetado e emite um run manifest e um relatório por arm mais um `ComparisonManifest`; arms indisponíveis ou com resultado inconsistente ficam explícitos e tornam a comparação incompleta (`require_complete_comparison()`), sem fallback e sem score geral.
+- `arm_differences()`/`ArmDifference`/`DifferenceKind` e `ArmMatch`/`MatchStatus` — braços pareados (#545): a configuração de um estágio pode ser registrada campo a campo e cada variável declara os campos que muda (`configuration_fields`), então uma ablação de prompt, vista, contexto, orçamento visual ou backend que também muda revisão do modelo, schema de saída ou geração é recusada com o campo e os dois valores; na execução, cada arm é pareado com o baseline, e um estágio não afetado com outro conteúdo ou outro evaluator/código/schemas torna o par `invalid` e o tira das métricas. Contagens de pares e motivos ficam em `comparison.json`.
 
 ### QA das anotações e reprodutibilidade
 
