@@ -132,7 +132,7 @@ def compare(
 
 
 def main() -> None:
-    workspace = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+    workspace = Path(__file__).resolve().parents[3] / "outputs"
     ok = compare(
         "run-0003 (hand-chained) vs run-0006 (run_plan()/resume_plan()-orchestrated), "
         "both under the corrected code_version (contextmap.__version__ reflecting the real "

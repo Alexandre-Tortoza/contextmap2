@@ -13,7 +13,7 @@ from contextmap.runtime.executors import SensorAssociationExecutor
 from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy, SensorAssociationRunReader
 from contextmap.state_estimation import LookupPolicy
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 STATE_ESTIMATION_ARTIFACT_ID = "b13c6e588aeef1e5142f890399e190b9"
 GEOMETRIC_MAP_ARTIFACT_ID = "d6ed712aa1a77b91dc93fd951273d938"

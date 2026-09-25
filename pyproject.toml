@@ -66,8 +66,16 @@ vision = [
   "transformers>=5.17,<6",
   "Pillow>=10.0.1",
 ]
+gemini = [
+  "google-genai>=2,<3",
+  "httpx>=0.28,<1",
+]
 dev = [
   "build>=1.6.1",
+  # O SDK do Gemini entra no dev para os testes de contrato saírem do skip permanente:
+  # eles respondem por httpx.MockTransport e nenhuma requisição sai do processo.
+  "google-genai>=2,<3",
+  "httpx>=0.28,<1",
   "mypy>=2.3.1",
   "pre-commit>=3.8",
   "pytest>=9.1.1",

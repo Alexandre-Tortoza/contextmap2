@@ -149,5 +149,5 @@ is an expected, already-documented limitation of the `external_pose` backend, no
 Non-GPU stages (`01` through `08`) ran with the worktree's own editable-installed venv
 (`.venv/bin/python`, no ML dependencies needed). The upstream `PerceptionRunArtifact` this run
 consumes was produced separately with the real ML stack in
-`/home/alexmrtr/.cache/contextmap2-audit/venv` (torch/transformers/sam2/bitsandbytes), documented
+`~/.cache/contextmap2-audit/venv` (torch/transformers/sam2/bitsandbytes), documented
 in its own `outputs/e2e-real/visual_perception/reports/*.json`.

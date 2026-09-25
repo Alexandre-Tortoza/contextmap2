@@ -18,7 +18,7 @@ from contextmap.spatial_relations import (
     SpatialRelationsRunReader,
 )
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 GEOMETRIC_MAP_ARTIFACT_ID = "66ad39c22da8ee74384220942337e535"
 ENTITY_RESOLUTION_ARTIFACT_ID = "bcd9cb4c966ae41693efb3cf0d6a8e88"
 OUTPUT_DIR = WORKSPACE / "e2e-real/run-0002/spatial_relations"

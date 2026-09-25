@@ -13,7 +13,7 @@ from contextmap.semantic_mapping import (
     SemanticMappingRunReader,
 )
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 GEOMETRIC_MAP_ARTIFACT_ID = "66ad39c22da8ee74384220942337e535"
 SEMANTIC_FUSION_ARTIFACT_ID = "53adefa1fd687fe833af23c6378e70c2"
 OUTPUT_DIR = WORKSPACE / "e2e-real/run-0002/semantic_mapping"

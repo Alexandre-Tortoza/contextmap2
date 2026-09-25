@@ -24,7 +24,7 @@ from contextmap.state_estimation import StateEstimationRunReader
 from contextmap.state_estimation.preflight import calibration_identity
 from contextmap.visual_perception import PerceptionRun, PerceptionRunReader
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 SEQUENCE_DIR = WORKSPACE / "ingest-real/sequences/corridor-02/720a486de8d44c16a9d3d2ff9fa7b1a4"
 POSE_SEQUENCE_DIR = WORKSPACE / "ingest-real/sequences/corridor-02-pose/e2d832c152b1493999082d4f67210b5b"
 TRAJECTORY_DIR = WORKSPACE / "e2e-real/run-0003/state_estimation"

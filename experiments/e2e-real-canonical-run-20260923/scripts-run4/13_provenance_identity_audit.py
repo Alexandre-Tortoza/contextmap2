@@ -21,7 +21,7 @@ from contextmap.spatial_relations import SpatialRelationsRunReader
 from contextmap.state_estimation import StateEstimationRunReader
 from contextmap.visual_perception import PerceptionRunReader
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 
 _FAILURES: list[str] = []
 

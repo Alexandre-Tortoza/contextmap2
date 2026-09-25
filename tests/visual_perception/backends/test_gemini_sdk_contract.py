@@ -143,9 +143,14 @@ def test_the_request_reaches_the_transport_with_the_key_only_in_the_header(
     assert KEY not in body
     payload = json.loads(body)
     parts = payload["contents"][0]["parts"]
-    assert parts[0]["inlineData"]["mimeType"] == "image/png"
+    inline = parts[0]["inlineData"]
+    # O SDK converte ``inline_data`` para camelCase mas deixa ``mime_type`` em snake_case
+    # (observado no google-genai 2.25.0; a mesma inconsistência aparece no
+    # ``thinking_budget`` abaixo). A grafia da chave é escolha do SDK, não do nosso
+    # contrato: o que este teste fixa é o tipo declarado e os bytes exatos.
+    assert (inline.get("mimeType") or inline["mime_type"]) == "image/png"
     # Os bytes enviados são exatamente os verificados contra o sha256 da view.
-    assert base64.b64decode(parts[0]["inlineData"]["data"]) == PNG
+    assert base64.b64decode(inline["data"]) == PNG
     assert parts[1]["text"] == "canonical prompt"
     generation = payload["generationConfig"]
     assert generation["temperature"] == 0.0

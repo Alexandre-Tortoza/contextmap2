@@ -44,7 +44,7 @@ from contextmap.visual_perception import (
 )
 from contextmap.sensor_association.service import AssociationFrameInput
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 SEQUENCE = WORKSPACE / "ingest-real/sequences/corridor-02/d8ef485b87af4452b224c9611ba0c621"
 TRAJECTORY = WORKSPACE / "corridor-245-90s/run-0001/state_estimation"
 GEOMETRY = WORKSPACE / "corridor-245-90s/run-0001/geometric_mapping"

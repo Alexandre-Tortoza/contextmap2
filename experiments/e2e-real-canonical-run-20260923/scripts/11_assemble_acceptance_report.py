@@ -304,7 +304,11 @@ def main() -> None:
         ),
     )
 
-    path = Path("/home/alexmrtr/Projects/contextmap2/outputs/e2e-real/acceptance-report.json")
+    path = Path(__file__).resolve().parents[3] / (
+
+        "outputs/e2e-real/acceptance-report.json"
+
+    )
     write_acceptance_report(path, report)
     print("wrote", path)
     print("results:")

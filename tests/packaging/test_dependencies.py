@@ -26,14 +26,17 @@ PROJECT: dict[str, Any] = tomllib.loads(
 )["project"]
 
 # Nome de distribuição no PyPI -> nome do módulo importado, quando diferem.
-_IMPORT_ROOT_OF_DISTRIBUTION = {"pillow": "PIL"}
+_IMPORT_ROOT_OF_DISTRIBUTION = {"pillow": "PIL", "google-genai": "google"}
 
 # Runtimes que o código importa, mas que o PyPI não distribui (verificado em
-# 2026-09-21): a instalação é feita pelo usuário a partir do repositório do
-# fornecedor, e o motivo de não haver extra fica em docs/installation.md.
+# 2026-09-25): a instalação é feita pelo usuário a partir do repositório do
+# fornecedor ou pela distribuição do ROS, e o motivo de não haver extra fica em
+# docs/installation.md.
 EXTERNAL_RUNTIME_MODULES = {
     "alpha_clip": "AlphaCLIP is installed from its GitHub repository, not from PyPI",
     "sam2": "SAM 2 is installed from its GitHub repository, not from PyPI",
+    "rospy": "ROS 1 Noetic ships rospy inside the FAST-LIO container, not on PyPI",
+    "nav_msgs": "ROS 1 Noetic ships nav_msgs inside the FAST-LIO container, not on PyPI",
 }
 
 # Módulos que importam um SDK opcional já no import: só são alcançados pelo
@@ -91,12 +94,15 @@ def test_base_install_depends_only_on_numpy() -> None:
 def test_declared_extras_cover_the_advertised_capabilities() -> None:
     extras = _feature_extras()
 
-    assert {"ros1", "ros2", "vision"} <= set(extras)
+    assert {"ros1", "ros2", "vision", "gemini"} <= set(extras)
     assert _distribution_names(extras["ros1"]) == {"rosbags"}
     assert extras["ros2"] == extras["ros1"], "both ROS adapters read bags through rosbags"
     assert {"torch", "torchvision", "transformers", "pillow"} <= _distribution_names(
         extras["vision"]
     )
+    # O cliente Gemini empacotado importa o SDK e o httpx; ambos vêm do PyPI, então são
+    # extra e não runtime externo.
+    assert _distribution_names(extras["gemini"]) == {"google-genai", "httpx"}
 
 
 def test_every_third_party_import_is_declared_or_documented_as_external() -> None:

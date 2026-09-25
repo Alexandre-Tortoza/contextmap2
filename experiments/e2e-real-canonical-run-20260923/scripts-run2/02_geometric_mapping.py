@@ -13,7 +13,7 @@ from contextmap.runtime import ArtifactRef, StageRequest
 from contextmap.runtime.executors import GeometricMappingExecutor
 from contextmap.state_estimation import LookupPolicy
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 STATE_ESTIMATION_ARTIFACT_ID = "ee9cf3f2702f9ff1b18a74f7dcadc5fb"
 OUTPUT_DIR = WORKSPACE / "e2e-real/run-0002/geometric_mapping"

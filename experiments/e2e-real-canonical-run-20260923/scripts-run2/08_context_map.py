@@ -14,7 +14,7 @@ from contextmap.runtime import ArtifactRef, StageRequest
 from contextmap.runtime.executors import ContextMapExecutor
 from contextmap.spatial_relations import AxisDirection
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 GEOMETRIC_MAP_ARTIFACT_ID = "66ad39c22da8ee74384220942337e535"
 ENTITY_RESOLUTION_ARTIFACT_ID = "bcd9cb4c966ae41693efb3cf0d6a8e88"

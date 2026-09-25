@@ -27,9 +27,14 @@ _ROSBAGS_ADAPTERS = (
     "contextmap.ingestion.adapters.ros1_bag",
     "contextmap.ingestion.adapters.ros2_bag",
 )
-_EXTRA_MODULES = {"ros1": ("rosbags",), "ros2": ("rosbags",)}
+_EXTRA_MODULES = {
+    "ros1": ("rosbags",),
+    "ros2": ("rosbags",),
+    # O cliente Gemini empacotado importa o SDK; ``google`` é o pacote-namespace dele.
+    "gemini": ("google", "httpx"),
+}
 # Módulos que a instalação base nunca deve arrastar.
-_HEAVY_MODULES = ("torch", "transformers", "PIL", "rosbags", "rclpy")
+_HEAVY_MODULES = ("torch", "transformers", "PIL", "rosbags", "rclpy", "google", "httpx")
 _FALLBACK_VERSION = "0.0.0"
 
 

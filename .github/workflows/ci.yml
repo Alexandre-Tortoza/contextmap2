@@ -147,9 +147,9 @@ jobs:
           if-no-files-found: error
 
   # A suíte inteira contra a wheel instalada só com as dependências base (NumPy),
-  # e cada extra de bag ROS contra os testes que dependem dele. Cobre os
-  # round-trips de artifact sem nenhuma dependência opcional e prova que os
-  # extras instalam o que anunciam.
+  # e cada extra contra os testes que dependem dele. Cobre os round-trips de
+  # artifact sem nenhuma dependência opcional e prova que os extras instalam o
+  # que anunciam.
   lightweight-install:
     needs: package
     runs-on: ubuntu-24.04
@@ -176,13 +176,22 @@ jobs:
           "${RUNNER_TEMP}/base-venv/bin/python" -m pip install --no-cache-dir dist/*.whl "pytest>=9.1.1"
           "${RUNNER_TEMP}/base-venv/bin/python" -m pytest -p no:cacheprovider
 
-      - name: Test the ROS extras
+      # Cada extra roda o smoke da instalação e só os testes que ele habilita: os
+      # extras de ROS destravam os adapters de bag; o do Gemini, os testes de
+      # contrato contra o SDK real, que sem ele ficam em skip permanente.
+      - name: Test the optional extras
         run: |
           wheel="$(ls dist/*.whl)"
-          for extra in ros1 ros2; do
+          ros_tests="tests/ingestion/adapters tests/state_estimation/test_state_estimation_fast_lio_process.py"
+          gemini_tests="tests/visual_perception/backends/test_gemini_sdk_contract.py tests/visual_perception/backends/test_gemini_client.py"
+          for extra in ros1 ros2 gemini; do
+            case "${extra}" in
+              gemini) extra_tests="${gemini_tests}" ;;
+              *) extra_tests="${ros_tests}" ;;
+            esac
             env_dir="${RUNNER_TEMP}/extra-${extra}"
             python -m venv "${env_dir}"
             "${env_dir}/bin/python" -m pip install --no-cache-dir "${wheel}[${extra}]" "pytest>=9.1.1"
             "${env_dir}/bin/python" tests/packaging/smoke_installed_package.py --extra "${extra}"
-            "${env_dir}/bin/python" -m pytest -p no:cacheprovider tests/ingestion/adapters tests/state_estimation/test_state_estimation_fast_lio_process.py
+            "${env_dir}/bin/python" -m pytest -p no:cacheprovider ${extra_tests}
           done

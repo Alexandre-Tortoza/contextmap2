@@ -18,7 +18,7 @@ from contextmap.sensor_association import (
 )
 from contextmap.state_estimation import LookupPolicy
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 STATE_ESTIMATION_ARTIFACT_ID = "0df649a05d2df4879bf5f61aefb15e94"
 GEOMETRIC_MAP_ARTIFACT_ID = "e9f0a30db6be13ec8021caa243688d46"

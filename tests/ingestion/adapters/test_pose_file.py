@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,15 @@ from contextmap.ingestion import (
 )
 from contextmap.ingestion.adapters.pose_file import PoseFileConfigError, PoseFileSourceAdapter
 from contextmap.ingestion.sequence_provenance import SequenceProvenance, compute_source_content_hash
+
+# O mesmo diretório que o resto da suíte usa para o corridor-02, que não é versionado:
+# variável de ambiente com default relativo ao repositório, nunca um caminho de máquina.
+_DATASET = Path(
+    os.environ.get(
+        "CONTEXTMAP_CORRIDOR02_DIR",
+        Path(__file__).resolve().parents[3] / "datasets" / "corridor-02",
+    )
+)
 
 _TUM_TEXT = (
     "# timestamp tx ty tz qx qy qz qw\n"
@@ -341,7 +351,7 @@ def test_same_adapter_processes_a_different_file_via_configuration_only(tmp_path
 
 
 def test_real_corridor_02_ground_truth_file_parses_to_5522_measurements() -> None:
-    real_path = Path("/home/alexmrtr/Projects/contextmap2/datasets/corridor-02/corridor-02-gt.txt")
+    real_path = _DATASET / "corridor-02-gt.txt"
     if not real_path.is_file():
         pytest.skip("corridor-02 dataset is not available (it is not versioned)")
     adapter = PoseFileSourceAdapter(_config(real_path))
@@ -364,7 +374,7 @@ def test_real_corridor_02_ground_truth_file_ingests_into_a_companion_sequence_ar
     24 GB bag, out of scope here). Every observation, hash and count below
     comes from the real `corridor-02-gt.txt` file.
     """
-    real_path = Path("/home/alexmrtr/Projects/contextmap2/datasets/corridor-02/corridor-02-gt.txt")
+    real_path = _DATASET / "corridor-02-gt.txt"
     if not real_path.is_file():
         pytest.skip("corridor-02 dataset is not available (it is not versioned)")
 
