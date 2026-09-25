@@ -36,14 +36,15 @@ Region Discovery possui implementação concreta de preparação opcional, full-
 Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, SigLIP2, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2, DINOv3 e CLIP e segue pendente para SigLIP2 e AlphaCLIP. A geometria densa dos diagnostics é contratual: `PerceptionRunWriter.finalize()` vincula `SUCCEEDED`/`WARNING` à `VisualFeature` persistida e recusa divergências de shape/grid, payload, provenance, `EmbeddingSpace` e run proprietário antes de publicar o artifact. Detalhes, resultados e limites estão em [`feature-extraction.md`](feature-extraction.md), [`dinov2.md`](dinov2.md), [`dinov3.md`](dinov3.md) ([relatório da execução real](dinov3-validation.md)), [`siglip2.md`](siglip2.md) e [`clip.md`](clip.md).
 
 Semantic Interpretation possui contratos canônicos para claims/contexto, request,
-prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 implementam
+prompt/parser versionados e execução auditável. Qwen, Gemini, Florence-2 e Eagle 2.5 implementam
 o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
 isolados e testes determinísticos. `ClipSemanticScorer` e
 `AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Há
 execuções reais registradas de SAM2/SAM3, DINOv2/DINOv3/CLIP, Qwen e Florence-2
 semântico (os dois últimos sem anotações humanas); AlphaCLIP e Gemini
 continuam sem execução real registrada, e o Gemini tem cliente validado só com
-transporte simulado. Nenhuma dessas validações substitui uma avaliação
+transporte simulado. O Eagle 2.5 também não tem execução real registrada
+([`eagle2_5.md`](eagle2_5.md)). Nenhuma dessas validações substitui uma avaliação
 científica comparativa comum, que permanece pendente. O
 `CANONICAL_PRESET_V1` ainda preserva
 temporariamente os estágios legados de cena/região até a construção de
@@ -121,6 +122,7 @@ Visual Perception.
 - [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
 - [`feature-extraction.md`](feature-extraction.md) — visão integrada do core de Feature Extraction, contratos, payloads, sampling, pooling, diagnostics, enhancement opcional, avaliação e estado dos backends concretos.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — requests canônicos, seleção explícita de evidência e validação de capacidades.
+- [`eagle2_5.md`](eagle2_5.md) — adapter Eagle 2.5 de Semantic Interpretation, orçamento visual de tiles, upstream versus adaptado e licença dos pesos.
 - [`embedding_space.md`](embedding_space.md) — identidade e compatibilidade de espaços de embedding.
 - [`feature_store.md`](feature_store.md) — persistência, indexação e carregamento lazy de payloads.
 - [`mask_store.md`](mask_store.md) — persistência compacta e carregamento lazy de máscaras de região.

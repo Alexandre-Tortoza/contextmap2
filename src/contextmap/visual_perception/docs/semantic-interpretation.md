@@ -65,8 +65,8 @@ bytes diferentes dos registrados. A verificação por `add_semantic_view_payload
 acontece na persistência do run, depois da inferência, e continua existindo como
 segunda barreira do artifact; ela não substitui a verificação abaixo.
 
-Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime` e
-`GeminiClient`) recebem a **identidade completa das views**
+Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime`,
+`EagleRuntime` e `GeminiClient`) recebem a **identidade completa das views**
 (`visual_views: tuple[SemanticVisualView, ...]`) em vez de apenas
 `payload_reference`. A leitura e a validação dos bytes são centralizadas em
 `read_view_payload(view_root, view)` (`backends/_semantic_views.py`, interno à
@@ -79,15 +79,15 @@ capability, fora da API pública):
    cujo hash difere de `SemanticVisualView.sha256`;
 4. devolve os próprios bytes verificados.
 
-Cada runtime decodifica ou transmite **somente esses bytes**: Qwen e Florence-2
-abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
+Cada runtime decodifica ou transmite **somente esses bytes**: Qwen, Florence-2 e
+Eagle 2.5 abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
 parte inline. Assim, o que foi verificado é exatamente o que é consumido, sem
 janela entre a checagem e o uso, e a verificação precede a abertura da imagem e
 o envio ao provider. No Gemini, todas as views são verificadas antes da primeira
 chamada de rede, então um payload divergente nunca sai da máquina.
 
 Um payload divergente é uma falha explícita e terminal (`QwenInferenceError`,
-`Florence2InferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
+`Florence2InferenceError`, `EagleInferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
 inferência parcial. Quem implementa esses seams com outro runtime, gateway ou
 fake precisa usar `read_view_payload` (ou uma checagem equivalente); o contrato
 está registrado nas docstrings dos protocolos.
@@ -139,8 +139,8 @@ código nem criar comportamento específico de backend.
   nomeia exatamente um texto de instrução e um schema de saída: uma política nova
   é uma entrada nova, nunca a edição de uma existente.
 - **O request seleciona.** `SemanticInterpretationRequest.prompt_template_id` é a
-  seleção. Qwen e Gemini renderizam exatamente o template do catálogo com essa
-  identidade e entregam ao modelo exatamente esse texto. Não existe mais
+  seleção. Qwen, Gemini e Eagle 2.5 renderizam exatamente o template do catálogo com
+  essa identidade e entregam ao modelo exatamente esse texto. Não existe mais
   `SemanticPromptTemplate.default_for()` nem padrão interno de backend.
   Identidade desconhecida, modo divergente ou `requested_output_schema` diferente
   do schema do template falham com `ValueError` antes de qualquer chamada ao
@@ -198,7 +198,7 @@ existe porque modelos reais descrevem corretamente a região mas omitem a chave 
 de 3 respostas de região, issue #340).
 
 `SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
-prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
+prompt/parser. Qwen, Gemini e Eagle 2.5 usam `UNSCORED_ONLY`, apresentam apenas `null` no
 schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
 fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
 número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
@@ -365,6 +365,20 @@ fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
 SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
 fixam o formato da requisição e o mapeamento dos erros reais sem rede.
 
+## Adapter Eagle 2.5
+
+`EagleSemanticInterpreter` executa o VLM Eagle 2.5 (NVlabs) pelo mesmo request, a mesma
+política de prompt selecionada pelo request e o mesmo parser `UNSCORED_ONLY` de Qwen e Gemini,
+sem modelo de evidência próprio. Declara os modos `SCENE`/`REGION` e todos os tipos de view,
+sem features nem contexto de cena. Várias views viram várias imagens de uma mesma mensagem, na
+ordem do request. `EagleSemanticConfig` exige, além de modelo, revisão, device, precisão e
+geração, o orçamento visual do processor `eagle_2_5_vl` (`max_dynamic_tiles`, mais
+`min_dynamic_tiles` e `use_thumbnail`), que entra no fingerprint; o runtime transformers
+(`HuggingFaceEagleRuntime`, `trust_remote_code` só na revisão fixada e só do cache local) envia
+esse orçamento explicitamente ao processor e recusa, antes da geração, tiles que o excedam.
+Detalhes, o que vem do upstream e o que é adaptado, e a licença não comercial dos pesos estão em
+[`eagle2_5.md`](eagle2_5.md). Não há execução real registrada.
+
 ## Adapter Florence-2
 
 `Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
@@ -460,7 +474,7 @@ ou checkpoint disponível, falha com erro explícito.
 ## Avaliação
 
 `contextmap.evaluation.semantic_interpretation` fornece um report comum para
-Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+Qwen, Gemini, Florence-2 e Eagle 2.5. O contexto registra reference-set, seleção, run,
 artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
 região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
 custo permanecem em blocos distintos. O baseline usa a policy versionada
@@ -483,6 +497,8 @@ O branch de integração materializa:
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
 - Florence-2 implementa o mesmo boundary por adapter separado de Region
   Discovery;
+- Eagle 2.5 implementa o mesmo boundary com orçamento visual explícito e
+  verificado, ainda sem execução real;
 - os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
   SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
