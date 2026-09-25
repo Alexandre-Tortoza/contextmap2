@@ -30,14 +30,15 @@
     "observation_count": 307,
     "persistence": "streaming",
     "rejected_frame_count": 4,
-    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-C-culled-streaming",
+    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-C",
     "selected_frames": 15,
-    "wall_time_seconds": 33.225,
+    "wall_time_seconds": 33.285,
     "window": "frozen"
    },
-   "peak_rss_mb": 2306.7,
+   "peak_rss_mb": 2293.4,
+   "peak_rss_mb_before": 0.0,
    "returncode": 0,
-   "wall_time_seconds": 33.885
+   "wall_time_seconds": 33.911
   },
   "C-full": {
    "arm": "C-full",
@@ -49,15 +50,15 @@
     "observation_count": 7935,
     "persistence": "streaming",
     "rejected_frame_count": 10,
-    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-C-full",
+    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-C-full",
     "selected_frames": 360,
-    "wall_time_seconds": 1416.833,
+    "wall_time_seconds": 1356.441,
     "window": "all"
    },
-   "peak_rss_mb": 6592.2,
+   "peak_rss_mb": 4339.8,
    "peak_rss_mb_before": 0.0,
    "returncode": 0,
-   "wall_time_seconds": 1421.421
+   "wall_time_seconds": 1357.101
   },
   "D": {
    "arm": "D",
@@ -69,14 +70,15 @@
     "observation_count": 307,
     "persistence": "streaming",
     "rejected_frame_count": 4,
-    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-D-fullmap-streaming",
+    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-D",
     "selected_frames": 15,
-    "wall_time_seconds": 119.451,
+    "wall_time_seconds": 120.839,
     "window": "frozen"
    },
-   "peak_rss_mb": 6628.7,
+   "peak_rss_mb": 6545.9,
+   "peak_rss_mb_before": 0.0,
    "returncode": 0,
-   "wall_time_seconds": 120.09
+   "wall_time_seconds": 121.462
   },
   "D-partial": {
    "arm": "D-partial",
@@ -88,40 +90,45 @@
     "observation_count": 730,
     "persistence": "streaming",
     "rejected_frame_count": 4,
-    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-D-partial",
+    "run_dir": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-D-partial",
     "selected_frames": 30,
-    "wall_time_seconds": 281.048,
+    "wall_time_seconds": 283.332,
     "window": "all"
    },
-   "peak_rss_mb": 8758.9,
+   "peak_rss_mb": 6547.1,
    "peak_rss_mb_before": 0.0,
    "returncode": 0,
-   "wall_time_seconds": 283.107
+   "wall_time_seconds": 283.949
   }
  },
- "attribution": {
+ "attribution_frozen_window_only": {
+  "caveat": "these factors are this 15-frame window's; over the trajectory culling gives ~2.81x in time",
   "combined_A_to_C": {
-   "memory_factor": 9.94,
-   "time_factor": 8.11
+   "memory_factor": 10.0,
+   "time_factor": 8.1
   },
-  "culling_only_D_to_C": {
+  "culling_D_to_C": {
+   "memory_factor": 2.85,
    "peak_rss_mb": [
-    6628.7,
-    2306.7
+    6545.9,
+    2293.4
    ],
+   "time_factor": 3.58,
    "wall_time_s": [
-    120.09,
-    33.885
+    121.462,
+    33.911
    ]
   },
-  "streaming_only_A_to_D": {
+  "streaming_A_to_D": {
+   "memory_factor": 3.5,
    "peak_rss_mb": [
     22939.0,
-    6628.7
+    6545.9
    ],
+   "time_factor": 2.26,
    "wall_time_s": [
     274.749,
-    120.09
+    121.462
    ]
   }
  },
@@ -135,25 +142,51 @@
  },
  "extrapolation_not_measured": {
   "baseline_batch": "OOM: 3096 frames x ~1.2 GB retained",
-  "caveat": "scales frame count only; the candidate query (29% of the culled arm) may grow with map size because the spatial index is per-scan bounding boxes (median extent 104 x 64 x 3.7 m)",
-  "culled_streaming_hours": 3.48,
+  "caveat": "scales frame count only; the candidate query (30% of the culled arm) may grow with map size because the spatial index is per-scan bounding boxes (median extent 104 x 64 x 3.7 m, 56% of the payload scanned per frame). That is #94's to fix.",
+  "culled_streaming_hours": 3.34,
   "full_bag_frames": 3096,
   "full_bag_map_points": 229000000,
-  "fullmap_streaming_hours": 9.3
+  "fullmap_streaming_hours": 9.37
  },
  "frame_count_independence": {
-  "peak_if_it_scaled_with_frames_mb": 73395.0,
+  "frames_ratio": 31.8,
+  "max_candidates_ratio": 2.15,
+  "peak_if_it_scaled_with_frames_mb": 72972.0,
+  "peak_ratio": 1.89,
   "sequence_frames": 350,
   "sequence_max_candidates": 12822696,
-  "sequence_peak_rss_mb": 6592.2,
+  "sequence_peak_rss_mb": 4339.8,
   "window_frames": 11,
   "window_max_candidates": 5966091,
-  "window_peak_rss_mb": 2306.7
+  "window_peak_rss_mb": 2293.4
+ },
+ "input_retention_fixed": {
+  "conclusion": "the drop on the long arms matches the measured image payload to within 3%, and the frozen-window arms barely move because they only ever loaded 15 images",
+  "delta_mb": {
+   "C": -13.3,
+   "C-full": -2252.4,
+   "D": -82.8,
+   "D-partial": -2211.8
+  },
+  "found_in_review": "executor and driver held every image payload for the whole run",
+  "measured_payload_mb": 2192.9,
+  "peak_after_mb": {
+   "C": 2293.4,
+   "C-full": 4339.8,
+   "D": 6545.9,
+   "D-partial": 6547.1
+  },
+  "peak_before_mb": {
+   "C": 2306.7,
+   "C-full": 6592.2,
+   "D": 6628.7,
+   "D-partial": 8758.9
+  }
  },
  "issue": 564,
  "long_runs": {
   "C-full": {
-   "candidate_query_seconds": 410.6,
+   "candidate_query_seconds": 402.2,
    "candidates": {
     "fraction_max": 0.4815,
     "fraction_p50": 0.3499,
@@ -164,11 +197,11 @@
    },
    "frames": 350,
    "map_point_count": 26630193,
-   "projection_seconds": 380.6,
-   "seconds_per_frame": 4.048
+   "projection_seconds": 381.1,
+   "seconds_per_frame": 3.875
   },
   "D-partial": {
-   "candidate_query_seconds": 15.4,
+   "candidate_query_seconds": 15.7,
    "candidates": {
     "fraction_max": 1.0,
     "fraction_p50": 1.0,
@@ -179,13 +212,17 @@
    },
    "frames": 26,
    "map_point_count": 26630193,
-   "projection_seconds": 98.2,
-   "seconds_per_frame": 10.807
+   "projection_seconds": 99.3,
+   "seconds_per_frame": 10.895
   }
  },
  "max_range_justification": {
   "associated_points_measured": 172219,
   "chosen_max_range_m": 20.0,
+  "exactness_depends_on_depth_metric": {
+   "OPTICAL_AXIS": "not exact: the rule compares z and z <= range, so an excluded element may have had a smaller z. Direction is fixed: only ever less occluded, never dropping associated geometry. Measured probe: ~24 px of window reach, against 12 px here; a probe, not a proven bound.",
+   "RAY_RANGE": "exact; corridor-02 is MEI, so this run's equivalence is exact"
+  },
   "margin_over_observed_max": 3.64,
   "points_beyond_8m": 0,
   "range_m": {
@@ -196,7 +233,8 @@
    "p99_9": 4.51
   }
  },
- "optimized_commit": "c8bf518",
+ "note": "Arms D, C, C-full and D-partial were re-measured at b654762, after review found the executor and this experiment's own driver still materialized every image payload up front. Arm A is the unchanged baseline revision.",
+ "optimized_commit": "b654762",
  "population": {
   "frozen_window": [
    "camera_1_image_raw-000168",
@@ -216,6 +254,8 @@
    "camera_1_image_raw-000252"
   ],
   "geometric_map_id": "corridor-02--ef41c6a06c0cf7dc774faef2f677cca1",
+  "image_count_in_bag": 2495,
+  "image_payload_mb": 2192.9,
   "map_point_count": 26630193,
   "map_scan_count": 945,
   "perception_run_id": "vp-sam2-corridor245",

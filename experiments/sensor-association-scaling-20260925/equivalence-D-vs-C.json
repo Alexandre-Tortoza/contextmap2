@@ -1,5 +1,5 @@
 {
- "baseline": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-D-fullmap-streaming",
+ "baseline": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-D",
  "candidate_policies": {
   "baseline": {
    "block_points": 1000000,
@@ -104,7 +104,7 @@
   "baseline": 307,
   "optimized": 307
  },
- "optimized": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-C-culled-streaming",
+ "optimized": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-C",
  "per_frame": {
   "camera_1_image_raw-000168": {
    "baseline_associated": 3822,

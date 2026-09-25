@@ -21,6 +21,7 @@ import hashlib
 import json
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from contextmap.ingestion import ImageObservation, SequenceArtifactReader
@@ -125,27 +126,35 @@ def main() -> None:
     # Só as imagens são decodificadas: list_observations() decodificaria também os 364 MB de
     # pointcloud e os 20781 registros de IMU, que esta associação nunca usa (#511).
     selected = set(FROZEN_WINDOW) if options.window == "frozen" else None
-    images: dict[str, ImageObservation] = {}
-    for entry in sequence.iter_index():
-        if entry.modality != "image":
-            continue
-        if selected is not None and str(entry.observation_id) not in selected:
-            continue
-        observation = sequence.observation_at(entry.offset)
-        if isinstance(observation, ImageObservation):
-            images[str(observation.observation_id)] = observation
+    # Só o offset de cada imagem: o payload é lido quando o frame é construído e solto logo
+    # depois. Manter os 2495 payloads vivos custava 2,19 GB e escalava com o número de frames,
+    # o que contaminava a própria medição de pico deste experimento.
+    offsets = {
+        str(entry.observation_id): entry.offset
+        for entry in sequence.iter_index()
+        if entry.modality == "image"
+        and (selected is None or str(entry.observation_id) in selected)
+    }
 
-    results = [
-        result
+    identities = sorted(
+        str(result.source_observation_id)
         for result in perception.iter_results()
-        if str(result.source_observation_id) in images
-    ]
-    results.sort(key=lambda result: str(result.source_observation_id))
+        if str(result.source_observation_id) in offsets
+    )
     if options.frames is not None:
-        results = results[: options.frames]
-    frames = tuple(_frame(images[str(result.source_observation_id)], result) for result in results)
-    if not frames:
+        identities = identities[: options.frames]
+    wanted = set(identities)
+    if not wanted:
         raise SystemExit("the selection matched no perceived frame")
+
+    def frames() -> Iterator[AssociationFrameInput]:
+        for result in perception.iter_results():
+            identity = str(result.source_observation_id)
+            if identity not in wanted:
+                continue
+            image = sequence.observation_at(offsets[identity])
+            if isinstance(image, ImageObservation):
+                yield _frame(image, result)
 
     candidate_policy = _candidate_policy(options.max_range_m)
     extra: dict[str, object] = {}
@@ -172,7 +181,7 @@ def main() -> None:
             calibration=calibration,
             occlusion_policy=OCCLUSION,
             tolerances=TOLERANCES,
-            frames=frames,
+            frames=frames(),
             state_estimation_run_id=trajectory.manifest.run_id,
             code_version=f"scaling-{options.arm}",
             mask_loader=perception.mask_store(),
@@ -198,7 +207,7 @@ def main() -> None:
                 "persistence": "streaming" if streaming else "batch",
                 "max_range_m": options.max_range_m,
                 "window": options.window,
-                "selected_frames": len(frames),
+                "selected_frames": len(identities),
                 "frame_count": manifest.frame_count,
                 "rejected_frame_count": manifest.rejected_frame_count,
                 "observation_count": manifest.observation_count,

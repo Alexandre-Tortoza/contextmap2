@@ -88,23 +88,29 @@ outro. Mesmo método do #181, para os números serem comparáveis com ele.
 | Braço | Wall time | Peak RSS | Frames | Rejeitados | Observações | Integridade |
 |---|---|---|---|---|---|---|
 | **A** mapa inteiro + batch | 274,7 s | **22.939 MB** | 11 | 4 | 307 | limpa |
-| **D** mapa inteiro + streaming | 120,1 s | 6.629 MB | 11 | 4 | 307 | limpa |
-| **C** esfera 20 m + streaming | **33,2 s** | **2.307 MB** | 11 | 4 | 307 | limpa |
+| **D** mapa inteiro + streaming | 121,5 s | 6.546 MB | 11 | 4 | 307 | limpa |
+| **C** esfera 20 m + streaming | **33,9 s** | **2.293 MB** | 11 | 4 | 307 | limpa |
+
+Os braços D, C, C-full e D-partial foram **remedidos** em `b654762`, depois que a review
+encontrou o executor — e o driver deste próprio experimento — ainda materializando todos os
+payloads de imagem antes de começar. Isso não afeta a janela congelada, que só carrega 15
+imagens (−83 MB e −13 MB), mas muda as passagens longas; ver [`full-sequence.md`](full-sequence.md).
+O braço A é a revisão de baseline, inalterada.
 
 ### Atribuição independente **nesta janela de 15 frames**
 
-Os fatores abaixo são desta população. Sobre a trajetória inteira o culling rende ~**2,67×** em
-tempo (4,05 s/frame contra 10,81 s/frame), não os 3,6× da janela — ver
+Os fatores abaixo são desta população. Sobre a trajetória inteira o culling rende ~**2,81×** em
+tempo (3,88 s/frame contra 10,89 s/frame), não os 3,58× da janela — ver
 [`full-sequence.md`](full-sequence.md). Nenhum destes fatores é propriedade geral da
 implementação.
 
 | Mudança | Memória | Tempo |
 |---|---|---|
-| **#563** streaming (A → D) | 22.939 → 6.629 MB (**3,5×**) | 274,7 → 120,1 s (**2,3×**) |
-| **#562** culling (D → C) | 6.629 → 2.307 MB (**2,9×**) | 120,1 → 33,2 s (**3,6×**) |
-| **Combinado** (A → C) | **9,9× menos memória** | **8,3× mais rápido** |
+| **#563** streaming (A → D) | 22.939 → 6.546 MB (**3,50×**) | 274,7 → 121,5 s (**2,26×**) |
+| **#562** culling (D → C) | 6.546 → 2.293 MB (**2,85×**) | 121,5 → 33,9 s (**3,58×**) |
+| **Combinado** (A → C) | **10,0× menos memória** | **8,1× mais rápido** |
 
-O par 9,9× / 8,3× é o desta janela. Não o cite sem a população.
+O par 10,0× / 8,1× é o desta janela. Não o cite sem a população.
 
 O ganho de tempo do streaming não era esperado e vale registrar: ele não reduz trabalho
 aritmético algum. A explicação provável é pressão de alocador e de page fault — o braço A
