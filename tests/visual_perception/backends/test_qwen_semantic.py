@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -38,12 +39,22 @@ from contextmap.visual_perception.backends.qwen import (
     QwenSemanticConfig,
     QwenSemanticInterpreter,
 )
+from contextmap.visual_perception.semantic_backend import (
+    SemanticVisualInputMeasurement,
+    decode_semantic_execution,
+    encode_semantic_execution,
+)
 
 
 class _FakeQwenRuntime:
-    def __init__(self, confidence: float | None = None) -> None:
+    def __init__(
+        self,
+        confidence: float | None = None,
+        visual_inputs: tuple[SemanticVisualInputMeasurement, ...] | None = None,
+    ) -> None:
         self.calls: list[tuple[tuple[SemanticVisualView, ...], str, QwenSemanticConfig]] = []
         self.confidence = confidence
+        self.visual_inputs = visual_inputs
 
     def generate(
         self,
@@ -74,6 +85,7 @@ class _FakeQwenRuntime:
             output_tokens=24,
             peak_memory_bytes=1024,
             warnings=("deterministic fake",),
+            visual_inputs=self.visual_inputs,
         )
 
 
@@ -320,6 +332,100 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
     assert reader.verify_integrity() == []
 
 
+def _cpu_config(**changes: Any) -> QwenSemanticConfig:
+    return replace(
+        QwenSemanticConfig(
+            model="Qwen/Qwen3-VL-4B-Instruct",
+            device="cpu",
+            precision="float32",
+            max_new_tokens=32,
+            temperature=0.0,
+        ),
+        **changes,
+    )
+
+
+_BUDGET = {"min_pixels": 256 * 32 * 32, "max_pixels": 1280 * 32 * 32}
+"""A visual input budget of 256 to 1280 merged 32 px patches per image."""
+
+
+def test_an_unset_visual_budget_keeps_the_configuration_identity_it_had_before_526() -> None:
+    """Existing configurations keep their fingerprint; no budget key is invented for them."""
+    before_526 = {
+        "model": "Qwen/Qwen3-VL-4B-Instruct",
+        "device": "cpu",
+        "precision": "float32",
+        "max_new_tokens": 32,
+        "temperature": 0.0,
+        "quantization": None,
+        "revision": None,
+    }
+    encoded = json.dumps(before_526, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    adapter = QwenSemanticInterpreter(config=_cpu_config(), runtime=_FakeQwenRuntime())
+
+    assert _cpu_config().to_dict() == before_526
+    assert adapter.configuration_fingerprint == "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def test_the_visual_input_budget_is_part_of_the_configuration_identity() -> None:
+    """#526: the budget is a scientific input, so it is fingerprinted and recorded."""
+    unset = _cpu_config()
+    budget = _cpu_config(**_BUDGET)
+    tighter = _cpu_config(**{**_BUDGET, "max_pixels": 640 * 32 * 32})
+
+    fingerprints = {
+        QwenSemanticInterpreter(config=config, runtime=_FakeQwenRuntime()).configuration_fingerprint
+        for config in (unset, budget, tighter)
+    }
+    adapter = QwenSemanticInterpreter(config=budget, runtime=_FakeQwenRuntime())
+    execution = adapter.interpret(_request(adapter))
+
+    assert len(fingerprints) == 3
+    assert execution.effective_configuration["min_pixels"] == 262_144
+    assert execution.effective_configuration["max_pixels"] == 1_310_720
+
+
+@pytest.mark.parametrize(
+    ("budget", "message"),
+    [
+        ({"max_pixels": 1_310_720}, "set together"),
+        ({"min_pixels": 262_144}, "set together"),
+        ({"min_pixels": 0, "max_pixels": 1_310_720}, "min_pixels must be positive"),
+        ({"min_pixels": 262_144, "max_pixels": -1}, "max_pixels must be positive"),
+        ({"min_pixels": 1_310_720, "max_pixels": 262_144}, "must not exceed max_pixels"),
+    ],
+)
+def test_an_incomplete_or_impossible_visual_budget_is_rejected(
+    budget: dict[str, int], message: str
+) -> None:
+    """A partial budget would leave the other bound at a checkpoint default nobody recorded."""
+    with pytest.raises(ValueError, match=message):
+        _cpu_config(**budget)
+
+
+def test_measured_visual_inputs_are_execution_diagnostics_not_identity() -> None:
+    measured = (
+        SemanticVisualInputMeasurement(
+            view_id="tight-crop", height_px=448, width_px=320, visual_tokens=140
+        ),
+    )
+    adapter = QwenSemanticInterpreter(
+        config=_cpu_config(**_BUDGET), runtime=_FakeQwenRuntime(visual_inputs=measured)
+    )
+    fingerprint = adapter.configuration_fingerprint
+
+    execution = adapter.interpret(_request(adapter))
+    decoded = decode_semantic_execution(
+        encode_semantic_execution(execution, raw_response_reference="raw.txt")
+    )
+
+    assert execution.diagnostics.visual_inputs == measured
+    assert decoded.diagnostics.visual_inputs == measured
+    assert "visual_inputs" not in execution.effective_configuration
+    assert adapter.configuration_fingerprint == fingerprint
+
+
 class _NonScalarAttributeQwenRuntime:
     """Reproduces a real failure family that survives the confidence fix.
 
@@ -357,6 +463,11 @@ class _NonScalarAttributeQwenRuntime:
             output_tokens=24,
             peak_memory_bytes=1024,
             warnings=(),
+            visual_inputs=(
+                SemanticVisualInputMeasurement(
+                    view_id="tight-crop", height_px=448, width_px=320, visual_tokens=140
+                ),
+            ),
         )
 
 
@@ -386,4 +497,7 @@ def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_stri
     assert failed.request.request_id == request.request_id, "shares the attempt identity"
     assert failed.provenance.backend.model == config.model
     assert failed.diagnostics.input_tokens == 120
+    # #526: a rejected response still records what the model actually consumed.
+    assert failed.diagnostics.visual_inputs is not None
+    assert failed.diagnostics.visual_inputs[0].visual_tokens == 140
     assert failed.rendered_prompt.text, "the exact prompt sent must be preserved"

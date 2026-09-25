@@ -142,6 +142,9 @@ def _write_shared_audit(
     outcome: dict[str, str],
 ) -> tuple[str, ...]:
     """Write what both outcomes share, plus the caller's outcome-specific files."""
+    # Import tardio: semantic_backend importa este módulo (redação) no carregamento.
+    from contextmap.visual_perception.semantic_backend import encode_semantic_backend_diagnostics
+
     records: dict[str, str] = {
         "request.json": json.dumps(
             redact_semantic_secrets(encode_semantic_request(execution.request)),
@@ -153,12 +156,7 @@ def _write_shared_audit(
         "diagnostics.json": json.dumps(
             redact_semantic_secrets(
                 {
-                    "latency_ms": execution.diagnostics.latency_ms,
-                    "input_tokens": execution.diagnostics.input_tokens,
-                    "output_tokens": execution.diagnostics.output_tokens,
-                    "peak_memory_bytes": execution.diagnostics.peak_memory_bytes,
-                    "retries": execution.diagnostics.retries,
-                    "warnings": list(execution.diagnostics.warnings),
+                    **encode_semantic_backend_diagnostics(execution.diagnostics),
                     "effective_configuration": dict(execution.effective_configuration),
                 }
             ),

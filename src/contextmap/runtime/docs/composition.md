@@ -79,6 +79,26 @@ prompt_policy = { scene = "scene/v1", region = "region/v1" }
 - **Composição.** `ComposedRuntime.semantic_prompts` mapeia cada modo para um `SemanticRequestPrompt` (`template_id`, `output_schema`), que o `VisualPerceptionExecutor` copia para `prompt_template_id`/`requested_output_schema` de cada request. Um modo sem entrada (o modo que a task do Florence-2 não serve) falha explicitamente ao montar o request, nunca recebe um padrão.
 - **Identidade e reuso.** Como qualquer parâmetro de backend, `prompt_policy` entra na configuração efetiva, no seu digest e no `config_digest` do estágio `visual_perception`. Trocar só a política recalcula `visual_perception` e, pelas entradas, os estágios que dependem dele; `ingestion`, `state_estimation` e `geometric_mapping` mantêm a identidade e continuam reutilizáveis. A granularidade é a do estágio: Region Discovery e features são recalculados junto, porque Semantic Interpretation ainda não é um estágio próprio do runtime.
 
+### Orçamento de entrada visual do Qwen (#526)
+
+O custo visual de uma request Qwen com várias views é controlado por dois parâmetros comuns do bloco `qwen`, não por um grupo reservado:
+
+```toml
+[components.visual_perception.semantic_interpretation.qwen]
+model = "Qwen/Qwen3-VL-4B-Instruct"
+precision = "bfloat16"
+max_new_tokens = 256
+temperature = 0.0
+min_pixels = 262144    # 256 tokens visuais de 32 px por view
+max_pixels = 1310720   # 1280 tokens visuais de 32 px por view
+prompt_policy = { scene = "scene/v1", region = "region/v1" }
+```
+
+- **Validação antes do runtime.** `QwenSemanticConfig` exige os dois juntos (ou nenhum), positivos e com `min_pixels ≤ max_pixels`; qualquer outro caso é `BackendConfigurationError` em `compose()`, antes de o provider ser chamado. O provider recebe o orçamento dentro do `QwenSemanticConfig`, e o `HuggingFaceQwenRuntime` o aplica e o confere ao construir o processor ([Adapter Qwen](../../visual_perception/docs/semantic-interpretation.md#runtime-transformers-huggingfaceqwenruntime)).
+- **Por view, não por request.** Os limites valem para cada imagem depois do resize do processor; o custo de uma request é a soma das views. Não há parâmetro de total por request, porque o processor não o aplica.
+- **Identidade.** O orçamento entra na configuração efetiva, no fingerprint do intérprete e no `config_digest` de `visual_perception`: uma ablação de orçamento recalcula só esse estágio. Sem os dois parâmetros, configuração efetiva, digest e fingerprint são os de antes do #526, e vale o default do processor do checkpoint na revisão fixada. Num manifesto de experimento, o fator é declarado nos campos `interpreter.qwen.min_pixels`/`interpreter.qwen.max_pixels`.
+- **Diagnóstico, não identidade.** O tamanho que cada view atingiu e seus tokens visuais ficam em `SemanticBackendDiagnostics.visual_inputs` de cada execução; um estouro de memória é `QwenOutOfMemoryError`, cuja mensagem nomeia o número de views e o orçamento em vigor.
+
 ## Ordem de validação
 
 1. a configuração da capability (`build_config()`), com **todos** os problemas de uma vez e a mensagem da própria capability;
