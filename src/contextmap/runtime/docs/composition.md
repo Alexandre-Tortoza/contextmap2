@@ -36,7 +36,7 @@ flowchart LR
 |---|---|---|
 | `ingestion.source_adapter` | `ros1_bag`, `ros2_bag` | adapter construído a cada pedido (`SourceAdapterConfig`); exige `rosbags`; um pedido de outra família de source é recusado |
 | `visual_perception.region_discovery` | `sam2`, `sam3`, `florence2` | **provider** (`Sam2Runtime`, `Sam3Runtime`, `Florence2Runtime`) |
-| `visual_perception.dense_features` | `dinov2`, `dinov3` | loader Hugging Face empacotado (lazy; `torch`, `transformers`, `Pillow`) ou provider |
+| `visual_perception.dense_features` | `dinov2`, `dinov3`, `siglip2` | loader Hugging Face empacotado (lazy; `torch`, `transformers`, `Pillow`) ou provider; `siglip2` tem escopo `dense` **fixado** pelo slot |
 | `visual_perception.region_features` | `clip`, `alphaclip` | loader empacotado (HF / oficial) ou provider; `clip` tem escopo `region` **fixado** pelo slot; `alphaclip` exige `mask_source` no escopo |
 | `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2` | **provider** (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime`); `gemini` declara o segredo `GEMINI_API_KEY` |
 | `state_estimation.estimator` | `external_pose`, `fast_lio` | `external_pose` não precisa de runtime; `fast_lio` usa o runner por subprocesso empacotado, descrito no grupo `runner` (`command`, `timeout_s`, `work_root`), ou um provider |

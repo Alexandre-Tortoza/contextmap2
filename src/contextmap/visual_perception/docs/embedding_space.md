@@ -15,6 +15,8 @@ DINOv3 (dimension=1024) != CLIP (dimension=1024)         # famílias diferentes
 CLIP checkpoint A != CLIP checkpoint B automaticamente    # checkpoints diferentes
 ```
 
+`EmbeddingSpace` não tem campo próprio de preprocessamento. O adapter SigLIP2 qualifica o `layer` com a identidade do seu pixel path (filtro de resize e resolução de entrada), de modo que uma mudança de preprocessamento também muda o fingerprint; os adapters DINO/CLIP não fazem isso. Ver [`siglip2.md`](siglip2.md).
+
 `embedding_space_fingerprint(space)` computa um hash determinístico (`"sha256:<hex>"`) sobre todos os campos de `EmbeddingSpace` — dois espaços produzem o mesmo fingerprint se e somente se todo campo é igual. Este é o valor que um backend real grava em `VisualFeature.embedding_space_id`.
 
 ## Duas formas de validar compatibilidade

@@ -296,6 +296,7 @@ flowchart LR
 
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
+    SIG2["SigLIP2"] -->|implementado| FE
     CLIP["CLIP"] -->|implementado| FE
     ACLIP["AlphaCLIP"] -->|implementado| FE
     Q["Qwen"] -->|adapter canônico implementado| SI
