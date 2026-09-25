@@ -6,6 +6,10 @@ stored or indexed. :class:`GeometrySource` is that boundary. The authoritative
 data is the persisted geometry: an index is an implementation detail behind
 these methods, and a corrupt derived index must never redefine coordinates.
 
+:class:`~contextmap.geometric_mapping.GeometryBlockSource` is the array-shaped
+sibling of this boundary, for a consumer that must evaluate millions of coordinates
+at once instead of auditing one element.
+
 The boundary owns no semantics: there is no label, feature, entity or
 nearest-semantic query, and no projection into images.
 """

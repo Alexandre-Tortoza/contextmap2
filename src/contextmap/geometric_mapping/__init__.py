@@ -17,6 +17,11 @@ from contextmap.geometric_mapping.accumulation import (
     accumulate_plan,
     map_provenance_from_plan,
 )
+from contextmap.geometric_mapping.bulk_geometry import (
+    DEFAULT_BLOCK_POINTS,
+    GeometryBlock,
+    GeometryBlockSource,
+)
 from contextmap.geometric_mapping.geometry_storage import PackedGeometry, ScanRecord
 from contextmap.geometric_mapping.inputs import (
     GeometryInput,
@@ -83,6 +88,7 @@ from contextmap.geometric_mapping.transformation import (
 )
 
 __all__ = [
+    "DEFAULT_BLOCK_POINTS",
     "AccumulatedMap",
     "AccumulationError",
     "Bounds3D",
@@ -92,6 +98,8 @@ __all__ = [
     "GeometricMapArtifactWriter",
     "GeometricMapProvenance",
     "GeometricMapRunId",
+    "GeometryBlock",
+    "GeometryBlockSource",
     "GeometryId",
     "GeometryInput",
     "GeometryInputError",
