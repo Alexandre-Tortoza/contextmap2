@@ -37,7 +37,7 @@ from contextmap.runtime.catalog import (
     PRESETS,
     StageDeclaration,
 )
-from contextmap.runtime.composition import compose
+from contextmap.runtime.composition import RuntimeProvider, compose, compose_executors
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
     DEBUG_LEVELS,
@@ -78,7 +78,6 @@ from contextmap.runtime.pipeline import (
 )
 from contextmap.runtime.reuse import REUSE_SCHEMA_VERSION, FileArtifactStore, ReusePolicy
 from contextmap.runtime.runs import (
-    RUNS_DIRECTORY,
     RunJournal,
     RunSummary,
     check_resumable,
@@ -139,16 +138,22 @@ class RuntimeComponent:
     Attributes:
         component_id: ``"<capability>.<slot>"``.
         backends: The selectable backends.
+        optional: Whether the stage that owns this component still runs with no backend
+            selected for it (see :class:`~contextmap.runtime.catalog.ComponentSpec`). A
+            consumer must treat "no backend" as one legitimate, explicit state for such a
+            component, never as an incomplete one.
     """
 
     component_id: str
     backends: tuple[RuntimeBackend, ...]
+    optional: bool
 
     def to_document(self) -> dict[str, Any]:
         """Return the JSON-compatible form."""
         return {
             "component_id": self.component_id,
             "backends": [backend.to_document() for backend in self.backends],
+            "optional": self.optional,
         }
 
 
@@ -196,7 +201,12 @@ class RuntimeStatus:
         schemas: Versions of the persisted document schemas this runtime reads and writes.
         profiles: Known profile and preset identities.
         workspace: The workspace runs are persisted under, when one is set.
-        executors: Stages this runtime has an executor for.
+        executors: Stages this runtime was explicitly given an executor for, at construction.
+            It does not include the stages :meth:`Runtime.preflight` and :meth:`Runtime.run`
+            compose automatically from a specific configuration (composing needs a resolved
+            ``EffectiveConfig``, which this discovery call does not take): call
+            :meth:`Runtime.preflight` with a configuration and read its ``missing_executors``
+            for the accurate, config-specific answer.
         verifier_configured: Whether reuse can verify indexed artifacts.
     """
 
@@ -536,7 +546,8 @@ class RuntimeRunSummary:
     """One line of the run list.
 
     Attributes:
-        run_id: The run identity.
+        run_id: The run identity, unique only inside its dataset.
+        dataset: The dataset the run belongs to, the directory it lives under.
         readable: Whether the record could be read.
         status: The lifecycle state, when readable.
         interrupted: Whether the run was killed mid-way, when readable.
@@ -548,6 +559,7 @@ class RuntimeRunSummary:
     """
 
     run_id: str
+    dataset: str
     readable: bool
     status: str | None
     interrupted: bool | None
@@ -649,8 +661,25 @@ class Runtime:
     Args:
         workspace: Where runs are persisted. It becomes ``resources.workspace`` of every
             configuration :meth:`resolve_config` resolves, exactly as the CLI's ``--workspace``.
-        executors: One executor per stage this runtime can execute. There is no default: a run
-            without them is blocked by preflight.
+        executors: Executors to use in addition to, and in preference over, the ones
+            :func:`~contextmap.runtime.composition.compose_executors` builds automatically from
+            each call's ``EffectiveConfig`` (today: ``state_estimation``, ``geometric_mapping``,
+            ``sensor_association`` and ``semantic_fusion``). Pass an entry here to override a
+            composed stage (a test double, for example) or to supply one composition cannot
+            build on its own, such as ``ingestion``'s ``IngestionStageExecutor`` (it needs a
+            concrete request that is never part of a configuration). A stage with neither a
+            composed nor a supplied executor is blocked by preflight.
+        providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
+            Qwen, Gemini, Florence-2 and every other backend ``compose_executors`` builds
+            through a ``RuntimeProvider``, for example ``entity_resolution.appearance`` or
+            ``visual_perception``'s four backends), keyed by component identity
+            (``"<capability>.<slot>"``), in the exact shape
+            :func:`~contextmap.runtime.composition.compose_executors` already expects. An
+            entry here for a component whose configuration also declares a
+            ``resources.providers`` target still wins over that declared target, and the
+            override is recorded on the run's own ``run_planned`` event. Without either a
+            provider given here or a declared target, a component that needs one is composed
+            as absent, exactly like an incomplete selection, never with a substitute.
         verifier: Tells whether an indexed artifact still exists and is intact. Reuse and resume
             need it, and only the owner of the executors can provide it.
         adapter_factory: Builds the source adapter for ingestion; composed from the
@@ -666,6 +695,7 @@ class Runtime:
         *,
         workspace: str | os.PathLike[str] | None = None,
         executors: Mapping[str, StageExecutor] | None = None,
+        providers: Mapping[str, RuntimeProvider] | None = None,
         verifier: Callable[[ArtifactRef], bool] | None = None,
         adapter_factory: SourceAdapterFactory | None = None,
         environ: Mapping[str, str] | None = None,
@@ -675,6 +705,7 @@ class Runtime:
         """Create a runtime; nothing is loaded and nothing is discovered."""
         self._workspace = None if workspace is None else Path(workspace)
         self._executors = dict(executors or {})
+        self._providers = dict(providers or {})
         self._verifier = verifier
         self._adapter_factory = adapter_factory
         self._environ = environ
@@ -796,7 +827,10 @@ class Runtime:
         It runs the same checks :meth:`run` runs first (topology, contracts, selections,
         backend selection, optional modules, secrets, executors) and reports every problem at
         once. It looks up and imports nothing, so it is cheap enough for an interactive
-        frontend.
+        frontend. ``missing_executors`` accounts for both the executors this runtime was
+        constructed with and the ones :func:`~contextmap.runtime.composition.compose_executors`
+        can build from ``config`` alone; a composition failure (an invalid backend parameter, a
+        missing module or secret) is reported the same way, never raised.
 
         Args:
             config: The effective configuration.
@@ -813,9 +847,10 @@ class Runtime:
         """
         scoped = self._scope(config, targets, provided, catalog)
         execution = scoped.execution
+        executors = self._executors_for(config)
         report = preflight(
             execution,
-            executors=self._executors,
+            executors=executors,
             environ=self._environ,
             module_available=self._module_available,
             reuse=reuse,
@@ -838,7 +873,7 @@ class Runtime:
                 stage.stage_id
                 for stage in execution.stages
                 if stage.available
-                and stage.stage_id not in self._executors
+                and stage.stage_id not in executors
                 and (stage.stage_id not in predicted or predicted[stage.stage_id].kind != "reused")
             ),
         )
@@ -895,6 +930,8 @@ class Runtime:
         """
         workspace = self._workspace_for(config)
         scoped = self._scope(config, targets, provided, catalog)
+        provider_overrides: list[str] = []
+        executors = self._executors_for(config, provider_overrides)
         previous: Path | None = None
         if resume is not None:
             if reuse is None:
@@ -913,10 +950,11 @@ class Runtime:
                 resume_plan(
                     previous,
                     scoped.execution,
-                    self._executors,
+                    executors,
                     reuse=reuse,
                     environ=self._environ,
                     module_available=self._module_available,
+                    provider_overrides=provider_overrides,
                     journal=journal,
                     events=guard,
                     cancellation=cancellation,
@@ -926,9 +964,10 @@ class Runtime:
             else:
                 run_plan(
                     scoped.execution,
-                    self._executors,
+                    executors,
                     environ=self._environ,
                     module_available=self._module_available,
+                    provider_overrides=provider_overrides,
                     reuse=reuse,
                     journal=journal,
                     events=guard,
@@ -1009,28 +1048,29 @@ class Runtime:
     # --- runs --------------------------------------------------------------------------
 
     def list_runs(self) -> tuple[RuntimeRunSummary, ...]:
-        """List the persisted runs of the workspace, oldest first.
+        """List the persisted runs of the workspace, ``<workspace>/<dataset>/run-NNNN``.
 
         Returns:
-            One summary per run directory, in run-number order. A record that cannot be read is
-            listed with the reason, never skipped.
+            One summary per run directory, ordered by dataset and then by run number. A
+            record that cannot be read is listed with the reason, never skipped.
 
         Raises:
             ValueError: If this runtime has no workspace.
         """
         if self._workspace is None:
             raise ValueError("this runtime has no workspace: pass workspace= to Runtime(...)")
-        base = self._workspace / RUNS_DIRECTORY
-        if not base.is_dir():
+        if not self._workspace.is_dir():
             return ()
         numbered = sorted(
-            (int(path.name.removeprefix("run-")), path)
-            for path in base.iterdir()
+            (dataset.name, int(path.name.removeprefix("run-")), path)
+            for dataset in self._workspace.iterdir()
+            if dataset.is_dir()
+            for path in dataset.iterdir()
             if path.is_dir()
             and path.name.startswith("run-")
             and path.name.removeprefix("run-").isdigit()
         )
-        return tuple(_summary(path) for _, path in numbered)
+        return tuple(_summary(path) for _, _, path in numbered)
 
     def inspect_run(self, run: str | os.PathLike[str]) -> RuntimeRunRecord:
         """Read one persisted run: lifecycle, exact lineage, decisions and failure.
@@ -1066,6 +1106,7 @@ class Runtime:
                         self._backend(component_id, backend_id)
                         for backend_id in sorted(COMPONENTS[component_id].backends)
                     ),
+                    optional=COMPONENTS[component_id].optional,
                 )
                 for component_id in stage.components
             ),
@@ -1187,6 +1228,35 @@ class Runtime:
                 )
         return tuple(warnings)
 
+    def _executors_for(
+        self, config: EffectiveConfig, provider_overrides: list[str] | None = None
+    ) -> Mapping[str, StageExecutor]:
+        """Merge the executors composed from ``config`` with the ones given at construction.
+
+        ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
+        ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once a runtime
+        provider is available for every backend that needs one -- explicitly through
+        ``self._providers``, or declared as a ``resources.providers`` target in ``config``
+        itself -- ``visual_perception``) from ``config`` alone; a stage it cannot build for any
+        reason is simply absent, never raised (see its own docstring). Whatever this runtime was
+        constructed with in ``executors`` (a test double, a stage composition cannot build such
+        as ``ingestion``, or an explicit override) is layered on top and always wins.
+
+        Args:
+            config: The resolved configuration.
+            provider_overrides: When given, receives (by mutation) the component identities
+                where ``self._providers`` won over a ``resources.providers`` target ``config``
+                also declared, so :meth:`run` can record it on the run's own trail.
+        """
+        composed = compose_executors(
+            config,
+            providers=self._providers,
+            environ=self._environ,
+            module_available=self._module_available,
+            on_provider_override=None if provider_overrides is None else provider_overrides.append,
+        )
+        return {**composed, **self._executors}
+
     def _workspace_for(self, config: EffectiveConfig) -> Path:
         configured = config.config.resources.workspace
         if configured is None:
@@ -1204,15 +1274,28 @@ class Runtime:
         return Path(configured)
 
     def _run_directory(self, run: str | os.PathLike[str]) -> Path:
-        """Resolve a run id under the workspace, or a run directory."""
+        """Resolve a run id under any dataset of the workspace, or a run directory."""
         reference = os.fspath(run)
-        if self._workspace is not None and Path(reference).name == reference:
-            under = self._workspace / RUNS_DIRECTORY / reference
-            if under.is_dir():
-                return under
+        if (
+            self._workspace is not None
+            and self._workspace.is_dir()
+            and Path(reference).name == reference
+        ):
+            found = sorted(
+                dataset / reference
+                for dataset in self._workspace.iterdir()
+                if (dataset / reference).is_dir()
+            )
+            if len(found) > 1:
+                raise RunRecordError(
+                    f"run id {reference!r} exists in several datasets "
+                    f"({', '.join(path.parent.name for path in found)}): pass the run directory"
+                )
+            if found:
+                return found[0]
         if Path(reference).is_dir():
             return Path(reference)
-        where = "" if self._workspace is None else f" under {self._workspace / RUNS_DIRECTORY}"
+        where = "" if self._workspace is None else f" under {self._workspace}"
         raise RunRecordError(f"no run record for {reference!r}{where}")
 
 
@@ -1239,11 +1322,17 @@ def _editable(
             continue
         for component_id in stage.components:
             component = config.config.components[component_id]
+            spec = COMPONENTS[component_id]
+            backend_choices: tuple[Any, ...] = tuple(sorted(spec.backends))
+            if spec.optional:
+                # Componente genuinamente opcional: "nenhum backend" é um estado válido e
+                # explícito, então precisa aparecer em `allowed`, nunca só em `current`.
+                backend_choices = (*backend_choices, None)
             edits.append(
                 RuntimeEdit(
                     path=f"components.{component_id}.backend",
                     kind="choice",
-                    allowed=tuple(sorted(COMPONENTS[component_id].backends)),
+                    allowed=backend_choices,
                     current=component.backend,
                 )
             )
@@ -1290,6 +1379,7 @@ def _summary(directory: Path) -> RuntimeRunSummary:
     except RunRecordError as error:
         return RuntimeRunSummary(
             run_id=directory.name,
+            dataset=directory.parent.name,
             readable=False,
             status=None,
             interrupted=None,
@@ -1301,6 +1391,7 @@ def _summary(directory: Path) -> RuntimeRunSummary:
         )
     return RuntimeRunSummary(
         run_id=run.run_id,
+        dataset=directory.parent.name,
         readable=True,
         status=run.status.value,
         interrupted=run.interrupted,

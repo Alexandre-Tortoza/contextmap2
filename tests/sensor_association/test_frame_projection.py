@@ -7,6 +7,7 @@ from projection_builders import (
     BODY_TO_CAMERA_ROTATION,
     CAMERA_CALIBRATION_ID,
     IDENTITY,
+    UNBOUNDED_CANDIDATES,
     YAW_90,
     ArrayGeometrySource,
     artifact,
@@ -39,7 +40,6 @@ from contextmap.sensor_association.frame_projection import (
     ProjectionStage,
     RejectedProjection,
 )
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.sensor_association.image_transform import raw_to_prepared_transform
 from contextmap.shared import Quaternion, Vector3, rotate_vector
 from contextmap.state_estimation import (
@@ -86,7 +86,8 @@ def _projector(
         **map_options,  # type: ignore[arg-type]
     )
     return FrameProjector(
-        cloud=GeometryCloud.from_source(source),
+        geometry=source,
+        candidate_policy=UNBOUNDED_CANDIDATES,
         trajectory=make_lookup(trajectory),
         pose_policy=policy,
         calibration=calibration,
@@ -418,7 +419,8 @@ def test_the_trajectory_must_be_in_the_frame_of_the_map() -> None:
 
     with pytest.raises(AssociationInputError, match="frame"):
         FrameProjector(
-            cloud=GeometryCloud.from_source(source),
+            geometry=source,
+            candidate_policy=UNBOUNDED_CANDIDATES,
             trajectory=make_lookup(make_trajectory(calibration, reference_frame="odom")),
             pose_policy=EXACT,
             calibration=calibration,
@@ -442,7 +444,8 @@ def test_the_calibration_must_be_the_one_the_map_and_the_trajectory_used() -> No
 
     with pytest.raises(AssociationInputError, match="calibration"):
         FrameProjector(
-            cloud=GeometryCloud.from_source(source),
+            geometry=source,
+            candidate_policy=UNBOUNDED_CANDIDATES,
             trajectory=make_lookup(make_trajectory(calibration)),
             pose_policy=EXACT,
             calibration=other,

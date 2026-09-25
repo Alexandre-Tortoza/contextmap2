@@ -82,8 +82,6 @@ from contextmap.state_estimation.run_artifact import (
     StateEstimationRunManifest,
     StateEstimationRunReader,
     StateEstimationRunWriter,
-    allocate_run_index,
-    rebuild_run_registry,
 )
 from contextmap.state_estimation.service import (
     GeometryPreflightError,
@@ -147,12 +145,10 @@ __all__ = [
     "TrajectoryProvenance",
     "TrajectoryQualitySummary",
     "TransformCheck",
-    "allocate_run_index",
     "calibration_identity",
     "execute_state_estimation",
     "motion_deltas",
     "pose_estimate_id_for",
-    "rebuild_run_registry",
     "run_geometry_preflight",
     "summarize_distribution",
     "summarize_lookups",

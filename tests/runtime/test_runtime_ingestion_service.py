@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from runtime_documents import effective_from, selected_document
@@ -12,12 +13,16 @@ from runtime_ingestion import FakeAdapter, factory, image, sequence
 from runtime_ingestion import request as make_request
 
 from contextmap.ingestion import (
+    ConstantOffsetCorrection,
     MissingRequiredTopicError,
     SequenceArtifactError,
     SequenceArtifactReader,
     SourceAdapterCapabilities,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
+    TimestampPolicy,
+    compute_source_content_hash,
 )
 from contextmap.runtime import (
     ArtifactRef,
@@ -30,6 +35,7 @@ from contextmap.runtime import (
     ReusePolicy,
     RunJournal,
     StageExecutionError,
+    StageRequest,
     ValidationPolicy,
     read_run,
     resolve_plan,
@@ -132,10 +138,10 @@ class TestPreflight:
         missing = make_request(tmp_path, source_path=str(tmp_path / "nowhere.bag"))
         not_a_directory = tmp_path / "file"
         not_a_directory.write_text("x", encoding="utf-8")
-        blocked = make_request(tmp_path, workspace=str(not_a_directory))
+        blocked = make_request(tmp_path, output_dir=str(not_a_directory))
 
         assert any(p.path == "source.path" for p in _service().preflight(missing).problems)
-        assert any(p.path == "output.workspace" for p in _service().preflight(blocked).problems)
+        assert any(p.path == "output.output_dir" for p in _service().preflight(blocked).problems)
 
     def test_an_adapter_that_cannot_open_the_source_is_a_problem_naming_the_error(
         self, tmp_path: Path
@@ -191,12 +197,15 @@ class TestPreflight:
 
 
 class TestRequestIdentity:
-    def test_it_is_deterministic_and_independent_of_the_workspace(self, tmp_path: Path) -> None:
+    def test_it_is_deterministic_and_independent_of_the_output_directory(
+        self, tmp_path: Path
+    ) -> None:
         first = make_request(tmp_path)
 
         assert first.identity == make_request(tmp_path).identity
         assert (
-            first.identity == make_request(tmp_path, workspace=str(tmp_path / "elsewhere")).identity
+            first.identity
+            == make_request(tmp_path, output_dir=str(tmp_path / "elsewhere")).identity
         )
 
     @pytest.mark.parametrize(
@@ -210,6 +219,7 @@ class TestRequestIdentity:
             {"config_identity": "sha256:abc"},
             {"validation": ValidationPolicy(on_problems="warn")},
             {"topics": SourceTopicMapping(rgb="/other", imu="/imu")},
+            {"extra": {"pose_role": "ground_truth"}},
         ],
     )
     def test_every_input_that_changes_the_result_changes_the_identity(
@@ -222,12 +232,61 @@ class TestRequestIdentity:
         document = original.to_document()
 
         rebuilt = IngestionRequest.from_document(
-            document, workspace=original.workspace, source_type=None
+            document, output_dir=original.output_dir, source_type=None
         )
 
         assert rebuilt.identity == original.identity
         assert json.loads(json.dumps(document)) == document
-        assert "workspace" not in document
+        assert "output_dir" not in document
+
+    def test_extra_round_trips_through_the_document(self, tmp_path: Path) -> None:
+        """Issue #555: PoseFileSourceAdapter needs extra['format'/'parent_frame'/'body_frame'/
+        'pose_role'], which only reaches the adapter through this field -- SourceAdapterConfig
+        already carries it, but IngestionRequest had no pass-through until now."""
+        original = make_request(tmp_path, extra={"format": "tum", "pose_role": "ground_truth"})
+
+        document = original.to_document()
+        rebuilt = IngestionRequest.from_document(
+            document, output_dir=original.output_dir, source_type=None
+        )
+
+        assert document["extra"] == {"format": "tum", "pose_role": "ground_truth"}
+        assert rebuilt.extra == original.extra
+        assert rebuilt.identity == original.identity
+
+    def test_a_configured_window_changes_the_identity(self, tmp_path: Path) -> None:
+        base = make_request(tmp_path)
+        window = SourceWindow(
+            clock_id=f"{base.source_type}:{base.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=1.0,
+        )
+
+        windowed = make_request(tmp_path, window=window)
+
+        assert windowed.identity != base.identity
+        assert base.window is None
+        assert windowed.window == window
+
+    def test_the_window_round_trips_through_the_document(self, tmp_path: Path) -> None:
+        window = SourceWindow(
+            clock_id="ros1_bag:recording.bag:recording_time", start_seconds=1.0, end_seconds=2.0
+        )
+        original = make_request(tmp_path, window=window)
+
+        document = original.to_document()
+        rebuilt = IngestionRequest.from_document(
+            document, output_dir=original.output_dir, source_type=None
+        )
+
+        assert document["window"] == {
+            "clock_id": window.clock_id,
+            "start_seconds": 1.0,
+            "end_seconds": 2.0,
+        }
+        assert rebuilt.window == window
+        assert rebuilt.identity == original.identity
+        assert json.loads(json.dumps(document)) == document
 
     def test_an_invalid_document_is_refused(self, tmp_path: Path) -> None:
         good = make_request(tmp_path).to_document()
@@ -238,10 +297,10 @@ class TestRequestIdentity:
                     **good,
                     "synchronization": {"reference_modality": "nope", "tolerance_nanoseconds": 1},
                 },
-                workspace="ws",
+                output_dir="ws",
             )
         with pytest.raises(ValueError, match="invalid ingestion request"):
-            IngestionRequest.from_document({"source_path": "x"}, workspace="ws")
+            IngestionRequest.from_document({"source_path": "x"}, output_dir="ws")
 
     @pytest.mark.parametrize("name", ["", "a/b", "..", "a\\b"])
     def test_a_sequence_name_must_be_a_single_safe_segment(self, tmp_path: Path, name: str) -> None:
@@ -259,7 +318,10 @@ class TestSuccessfulRun:
         assert reader.verify_integrity() == []
         assert str(reader.manifest.artifact_id) == result.artifact_id
         assert dict(reader.manifest.observation_counts)["image"] == 3
-        assert [p.name for p in _published(tmp_path / "ws")] == [result.artifact_id]
+        assert [p.name for p in _published(tmp_path / "ws")] == ["artifact-1"]
+        assert SequenceArtifactReader(_published(tmp_path / "ws")[0]).manifest.artifact_id == (
+            result.artifact_id
+        )
 
     def test_the_result_carries_counts_diagnostics_and_operational_metrics(
         self, tmp_path: Path
@@ -302,6 +364,64 @@ class TestSuccessfulRun:
         assert provenance is not None and provenance.source_content_hash is None
         assert provenance.ingestion_config["hash_source"] is False
 
+    def test_a_configured_window_reaches_the_adapter_and_the_persisted_provenance(
+        self, tmp_path: Path
+    ) -> None:
+        """#506: a janela deve ser alcançável pelo caminho canônico, não só pelos adapters.
+
+        Exercita o caminho real ``IngestionRequest`` -> ``IngestionService.run()``
+        (não um script adapter->writer->provenance montado à mão): o pedido
+        carrega ``window``, a config construída para o adapter carrega
+        ``window`` (`_adapter_config()`), e a proveniência publicada declara
+        a janela realmente usada, com um hash de conteúdo derivado do que o
+        adapter efetivamente leu (`adapter.content_hash()`), nunca de uma
+        passada separada sobre a fonte inteira.
+        """
+        built: list[FakeAdapter] = []
+        base_request = make_request(tmp_path)
+        window = SourceWindow(
+            clock_id=f"{base_request.source_type}:{base_request.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=10.0,
+        )
+        request = dataclasses.replace(base_request, window=window)
+
+        result = _service(built=built).run(request)
+
+        assert result.status == "completed" and result.failure is None
+        # preflight() constructs its own adapter to inspect capabilities(), and _execute()
+        # builds a second, separate one for the actual read -- both must carry the window.
+        assert built and all(adapter.config.window == window for adapter in built)
+        read_adapter = next(adapter for adapter in built if adapter.read_calls > 0)
+        assert result.artifact_path is not None
+        provenance = SequenceArtifactReader(Path(result.artifact_path)).read_provenance()
+        assert provenance is not None
+        assert provenance.ingestion_config["window"] == {
+            "clock_id": window.clock_id,
+            "start_seconds": 0.0,
+            "end_seconds": 10.0,
+        }
+        assert provenance.source_content_hash == read_adapter.content_hash()
+        assert provenance.source_content_hash is not None
+        # Uma janela configurada nunca deve custar uma passada de hash sobre a
+        # fonte inteira: o hash persistido é o do adapter (só o que foi lido),
+        # não igual ao hash do arquivo inteiro no disco.
+        assert provenance.source_content_hash != compute_source_content_hash(
+            Path(request.source_path)
+        )
+
+    def test_extra_reaches_the_constructed_adapter_config(self, tmp_path: Path) -> None:
+        """Issue #555: PoseFileSourceAdapter's required format/parent_frame/body_frame/pose_role
+        only exist in SourceAdapterConfig.extra -- this is the only path that can carry them."""
+        built: list[FakeAdapter] = []
+        extra = {"format": "tum", "parent_frame": "map", "body_frame": "epson"}
+        request = make_request(tmp_path, extra=extra)
+
+        result = _service(built=built).run(request)
+
+        assert result.status == "completed" and result.failure is None
+        assert built and all(adapter.config.extra == extra for adapter in built)
+
     def test_adapter_warnings_reach_the_result_and_the_artifact(self, tmp_path: Path) -> None:
         result = _service(warnings=["skipped a malformed message"]).run(make_request(tmp_path))
         assert result.artifact_path is not None
@@ -337,7 +457,12 @@ class TestSuccessfulRun:
     ) -> None:
         request = make_request(tmp_path)
         first = _service().run(request)
-        second = _service().run(request)
+        second = _service().run(
+            dataclasses.replace(
+                request,
+                output_dir=str(tmp_path / "ws" / "sequences" / "corridor-02" / "artifact-2"),
+            )
+        )
 
         assert first.artifact_id != second.artifact_id
         assert first.request_identity == second.request_identity
@@ -352,6 +477,140 @@ class TestSuccessfulRun:
         )
 
         assert result.status == "completed" and result.metrics.observations_read == 49
+
+
+class TestTimestampPolicy:
+    """Issue #554: dataset-scoped timestamp normalization through the real request/service path."""
+
+    def test_the_default_policy_is_recorded_and_changes_nothing(self, tmp_path: Path) -> None:
+        result = _service().run(make_request(tmp_path))
+        assert result.artifact_path is not None
+
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        assert provenance.ingestion_config["timestamp_policy"] == {
+            "event_clock": "header_stamp",
+            "window_clock": "recording_time",
+            "correction": {"type": "none"},
+        }
+        first = reader.list_observations()[0]
+        assert "source_time_before_correction_seconds" not in first.provenance.raw_metadata
+
+    def test_a_configured_constant_offset_corrects_the_published_observations(
+        self, tmp_path: Path
+    ) -> None:
+        wrong_epoch_start = 1_000_000_000  # somewhere in 2001, in the source's own clock
+        observations = [image(index, float(wrong_epoch_start + index)) for index in range(1, 4)]
+        correction = ConstantOffsetCorrection.from_offset_seconds(789_004_800.0)  # ~25 years
+        policy = TimestampPolicy(correction=correction)
+
+        result = IngestionService(factory(observations=observations)).run(
+            make_request(
+                tmp_path,
+                topics=SourceTopicMapping(rgb="/camera"),
+                reference="image",
+                timestamp_policy=policy,
+            )
+        )
+
+        assert result.status == "completed" and result.failure is None
+        assert result.artifact_path is not None
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        published = sorted(reader.list_observations(), key=lambda o: str(o.observation_id))
+        assert [obs.timestamp.seconds for obs in published] == [
+            wrong_epoch_start + index + 789_004_800 for index in range(1, 4)
+        ]
+        raw_metadata = published[0].provenance.raw_metadata
+        assert raw_metadata["source_time_before_correction_seconds"] == wrong_epoch_start + 1
+
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        timestamp_policy_document = cast(
+            dict[str, Any], provenance.ingestion_config["timestamp_policy"]
+        )
+        correction_document = cast(dict[str, Any], timestamp_policy_document["correction"])
+        assert correction_document["type"] == "constant_offset"
+        assert correction_document["offset_seconds"] == pytest.approx(789_004_800.0)
+
+    def test_a_sibling_request_without_a_policy_does_not_inherit_the_correction(
+        self, tmp_path: Path
+    ) -> None:
+        corrected_policy = TimestampPolicy(
+            correction=ConstantOffsetCorrection.from_offset_seconds(1_000.0)
+        )
+        corrected_result = _service().run(
+            make_request(tmp_path, name="corridor-a", timestamp_policy=corrected_policy)
+        )
+        default_result = _service().run(make_request(tmp_path, name="corridor-b"))
+
+        assert corrected_result.status == default_result.status == "completed"
+        assert corrected_result.artifact_path is not None
+        assert default_result.artifact_path is not None
+        corrected_first = SequenceArtifactReader(
+            Path(corrected_result.artifact_path)
+        ).list_observations()[0]
+        default_first = SequenceArtifactReader(
+            Path(default_result.artifact_path)
+        ).list_observations()[0]
+        assert corrected_first.timestamp.seconds - default_first.timestamp.seconds == 1_000
+
+    def test_a_non_monotonic_source_clock_produces_an_actionable_provenance_warning(
+        self, tmp_path: Path
+    ) -> None:
+        observations = [image(1, 10.0), image(2, 11.0), image(3, 5.0)]  # reset partway through
+
+        result = IngestionService(factory(observations=observations)).run(
+            make_request(
+                tmp_path,
+                topics=SourceTopicMapping(rgb="/camera"),
+                reference="image",
+                validation=ValidationPolicy(on_problems="warn"),
+            )
+        )
+
+        assert result.status == "completed"
+        assert result.artifact_path is not None
+        provenance = SequenceArtifactReader(Path(result.artifact_path)).read_provenance()
+        assert provenance is not None
+        assert any("non-monotonic" in warning for warning in provenance.warnings)
+
+    def test_a_window_and_a_correction_apply_independently_in_the_same_request(
+        self, tmp_path: Path
+    ) -> None:
+        # Window selection stays on recording_time (the adapter's own clock, untouched by #554)
+        # while the header/event clock is normalized -- the two mechanisms must not interfere.
+        built: list[FakeAdapter] = []
+        base_request = make_request(
+            tmp_path,
+            timestamp_policy=TimestampPolicy(
+                correction=ConstantOffsetCorrection.from_offset_seconds(500.0)
+            ),
+        )
+        window = SourceWindow(
+            clock_id=f"{base_request.source_type}:{base_request.source_path}:recording_time",
+            start_seconds=0.0,
+            end_seconds=10.0,
+        )
+        request = dataclasses.replace(base_request, window=window)
+
+        result = IngestionService(factory(built=built)).run(request)
+
+        assert result.status == "completed"
+        assert result.artifact_path is not None
+        assert built and all(adapter.config.window == window for adapter in built)
+        reader = SequenceArtifactReader(Path(result.artifact_path))
+        provenance = reader.read_provenance()
+        assert provenance is not None
+        window_document = cast(dict[str, Any], provenance.ingestion_config["window"])
+        assert window_document["clock_id"] == window.clock_id
+        timestamp_policy_document = cast(
+            dict[str, Any], provenance.ingestion_config["timestamp_policy"]
+        )
+        correction_document = cast(dict[str, Any], timestamp_policy_document["correction"])
+        assert correction_document["type"] == "constant_offset"
+        corrected_seconds = sorted({obs.timestamp.seconds for obs in reader.list_observations()})
+        assert corrected_seconds == [501, 502, 503]
 
 
 class TestExpectedFailures:
@@ -547,30 +806,85 @@ class TestUnexpectedFailures:
 class TestAsTheIngestionStageOfTheDag:
     def _plan(self, tmp_path: Path) -> Any:
         effective = effective_from(tmp_path, selected_document())
-        return resolve_plan(effective).scope(targets=["ingestion"])
+        return effective, resolve_plan(effective).scope(targets=["ingestion"])
 
-    def test_the_executor_returns_the_published_artifact_with_its_content_hash(
+    def _run(
+        self,
+        tmp_path: Path,
+        service: IngestionService,
+        *,
+        stage_id: str = "ingestion",
+        **options: Any,
+    ) -> Any:
+        effective, execution = self._plan(tmp_path)
+        journal = RunJournal.create(tmp_path / "ws", effective, execution)
+        executor = IngestionStageExecutor(service, make_request(tmp_path), stage_id=stage_id)
+        return journal, run_plan(
+            execution,
+            {"ingestion": executor},
+            environ={},
+            module_available=lambda _n: True,
+            journal=journal,
+            **options,
+        )
+
+    def test_the_executor_publishes_into_the_stage_directory_of_the_run(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
-        executor = IngestionStageExecutor(_service(), make_request(tmp_path))
-
-        record = run_plan(
-            execution, {"ingestion": executor}, environ={}, module_available=lambda _n: True
-        )
+        journal, record = self._run(tmp_path, _service())
 
         artifact = record.stages[0].output
         assert artifact.contract == "SequenceArtifact" and artifact.content_hash
-        published = _published(tmp_path / "ws")
-        assert [p.name for p in published] == [artifact.artifact_id]
+        assert artifact.location == f"S1/{journal.directory.name}/ingestion"
+        directory = tmp_path / "ws" / str(artifact.location)
+        assert SequenceArtifactReader(directory).manifest.artifact_id == artifact.artifact_id
+        # Nada é publicado fora da pasta do estágio: o executor só usa o diretório que recebeu.
+        assert not (tmp_path / "ws" / "sequences").exists()
+        assert artifact.stage_id == "ingestion"
+
+    def test_the_stage_id_of_the_published_artifact_can_be_overridden(self, tmp_path: Path) -> None:
+        """Issue #555: a second, differently-configured instance of this same executor (for
+        example one reading a pose file instead of a bag) must publish its ``ArtifactRef``
+        under its own stage id, never the hard-coded ``"ingestion"``.
+
+        Calls ``execute()`` directly with a hand-built ``StageRequest``: ``run_plan`` itself
+        already checks that a stage's output names the DAG step that ran it (correctly so),
+        so exercising the override through a plan would require a real ``pose_ingestion``
+        stage declaration -- out of scope for this unit-level check of the executor alone.
+        """
+        executor = IngestionStageExecutor(
+            _service(), make_request(tmp_path), stage_id="pose_ingestion"
+        )
+        request = StageRequest(
+            stage_id="pose_ingestion",
+            inputs={},
+            components={},
+            config_digest="test",
+            output_dir=tmp_path / "ws" / "run-0001" / "pose_ingestion",
+            workspace=tmp_path / "ws",
+        )
+
+        ref = executor.execute(request)
+
+        assert ref.stage_id == "pose_ingestion"
+
+    def test_the_artifact_identity_is_derived_from_the_stage_and_is_repeatable(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        _, first = self._run(tmp_path / "a", _service())
+        _, second = self._run(tmp_path / "b", _service())
+
+        assert first.stages[0].output.artifact_id == second.stages[0].output.artifact_id
 
     def test_the_same_ingestion_is_reused_by_identity_and_a_changed_one_is_recomputed(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
+        effective, execution = self._plan(tmp_path)
 
         def verify(ref: ArtifactRef) -> bool:
-            return any((tmp_path / "ws" / "sequences").glob(f"*/{ref.artifact_id}/manifest.json"))
+            return ref.location is not None and (tmp_path / "ws" / ref.location).is_dir()
 
         policy = ReusePolicy(
             store=FileArtifactStore(tmp_path / "index", verify=verify), code_identity="c1"
@@ -578,6 +892,7 @@ class TestAsTheIngestionStageOfTheDag:
         service = _service()
 
         def run() -> Any:
+            journal = RunJournal.create(tmp_path / "ws", effective, execution)
             executor = IngestionStageExecutor(service, make_request(tmp_path))
             return run_plan(
                 execution,
@@ -585,21 +900,20 @@ class TestAsTheIngestionStageOfTheDag:
                 environ={},
                 module_available=lambda _n: True,
                 reuse=policy,
+                journal=journal,
             )
 
         first, second = run(), run()
 
         assert first.stages[0].output == second.stages[0].output
         assert second.stages[0].decision is not None and second.stages[0].decision.kind == "reused"
-        assert len(_published(tmp_path / "ws")) == 1
+        assert len(list((tmp_path / "ws" / "S1").glob("run-*/ingestion"))) == 1
 
     def test_an_ingestion_failure_becomes_a_categorized_failure_record(
         self, tmp_path: Path
     ) -> None:
-        execution = self._plan(tmp_path)
-        journal = RunJournal.create(
-            tmp_path / "records", effective_from(tmp_path, selected_document()), execution
-        )
+        effective, execution = self._plan(tmp_path)
+        journal = RunJournal.create(tmp_path / "records", effective, execution)
         executor = IngestionStageExecutor(_service(fail_after=1), make_request(tmp_path))
 
         with pytest.raises(StageExecutionError, match="bag corrupt"):

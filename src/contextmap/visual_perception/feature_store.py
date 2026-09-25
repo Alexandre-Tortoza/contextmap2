@@ -53,6 +53,18 @@ FEATURE_INDEX_SCHEMA_VERSION = "0.1.0"
 _FEATURE_INDEX_RECORD_TYPE = "feature_index"
 
 
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
+def _hash_file(path: Path) -> str:
+    """Return a file's sha256 hex digest without ever holding the whole file in memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(_HASH_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class FeatureStoreError(Exception):
     """Base class for feature payload storage failures."""
 
@@ -323,8 +335,10 @@ class FeatureStoreReader:
         if not full_path.is_file():
             raise FeatureStoreError(f"missing payload file: {entry.payload_reference}")
 
-        data = full_path.read_bytes()
-        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        # Hash em streaming e depois np.load(path): ler o arquivo inteiro para bytes e decodificar
+        # a partir deles fazia os bytes serializados e o array conviverem, dobrando o pico de
+        # memoria de um payload denso real (#518).
+        digest = f"sha256:{_hash_file(full_path)}"
         if digest != entry.content_hash:
             raise FeaturePayloadIntegrityError(
                 f"content hash mismatch for {entry.payload_reference}: "
@@ -332,7 +346,7 @@ class FeatureStoreReader:
             )
 
         try:
-            array: NDArray[Any] = np.load(io.BytesIO(data), allow_pickle=False)
+            array: NDArray[Any] = np.load(full_path, allow_pickle=False)
         except (ValueError, OSError) as error:
             raise FeaturePayloadIntegrityError(
                 f"unsupported or corrupt payload for {entry.payload_reference}: {error}"

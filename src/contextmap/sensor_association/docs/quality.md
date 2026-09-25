@@ -1,6 +1,8 @@
 # Qualidade da observação
 
-Este documento descreve `src/contextmap/sensor_association/quality.py` (o contrato) e `quality_derivation.py` (a derivação), versão `observation-quality-v1`.
+Este documento descreve `src/contextmap/sensor_association/quality.py` (o contrato) e `quality_derivation.py` (a derivação), versão `observation-quality-v2`.
+
+A `v2` (#562): `ReprojectionStatistics` ganhou `unevaluated_count` e passa a definir suas taxas sobre a população **avaliada** (`evaluated_count`, `invalid_rate`), além de recusar existir sem ao menos uma correspondência avaliada que projete. Um residual medido sobre uma população que a política de candidatos estreitou não é a mesma grandeza que um medido sobre o mapa inteiro, então não mantém a mesma identidade.
 
 `ObservationQuality` guarda, como **medidas** separadas e tipadas, as condições que afetam o quão útil é uma observação espacial visual: a que distância está a geometria de apoio, quanto da região estava visível, com que densidade ela é suportada, onde está na imagem, quão bem a pose se alinha no tempo e, quando existe uma referência confiável, o resíduo de reprojeção.
 

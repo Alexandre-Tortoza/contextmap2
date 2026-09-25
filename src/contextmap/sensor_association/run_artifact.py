@@ -24,11 +24,12 @@ import sys
 from array import array
 from bisect import bisect_left
 from collections.abc import Iterator, Mapping
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any, BinaryIO, NewType
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import SequenceArtifactId
@@ -55,13 +56,22 @@ from contextmap.shared import (
     FileEntry,
     RunDirectoryError,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.visual_perception import RegionId
 
-SCHEMA_VERSION = "0.1.0"
-"""Sensor Association run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Sensor Association run artifact schema version written and understood by this module.
+
+``0.2.0`` is the candidate-selection schema (#562): the manifest gained the required
+``candidate_policy``, and every projection record gained ``candidates`` and ``stage_counts``.
+The single ``point_count`` is **gone**: it meant the map's size in ``0.1.0`` and would mean the
+evaluated population here, which a reader could not tell apart, so both concepts are named
+explicitly as ``candidates.map_point_count`` and ``candidates.candidate_count``.
+``geometry-support.u32`` and the dense ``eligible_indices`` now hold global
+geometry indices explicitly rather than candidate rows that happened to coincide with them.
+A ``0.1.0`` artifact is refused with a clear error instead of being migrated: during ``v0.x``
+a run is re-executed, never rewritten.
+"""
 
 SensorAssociationRunId = NewType("SensorAssociationRunId", str)
 """Identity of one Sensor Association run, local to its capability and sequence."""
@@ -109,8 +119,9 @@ class SensorAssociationRunManifest:
     """Authoritative metadata of a persisted Sensor Association run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's association runs.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this sequence, supplied by the
+            caller.
         sequence_name: Name of the processed sequence.
         sequence_artifact_id: Canonical sequence artifact consumed.
         selection_id: Deterministic identity of the sequence selection.
@@ -119,6 +130,8 @@ class SensorAssociationRunManifest:
         state_estimation_run_id: The state-estimation run it came from, when there is one.
         perception_run_ids: The perception runs the evidence came from.
         calibration_identity: Hash of the calibration used.
+        candidate_policy: The candidate policy record, with its fingerprint: which map
+            geometry each frame evaluated before projection.
         visibility_policy: The occlusion policy record, with its fingerprint.
         membership_policy_id: The mask-membership rule.
         definitions: Versions of the coverage, quality, diagnostics and sampling definitions.
@@ -149,6 +162,7 @@ class SensorAssociationRunManifest:
     state_estimation_run_id: str | None
     perception_run_ids: tuple[str, ...]
     calibration_identity: str
+    candidate_policy: Mapping[str, Any]
     visibility_policy: Mapping[str, Any]
     membership_policy_id: str
     definitions: Mapping[str, str]
@@ -177,7 +191,8 @@ class DenseAssociationRecord:
         channel_id: The evidence channel.
         provenance: The full lineage of the association, as JSON primitives.
         terms: Cells read per point: ``1`` for nearest and ``4`` for bilinear.
-        eligible_indices: Frame positions of the eligible points.
+        eligible_indices: Global geometry indices of the eligible points, the identity
+            :func:`~contextmap.geometric_mapping.geometry_id_for` uses.
         sampled: Whether the grid served each eligible point.
         cell_rows: Row of each cell read, ``terms`` per point, ``-1`` where out of support.
         cell_cols: Column of each cell read.
@@ -195,207 +210,391 @@ class DenseAssociationRecord:
     weights: array[float]
 
 
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "sensor-association" / sequence_name
-
-
 class SensorAssociationRunWriter:
-    """Builds an immutable Sensor Association run artifact on the local filesystem."""
+    """Builds an immutable Sensor Association run artifact on the local filesystem.
+
+    The writer holds the run's identity and opens a :meth:`transaction`; the transaction is
+    what touches the filesystem, and it is a
+    :class:`~contextmap.sensor_association.service.FrameSink`, so a run is persisted frame by
+    frame instead of from a fully materialized result::
+
+        with writer.transaction() as run:
+            outcome = SensorAssociationService().run(request, sink=run)
+            manifest = run.finalize(outcome)
+    """
 
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: SensorAssociationRunId,
         run_index: int,
-        selection_label: str,
-        channel_label: str,
         debug_level: SensorAssociationDebugLevel = SensorAssociationDebugLevel.NONE,
     ) -> None:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/sensor_association``); the writer
+                computes no path, creates the directory atomically on finalization and
+                refuses to replace one that exists.
             sequence_name: Name of the sequence the run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's association runs (see
-                :func:`allocate_run_index`).
-            selection_label: Short readable selection description for the directory name.
-            channel_label: Short readable feature-path description for the directory name,
-                e.g. ``"native"`` or ``"enhanced"``.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             debug_level: Amount of non-contractual debug evidence to persist.
         """
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{channel_label}"
-        )
+        self._final_dir = output_dir
+        self._opened = False
+
+    @property
+    def run_id(self) -> SensorAssociationRunId:
+        """Identity of the run this writer persists."""
+        return self._run_id
+
+    @property
+    def run_index(self) -> int:
+        """Ordinal of the run among the caller's runs of the same sequence."""
+        return self._run_index
+
+    @property
+    def sequence_name(self) -> str:
+        """Name of the sequence the run processed."""
+        return self._sequence_name
+
+    @property
+    def debug_level(self) -> SensorAssociationDebugLevel:
+        """How much non-contractual debug evidence the run persists."""
+        return self._debug_level
+
+    @property
+    def final_dir(self) -> Path:
+        """Where the finished artifact will live."""
+        return self._final_dir
+
+    @contextmanager
+    def transaction(self) -> Iterator[SensorAssociationRunTransaction]:
+        """Open the run, yielding the sink that persists each frame as it arrives.
+
+        Leaving the block without a successful :meth:`SensorAssociationRunTransaction.finalize`
+        -- normally or through an exception -- discards everything written: an interrupted run
+        never leaves a publishable artifact.
+
+        Raises:
+            RunArtifactError: If this writer already opened a transaction, or a run already
+                exists at the target path.
+        """
+        if self._opened:
+            raise RunArtifactError("writer already finalized")
+        self._opened = True
+        try:
+            with AtomicRunDirectory(self._final_dir) as run:
+                transaction = SensorAssociationRunTransaction(run=run, writer=self)
+                try:
+                    yield transaction
+                finally:
+                    transaction.close()
+        except RunDirectoryError as error:
+            raise RunArtifactError(str(error)) from error
+
+
+class SensorAssociationRunTransaction:
+    """One run being written: a frame sink that persists and then forgets each frame.
+
+    Per-frame payloads are appended to open streams and nothing about a frame is retained:
+    no array, no observation, no projection. Nothing is visible until :meth:`finalize`
+    publishes the run atomically.
+
+    What the transaction does keep is bounded and scalar. Counts and byte offsets are
+    constant, and one timing record per frame accumulates because #562 asks for per-frame
+    candidate-query and projection times and ``metrics/runtime.json`` is a single document
+    written only when the caller measured. That record is four primitives, about 567 B, so
+    3096 frames cost under 1.7 MB -- a linear term worth naming rather than hiding, and four
+    orders of magnitude below the 4.3 GB peak of the real 350-frame run. The rule it must keep
+    obeying is that the linear term holds **scalars**, never a frame or an array.
+    """
+
+    def __init__(self, *, run: AtomicRunDirectory, writer: SensorAssociationRunWriter) -> None:
+        """Open the run's contractual streams.
+
+        Args:
+            run: The atomic directory the run is built in.
+            writer: The writer that owns the run's identity and debug level.
+        """
+        self._run = run
+        self._writer = writer
+        self._streams = ExitStack()
+        self._closed = False
         self._finalized = False
+        self._observations = self._open(_OBSERVATIONS)
+        self._index = self._open(_OBSERVATION_INDEX)
+        self._support = self._open(_SUPPORT)
+        self._quality = self._open(_QUALITY)
+        self._projection = self._open(_PROJECTION)
+        self._visibility = self._open(_VISIBILITY)
+        self._diagnostics = self._open(_DIAGNOSTICS)
+        self._dense_index: BinaryIO | None = None
+        self._dense_cells: BinaryIO | None = None
+        # Agregados de run: contagens e bytes, nunca arrays de frame.
+        self._support_offset = 0
+        self._observation_offset = 0
+        self._quality_offset = 0
+        self._dense_offset = 0
+        self._frame_count = 0
+        self._observation_count = 0
+        self._observations_without_support = 0
+        self._failed_frame_count = 0
+        self._finding_counts: dict[str, int] = {}
+        self._state_counts: dict[str, int] = {}
+        self._dense_sources: dict[str, dict[str, dict[str, Any]]] = {}
+        self._debug_feature_sources: list[dict[str, Any]] = []
+        self._timings: list[dict[str, Any]] = []
+
+    def _open(self, relative_path: str) -> BinaryIO:
+        return self._streams.enter_context(self._run.open_binary(relative_path))
+
+    def accept(self, frame: FrameAssociation) -> None:
+        """Persist one completed frame and update the run's aggregates.
+
+        Implements :class:`~contextmap.sensor_association.service.FrameSink`. Nothing about the
+        frame is retained: only counts, byte offsets and the frame's own timings survive the
+        call.
+
+        Raises:
+            RunArtifactError: If the run is already finalized or closed, or an observation's
+                geometry support disagrees with its region membership.
+        """
+        if self._finalized or self._closed:
+            raise RunArtifactError("the run is no longer open for frames")
+        self._write_frame_observations(frame)
+        self._projection.write(_line(_projection_record(frame)))
+        self._visibility.write(_line(_visibility_record(frame)))
+        self._diagnostics.write(_line(frame.diagnostics.to_record()))
+        if frame.dense_samples:
+            self._write_frame_dense(frame)
+        self._accumulate(frame)
+        self._write_frame_debug(frame)
 
     def finalize(
         self, outcome: SensorAssociationOutcome, *, runtime_s: float | None = None
     ) -> SensorAssociationRunManifest:
-        """Persist a completed run atomically.
+        """Close the streams, write the run-level files and publish the artifact atomically.
 
         Args:
-            outcome: The association result.
+            outcome: The run's identity, policies and aggregates, as the service returned it.
             runtime_s: Wall-clock time the run took, when measured. It is a metric apart from
-                every quality measure.
+                every quality measure, and it never enters ``outputs/``.
 
         Returns:
             The manifest of the finalized run.
 
         Raises:
-            RunArtifactError: If already finalized, if a run already exists at the target
-                path, or if an observation's geometry support disagrees with its membership.
+            RunArtifactError: If already finalized, the outcome counts other frames than this
+                transaction persisted, or the run cannot be published.
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
+        if outcome.frame_count != self._frame_count:
+            raise RunArtifactError(
+                f"the outcome counts {outcome.frame_count} frames but {self._frame_count} "
+                "reached the run"
+            )
+        self.close()
         try:
-            with AtomicRunDirectory(self._final_dir) as run:
-                self._write_outputs(run, outcome)
-                self._write_metrics(run, outcome, runtime_s)
-                if self._debug_level is not SensorAssociationDebugLevel.NONE:
-                    write_standard_debug(run, outcome)
-                if self._debug_level is SensorAssociationDebugLevel.FULL:
-                    write_full_debug(run, outcome)
-                run.publish(
-                    manifest=self._manifest_record(outcome),
-                    readme=_render_readme(self._run_id, self._run_index, outcome),
+            self._run.write_text(_SUMMARY, _json(self._summary(outcome)))
+            if runtime_s is not None:
+                # Tempo de parede nunca entra em outputs/: um rerun não o reproduz. Aqui ele
+                # só existe quando o chamador realmente mediu, o que mantém o artefato
+                # reprodutível byte a byte.
+                self._run.write_text(
+                    _RUNTIME,
+                    _json(
+                        {
+                            "runtime_s": runtime_s,
+                            "candidate_query_seconds": sum(
+                                float(t["candidate_query_seconds"]) for t in self._timings
+                            ),
+                            "projection_seconds": sum(
+                                float(t["projection_seconds"]) for t in self._timings
+                            ),
+                            "frames": self._timings,
+                        }
+                    ),
                 )
+            if self._debug_feature_sources:
+                self._run.write_text(
+                    "debug/feature-sources.json",
+                    json.dumps(self._debug_feature_sources, indent=2, sort_keys=True) + "\n",
+                    contractual=False,
+                )
+            self._run.publish(
+                manifest=self._manifest_record(outcome),
+                readme=_render_readme(self._writer.run_id, self._writer.run_index, outcome),
+            )
         except RunDirectoryError as error:
             raise RunArtifactError(str(error)) from error
         self._finalized = True
-        rebuild_run_registry(workspace_root=self._workspace_root, sequence_name=self._sequence_name)
-        return _load_manifest(self._final_dir)
+        return _load_manifest(self._writer.final_dir)
 
-    def _write_outputs(self, run: AtomicRunDirectory, outcome: SensorAssociationOutcome) -> None:
+    def close(self) -> None:
+        """Close every open stream; idempotent, and required before publishing."""
+        if not self._closed:
+            self._closed = True
+            self._streams.close()
+
+    # --- per frame -------------------------------------------------------------------
+
+    def _write_frame_observations(self, frame: FrameAssociation) -> None:
         import numpy as np
 
-        support_chunks: list[bytes] = []
-        support_offset = 0
-        observation_lines: list[bytes] = []
-        quality_lines: list[bytes] = []
-        index_lines: list[str] = []
-        observation_offset = 0
-        quality_offset = 0
-        for frame in outcome.frames:
-            projection = frame.resolution.frame
-            for region, observation, quality in zip(
-                frame.membership.regions, frame.observations, frame.qualities, strict=True
-            ):
-                positions = np.asarray(region.associated_indices, dtype="<u4")
-                expected = tuple(projection.map_reference(int(i)) for i in positions)
-                if expected != observation.geometry_support:
-                    raise RunArtifactError(
-                        f"the geometry support of {observation.spatial_observation_id!r} "
-                        "does not match its region membership"
-                    )
-                record = encode_spatial_observation(observation)
-                del record["geometry_support"]
-                record["support"] = {"offset": support_offset, "count": int(positions.shape[0])}
-                observation_line = json.dumps(record, sort_keys=True).encode("utf-8")
-                quality_line = json.dumps(
-                    encode_observation_quality(quality), sort_keys=True
-                ).encode("utf-8")
-                index_lines.append(
-                    json.dumps(
-                        {
-                            "spatial_observation_id": str(observation.spatial_observation_id),
-                            "source_observation_id": str(observation.source_observation_id),
-                            "region_id": str(observation.region_id),
-                            "observation": {
-                                "byte_offset": observation_offset,
-                                "byte_length": len(observation_line),
-                            },
-                            "quality": {
-                                "byte_offset": quality_offset,
-                                "byte_length": len(quality_line),
-                            },
-                        },
-                        sort_keys=True,
-                    )
+        projection = frame.resolution.frame
+        for region, observation, quality in zip(
+            frame.membership.regions, frame.observations, frame.qualities, strict=True
+        ):
+            # As posições são linhas de candidatos; o que se persiste é a identidade global
+            # de cada uma, que é o que o leitor reconstrói (#562).
+            rows = np.asarray(region.associated_indices)
+            positions = np.asarray(projection.global_indices[rows], dtype="<u4")
+            if projection.map_references(rows) != observation.geometry_support:
+                raise RunArtifactError(
+                    f"the geometry support of {observation.spatial_observation_id!r} "
+                    "does not match its region membership"
                 )
-                support_chunks.append(positions.tobytes())
-                support_offset += int(positions.shape[0])
-                observation_lines.append(observation_line)
-                quality_lines.append(quality_line)
-                observation_offset += len(observation_line) + 1
-                quality_offset += len(quality_line) + 1
-        run.write_bytes(_SUPPORT, b"".join(support_chunks))
-        run.write_bytes(_OBSERVATIONS, b"".join(line + b"\n" for line in observation_lines))
-        run.write_bytes(_QUALITY, b"".join(line + b"\n" for line in quality_lines))
-        run.write_text(_OBSERVATION_INDEX, _lines(index_lines))
-        run.write_text(_PROJECTION, _lines(_projection_record(f) for f in outcome.frames))
-        run.write_text(_VISIBILITY, _lines(_visibility_record(f) for f in outcome.frames))
-        if outcome.dense_channels:
-            self._write_dense(run, outcome)
+            record = encode_spatial_observation(observation)
+            del record["geometry_support"]
+            record["support"] = {
+                "offset": self._support_offset,
+                "count": int(positions.shape[0]),
+            }
+            observation_line = json.dumps(record, sort_keys=True).encode("utf-8")
+            quality_line = json.dumps(encode_observation_quality(quality), sort_keys=True).encode(
+                "utf-8"
+            )
+            self._index.write(
+                _line(
+                    {
+                        "spatial_observation_id": str(observation.spatial_observation_id),
+                        "source_observation_id": str(observation.source_observation_id),
+                        "region_id": str(observation.region_id),
+                        "observation": {
+                            "byte_offset": self._observation_offset,
+                            "byte_length": len(observation_line),
+                        },
+                        "quality": {
+                            "byte_offset": self._quality_offset,
+                            "byte_length": len(quality_line),
+                        },
+                    }
+                )
+            )
+            self._support.write(positions.tobytes())
+            self._observations.write(observation_line + b"\n")
+            self._quality.write(quality_line + b"\n")
+            self._support_offset += int(positions.shape[0])
+            self._observation_offset += len(observation_line) + 1
+            self._quality_offset += len(quality_line) + 1
 
-    def _write_dense(self, run: AtomicRunDirectory, outcome: SensorAssociationOutcome) -> None:
+    def _write_frame_dense(self, frame: FrameAssociation) -> None:
         import numpy as np
 
-        blob: list[bytes] = []
-        records: list[str] = []
-        offset = 0
-        for frame in outcome.frames:
-            for channel in outcome.dense_channels:
-                samples = frame.dense_samples[channel.channel_id]
-                sections = (
-                    np.asarray(samples.eligible_indices, dtype="<u4").tobytes(),
-                    np.asarray(samples.sampled, dtype="u1").tobytes(),
-                    np.asarray(samples.cell_rows, dtype="<i4").tobytes(),
-                    np.asarray(samples.cell_cols, dtype="<i4").tobytes(),
-                    np.asarray(samples.weights, dtype="<f4").tobytes(),
+        if self._dense_index is None or self._dense_cells is None:
+            self._dense_index = self._open(_DENSE_INDEX)
+            self._dense_cells = self._open(_DENSE_CELLS)
+        global_indices = frame.resolution.frame.global_indices
+        for channel_id in sorted(frame.dense_samples):
+            samples = frame.dense_samples[channel_id]
+            sections = (
+                np.asarray(global_indices[samples.eligible_indices], dtype="<u4").tobytes(),
+                np.asarray(samples.sampled, dtype="u1").tobytes(),
+                np.asarray(samples.cell_rows, dtype="<i4").tobytes(),
+                np.asarray(samples.cell_cols, dtype="<i4").tobytes(),
+                np.asarray(samples.weights, dtype="<f4").tobytes(),
+            )
+            self._dense_index.write(
+                _line(
+                    {
+                        "source_observation_id": str(frame.source_observation_id),
+                        "channel_id": channel_id,
+                        "provenance": samples.provenance.to_record(),
+                        "terms": int(samples.cell_rows.shape[1]),
+                        "eligible_count": int(samples.eligible_indices.shape[0]),
+                        "byte_offset": self._dense_offset,
+                    }
                 )
-                records.append(
-                    json.dumps(
-                        {
-                            "source_observation_id": str(frame.source_observation_id),
-                            "channel_id": channel.channel_id,
-                            "provenance": samples.provenance.to_record(),
-                            "terms": int(samples.cell_rows.shape[1]),
-                            "eligible_count": int(samples.eligible_indices.shape[0]),
-                            "byte_offset": offset,
-                        },
-                        sort_keys=True,
-                    )
-                )
-                for section in sections:
-                    blob.append(section)
-                    offset += len(section)
-        run.write_bytes(_DENSE_CELLS, b"".join(blob))
-        run.write_text(_DENSE_INDEX, _lines(records))
+            )
+            for section in sections:
+                self._dense_cells.write(section)
+                self._dense_offset += len(section)
 
-    def _write_metrics(
-        self,
-        run: AtomicRunDirectory,
-        outcome: SensorAssociationOutcome,
-        runtime_s: float | None,
-    ) -> None:
-        run.write_text(
-            _DIAGNOSTICS, _lines(frame.diagnostics.to_record() for frame in outcome.frames)
+    def _write_frame_debug(self, frame: FrameAssociation) -> None:
+        level = self._writer.debug_level
+        if level is SensorAssociationDebugLevel.NONE:
+            return
+        write_standard_debug(self._run, frame)
+        if level is SensorAssociationDebugLevel.FULL:
+            self._debug_feature_sources.extend(write_full_debug(self._run, frame))
+
+    def _accumulate(self, frame: FrameAssociation) -> None:
+        self._frame_count += 1
+        self._observation_count += len(frame.observations)
+        self._observations_without_support += sum(
+            1 for observation in frame.observations if not observation.geometry_support
         )
-        run.write_text(_SUMMARY, _json(_summary(outcome)))
-        if runtime_s is not None:
-            run.write_text(_RUNTIME, _json({"runtime_s": runtime_s}))
+        self._failed_frame_count += int(frame.diagnostics.failed)
+        for finding in frame.diagnostics.findings:
+            code = finding.code.value
+            self._finding_counts[code] = self._finding_counts.get(code, 0) + 1
+        resolution = frame.resolution
+        for state, count in resolution.state_counts().items():
+            self._state_counts[state.value] = self._state_counts.get(state.value, 0) + count
+        self._state_counts["visible"] = (
+            self._state_counts.get("visible", 0) + resolution.visible_count
+        )
+        projection = resolution.frame
+        self._timings.append(
+            {
+                "source_observation_id": str(frame.source_observation_id),
+                "candidate_query_seconds": projection.candidates.query_seconds,
+                "projection_seconds": projection.projection_seconds,
+                "candidate_count": projection.candidate_count,
+            }
+        )
+        for channel_id, samples in frame.dense_samples.items():
+            source = _dense_feature_source(samples.provenance)
+            channel = self._dense_sources.setdefault(channel_id, {})
+            key = json.dumps(source, sort_keys=True)
+            entry = channel.setdefault(key, {**source, "frame_count": 0})
+            entry["frame_count"] += 1
+
+    # --- run level -------------------------------------------------------------------
+
+    def _summary(self, outcome: SensorAssociationOutcome) -> dict[str, Any]:
+        return {
+            "frame_count": self._frame_count,
+            "observation_count": self._observation_count,
+            "observations_without_support": self._observations_without_support,
+            "state_counts": dict(self._state_counts),
+            "rejected_frames": [
+                {
+                    "source_observation_id": str(rejected.source_observation_id),
+                    "rejection": rejected.rejection.value,
+                }
+                for rejected in outcome.rejected
+            ],
+        }
 
     def _manifest_record(self, outcome: SensorAssociationOutcome) -> dict[str, Any]:
-        findings: dict[str, int] = {}
-        failed = 0
-        for frame in outcome.frames:
-            failed += int(frame.diagnostics.failed)
-            for finding in frame.diagnostics.findings:
-                findings[finding.code.value] = findings.get(finding.code.value, 0) + 1
         pose = outcome.pose_policy
         tolerances = outcome.tolerances
         return {
-            "run_id": str(self._run_id),
-            "run_index": self._run_index,
-            "sequence_name": self._sequence_name,
+            "run_id": str(self._writer.run_id),
+            "run_index": self._writer.run_index,
+            "sequence_name": self._writer.sequence_name,
             "sequence_artifact_id": str(outcome.sequence_artifact_id),
             "selection_id": outcome.selection_id,
             "geometric_map_id": str(outcome.geometric_map.map_id),
@@ -405,6 +604,10 @@ class SensorAssociationRunWriter:
             else str(outcome.state_estimation_run_id),
             "perception_run_ids": [str(run_id) for run_id in outcome.perception_run_ids],
             "calibration_identity": outcome.calibration_identity,
+            "candidate_policy": {
+                **outcome.candidate_policy.to_record(),
+                "fingerprint": outcome.candidate_policy.fingerprint(),
+            },
             "visibility_policy": {
                 **outcome.occlusion_policy.to_record(),
                 "fingerprint": outcome.occlusion_policy.fingerprint(),
@@ -427,15 +630,25 @@ class SensorAssociationRunWriter:
                 "max_reprojection_p95_px": tolerances.max_reprojection_p95_px,
                 "max_reprojection_invalid_rate": tolerances.max_reprojection_invalid_rate,
             },
-            "dense_channels": _dense_channel_records(outcome),
+            "dense_channels": [
+                {
+                    "channel_id": channel.channel_id,
+                    "interpolation": channel.interpolation.value,
+                    "feature_sources": [
+                        self._dense_sources[channel.channel_id][key]
+                        for key in sorted(self._dense_sources.get(channel.channel_id, {}))
+                    ],
+                }
+                for channel in outcome.dense_channels
+            ],
             "configuration_fingerprint": outcome.configuration_fingerprint,
             "code_version": outcome.code_version,
-            "frame_count": len(outcome.frames),
+            "frame_count": self._frame_count,
             "rejected_frame_count": len(outcome.rejected),
-            "failed_frame_count": failed,
-            "observation_count": sum(len(frame.observations) for frame in outcome.frames),
-            "finding_counts": findings,
-            "debug_level": self._debug_level.value,
+            "failed_frame_count": self._failed_frame_count,
+            "observation_count": self._observation_count,
+            "finding_counts": dict(self._finding_counts),
+            "debug_level": self._writer.debug_level.value,
             "schema_version": SCHEMA_VERSION,
             "created_at": datetime.now(UTC).isoformat(),
         }
@@ -655,48 +868,6 @@ class SensorAssociationRunReader:
         return self._dense_index
 
 
-def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's association runs.
-
-    Scans the run directories, never the registry, so an interrupted or corrupted run is not
-    counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
-def rebuild_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
-def _valid_run_index(run_dir: Path) -> int | None:
-    try:
-        reader = SensorAssociationRunReader(run_dir)
-    except RunArtifactError:
-        return None
-    return None if reader.verify_integrity() else reader.manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = SensorAssociationRunReader(run_dir).manifest
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
-
-
 def _load_manifest(run_dir: Path) -> SensorAssociationRunManifest:
     manifest_path = run_dir / _MANIFEST
     if not manifest_path.is_file():
@@ -717,6 +888,7 @@ def _load_manifest(run_dir: Path) -> SensorAssociationRunManifest:
         state_estimation_run_id=raw["state_estimation_run_id"],
         perception_run_ids=tuple(raw["perception_run_ids"]),
         calibration_identity=raw["calibration_identity"],
+        candidate_policy=dict(raw["candidate_policy"]),
         visibility_policy=dict(raw["visibility_policy"]),
         membership_policy_id=raw["membership_policy_id"],
         definitions=dict(raw["definitions"]),
@@ -766,15 +938,43 @@ def _array(typecode: str, data: bytes) -> array[Any]:
     return values
 
 
+def _line(record: Mapping[str, Any]) -> bytes:
+    """Encode one JSONL record, with its newline, exactly as a batch write would."""
+    return json.dumps(record, sort_keys=True).encode("utf-8") + b"\n"
+
+
+def _dense_feature_source(provenance: Any) -> dict[str, Any]:
+    """The feature source one dense channel sampled in a frame, as JSON primitives."""
+    enhancement = provenance.enhancement
+    return {
+        "source_artifact_id": provenance.source_artifact_id,
+        "embedding_space_id": provenance.embedding_space_id,
+        "coordinate_transform_id": provenance.coordinate_transform_id,
+        "sampling_fingerprint": provenance.sampling_fingerprint,
+        "extractor": {
+            "backend_id": provenance.extractor.backend_id,
+            "provider": provenance.extractor.provider,
+            "model": provenance.extractor.model,
+            "version": provenance.extractor.version,
+            "configuration_fingerprint": provenance.extractor.configuration_fingerprint,
+        },
+        "enhancement": None
+        if enhancement is None
+        else {
+            "backend_id": enhancement.backend.backend_id,
+            "model": enhancement.backend.model,
+            "version": enhancement.backend.version,
+            "configuration_fingerprint": enhancement.backend.configuration_fingerprint,
+            "source_embedding_space_id": enhancement.source_embedding_space_id,
+            "output_embedding_space_id": enhancement.output_embedding_space_id,
+            "input_grid_size": list(enhancement.input_grid_size),
+            "output_grid_size": list(enhancement.output_grid_size),
+        },
+    }
+
+
 def _json(record: Mapping[str, Any]) -> str:
     return json.dumps(record, indent=2, sort_keys=True) + "\n"
-
-
-def _lines(records: Any) -> str:
-    return "".join(
-        (record if isinstance(record, str) else json.dumps(record, sort_keys=True)) + "\n"
-        for record in records
-    )
 
 
 def _projection_record(frame: FrameAssociation) -> dict[str, Any]:
@@ -784,7 +984,11 @@ def _projection_record(frame: FrameAssociation) -> dict[str, Any]:
         "source_observation_id": str(projection.source_observation_id),
         "image_timestamp": projection.image_timestamp.to_record(),
         "map_id": str(projection.map_id),
-        "point_count": len(projection.projectable),
+        # Sem um `point_count` só: ele significaria o tamanho do mapa no schema 0.1.0 e a
+        # população avaliada no 0.2.0, e um leitor não teria como saber qual. Os dois conceitos
+        # ficam nomeados dentro de `candidates` (#564).
+        "candidates": projection.candidates.to_record(),
+        "stage_counts": {stage.value: count for stage, count in projection.stage_counts().items()},
         "calibration_ref": encode_calibration_ref(projection.calibration_ref),
         "camera": {
             "calibration_id": str(projection.camera.calibration_id),
@@ -858,74 +1062,6 @@ def _visibility_record(frame: FrameAssociation) -> dict[str, Any]:
     }
 
 
-def _summary(outcome: SensorAssociationOutcome) -> dict[str, Any]:
-    state_counts: dict[str, int] = {}
-    empty_support = 0
-    for frame in outcome.frames:
-        for state, count in frame.resolution.state_counts().items():
-            state_counts[state.value] = state_counts.get(state.value, 0) + count
-        state_counts["visible"] = state_counts.get("visible", 0) + frame.resolution.visible_count
-        empty_support += sum(1 for o in frame.observations if not o.geometry_support)
-    return {
-        "frame_count": len(outcome.frames),
-        "observation_count": sum(len(frame.observations) for frame in outcome.frames),
-        "observations_without_support": empty_support,
-        "state_counts": state_counts,
-        "rejected_frames": [
-            {
-                "source_observation_id": str(rejected.source_observation_id),
-                "rejection": rejected.rejection.value,
-            }
-            for rejected in outcome.rejected
-        ],
-    }
-
-
-def _dense_channel_records(outcome: SensorAssociationOutcome) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for channel in outcome.dense_channels:
-        sources: dict[str, dict[str, Any]] = {}
-        for frame in outcome.frames:
-            provenance = frame.dense_samples[channel.channel_id].provenance
-            enhancement = provenance.enhancement
-            source: dict[str, Any] = {
-                "source_artifact_id": provenance.source_artifact_id,
-                "embedding_space_id": provenance.embedding_space_id,
-                "coordinate_transform_id": provenance.coordinate_transform_id,
-                "sampling_fingerprint": provenance.sampling_fingerprint,
-                "extractor": {
-                    "backend_id": provenance.extractor.backend_id,
-                    "provider": provenance.extractor.provider,
-                    "model": provenance.extractor.model,
-                    "version": provenance.extractor.version,
-                    "configuration_fingerprint": provenance.extractor.configuration_fingerprint,
-                },
-                "enhancement": None
-                if enhancement is None
-                else {
-                    "backend_id": enhancement.backend.backend_id,
-                    "model": enhancement.backend.model,
-                    "version": enhancement.backend.version,
-                    "configuration_fingerprint": enhancement.backend.configuration_fingerprint,
-                    "source_embedding_space_id": enhancement.source_embedding_space_id,
-                    "output_embedding_space_id": enhancement.output_embedding_space_id,
-                    "input_grid_size": list(enhancement.input_grid_size),
-                    "output_grid_size": list(enhancement.output_grid_size),
-                },
-            }
-            key = json.dumps(source, sort_keys=True)
-            entry = sources.setdefault(key, {**source, "frame_count": 0})
-            entry["frame_count"] += 1
-        records.append(
-            {
-                "channel_id": channel.channel_id,
-                "interpolation": channel.interpolation.value,
-                "feature_sources": [sources[key] for key in sorted(sources)],
-            }
-        )
-    return records
-
-
 def _render_readme(
     run_id: SensorAssociationRunId, run_index: int, outcome: SensorAssociationOutcome
 ) -> str:
@@ -939,7 +1075,7 @@ def _render_readme(
         f"- Geometric map: `{outcome.geometric_map.map_id}`\n"
         f"- Trajectory: `{outcome.trajectory_id}`\n"
         f"- Dense feature channels: {channels}\n"
-        f"- Frames: {len(outcome.frames)} associated, {len(outcome.rejected)} rejected\n"
+        f"- Frames: {outcome.frame_count} associated, {len(outcome.rejected)} rejected\n"
         "\n"
         "Contractual data is in `outputs/` and `metrics/`; `debug/` is human evidence and no "
         "downstream stage may depend on it.\n"

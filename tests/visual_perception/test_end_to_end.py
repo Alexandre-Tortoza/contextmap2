@@ -181,8 +181,9 @@ def test_failing_region_discovery_still_preserves_independent_dense_feature_evid
 
 def test_end_to_end_persists_reopens_and_groups_via_multi_run_evidence_set(tmp_path: Path) -> None:
     def _persist_run(run_index: int, run_id: str, observation_ids: list[str]) -> Path:
+        run_dir = tmp_path / f"run-{run_index:04d}"
         writer = PerceptionRunWriter(
-            workspace_root=tmp_path,
+            output_dir=run_dir,
             sequence_name="corridor-02",
             run_id=PerceptionRunId(run_id),
             run_index=run_index,
@@ -193,26 +194,18 @@ def test_end_to_end_persists_reopens_and_groups_via_multi_run_evidence_set(tmp_p
             ),
             pipeline_preset=CANONICAL_PRESET_V1,
             configuration_digest="sha256:test",
-            selection_label="frames",
-            profile_label="fake",
         )
         for observation_id in observation_ids:
             outcomes, result = _process_observation(observation_id, run_id)
             writer.add_result(result)
             writer.add_stage_outcomes(outcomes)
         writer.finalize()
-        return (
-            tmp_path
-            / "runs"
-            / "visual-perception"
-            / "corridor-02"
-            / f"run-{run_index:04d}__frames__fake"
-        )
+        return run_dir
 
     run_0001_dir = _persist_run(1, "run-0001", ["frame-0100", "frame-0124"])
     run_0002_dir = _persist_run(2, "run-0002", ["frame-0124"])
 
-    # Isolated reopening, no registry required.
+    # Reabertura isolada, direto no diretório que o chamador escolheu.
     reader = PerceptionRunReader(run_0001_dir)
     assert reader.verify_integrity() == []
     reopened_result = reader.result(SourceObservationId("frame-0124"))

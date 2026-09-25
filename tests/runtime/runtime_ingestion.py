@@ -7,6 +7,7 @@ end to end (down to a real ``SequenceArtifact`` on disk) without ROS or a record
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -111,17 +112,20 @@ class FakeAdapter:
         self._error = error
         self._on_observation = on_observation
         self.read_calls = 0
+        self._read_observation_ids: list[str] = []
 
     def capabilities(self) -> SourceAdapterCapabilities:
         return self._provides
 
     def read_observations(self) -> Iterator[SourceObservation]:
         self.read_calls += 1
+        self._read_observation_ids = []
         for index, observation in enumerate(self._observations):
             if self._fail_after is not None and index == self._fail_after:
                 raise self._error or RuntimeError("bag corrupt")
             if self._on_observation is not None:
                 self._on_observation(index)
+            self._read_observation_ids.append(str(observation.observation_id))
             yield observation
 
     def read_calibration(self) -> CalibrationSet | None:
@@ -129,6 +133,21 @@ class FakeAdapter:
 
     def warnings(self) -> Sequence[SourceAdapterWarning]:
         return self._warnings
+
+    def content_hash(self) -> str | None:
+        """Return a hash of exactly what was yielded by the most recent read.
+
+        A minimal stand-in for the real, windowed adapters'
+        incrementally-accumulated ``content_hash()`` (issue #506): distinct
+        whenever a different subset of ``self._observations`` was actually
+        read (e.g. because a window was configured upstream and a real
+        adapter would have filtered accordingly), and ``None`` before any
+        read.
+        """
+        if not self._read_observation_ids:
+            return None
+        digest = hashlib.sha256("|".join(self._read_observation_ids).encode()).hexdigest()
+        return f"sha256:{digest}"
 
 
 def factory(
@@ -179,7 +198,7 @@ def request(
         "source_type": source_type,
         "source_path": str(source),
         "sequence_name": name,
-        "workspace": str(tmp_path / "ws"),
+        "output_dir": str(tmp_path / "ws" / "sequences" / name / "artifact-1"),
         "topics": topics or SourceTopicMapping(rgb="/camera", imu="/imu"),
         "synchronization": SynchronizationConfig(
             reference_modality=reference, tolerance_nanoseconds=tolerance_ns

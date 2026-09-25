@@ -8,9 +8,27 @@ backend-specific branch and no scientific rule: configuration is resolved by
 :func:`~contextmap.runtime.pipeline.run_plan`. Every flag is translated into a
 configuration override, so the CLI never becomes a second place that decides what runs.
 
-Stage executors are not bundled: the executors of the real capabilities are supplied by
-the caller of :func:`main` (tests, or a future entry point). Without one, a real run is
-blocked by preflight with an explicit message and nothing runs; a dry run needs none.
+Stage executors: for every command that runs or previews a plan, the executors that
+:func:`~contextmap.runtime.composition.compose_executors` can build from the resolved
+configuration (``state_estimation``, ``geometric_mapping``, ``sensor_association``,
+``semantic_fusion``, ``entity_resolution`` and ``spatial_relations`` unconditionally;
+``visual_perception`` once a runtime is available for every one of its selected backends
+that has no bundled loader -- SAM2, SAM3, Qwen, Gemini and Florence-2 today) are composed
+automatically, so the installed ``contextmap`` binary executes them with **no Python
+wrapper**: a runtime provider can be supplied either through ``main(providers=...)`` (a
+Python embedder only) or, for the installed binary itself, declared in configuration as a
+``resources.providers`` target (a ``"module:attribute"`` string, resolved by
+:func:`~contextmap.runtime.composition.resolve_provider`; see ``docs/composition.md`` and
+``docs/configuration.md``). The same mechanism covers any other optional component that
+needs a model runtime or client the repository does not load itself (for example
+``entity_resolution.appearance``), keyed by component identity (``"<capability>.<slot>"``).
+Executors supplied by the caller of :func:`main` (tests, or a future embedder) are merged
+on top and always win, so an explicit injection can override or extend what was composed --
+including ``ingestion``, whose
+:class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor` needs a concrete
+request that is never part of a configuration (see ``contextmap ingest``).
+``point_representation`` has no real executor yet: without an injection, a real run of that
+stage is blocked by preflight with an explicit message; a dry run needs none.
 
 Exit codes: ``0`` success, ``1`` the request was understood but cannot be satisfied
 (invalid configuration, blocked preflight, failed stage, failed integrity check), ``2``
@@ -31,7 +49,7 @@ from typing import Any, TextIO
 from contextmap import __version__
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import CANONICAL_PROFILE_ID
-from contextmap.runtime.composition import compose
+from contextmap.runtime.composition import RuntimeProvider, compose, compose_executors
 from contextmap.runtime.config import (
     DEBUG_LEVELS,
     ConfigProblem,
@@ -68,10 +86,10 @@ from contextmap.runtime.pipeline import (
 )
 from contextmap.runtime.reuse import FileArtifactStore, ReusePolicy
 from contextmap.runtime.runs import (
-    RUNS_DIRECTORY,
     RunJournal,
     RunSummary,
     check_resumable,
+    dataset_directory,
     read_run,
     resume_plan,
 )
@@ -109,6 +127,7 @@ class _Session:
 
     args: argparse.Namespace
     executors: Mapping[str, StageExecutor]
+    providers: Mapping[str, RuntimeProvider]
     environ: Mapping[str, str] | None
     module_available: Callable[[str], bool] | None
     verifier: Callable[[ArtifactRef], bool] | None
@@ -153,6 +172,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     executors: Mapping[str, StageExecutor] | None = None,
+    providers: Mapping[str, RuntimeProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     verifier: Callable[[ArtifactRef], bool] | None = None,
@@ -164,8 +184,25 @@ def main(
 
     Args:
         argv: Arguments after the program name; defaults to ``sys.argv[1:]``.
-        executors: One executor per stage this process can execute. There is no default:
-            a real run without them is blocked by preflight.
+        executors: Executors to use in addition to, and in preference over, the ones
+            :func:`~contextmap.runtime.composition.compose_executors` builds automatically
+            from the resolved configuration for ``run``, ``stage`` and their dry runs. Pass
+            an entry here to override a composed stage (for example with a test double) or
+            to supply one composition cannot build on its own, such as ``ingestion``'s
+            :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`. A stage
+            with neither a composed nor a supplied executor is blocked by preflight.
+        providers: Model runtimes or clients for a backend with no bundled loader (SAM2, SAM3,
+            Qwen, Gemini, Florence-2 and every other backend built through
+            :meth:`~contextmap.runtime.composition._Context.runtime`, for example
+            ``entity_resolution.appearance`` or ``visual_perception``'s four backends), keyed
+            by component identity (``"<capability>.<slot>"``) in the exact shape
+            :func:`~contextmap.runtime.composition.compose_executors` already expects. This is
+            the Python-embedding path; the installed binary instead declares a
+            ``resources.providers`` target in configuration for the same component (see the
+            module docstring) -- an entry given here for a component that also has one
+            declared still wins, and that override is recorded on the run's ``run_planned``
+            event. Without either, a component that needs one composes as absent, exactly
+            like an incomplete selection, never with a substitute.
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
@@ -188,6 +225,7 @@ def main(
         session = _Session(
             args=args,
             executors=executors or {},
+            providers=providers or {},
             environ=environ,
             module_available=module_available,
             verifier=verifier,
@@ -328,11 +366,17 @@ def _config_options() -> argparse.ArgumentParser:
 
 def _ingest_options() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
+    # `ingest` não tem workspace nem run: o destino é o diretório final do artifact (--output-dir).
+    common.set_defaults(workspace=None)
     group = common.add_argument_group("configuration")
     group.add_argument("-c", "--config", action="append", metavar="FILE", help="configuration file")
     group.add_argument("--profile", default=CANONICAL_PROFILE_ID, metavar="ID", help="base profile")
     group.add_argument("--set", action="append", metavar="PATH=VALUE", help="override one setting")
-    group.add_argument("--workspace", metavar="DIR", help="workspace that receives the sequence")
+    group.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        help="final directory of the sequence artifact (must not exist)",
+    )
     source = common.add_argument_group("source and request")
     source.add_argument("--source", required=True, metavar="PATH", help="the recorded source")
     source.add_argument(
@@ -514,10 +558,50 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
     reuse = _reuse_policy(session)
+    provider_overrides: list[str] = []
+    executors = _executors_for(session, effective, provider_overrides)
     if args.dry_run:
-        return _dry_run(session, effective, plan, execution, resolved, reuse)
+        return _dry_run(session, effective, plan, execution, resolved, reuse, executors)
     assert workspace is not None  # exigido acima
-    return _execute(session, effective, execution, Path(workspace), reuse)
+    _dataset_directory(effective, workspace)  # recusa cedo um run sem dataset
+    return _execute(
+        session, effective, execution, Path(workspace), reuse, executors, provider_overrides
+    )
+
+
+def _executors_for(
+    session: _Session,
+    effective: EffectiveConfig,
+    provider_overrides: list[str] | None = None,
+) -> Mapping[str, StageExecutor]:
+    """Merge the executors composed from ``effective`` with the ones the caller injected.
+
+    ``compose_executors`` builds every stage it genuinely can (today: ``state_estimation``,
+    ``geometric_mapping``, ``sensor_association``, ``semantic_fusion`` and, once a runtime
+    provider is available for every backend that needs one -- explicitly through
+    ``session.providers``, or declared as a ``resources.providers`` target in the resolved
+    configuration itself -- ``visual_perception``) from the resolved configuration alone, so
+    the installed CLI runs them with no Python wrapper; a stage it cannot build for any
+    reason is simply absent, never raised (see its own docstring). Whatever the caller of
+    :func:`main` passed in ``session.executors`` (tests, a stage composition cannot build
+    such as ``ingestion``, or an explicit override) is layered on top and always wins.
+
+    Args:
+        session: The current CLI session.
+        effective: The resolved configuration.
+        provider_overrides: When given, receives (by mutation) the component identities
+            where ``session.providers`` won over a ``resources.providers`` target the
+            configuration also declared -- so ``_run`` can pass it into ``run_plan`` for a
+            real run to record it, exactly as it happened, in the run's own trail.
+    """
+    composed = compose_executors(
+        effective,
+        providers=session.providers,
+        environ=session.environ,
+        module_available=session.module_available,
+        on_provider_override=None if provider_overrides is None else provider_overrides.append,
+    )
+    return {**composed, **session.executors}
 
 
 def _dry_run(
@@ -527,13 +611,14 @@ def _dry_run(
     execution: ExecutionPlan,
     resolved: ResolvedSelections | None,
     reuse: ReusePolicy | None,
+    executors: Mapping[str, StageExecutor],
 ) -> int:
     """Show what the configuration resolves to, without loading, running or writing anything."""
-    # Um dry-run não confere executores: mostra o que a configuração resolve.
+    # Um dry-run não confere executores no preflight: mostra o que a configuração resolve.
     report = preflight(
         execution, environ=session.environ, module_available=session.module_available, reuse=reuse
     )
-    missing = [s.stage_id for s in execution.stages if s.stage_id not in session.executors]
+    missing = [s.stage_id for s in execution.stages if s.stage_id not in executors]
     predicted = {} if reuse is None else predict_reuse(execution, reuse)
     document = {
         "effective_config": effective.to_document(),
@@ -548,7 +633,7 @@ def _dry_run(
         "selections": None if resolved is None else resolved.to_document(),
         "reuse": {stage: decision.to_document() for stage, decision in predicted.items()},
         "preflight": {"ok": report.ok, "problems": _problem_documents(report.problems)},
-        "executors": {"registered": sorted(session.executors), "missing": missing},
+        "executors": {"registered": sorted(executors), "missing": missing},
     }
     lines = [
         *_config_lines(effective),
@@ -581,6 +666,8 @@ def _execute(
     execution: ExecutionPlan,
     workspace: Path,
     reuse: ReusePolicy | None,
+    executors: Mapping[str, StageExecutor],
+    provider_overrides: Sequence[str] = (),
 ) -> int:
     """Run for real, journaling every step of the lifecycle into a fresh run directory."""
     args = session.args
@@ -590,7 +677,7 @@ def _execute(
             raise _UsageError(
                 "--resume reuses the completed stages: pass --reuse-index and --code-identity"
             )
-        previous = _previous_run(workspace, args.resume)
+        previous = _previous_run(_dataset_directory(effective, str(workspace)), args.resume)
         check_resumable(read_run(previous), execution)  # recusa antes de criar um run novo
     secrets = resolve_secrets(effective.config, environ=session.environ)
     journal = RunJournal.create(workspace, effective, execution, code_identity=args.code_identity)
@@ -599,19 +686,21 @@ def _execute(
             record = resume_plan(
                 previous,
                 execution,
-                session.executors,
+                executors,
                 reuse=reuse,
                 environ=session.environ,
                 module_available=session.module_available,
+                provider_overrides=provider_overrides,
                 journal=journal,
                 redact=secrets.redact,
             )
         else:
             record = run_plan(
                 execution,
-                session.executors,
+                executors,
                 environ=session.environ,
                 module_available=session.module_available,
+                provider_overrides=provider_overrides,
                 reuse=reuse,
                 journal=journal,
                 redact=secrets.redact,
@@ -667,12 +756,20 @@ def _reuse_policy(session: _Session) -> ReusePolicy | None:
     )
 
 
-def _previous_run(workspace: Path, reference: str) -> Path:
-    """Resolve ``--resume`` as a run directory, or as a run id under the workspace."""
+def _dataset_directory(effective: EffectiveConfig, workspace: str) -> Path:
+    """Resolve ``<workspace>/<dataset>``: a real run needs ``inputs.sequence`` to be placed."""
+    try:
+        return dataset_directory(workspace, effective.config.inputs.sequence)
+    except ValueError as error:
+        raise _UsageError(str(error)) from error
+
+
+def _previous_run(datasets: Path, reference: str) -> Path:
+    """Resolve ``--resume`` as a run directory, or as a run id under the dataset directory."""
     candidate = Path(reference)
     if candidate.is_dir():
         return candidate
-    under = workspace / RUNS_DIRECTORY / reference
+    under = datasets / reference
     if under.is_dir():
         return under
     raise _Failure(f"no run record at {candidate} or {under}")
@@ -725,11 +822,9 @@ def _ingest(session: _Session) -> int:
     """Ingest a recorded source through the public ingestion service."""
     args = session.args
     effective = _effective(args)
-    workspace = effective.config.resources.workspace
-    if workspace is None:
-        raise _UsageError(
-            "ingest publishes a sequence: pass --workspace DIR (or resources.workspace)"
-        )
+    output_dir = args.output_dir
+    if output_dir is None:
+        raise _UsageError("ingest publishes a sequence artifact: pass --output-dir DIR")
     adapter = effective.config.components.get("ingestion.source_adapter")
     if adapter is None or adapter.backend is None:
         raise _UsageError(
@@ -755,7 +850,7 @@ def _ingest(session: _Session) -> int:
     }
     try:
         request = IngestionRequest.from_document(
-            document, workspace=workspace, source_type=adapter.backend
+            document, output_dir=output_dir, source_type=adapter.backend
         )
     except ValueError as error:
         raise _Failure(str(error)) from error
@@ -1041,7 +1136,10 @@ def _config_lines(effective: EffectiveConfig) -> list[str]:
         f"  resources: device={config.resources.device or '-'}, "
         f"workspace={config.resources.workspace or '-'}"
     )
-    lines.append(f"  policies: debug_level={config.policies.debug_level}")
+    lines.append(
+        f"  policies: debug_level={config.policies.debug_level}, "
+        f"trajectory_mode={config.policies.trajectory_mode}"
+    )
     return lines
 
 

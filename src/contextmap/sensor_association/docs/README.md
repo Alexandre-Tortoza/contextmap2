@@ -35,7 +35,7 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 - **Amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos) ([`dense_sampling.md`](dense_sampling.md)).
 - **Qualidade da observação**: o contrato `ObservationQuality` e a derivação de suas medidas ([`quality.md`](quality.md)).
 - **Diagnósticos** de calibração, reprojeção e alinhamento temporal, com achados explícitos, referência confiável e varredura de deslocamento temporal ([`diagnostics.md`](diagnostics.md)).
-- **Serviço e artifact de run**: `SensorAssociationService`, canais de features densas distintos e o `SensorAssociationRunArtifact` imutável, com tabelas colunares compactas, linhagem e evidência de depuração ([`artifact.md`](artifact.md)).
+- **Serviço e artifact de run**: `SensorAssociationService`, que projeta os candidatos de cada frame e o entrega a um `FrameSink` antes de soltá-lo, canais de features densas distintos e o `SensorAssociationRunArtifact` imutável, escrito frame a frame, com tabelas colunares compactas, linhagem e evidência de depuração ([`artifact.md`](artifact.md)).
 
 A **validação** lê o artifact pela API pública e produz relatórios estratificados
 de alcance, visibilidade, densidade de suporte, borda da imagem, ângulo de vista,
@@ -51,14 +51,14 @@ tempo, reprojeção e caminhos de features. Está implementada em
 - `ProjectionSummary` — fatos da projeção no nível do frame.
 - `VisualFeatureRef`, `SemanticClaimRef` — referências à evidência visual do mesmo resultado, nunca cópias.
 - `CalibrationRef`, `PoseRef`, `AssociationProvenance` — qual calibração, qual pose e qual execução produziram a observação.
-- `SensorAssociationService`, `SensorAssociationRequest`, `SensorAssociationOutcome`, `AssociationFrameInput`, `DenseChannel`, `FrameAssociation`, `OcclusionPolicy`, `DiagnosticTolerances`, `InterpolationPolicy`, `TrustedCorrespondences` — a execução da capability (entradas e resultado).
-- `SensorAssociationRunWriter`, `SensorAssociationRunReader`, `SensorAssociationRunManifest`, `SensorAssociationRunId`, `SensorAssociationDebugLevel`, `allocate_run_index()`, `rebuild_run_registry()` — o artifact de run.
+- `SensorAssociationService`, `SensorAssociationRequest`, `SensorAssociationOutcome`, `AssociationFrameInput`, `DenseChannel`, `FrameAssociation`, `FrameSink`, `CandidateGeometryPolicy`, `OcclusionPolicy`, `DiagnosticTolerances`, `InterpolationPolicy`, `TrustedCorrespondences` — a execução da capability (entradas, sink por frame e resultado).
+- `SensorAssociationRunWriter`, `SensorAssociationRunReader`, `SensorAssociationRunManifest`, `SensorAssociationRunId`, `SensorAssociationDebugLevel` — o artifact de run.
 - `ObservationQuality`, `ValueSummary`, `ReprojectionStatistics`, `QualityComponent` — medidas de qualidade da observação, separadas e tipadas, com ausência explícita; **não** são confiança semântica.
 - `CameraProjection`, `PixelProjection`, `CameraIdentity`, `camera_projection_for()` — projeção 3D → pixel e raio inverso, com domínio de visão explícito e a identidade da calibração em todo resultado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
-A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`, `FrameDiagnostics`) são internos à capability: os consumidores externos usam o serviço de associação e leem o artifact, não os passos.
+A cadeia de projeção e os passos intermediários (`CandidateGeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`, `FrameDiagnostics`) são internos à capability: os consumidores externos usam o serviço de associação e leem o artifact, não os passos.
 
 ## Módulos consumidos
 

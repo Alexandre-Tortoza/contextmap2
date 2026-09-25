@@ -6,8 +6,10 @@ Um run persiste as representações que um encoder produziu sobre um mapa geomé
 
 ## Layout
 
+O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/point_representation/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
+
 ```text
-workspace/runs/point-representation/<sequence>/run-000N__<selection>__<backend>/
+<output_dir>/
 ├── manifest.json                       # identidade, linhagem e inventário (tamanho + sha256)
 ├── README.md
 ├── outputs/
@@ -42,11 +44,11 @@ Os vetores ficam em um arquivo binário de linhas de tamanho fixo (`dimension ×
 
 Cada suporte que não produziu representação vai para `failed-supports.jsonl` com o suporte, o motivo e o detalhe do encoder; um run só de falhas é um run válido e explícito. O escritor recebe as `RepresentationMetrics` do serviço em `finalize` e **recusa** persistir um run cujos resultados não batem com elas, então um fluxo interrompido nunca é gravado como completo. Um centro só pode ter um resultado, e uma representação de outro mapa, espaço ou encoder é rejeitada.
 
-## Integridade, imutabilidade e índice
+## Integridade, imutabilidade e identidade
 
 - O inventário detecta arquivo ausente, alterado ou de tamanho diferente (`verify_integrity`); um schema desconhecido é recusado.
-- A escrita usa `shared.AtomicRunDirectory`: um run interrompido nunca parece finalizado, e um run finalizado nunca é sobrescrito (reexecutar gera um novo).
-- `allocate_run_index` conta só runs válidos no disco (não o registry), e `runs.json` é reconstruível por `rebuild_run_registry`; um run corrompido não entra.
+- A escrita usa `shared.AtomicRunDirectory(output_dir)`: um run interrompido nunca parece finalizado e não deixa nada para trás, e um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, e reexecutar grava em outro diretório.
+- `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.
 
 ## Níveis de debug
 

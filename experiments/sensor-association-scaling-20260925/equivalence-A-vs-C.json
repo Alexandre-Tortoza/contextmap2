@@ -1,0 +1,209 @@
+{
+ "baseline": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms/arm-A-fullmap-batch",
+ "candidate_policies": {
+  "baseline": "absent (0.1.0 schema: whole map)",
+  "optimized": {
+   "block_points": 1000000,
+   "fingerprint": "sha256:b90664ac797e7b5feef4a6cb641cccb2c73f7f58511e3230e1b9b063d397135d",
+   "max_range_m": 20.0,
+   "policy_id": "camera-range-candidates-v1"
+  }
+ },
+ "findings": [
+  {
+   "baseline": 24605721,
+   "frame": "camera_1_image_raw-000168",
+   "kind": "declared",
+   "optimized": 3521892,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 24535858,
+   "frame": "camera_1_image_raw-000174",
+   "kind": "declared",
+   "optimized": 3491782,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 24443333,
+   "frame": "camera_1_image_raw-000180",
+   "kind": "declared",
+   "optimized": 3463742,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 24354919,
+   "frame": "camera_1_image_raw-000186",
+   "kind": "declared",
+   "optimized": 3433737,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 24255864,
+   "frame": "camera_1_image_raw-000192",
+   "kind": "declared",
+   "optimized": 3390531,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 24151738,
+   "frame": "camera_1_image_raw-000198",
+   "kind": "declared",
+   "optimized": 3344081,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 23686638,
+   "frame": "camera_1_image_raw-000216",
+   "kind": "declared",
+   "optimized": 3044891,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 23468008,
+   "frame": "camera_1_image_raw-000222",
+   "kind": "declared",
+   "optimized": 2904588,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 23384608,
+   "frame": "camera_1_image_raw-000228",
+   "kind": "declared",
+   "optimized": 2841870,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 23382223,
+   "frame": "camera_1_image_raw-000234",
+   "kind": "declared",
+   "optimized": 2839955,
+   "what": "occluded count differs"
+  },
+  {
+   "baseline": 23401139,
+   "frame": "camera_1_image_raw-000252",
+   "kind": "declared",
+   "optimized": 2855688,
+   "what": "occluded count differs"
+  }
+ ],
+ "frames": {
+  "baseline": 11,
+  "optimized": 11,
+  "rejected_baseline": 4,
+  "rejected_optimized": 4
+ },
+ "geometry_support_identical": true,
+ "observations": {
+  "baseline": 307,
+  "optimized": 307
+ },
+ "optimized": "/tmp/claude-1000/-home-alexmrtr-Projects-contextmap2/b61c1545-57bd-4b2c-a5f6-f69d86652d2b/scratchpad/arms2/arm-C",
+ "per_frame": {
+  "camera_1_image_raw-000168": {
+   "baseline_associated": 3822,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 6231,
+   "optimized_associated": 3822,
+   "optimized_candidate_fraction": 0.2054749284017581,
+   "optimized_evaluated": 5471837,
+   "optimized_visible": 6231
+  },
+  "camera_1_image_raw-000174": {
+   "baseline_associated": 4118,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 7160,
+   "optimized_associated": 4118,
+   "optimized_candidate_fraction": 0.2068890751186069,
+   "optimized_evaluated": 5509496,
+   "optimized_visible": 7160
+  },
+  "camera_1_image_raw-000180": {
+   "baseline_associated": 5197,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 6732,
+   "optimized_associated": 5197,
+   "optimized_candidate_fraction": 0.20924035360915333,
+   "optimized_evaluated": 5572111,
+   "optimized_visible": 6732
+  },
+  "camera_1_image_raw-000186": {
+   "baseline_associated": 5329,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 7514,
+   "optimized_associated": 5329,
+   "optimized_candidate_fraction": 0.21136613617482983,
+   "optimized_evaluated": 5628721,
+   "optimized_visible": 7514
+  },
+  "camera_1_image_raw-000192": {
+   "baseline_associated": 5295,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 6657,
+   "optimized_associated": 5295,
+   "optimized_candidate_fraction": 0.21334257697644174,
+   "optimized_evaluated": 5681354,
+   "optimized_visible": 6657
+  },
+  "camera_1_image_raw-000198": {
+   "baseline_associated": 5206,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 8370,
+   "optimized_associated": 5206,
+   "optimized_candidate_fraction": 0.2153304333919022,
+   "optimized_evaluated": 5734291,
+   "optimized_visible": 8370
+  },
+  "camera_1_image_raw-000216": {
+   "baseline_associated": 36310,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 37631,
+   "optimized_associated": 36310,
+   "optimized_candidate_fraction": 0.22099854852722997,
+   "optimized_evaluated": 5885234,
+   "optimized_visible": 37631
+  },
+  "camera_1_image_raw-000222": {
+   "baseline_associated": 29150,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 30382,
+   "optimized_associated": 29150,
+   "optimized_candidate_fraction": 0.22347618734869854,
+   "optimized_evaluated": 5951214,
+   "optimized_visible": 30382
+  },
+  "camera_1_image_raw-000228": {
+   "baseline_associated": 25300,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 28472,
+   "optimized_associated": 25300,
+   "optimized_candidate_fraction": 0.22402102005043673,
+   "optimized_evaluated": 5965723,
+   "optimized_visible": 28472
+  },
+  "camera_1_image_raw-000234": {
+   "baseline_associated": 26858,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 30299,
+   "optimized_associated": 26858,
+   "optimized_candidate_fraction": 0.22403483895141127,
+   "optimized_evaluated": 5966091,
+   "optimized_visible": 30299
+  },
+  "camera_1_image_raw-000252": {
+   "baseline_associated": 25634,
+   "baseline_evaluated": 26630193,
+   "baseline_visible": 27710,
+   "optimized_associated": 25634,
+   "optimized_candidate_fraction": 0.22395489210311018,
+   "optimized_evaluated": 5963962,
+   "optimized_visible": 27710
+  }
+ },
+ "schema_versions": {
+  "baseline": "0.1.0",
+  "optimized": "0.2.0"
+ },
+ "verdict": "declared-difference"
+}

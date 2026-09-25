@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory as fake_factory
 from runtime_worlds import World
 
@@ -126,6 +127,181 @@ class TestDryRun:
         assert code == 0
         assert _json(out)["executors"]["missing"]
 
+    def test_the_installed_entrypoint_composes_real_executors_with_no_python_injection(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #1 of the PR #387 review, reproduced exactly: no ``executors=`` at all.
+
+        ``main()`` used to default to ``executors=executors or {}``, so every capability-backed
+        stage was unconditionally reported as missing an executor -- the installed
+        ``contextmap`` binary could never run the DAG without a Python wrapper injecting
+        executors by hand. With ``compose_executors`` wired into the CLI, the stages a
+        configuration alone can build (``state_estimation``, ``geometric_mapping``,
+        ``sensor_association``, ``semantic_fusion``) are no longer missing; ``ingestion`` (needs
+        a concrete ``IngestionRequest``, not part of any configuration) and
+        ``visual_perception`` (no real executor yet) honestly remain so.
+        """
+        code, out, err = cli(
+            "run", "-c", str(_config(tmp_path)), "--stage", "semantic_fusion", "--dry-run", "--json"
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert set(executors["missing"]) == {"ingestion", "visual_perception"}
+        assert {
+            "state_estimation",
+            "geometric_mapping",
+            "sensor_association",
+            "semantic_fusion",
+        }.issubset(executors["registered"])
+
+    def test_supplying_providers_composes_visual_perception_through_the_cli(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocker #1 of the PR #535 review: ``providers=`` now reaches the CLI's own path.
+
+        ``sam3`` (region discovery) and ``qwen`` (semantic interpretation) -- the default
+        fixture's backends -- have no bundled model loader (``composition.py``): without a
+        ``RuntimeProvider`` for each, ``compose_executors`` honestly leaves
+        ``visual_perception`` out, and the installed binary could never compose it, even
+        through a Python embedder, because ``main()`` had nowhere to receive one. ``main()``
+        now accepts ``providers=`` in the exact shape ``compose_executors(providers=...)`` (and
+        every other ``RuntimeProvider`` caller) already expects, so real backend selection
+        composes through the CLI's own ``_executors_for()``, not a hand-built executor
+        standing in for the whole stage.
+        """
+        providers = {
+            "visual_perception.region_discovery": lambda _config, _secrets: object(),
+            "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "visual_perception",
+            "--dry-run",
+            "--json",
+            providers=providers,
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert "visual_perception" in executors["registered"]
+        assert "visual_perception" not in executors["missing"]
+
+    def test_a_declared_provider_target_composes_visual_perception_with_no_python_providers(
+        self, tmp_path: Path
+    ) -> None:
+        """The decisive proof that #507's real gap is closed.
+
+        The acceptance criterion of #507 is that ``visual_perception`` runs through the
+        *installed* ``contextmap run``/``contextmap stage`` binary with no Python wrapper.
+        ``test_supplying_providers_composes_visual_perception_through_the_cli`` above only
+        proves Python embedding: it still calls ``main(providers=...)`` by hand, which the
+        installed console script (``contextmap = contextmap.runtime.cli:main``) never does --
+        it calls ``main(argv)`` with no ``providers`` keyword at all. This test simulates
+        exactly that call: ``sam3`` (region discovery) and ``qwen`` (semantic interpretation)
+        -- the two backends with no bundled model loader -- instead get their runtime from a
+        ``resources.providers`` target declared in the configuration file itself, resolved by
+        ``contextmap.runtime.composition.resolve_provider`` from a real importable module
+        (``runtime_provider_fixtures``, a sibling test module).
+        """
+        document = _document()
+        document["resources"]["providers"] = {
+            "visual_perception.region_discovery": (
+                "runtime_provider_fixtures:load_region_discovery"
+            ),
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "visual_perception",
+            "--dry-run",
+            "--json",
+            # Nenhum `providers=` é passado: exatamente a chamada que o binário instalado faz.
+        )
+
+        assert code == 0, out + err
+        executors = _json(out)["executors"]
+        assert "visual_perception" in executors["registered"]
+        assert "visual_perception" not in executors["missing"]
+
+    def test_a_provider_given_to_main_reaches_an_optional_entity_resolution_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """P2 #2 of the PR #540 review: ``main(providers=...)`` must reach ``compose_executors``.
+
+        Before this fix, the CLI had no provider-injection path at all, so a configuration
+        that legitimately selected ``entity_resolution.appearance`` (it needs a
+        ``FeatureVectorSource``, the same ``RuntimeProvider`` mechanism sam3/qwen/gemini
+        already use) silently lost the whole ``entity_resolution`` executor.
+        """
+        document = selected_document()
+        document["components"]["entity_resolution"]["appearance"] = {
+            "backend": "entity-appearance-comparison-v1",
+            "entity-appearance-comparison-v1": {
+                "embedding_space_id": "clip-vit-b32",
+                "min_supporting_similarity": 0.8,
+            },
+        }
+
+        def provide(config: Any, secrets: Any) -> object:
+            return object()  # um FeatureVectorSource real não importa aqui, só a propagação
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "entity_resolution",
+            "--dry-run",
+            "--json",
+            providers={"entity_resolution.appearance": provide},
+        )
+
+        assert code == 0, out + err
+        assert "entity_resolution" in _json(out)["executors"]["registered"]
+
+    def test_an_injected_executor_overrides_the_one_composed_from_configuration(
+        self, tmp_path: Path
+    ) -> None:
+        """A caller-supplied executor always wins over the automatically composed one.
+
+        ``state_estimation`` is fully selected in the configuration, so ``compose_executors``
+        would build a real ``StateEstimationExecutor`` for it -- one that reads a real
+        ``SequenceArtifact`` and would fail against the lightweight fake ``ingestion`` output
+        below. That the run succeeds and the fake stage is the one that actually executed
+        proves the injected override, not the composed executor, ran.
+        """
+        log: list[str] = []
+        executors = {
+            "ingestion": Stage("ingestion", "SequenceArtifact", log),
+            "state_estimation": Stage("state_estimation", "StateEstimationRunArtifact", log),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "state_estimation",
+            "--workspace",
+            str(tmp_path / "ws"),
+            executors=executors,
+        )
+
+        assert code == 0, out + err
+        assert log == ["ingestion", "state_estimation"]
+
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_the_complete_pipeline_is_blocked_with_the_reason_per_stage(
         self, tmp_path: Path
     ) -> None:
@@ -133,7 +309,7 @@ class TestDryRun:
 
         assert code == 1
         text = out + err
-        assert "semantic_mapping" in text and "milestone" in text
+        assert "scene_graph" in text and "milestone" in text
 
     def test_a_missing_optional_module_is_explained_with_an_install_hint(
         self, tmp_path: Path
@@ -210,7 +386,7 @@ class TestConfigurationFlags:
         config = _json(out)["config"]
         assert code == 0
         assert config["policies"]["debug_level"] == "full"  # a flag vence o --set
-        assert config["resources"] == {"device": "cuda", "workspace": "ws"}
+        assert config["resources"] == {"device": "cuda", "workspace": "ws", "providers": {}}
         assert config["inputs"]["sequence"] == "S1"
 
     def test_a_numeric_looking_sequence_stays_a_string(self, tmp_path: Path) -> None:
@@ -305,7 +481,7 @@ class TestRun:
 
         assert code == 0, out + err
         assert log == ["ingestion", "state_estimation", "geometric_mapping"]
-        run_dir = workspace / "runtime" / "run-0001"
+        run_dir = workspace / "S1" / "run-0001"
         assert sorted(p.name for p in run_dir.iterdir()) == [
             "effective_config.json",
             "events.jsonl",
@@ -316,6 +492,51 @@ class TestRun:
         execution = json.loads((run_dir / "execution.json").read_text("utf-8"))["document"]
         assert execution["order"] == ["ingestion", "state_estimation", "geometric_mapping"]
         assert "run-0001" in out
+
+    def test_a_provider_override_is_recorded_in_the_runs_own_trail(self, tmp_path: Path) -> None:
+        """Item 4 of the #507 fix: a caller-supplied provider that wins over a declared
+        ``resources.providers`` target for the same component is visible in the run's own
+        record, not just silently applied. This only ever happens through a Python embedder
+        that passes ``providers=`` -- an ordinary CLI invocation never does, so it never
+        triggers this branch (see ``test_a_declared_provider_target_composes_...`` above)."""
+        document = _document()
+        document["resources"]["providers"] = {
+            "visual_perception.region_discovery": (
+                "runtime_provider_fixtures:load_region_discovery"
+            ),
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+        log: list[str] = []
+        workspace = tmp_path / "ws"
+        executors = {
+            "ingestion": Stage("ingestion", "SequenceArtifact", log),
+            "visual_perception": Stage("visual_perception", "PerceptionRunArtifact", log),
+        }
+        # Provider explícito só para region_discovery: vence o alvo declarado *apenas* para
+        # esse componente; semantic_interpretation continua resolvido pelo alvo declarado.
+        explicit_providers = {
+            "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        }
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "visual_perception",
+            "--workspace",
+            str(workspace),
+            executors=executors,
+            providers=explicit_providers,
+        )
+
+        assert code == 0, out + err
+        run_dir = workspace / "S1" / "run-0001"
+        first_event = json.loads((run_dir / "events.jsonl").read_text("utf-8").splitlines()[0])
+        assert first_event["kind"] == "run_planned"
+        assert first_event["data"]["provider_overrides"] == ["visual_perception.region_discovery"]
 
     def test_every_run_gets_its_own_directory_and_never_overwrites_a_previous_one(
         self, tmp_path: Path
@@ -328,7 +549,7 @@ class TestRun:
             )
             assert code == 0
 
-        assert sorted(p.name for p in (tmp_path / "ws" / "runtime").iterdir()) == [
+        assert sorted(p.name for p in (tmp_path / "ws" / "S1").iterdir()) == [
             "run-0001",
             "run-0002",
         ]
@@ -383,9 +604,9 @@ class TestRun:
         assert code == 1
         assert "executor" in out + err and "ingestion" in out + err
         assert "run record" in err
-        status = _status(tmp_path / "ws" / "runtime" / "run-0001")
+        status = _status(tmp_path / "ws" / "S1" / "run-0001")
         assert status["status"] == "blocked"
-        assert not (tmp_path / "ws" / "runtime" / "run-0001" / "execution.json").exists()
+        assert not (tmp_path / "ws" / "S1" / "run-0001" / "execution.json").exists()
 
     def test_a_failing_stage_reports_what_completed_and_leaves_a_failure_record(
         self, tmp_path: Path
@@ -412,7 +633,7 @@ class TestRun:
         assert code == 1
         text = out + err
         assert "state_estimation" in text and "out of memory" in text and "ingestion" in text
-        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        run_dir = tmp_path / "ws" / "S1" / "run-0001"
         assert str(run_dir) in err
         status = _status(run_dir)
         assert status["status"] == "failed"
@@ -495,7 +716,7 @@ class TestSelections:
         assert code == 0, out + err
         assert log == ["geometric_mapping"]
         record = json.loads(
-            (tmp_path / "ws" / "runtime" / "run-0001" / "execution.json").read_text("utf-8")
+            (tmp_path / "ws" / "S1" / "run-0001" / "execution.json").read_text("utf-8")
         )["document"]
         assert record["selections"]["stages"]["ingestion"][0]["artifact_id"] == "seq-1"
 
@@ -636,7 +857,7 @@ class TestArtifactInspectionAndValidation:
         assert "manifest.json" in out + err
 
     def test_runtime_documents_are_verified_by_digest(self, tmp_path: Path) -> None:
-        run = tmp_path / "ws" / "runtime" / "run-0001"
+        run = tmp_path / "ws" / "S1" / "run-0001"
         cli(
             "run",
             "-c",
@@ -762,7 +983,7 @@ class TestLifecycleCommands:
 
     def test_inspect_run_shows_the_failure_record_and_the_trail(self, tmp_path: Path) -> None:
         self._resumable(tmp_path)
-        run_dir = str(tmp_path / "ws" / "runtime" / "run-0001")
+        run_dir = str(tmp_path / "ws" / "S1" / "run-0001")
 
         code, out, _ = cli("inspect", "run", run_dir, "--events")
 
@@ -773,9 +994,7 @@ class TestLifecycleCommands:
     def test_inspect_run_json_carries_every_event_and_the_environment(self, tmp_path: Path) -> None:
         self._resumable(tmp_path)
 
-        code, out, _ = cli(
-            "inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"), "--json"
-        )
+        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "S1" / "run-0001"), "--json")
 
         document = _json(out)
         assert code == 0
@@ -795,7 +1014,7 @@ class TestLifecycleCommands:
             str(tmp_path / "ws"),
         )
 
-        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "runtime" / "run-0001"))
+        code, out, _ = cli("inspect", "run", str(tmp_path / "ws" / "S1" / "run-0001"))
 
         assert code == 0
         assert "blocked" in out and "executor" in out
@@ -804,7 +1023,7 @@ class TestLifecycleCommands:
         self, tmp_path: Path
     ) -> None:
         self._resumable(tmp_path)
-        run_dir = tmp_path / "ws" / "runtime" / "run-0001"
+        run_dir = tmp_path / "ws" / "S1" / "run-0001"
         assert cli("validate", str(run_dir))[0] == 0
 
         events = run_dir / "events.jsonl"
@@ -831,9 +1050,9 @@ class TestLifecycleCommands:
         assert code == 0, out + err
         assert world.runs == ["geometric_mapping", "sensor_association", "semantic_fusion"]
         assert "resumed run-0001" in out
-        new = tmp_path / "ws" / "runtime" / "run-0002"
+        new = tmp_path / "ws" / "S1" / "run-0002"
         assert _status(new)["resumed_from"] == "run-0001"
-        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "failed"
+        assert _status(tmp_path / "ws" / "S1" / "run-0001")["status"] == "failed"
 
     def test_resuming_a_completed_run_is_refused_and_creates_no_run(self, tmp_path: Path) -> None:
         world, args = self._resumable(tmp_path)
@@ -848,7 +1067,7 @@ class TestLifecycleCommands:
 
         assert code == 1
         assert "nothing to resume" in out + err
-        assert not (tmp_path / "ws" / "runtime" / "run-0003").exists()
+        assert not (tmp_path / "ws" / "S1" / "run-0003").exists()
 
     def test_resume_and_reuse_flags_have_explicit_requirements(self, tmp_path: Path) -> None:
         base = [
@@ -917,7 +1136,7 @@ class TestLifecycleCommands:
 
         assert code == 130
         assert "cancelled" in out + err
-        assert _status(tmp_path / "ws" / "runtime" / "run-0001")["status"] == "cancelled"
+        assert _status(tmp_path / "ws" / "S1" / "run-0001")["status"] == "cancelled"
 
     def test_a_secret_never_reaches_the_output_or_the_run_record(self, tmp_path: Path) -> None:
         secret = "s3cr3t-token-value"
@@ -944,7 +1163,7 @@ class TestLifecycleCommands:
 
         assert code == 1
         assert secret not in out + err
-        for path in (tmp_path / "ws" / "runtime" / "run-0001").iterdir():
+        for path in (tmp_path / "ws" / "S1" / "run-0001").iterdir():
             assert secret not in path.read_text("utf-8"), path.name
 
     def test_the_dry_run_predicts_what_reuse_would_do(self, tmp_path: Path) -> None:
@@ -994,8 +1213,8 @@ class TestIngestCommand:
             "image",
             "--sync-tolerance-ns",
             "100000000",
-            "--workspace",
-            str(tmp_path / "ws"),
+            "--output-dir",
+            str(tmp_path / "ws" / "sequences" / "corridor-02" / "artifact-1"),
             *extra,
         ]
 
@@ -1068,14 +1287,14 @@ class TestIngestCommand:
         assert code == 130 and "cancelled" in out + err
         assert self._published(tmp_path) == []
 
-    def test_a_workspace_is_required(self, tmp_path: Path) -> None:
+    def test_an_output_directory_is_required(self, tmp_path: Path) -> None:
         args = self._args(tmp_path)
-        position = args.index("--workspace")
+        position = args.index("--output-dir")
         without = args[:position] + args[position + 2 :]
 
         code, out, err = cli(*without, adapter_factory=fake_factory())
 
-        assert code == 2 and "--workspace" in out + err
+        assert code == 2 and "--output-dir" in out + err
 
     def test_a_selected_adapter_is_required(self, tmp_path: Path) -> None:
         document = _document()

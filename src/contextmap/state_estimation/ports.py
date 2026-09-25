@@ -76,6 +76,14 @@ class StateEstimationRequest:
             order. A backend uses the modalities it needs and ignores the rest.
         calibration: Canonical calibration of the sequence, or ``None`` when
             the run has none. Backends never keep a second, hidden copy.
+        auxiliary_sequence_artifact_id: The auxiliary pose ``SequenceArtifact`` (issue #555's
+            bridge) some of ``observations`` actually came from, when the caller merged one in.
+            ``None`` when no auxiliary sequence contributed. A backend never needs to act on
+            this itself: :func:`~contextmap.state_estimation.execute_state_estimation` copies it
+            onto the published :class:`TrajectoryProvenance` regardless of which backend ran, so
+            every backend's lineage stays complete without each one repeating this concern.
+        auxiliary_selection_id: Deterministic identity of the auxiliary sequence's selection,
+            alongside ``auxiliary_sequence_artifact_id``. ``None`` under the same condition.
     """
 
     trajectory_id: TrajectoryId
@@ -83,6 +91,8 @@ class StateEstimationRequest:
     selection_id: str
     observations: Sequence[SourceObservation]
     calibration: CalibrationSet | None
+    auxiliary_sequence_artifact_id: SequenceArtifactId | None = None
+    auxiliary_selection_id: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

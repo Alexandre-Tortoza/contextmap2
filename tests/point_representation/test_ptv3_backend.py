@@ -146,6 +146,30 @@ def test_every_setting_that_changes_the_vector_changes_the_space_fingerprint(
     )
 
 
+def test_zero_padding_channels_default_to_none_and_are_declared_only_when_used() -> None:
+    assert make_config().padding_channels == 0
+    assert "padding" not in make_encoder().representation_space().input_definition
+
+    padded = make_encoder(padding_channels=1).representation_space()
+
+    assert "zero_padding_channels=1" in padded.input_definition
+    assert "xyz-local-prepared" in padded.input_definition
+
+
+def test_the_number_of_zero_padding_channels_changes_the_space_fingerprint() -> None:
+    base = representation_space_fingerprint(make_encoder().representation_space())
+
+    assert (
+        representation_space_fingerprint(make_encoder(padding_channels=1).representation_space())
+        != base
+    )
+
+
+def test_a_negative_number_of_padding_channels_is_rejected() -> None:
+    with pytest.raises(ValueError, match="padding_channels"):
+        make_config(padding_channels=-1)
+
+
 def test_the_support_policy_changes_the_space_fingerprint() -> None:
     assert representation_space_fingerprint(
         make_encoder(policy=knn_policy(8)).representation_space()

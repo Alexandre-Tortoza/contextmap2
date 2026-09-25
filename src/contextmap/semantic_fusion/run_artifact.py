@@ -57,13 +57,19 @@ from contextmap.shared import (
     FileEntry,
     RunDirectoryError,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.visual_perception import PerceptionRunId
 
-SCHEMA_VERSION = "0.1.0"
-"""Semantic Fusion run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Semantic Fusion run artifact schema version written and understood by this module.
+
+Bumped to ``0.2.0`` when ``metrics/counts.json`` redefined ``inference_results``: ``0.1.0``
+summed the results of every support, so a result whose regions fall in several supports was
+counted once per support; ``0.2.0`` counts the distinct results of the whole run, like
+``physical_observations``. The metrics are contractual and inventoried, so the same field with
+two denominators must not share a version. This is a pre-1.0 schema: no compatibility reader
+for ``0.1.0`` is kept and such a run is refused when opened.
+"""
 
 SemanticFusionRunId = NewType("SemanticFusionRunId", str)
 """Identity of one Semantic Fusion run."""
@@ -120,8 +126,10 @@ class FusionRunLineage:
         association_run_ids: The selected Sensor Association runs, sorted and unique.
         perception_run_ids: The selected perception runs whose claims were fused, sorted and
             unique.
-        point_representation_run_ids: The Point Representation runs whose structure was
-            referenced, sorted and unique; empty when none was used.
+        point_representation_run_ids: The Point Representation runs selected for the run, whose
+            structure a declared channel may reference, sorted and unique; empty when none was
+            selected. It records the selection, not the use: in a channel ablation every arm
+            lists the same runs, so that the arms see identical upstream artifacts.
     """
 
     sequence_artifact_id: str
@@ -177,8 +185,9 @@ class SemanticFusionRunManifest:
     """Authoritative metadata of a persisted Semantic Fusion run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's semantic-fusion runs.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this sequence, supplied by the
+            caller.
         sequence_name: Name of the processed sequence.
         lineage: The upstream artifacts the run consumed.
         grouping_policy_id: The physical-observation grouping policy, ``None`` for an empty run.
@@ -223,10 +232,6 @@ class SemanticFusionRunManifest:
     file_inventory: tuple[FileEntry, ...]
 
 
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "semantic-fusion" / sequence_name
-
-
 class SemanticFusionRunWriter:
     """Builds an immutable Semantic Fusion run artifact on the local filesystem.
 
@@ -237,12 +242,10 @@ class SemanticFusionRunWriter:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: SemanticFusionRunId,
         run_index: int,
-        selection_label: str,
-        policy_label: str,
         lineage: FusionRunLineage,
         code_version: str,
         debug_level: SemanticFusionDebugLevel = SemanticFusionDebugLevel.NONE,
@@ -250,29 +253,25 @@ class SemanticFusionRunWriter:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/semantic_fusion``); the writer
+                computes no path, creates the directory atomically on finalization and
+                refuses to replace one that exists.
             sequence_name: Name of the sequence the run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's runs (see
-                :func:`allocate_fusion_run_index`).
-            selection_label: Short readable description of the selected upstream runs, for the
-                directory name.
-            policy_label: Short readable description of the fusion policy, for the directory
-                name.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             lineage: The explicit upstream selection.
             code_version: Code revision that produced the run.
             debug_level: Amount of non-contractual debug evidence to persist.
         """
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
         self._lineage = lineage
         self._code_version = code_version
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{policy_label}"
-        )
+        self._final_dir = output_dir
 
     def write(
         self,
@@ -312,9 +311,6 @@ class SemanticFusionRunWriter:
                 )
         except RunDirectoryError as error:
             raise FusionRunArtifactError(str(error)) from error
-        rebuild_fusion_run_registry(
-            workspace_root=self._workspace_root, sequence_name=self._sequence_name
-        )
         return _load_manifest(self._final_dir)
 
     def _stream(
@@ -637,32 +633,6 @@ class SemanticFusionRunReader:
         return data
 
 
-def allocate_fusion_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's semantic-fusion runs.
-
-    Scans the run directories, never the registry, so an interrupted or corrupted run is not
-    counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
-def rebuild_fusion_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
 class _Tally:
     """Checks the outcomes as they stream and collects what the tables and metrics need."""
 
@@ -685,7 +655,7 @@ class _Tally:
         self.fusion_fingerprint: str | None = None
         self._previous: FusionSupportId | None = None
         self._physical: set[str] = set()
-        self._inference = 0
+        self._results: set[str] = set()
         self._per_support: dict[str, list[int]] = {
             "physical_observations_per_support": [],
             "inference_results_per_support": [],
@@ -777,9 +747,16 @@ class _Tally:
         self.support_count += 1
         self.contribution_count += len(evidence.contributions)
         self._hypotheses += len(evidence.hypotheses)
-        self._inference += evidence.inference_result_count
         self._physical.update(
             str(g.physical_observation_id) for g in evidence.physical_observation_groups
+        )
+        # Um resultado de percepção tem várias regiões e cada uma pode cair em um suporte diferente:
+        # somar `inference_result_count` por suporte contaria o mesmo resultado várias vezes e
+        # deixaria de ser comparável com os frames físicos distintos acima.
+        self._results.update(
+            str(result)
+            for g in evidence.physical_observation_groups
+            for result in g.perception_result_ids
         )
         counts = self._per_support
         counts["physical_observations_per_support"].append(evidence.physical_observation_count)
@@ -888,7 +865,7 @@ class _Tally:
             "contributions": self.contribution_count,
             "hypotheses": self._hypotheses,
             "physical_observations": len(self._physical),
-            "inference_results": self._inference,
+            "inference_results": len(self._results),
             "claims": {
                 "total": self._claims_total,
                 "scored": scored,
@@ -1032,23 +1009,6 @@ def _decode(raw: bytes, decoder: Callable[[Mapping[str, Any]], _T], what: str) -
         raise FusionRunArtifactError(f"malformed {what}: {error}") from error
 
 
-def _valid_run_index(run_dir: Path) -> int | None:
-    # Um diretório ilegível ou com manifest malformado simplesmente não é um run válido.
-    try:
-        reader = SemanticFusionRunReader(run_dir)
-    except (FusionRunArtifactError, ValueError, KeyError, OSError):
-        return None
-    return None if reader.verify_integrity() else reader.manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = SemanticFusionRunReader(run_dir).manifest
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
-
-
 def _load_manifest(run_dir: Path) -> SemanticFusionRunManifest:
     manifest_path = run_dir / _MANIFEST
     if not manifest_path.is_file():
@@ -1056,7 +1016,8 @@ def _load_manifest(run_dir: Path) -> SemanticFusionRunManifest:
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise FusionRunArtifactError(
-            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}"
+            f"unsupported run artifact schema_version: {raw.get('schema_version')!r}; "
+            f"this reader understands {SCHEMA_VERSION!r}"
         )
     lineage = raw["lineage"]
     policies = raw["policies"]

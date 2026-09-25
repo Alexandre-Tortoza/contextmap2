@@ -18,6 +18,7 @@ from contextmap.ingestion import (
     SourceObservationId,
     SourceProvenance,
     SourceTopicMapping,
+    SourceWindow,
 )
 from contextmap.shared import SourceTimestamp
 
@@ -76,6 +77,25 @@ class FakeSourceAdapter:
     def read_calibration(self) -> CalibrationSet | None:
         return self._config.calibration
 
+    def content_hash(self) -> str | None:
+        return None
+
+
+class _AdapterWithoutContentHash:
+    """Satisfies every SourceAdapter method except content_hash()."""
+
+    def capabilities(self) -> SourceAdapterCapabilities:
+        return SourceAdapterCapabilities()
+
+    def read_observations(self) -> Iterator[SourceObservation]:
+        return iter(())
+
+    def read_calibration(self) -> CalibrationSet | None:
+        return None
+
+    def warnings(self) -> Sequence[SourceAdapterWarning]:
+        return ()
+
 
 def _image_observation() -> ImageObservation:
     return ImageObservation(
@@ -118,6 +138,18 @@ def test_fake_adapter_satisfies_the_source_adapter_protocol() -> None:
     )
 
     assert isinstance(adapter, SourceAdapter)
+
+
+def test_content_hash_is_part_of_the_source_adapter_protocol() -> None:
+    """#506: o runtime precisa de um hash com escopo de janela de qualquer adapter.
+
+    ``content_hash()`` já existia em ``Ros1BagSourceAdapter``/``Ros2BagSourceAdapter``
+    mas fora do ``Protocol`` — o serviço de ingestion não tinha como obtê-lo
+    genericamente de um adapter arbitrário. Uma classe que implementa todo o
+    resto do boundary mas não ``content_hash()`` não deve satisfazer
+    ``SourceAdapter``.
+    """
+    assert not isinstance(_AdapterWithoutContentHash(), SourceAdapter)
 
 
 def test_downstream_code_consumes_any_adapter_without_branching() -> None:
@@ -195,6 +227,72 @@ def test_config_rejects_unknown_required_topic_name() -> None:
             timestamp_clock_id="fake-clock",
             required_topics=frozenset({"radar"}),
         )
+
+
+def test_source_window_rejects_end_before_start() -> None:
+    with pytest.raises(ValueError, match="end_seconds"):
+        SourceWindow(clock_id="clock-a", start_seconds=5.0, end_seconds=2.0)
+
+
+def test_source_window_rejects_equal_start_and_end() -> None:
+    """[t, t) não tem nenhum instante dentro; tratamos como configuração inválida.
+
+    Uma janela sempre errou pelo lado explícito (ver
+    ``InvalidSourceWindowError`` para não-sobreposição): resolver
+    silenciosamente para uma leitura vazia é o comportamento que
+    ``docs/adapters.md`` proíbe. Uma janela de largura zero é sintoma do
+    mesmo problema — quase sempre um erro de configuração (dois limites
+    iguais por engano), não uma leitura vazia intencional.
+    """
+    with pytest.raises(ValueError, match="end_seconds"):
+        SourceWindow(clock_id="clock-a", start_seconds=1.0, end_seconds=1.0)
+
+
+@pytest.mark.parametrize("start_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_source_window_rejects_non_finite_start(start_seconds: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        SourceWindow(clock_id="clock-a", start_seconds=start_seconds, end_seconds=2.0)
+
+
+@pytest.mark.parametrize("end_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_source_window_rejects_non_finite_end(end_seconds: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        SourceWindow(clock_id="clock-a", start_seconds=0.0, end_seconds=end_seconds)
+
+
+def test_resolved_window_clock_id_is_deterministic_from_source_type_and_path() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.resolved_window_clock_id() == "ros1_bag:data/example.bag:recording_time"
+
+
+def test_resolved_window_clock_id_differs_from_the_header_clock_id() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.resolved_window_clock_id() != config.resolved_timestamp_clock_id()
+
+
+def test_config_accepts_an_optional_window() -> None:
+    window = SourceWindow(
+        clock_id="ros1_bag:data/example.bag:recording_time", start_seconds=0.0, end_seconds=2.0
+    )
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping(), window=window
+    )
+
+    assert config.window is window
+
+
+def test_config_window_defaults_to_none() -> None:
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path="data/example.bag", topics=SourceTopicMapping()
+    )
+
+    assert config.window is None
 
 
 def test_generic_adapter_exposes_configured_calibration() -> None:

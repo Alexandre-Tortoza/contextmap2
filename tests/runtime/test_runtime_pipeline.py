@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -43,16 +44,19 @@ CANONICAL_ORDER = [
     "spatial_relations",
     "context_map",
 ]
-IMPLEMENTED = CANONICAL_ORDER[:6]
+IMPLEMENTED = CANONICAL_ORDER
 
 
 def _ready(_name: str) -> bool:
     return True
 
 
-def _document(*, point_representation: bool = False) -> dict[str, Any]:
+def _document(
+    *, point_representation: bool = False, pose_ingestion: bool = False
+) -> dict[str, Any]:
     document = selected_document()
     document["pipeline"]["stages"]["point_representation"] = point_representation
+    document["pipeline"]["stages"]["pose_ingestion"] = pose_ingestion
     return document
 
 
@@ -109,6 +113,7 @@ class TestCanonicalDag:
         assert without.order is not None and with_stage.order is not None
         assert "point_representation" not in without.order
         assert {item.name for item in without.stage("semantic_fusion").inputs} == {
+            "sequence",
             "association",
             "perception",
             "geometry",
@@ -123,6 +128,24 @@ class TestCanonicalDag:
         assert {item.name: item.source for item in with_stage.stage("semantic_fusion").inputs}[
             "representation"
         ] == "point_representation"
+
+    def test_the_auxiliary_pose_ingestion_stage_joins_only_when_selected(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #555: an opt-in second ingestion stage feeding state_estimation an auxiliary
+        pose-only SequenceArtifact, exactly like point_representation is opt-in for
+        semantic_fusion -- absent by default, never a silent second source."""
+        without = resolve_plan(effective_from(tmp_path, _document()))
+        with_stage = resolve_plan(effective_from(tmp_path, _document(pose_ingestion=True)))
+
+        assert without.order is not None and with_stage.order is not None
+        assert "pose_ingestion" not in without.order
+        assert {item.name for item in without.stage("state_estimation").inputs} == {"sequence"}
+        assert "pose_ingestion" in with_stage.order
+        assert with_stage.order.index("pose_ingestion") < with_stage.order.index("state_estimation")
+        wiring = {item.name: item.source for item in with_stage.stage("state_estimation").inputs}
+        assert wiring["pose_sequence"] == "pose_ingestion"
+        assert with_stage.stage("pose_ingestion").output == "SequenceArtifact"
 
     def test_a_stage_digest_follows_only_its_own_configuration(self, tmp_path: Path) -> None:
         base = resolve_plan(effective_from(tmp_path, _document()))
@@ -141,16 +164,17 @@ class TestCanonicalDag:
         )
         assert changed.digest != base.digest
 
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_unavailable_stages_stay_in_the_topology_with_their_reason(
         self, tmp_path: Path
     ) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
 
-        stage = plan.stage("semantic_mapping")
+        stage = plan.stage("scene_graph")
 
         assert not stage.available
         assert "milestone" in stage.unavailable_reason
-        assert [item.source for item in stage.inputs] == ["semantic_fusion"]
+        assert [item.source for item in stage.inputs] == ["geometric_mapping"]
 
 
 class TestPersistedTopology:
@@ -379,7 +403,7 @@ class TestScopeAndExecution:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []
         executors = _executors(plan, log)
-        scope = plan.scope(targets=["semantic_fusion"])
+        scope = plan.scope(targets=["context_map"])
 
         record = run_plan(
             scope, executors, environ={}, module_available=_ready, provided_runtimes=_ALL_PROVIDED
@@ -391,6 +415,7 @@ class TestScopeAndExecution:
         assert {
             name: [ref.artifact_id for ref in refs] for name, refs in fusion.inputs.items()
         } == {
+            "sequence": ["ingestion#1"],
             "association": ["sensor_association#1"],
             "perception": ["visual_perception#1"],
             "geometry": ["geometric_mapping#1"],
@@ -458,6 +483,7 @@ class TestScopeAndExecution:
 
         assert any("nope" in problem.message for problem in report.problems)
 
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_preflight_blocks_before_any_stage_runs(self, tmp_path: Path) -> None:
         plan = resolve_plan(effective_from(tmp_path, _document()))
         log: list[str] = []
@@ -465,7 +491,7 @@ class TestScopeAndExecution:
 
         with pytest.raises(PreflightError) as error:
             run_plan(
-                plan.scope(targets=["semantic_mapping"]),
+                plan.scope(targets=["scene_graph"]),
                 executors,
                 environ={},
                 module_available=_ready,
@@ -473,7 +499,7 @@ class TestScopeAndExecution:
             )
 
         assert log == []
-        assert any("semantic_mapping" in problem.path for problem in error.value.report.problems)
+        assert any("scene_graph" in problem.path for problem in error.value.report.problems)
 
     def test_preflight_reports_missing_executors_backends_and_secrets_together(
         self, tmp_path: Path

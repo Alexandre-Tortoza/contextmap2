@@ -29,6 +29,8 @@ state_estimation = "seq-01--run-0003"
 [resources]                  # recursos/dispositivo
 device = "cuda"
 workspace = "workspace/run-a"
+[resources.providers]        # RuntimeProvider declarado por componente (ver seção própria)
+"visual_perception.region_discovery" = "meu_pkg.contextmap_loaders:load_sam3"
 
 [policies]                   # política de debug
 debug_level = "standard"     # none | standard | full
@@ -39,7 +41,7 @@ debug_level = "standard"     # none | standard | full
 | `pipeline` | preset de topologia e quais estágios opcionais participam |
 | `components` | backend escolhido para cada ponto de variação, com os parâmetros **somente desse backend** |
 | `inputs` | sequência esperada e seleção explícita de runs/artifacts upstream por estágio: ids exatos, listas de runs, seleções nomeadas ou `latest` ([`selection.md`](selection.md)) |
-| `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram) e workspace |
+| `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram), workspace e `providers` (alvos `RuntimeProvider` declarados por componente, ver seção própria) |
 | `policies` | nível de debug; o debug nunca é dependência contratual de um estágio downstream |
 
 Não há campos de política de avaliação: nenhum consumidor existe ainda, e o schema não ganha campo sem consumidor.
@@ -66,6 +68,19 @@ Mapeamentos se mesclam chave a chave; qualquer outro valor substitui. O valor de
 - rejeita combinações incompatíveis (hoje: o canal de evidência `point_representation` de Semantic Fusion exige o estágio `point_representation` habilitado).
 
 O runtime **não escolhe backend em nome do usuário**: o perfil `canonical/1` fixa a topologia e deixa todo backend não selecionado. `check_selection()` reporta o que falta escolher.
+
+## `resources.providers`: runtime de modelo declarado em configuração
+
+Um backend sem loader empacotado (SAM2, SAM3, Qwen, Gemini, Florence-2 hoje) precisa de um `RuntimeProvider` — um `Callable[[config, ResolvedSecrets], runtime]` — para ser composto. Um chamador Python pode montar esse `Callable` diretamente (`Runtime(providers=...)`, `main(providers=...)`), mas o binário `contextmap` **instalado** não tem como: ele só enxerga o que a configuração descreve. `resources.providers` é essa descrição: um mapeamento `component_id -> "módulo:atributo"`, um por ponto de variação que precisa de um provider.
+
+```json
+{"resources": {"providers": {"visual_perception.region_discovery": "meu_pkg.loaders:load_sam3"}}}
+```
+
+- **Validação aqui é só estrutural.** A resolução do documento (`resolve_effective_config()`) exige apenas que cada valor seja uma string não vazia; ela nunca importa o módulo. Importar e resolver o alvo em um `RuntimeProvider` de verdade é responsabilidade de `contextmap.runtime.composition.resolve_provider`, chamado só quando aquele componente está sendo composto de fato — ver [`composition.md`](composition.md#providers-declarados-em-configuração-resourcesproviders) para a precedência (um `providers=` explícito, quando existe, ainda vence), a preguiça e a postura de segurança.
+- **Camadas e digest.** `resources.providers` flui pelas mesmas três camadas de qualquer outro campo (perfil < arquivos, mesclados chave a chave < overrides, que substituem o mapa inteiro) e participa do `digest` automaticamente, porque é só mais um campo de `RuntimeConfig.to_document()` — nenhum tratamento especial foi necessário.
+- **Não é parâmetro de backend.** Um alvo declarado é uma decisão de composição/implantação (qual processo fornece qual runtime), nunca um parâmetro científico validado pela capability; por isso vive em `resources`, ao lado de `device`/`workspace`, e nunca dentro do bloco `components.<capability>.<slot>.<backend>` do próprio backend.
+- **Segurança.** Um alvo é código Python executado em tempo de execução (importado e depois chamado). Configuração de origem não confiável nunca deve declarar um alvo, exatamente como não deve apontar para qualquer outro código executável — essa fronteira de confiança já existe hoje e não é nova.
 
 ## Digest e persistência
 
@@ -108,14 +123,18 @@ Pontos de variação:
 | `point_representation.encoder` | `geometric_descriptor`, `ptv3` |
 | `semantic_fusion.support` | `geometry-jaccard-support-v1` |
 | `semantic_fusion.accumulation` | `baseline-evidence-accumulation-v1`, `quality-aware-evidence-accumulation-v1` |
+| `entity_resolution.retrieval`, `.resolution`, `.geometry_comparison` | políticas versionadas, obrigatórias |
+| `entity_resolution.semantic_compatibility`, `.temporal_compatibility`, `.appearance`, `.representation` | políticas versionadas, **opcionais**: sem backend selecionado, o canal é `None`, nunca um padrão |
+| `spatial_relations.frame_conventions`, `.candidate`, `.geometry_summary` | políticas versionadas, obrigatórias |
+| `spatial_relations.geometric_predicate`, `.contact_predicate` | políticas versionadas, **opcionais**: sem backend selecionado, o avaliador é `None` |
 
 Para uma política, o identificador de backend é a identidade que a própria capability já versiona.
 
-Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`, e os estágios cujas capabilities ainda não existem: `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map`. Estes últimos são declarados **indisponíveis** com o motivo, em vez de omitidos ou simulados; um teste falha quando a capability passar a existir, para o catálogo ser atualizado junto.
+Estágios de `canonical/1`, do recorded source ao `ContextMapArtifact`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations`, `context_map`. Antes do v0.1.0 sair esta é a única topologia do repositório, e ela é livre para continuar crescendo até o release (ver `CANONICAL_PROFILE_ID` em `catalog.py`).
 
 ## Lacunas conhecidas
 
 - **Perfil sem backends.** Escolher SAM3, DINOv3, Qwen/Gemini ou FAST-LIO como canônicos é uma decisão científica que pertence à validação end-to-end (milestone #19), não ao runtime. Até lá, um experimento fornece um arquivo de configuração que seleciona os backends.
 - **Parâmetros por capability.** A validação dos parâmetros de cada backend (obrigatórios, tipos, faixas) acontece em `compose()`, instanciando a configuração da própria capability (`build_config()`); a resolução da configuração só garante valores JSON finitos e sem aparência de segredo. Políticas que hoje são apenas parâmetros (sincronização, voxelização, oclusão) ganham ponto de variação quando um executor de estágio as consumir.
 - **Dois `canonical/1`.** O `canonical/1` do runtime é o preset de topologia global. O `CANONICAL_PRESET_V1` de Visual Perception é o preset **interno** da percepção, com identidade própria, e continua conservando temporariamente os estágios legados de cena/região até a política de construção de `SemanticInterpretationRequest` ser promovida para a topologia default. O runtime não altera esse preset: a composition root entrega os backends atrás dos ports e não monta o preset interno; a lacuna segue registrada em [`composition.md`](composition.md) e em [`docs/runtime-composition.md`](../../../../docs/runtime-composition.md).
-- **Estágios indisponíveis.** Habilitar `semantic_mapping` em diante é válido na configuração (o preset os declara), mas nenhuma execução os cumpre enquanto as milestones #12–#15 não existirem.
+- **`context_map`.** `pipeline.stages.context_map` é recusado como estágio desconhecido: `canonical/1` não o declara ainda; é trabalho de outro milestone (End-to-End Validation).

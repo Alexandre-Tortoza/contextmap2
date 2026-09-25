@@ -34,7 +34,7 @@ from contextmap.sensor_association import (
     ValueSummary,
 )
 
-EVALUATOR_VERSION = "1"
+EVALUATOR_VERSION = "2"
 """Bumped whenever a metric's definition changes, so reports stay comparable."""
 
 
@@ -186,21 +186,63 @@ class TimingReport:
 class ReprojectionReport:
     """Reprojection residuals, only where a trusted reference existed.
 
+    A missing residual is not one fact but three, and they are counted apart: a frame may have
+    had no reference at all, a reference whose geometry its candidate policy never evaluated,
+    or a reference it evaluated and could not project. Collapsing them lost both the
+    distinction and the correspondence counts.
+
     Attributes:
-        frames_with_reference: Frames evaluated against a trusted reference.
-        frames_without_reference: Frames with none; no residual is invented for them.
-        correspondence_count: Reference correspondences evaluated, summed.
-        invalid_correspondence_count: Of those, the ones that could not be projected.
+        frames_measured: Frames whose residual was actually measured.
+        frames_without_reference: Frames with no trusted reference; none is invented for them.
+        frames_with_reference_not_evaluated: Frames whose candidate policy evaluated none of
+            the reference geometry. A run whose reference lies outside its candidate range
+            lands here instead of looking well-calibrated.
+        frames_without_projectable_reference: Frames that evaluated the reference geometry and
+            could project none of it. This one is a camera or calibration problem.
+        correspondence_count: Reference correspondences declared, summed over every frame that
+            had a reference, measured or not.
+        invalid_correspondence_count: Of the evaluated ones, those the camera model could not
+            project.
+        unevaluated_correspondence_count: Correspondences whose geometry the frames' candidate
+            policy never evaluated. They are not projection failures and are excluded from
+            :attr:`invalid_rate`; a run whose reference lies outside its candidate range reports
+            them here instead of looking well-calibrated.
         frame_median_px: Distribution, over frames, of each frame's median residual.
         frame_p95_px: Distribution, over frames, of each frame's 95th percentile residual.
     """
 
-    frames_with_reference: int
+    frames_measured: int
     frames_without_reference: int
+    frames_with_reference_not_evaluated: int
+    frames_without_projectable_reference: int
     correspondence_count: int
     invalid_correspondence_count: int
+    unevaluated_correspondence_count: int
     frame_median_px: ValueSummary | None
     frame_p95_px: ValueSummary | None
+
+    @property
+    def frames_with_reference(self) -> int:
+        """Frames a trusted reference was supplied for, whatever came of it."""
+        return (
+            self.frames_measured
+            + self.frames_with_reference_not_evaluated
+            + self.frames_without_projectable_reference
+        )
+
+    @property
+    def evaluated_correspondence_count(self) -> int:
+        """Correspondences the frames actually evaluated: the population the rate is over."""
+        return self.correspondence_count - self.unevaluated_correspondence_count
+
+    @property
+    def invalid_rate(self) -> float | None:
+        """Share of the evaluated correspondences that could not be projected.
+
+        ``None`` when nothing was evaluated, which is not the same as a rate of zero.
+        """
+        evaluated = self.evaluated_correspondence_count
+        return None if evaluated == 0 else self.invalid_correspondence_count / evaluated
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -216,6 +258,9 @@ class SensorAssociationLineage:
         state_estimation_run_id: The state-estimation run it came from, when there is one.
         perception_run_ids: The perception runs the evidence came from.
         calibration_identity: The exact calibration used.
+        candidate_policy: The candidate policy and its fingerprint: which map geometry each frame
+            evaluated before projection. Two runs that differ here evaluated different
+            populations, so comparing them as if only the feature path changed would be wrong.
         visibility_policy: The occlusion policy and its fingerprint.
         membership_policy_id: The mask-membership rule.
         definitions: Versions of the coverage, quality, diagnostics and sampling definitions.
@@ -233,6 +278,7 @@ class SensorAssociationLineage:
     state_estimation_run_id: str | None
     perception_run_ids: tuple[str, ...]
     calibration_identity: str
+    candidate_policy: Mapping[str, Any]
     visibility_policy: Mapping[str, Any]
     membership_policy_id: str
     definitions: Mapping[str, str]
@@ -481,10 +527,22 @@ def encode_sensor_association_report(report: SensorAssociationEvaluationReport) 
             "lookup_outcomes": dict(report.timing.lookup_outcomes),
         },
         "reprojection": {
+            "frames_measured": report.reprojection.frames_measured,
             "frames_with_reference": report.reprojection.frames_with_reference,
             "frames_without_reference": report.reprojection.frames_without_reference,
+            "frames_with_reference_not_evaluated": (
+                report.reprojection.frames_with_reference_not_evaluated
+            ),
+            "frames_without_projectable_reference": (
+                report.reprojection.frames_without_projectable_reference
+            ),
             "correspondence_count": report.reprojection.correspondence_count,
             "invalid_correspondence_count": report.reprojection.invalid_correspondence_count,
+            "unevaluated_correspondence_count": (
+                report.reprojection.unevaluated_correspondence_count
+            ),
+            "evaluated_correspondence_count": report.reprojection.evaluated_correspondence_count,
+            "invalid_rate": report.reprojection.invalid_rate,
             "frame_median_px": _encode_summary(report.reprojection.frame_median_px),
             "frame_p95_px": _encode_summary(report.reprojection.frame_p95_px),
         },
@@ -521,6 +579,7 @@ def _lineage(manifest: SensorAssociationRunManifest) -> SensorAssociationLineage
         state_estimation_run_id=manifest.state_estimation_run_id,
         perception_run_ids=tuple(manifest.perception_run_ids),
         calibration_identity=manifest.calibration_identity,
+        candidate_policy=dict(manifest.candidate_policy),
         visibility_policy=dict(manifest.visibility_policy),
         membership_policy_id=manifest.membership_policy_id,
         definitions=dict(manifest.definitions),
@@ -618,20 +677,36 @@ def _timing(projection_records: Sequence[Mapping[str, Any]]) -> TimingReport:
 def _reprojection(diagnostics: Sequence[Mapping[str, Any]]) -> ReprojectionReport:
     medians: list[float] = []
     p95s: list[float] = []
-    correspondences = invalid = 0
+    correspondences = invalid = unevaluated = 0
+    without_reference = not_evaluated = none_projectable = 0
     for record in diagnostics:
-        reprojection = record["reprojection"]
-        if reprojection is None:
+        # A tentativa está sempre no registro; o residual, só quando algo projetou. Ler o
+        # residual e seguir em frente descartava as contagens dos frames sem residual.
+        attempt = record["reprojection_attempt"]
+        outcome = attempt["outcome"]
+        if outcome == "no_reference":
+            without_reference += 1
             continue
+        correspondences += attempt["correspondence_count"]
+        invalid += attempt["invalid_count"]
+        unevaluated += attempt["unevaluated_count"]
+        if outcome == "not_evaluated":
+            not_evaluated += 1
+            continue
+        if outcome == "none_projectable":
+            none_projectable += 1
+            continue
+        reprojection = record["reprojection"]
         medians.append(reprojection["median_px"])
         p95s.append(reprojection["p95_px"])
-        correspondences += reprojection["correspondence_count"]
-        invalid += reprojection["invalid_count"]
     return ReprojectionReport(
-        frames_with_reference=len(medians),
-        frames_without_reference=len(diagnostics) - len(medians),
+        frames_measured=len(medians),
+        frames_without_reference=without_reference,
+        frames_with_reference_not_evaluated=not_evaluated,
+        frames_without_projectable_reference=none_projectable,
         correspondence_count=correspondences,
         invalid_correspondence_count=invalid,
+        unevaluated_correspondence_count=unevaluated,
         frame_median_px=_summary(medians),
         frame_p95_px=_summary(p95s),
     )
@@ -655,6 +730,7 @@ def _shared_lineage_drift(first: SensorAssociationLineage, other: SensorAssociat
         "state_estimation_run_id",
         "perception_run_ids",
         "calibration_identity",
+        "candidate_policy",
         "visibility_policy",
         "membership_policy_id",
         "definitions",
@@ -690,6 +766,7 @@ def _encode_lineage(lineage: SensorAssociationLineage) -> dict[str, Any]:
         "state_estimation_run_id": lineage.state_estimation_run_id,
         "perception_run_ids": list(lineage.perception_run_ids),
         "calibration_identity": lineage.calibration_identity,
+        "candidate_policy": dict(lineage.candidate_policy),
         "visibility_policy": dict(lineage.visibility_policy),
         "membership_policy_id": lineage.membership_policy_id,
         "definitions": dict(lineage.definitions),

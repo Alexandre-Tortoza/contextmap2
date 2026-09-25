@@ -32,8 +32,6 @@ from contextmap.shared import (
     RunDirectoryError,
     SourceTimestamp,
     check_file_inventory,
-    next_run_index,
-    write_run_registry,
 )
 from contextmap.state_estimation.lookup import ClockDomainMismatchError
 from contextmap.state_estimation.models import (
@@ -59,8 +57,12 @@ from contextmap.state_estimation.serialization import (
 )
 from contextmap.state_estimation.service import StateEstimationOutcome
 
-SCHEMA_VERSION = "0.1.0"
-"""State Estimation run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""State Estimation run artifact schema version written and understood by this module.
+
+Bumped from ``0.1.0`` for issue #555's ``auxiliary_sequence_artifact_id``/
+``auxiliary_selection_id`` manifest fields.
+"""
 
 StateEstimationRunId = NewType("StateEstimationRunId", str)
 """Identity of one State Estimation run, local to its capability and sequence."""
@@ -109,11 +111,18 @@ class StateEstimationRunManifest:
     """Authoritative metadata of a persisted State Estimation run.
 
     Attributes:
-        run_id: Identity of the run.
-        run_index: Monotonic index within this sequence's state-estimation runs.
+        run_id: Identity of the run, supplied by the caller.
+        run_index: Ordinal of the run among the caller's runs of this sequence, supplied by the
+            caller.
         sequence_name: Name of the processed sequence.
         sequence_artifact_id: Canonical sequence artifact consumed.
         selection_id: Deterministic identity of the sequence selection.
+        auxiliary_sequence_artifact_id: The auxiliary pose sequence actually merged into this
+            trajectory (issue #555), or ``None`` when none contributed. See
+            :attr:`~contextmap.state_estimation.TrajectoryProvenance.
+            auxiliary_sequence_artifact_id`.
+        auxiliary_selection_id: Deterministic identity of the auxiliary sequence's selection,
+            alongside ``auxiliary_sequence_artifact_id``. ``None`` under the same condition.
         trajectory_id: Identity of the persisted trajectory.
         estimator: Backend and configuration identity.
         calibration_identity: Hash of the calibration the estimator used.
@@ -143,6 +152,8 @@ class StateEstimationRunManifest:
     sequence_name: str
     sequence_artifact_id: SequenceArtifactId
     selection_id: str
+    auxiliary_sequence_artifact_id: SequenceArtifactId | None
+    auxiliary_selection_id: str | None
     trajectory_id: TrajectoryId
     estimator: EstimatorProvenance
     calibration_identity: str | None
@@ -165,46 +176,36 @@ class StateEstimationRunManifest:
     file_inventory: tuple[FileEntry, ...]
 
 
-def _sequence_dir(workspace_root: Path, sequence_name: str) -> Path:
-    return workspace_root / "runs" / "state-estimation" / sequence_name
-
-
 class StateEstimationRunWriter:
     """Builds an immutable State Estimation run artifact on the local filesystem."""
 
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        output_dir: Path,
         sequence_name: str,
         run_id: StateEstimationRunId,
         run_index: int,
-        selection_label: str,
-        backend_label: str,
         debug_level: StateEstimationDebugLevel = StateEstimationDebugLevel.NONE,
     ) -> None:
         """Create a writer for a new run.
 
         Args:
-            workspace_root: Root of the local workspace.
+            output_dir: The final directory of the artifact. The caller chooses it (in the
+                runtime, ``<workspace>/<dataset>/<run>/state_estimation``); the writer
+                computes no path, creates the directory atomically on finalization and
+                refuses to replace one that exists.
             sequence_name: Name of the sequence the run processed.
-            run_id: Identity of the run.
-            run_index: Monotonic index for this sequence's state-estimation
-                runs (see :func:`allocate_run_index`).
-            selection_label: Short readable selection description for the
-                directory name, e.g. ``"frames-0120-0260"``.
-            backend_label: Short readable backend description for the
-                directory name, e.g. ``"external-pose"``.
+            run_id: Identity of the run, supplied by the caller and never allocated here.
+            run_index: Ordinal of this run among the caller's runs of the same sequence,
+                supplied by the caller and recorded as given.
             debug_level: Amount of non-contractual debug evidence to persist.
         """
-        self._workspace_root = workspace_root
         self._sequence_name = sequence_name
         self._run_id = run_id
         self._run_index = run_index
         self._debug_level = debug_level
-        self._final_dir = _sequence_dir(workspace_root, sequence_name) / (
-            f"run-{run_index:04d}__{selection_label}__{backend_label}"
-        )
+        self._final_dir = output_dir
         self._finalized = False
 
     def finalize(
@@ -247,7 +248,6 @@ class StateEstimationRunWriter:
             raise RunArtifactError(str(error)) from error
 
         self._finalized = True
-        rebuild_run_registry(workspace_root=self._workspace_root, sequence_name=self._sequence_name)
         return _load_manifest(self._final_dir)
 
     def _write_outputs(self, run: AtomicRunDirectory, outcome: StateEstimationOutcome) -> None:
@@ -358,6 +358,12 @@ class StateEstimationRunWriter:
             "sequence_name": self._sequence_name,
             "sequence_artifact_id": str(provenance.sequence_artifact_id),
             "selection_id": provenance.selection_id,
+            "auxiliary_sequence_artifact_id": (
+                None
+                if provenance.auxiliary_sequence_artifact_id is None
+                else str(provenance.auxiliary_sequence_artifact_id)
+            ),
+            "auxiliary_selection_id": provenance.auxiliary_selection_id,
             "trajectory_id": str(trajectory.trajectory_id),
             "estimator": {
                 "backend_id": provenance.estimator.backend_id,
@@ -511,48 +517,6 @@ class StateEstimationRunReader:
         return self._index
 
 
-def allocate_run_index(*, workspace_root: Path, sequence_name: str) -> int:
-    """Compute the next monotonic run index for a sequence's state-estimation runs.
-
-    Scans the run directories, never the registry, so an interrupted or
-    corrupted run is not counted.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-
-    Returns:
-        The next index, starting at ``1``.
-    """
-    return next_run_index(_sequence_dir(workspace_root, sequence_name), index_of=_valid_run_index)
-
-
-def rebuild_run_registry(*, workspace_root: Path, sequence_name: str) -> None:
-    """Rebuild a sequence's ``runs.json`` convenience registry from its valid runs.
-
-    Args:
-        workspace_root: Root of the local workspace.
-        sequence_name: Name of the sequence.
-    """
-    write_run_registry(_sequence_dir(workspace_root, sequence_name), describe=_registry_record)
-
-
-def _valid_run_index(run_dir: Path) -> int | None:
-    try:
-        reader = StateEstimationRunReader(run_dir)
-    except RunArtifactError:
-        return None
-    return None if reader.verify_integrity() else reader.manifest.run_index
-
-
-def _registry_record(run_dir: Path) -> dict[str, Any] | None:
-    index = _valid_run_index(run_dir)
-    if index is None:
-        return None
-    manifest = StateEstimationRunReader(run_dir).manifest
-    return {"run_index": index, "run_id": str(manifest.run_id), "directory": run_dir.name}
-
-
 def _load_manifest(run_dir: Path) -> StateEstimationRunManifest:
     manifest_path = run_dir / _MANIFEST
     if not manifest_path.is_file():
@@ -569,6 +533,12 @@ def _load_manifest(run_dir: Path) -> StateEstimationRunManifest:
         sequence_name=raw["sequence_name"],
         sequence_artifact_id=SequenceArtifactId(raw["sequence_artifact_id"]),
         selection_id=raw["selection_id"],
+        auxiliary_sequence_artifact_id=(
+            None
+            if raw.get("auxiliary_sequence_artifact_id") is None
+            else SequenceArtifactId(raw["auxiliary_sequence_artifact_id"])
+        ),
+        auxiliary_selection_id=raw.get("auxiliary_selection_id"),
         trajectory_id=TrajectoryId(raw["trajectory_id"]),
         estimator=EstimatorProvenance(
             backend_id=estimator["backend_id"],
@@ -733,12 +703,19 @@ def _projection_csv(trajectory: Trajectory, *, second_axis: int) -> str:
 
 def _render_readme(run_id: StateEstimationRunId, run_index: int, trajectory: Trajectory) -> str:
     provenance = trajectory.provenance
+    auxiliary_line = (
+        f"- Auxiliary sequence artifact: `{provenance.auxiliary_sequence_artifact_id}` "
+        f"(selection `{provenance.auxiliary_selection_id}`)\n"
+        if provenance.auxiliary_sequence_artifact_id is not None
+        else ""
+    )
     return (
         f"# State estimation run {run_index:04d}\n"
         "\n"
         f"- Run ID: `{run_id}`\n"
         f"- Sequence artifact: `{provenance.sequence_artifact_id}`\n"
         f"- Selection: `{provenance.selection_id}`\n"
+        f"{auxiliary_line}"
         f"- Backend: `{provenance.estimator.backend_id}` "
         f"(version `{provenance.estimator.backend_version}`)\n"
         f"- Frames: `{trajectory.reference_frame}` <- `{trajectory.body_frame}` (T_parent_child)\n"

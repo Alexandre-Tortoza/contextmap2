@@ -9,6 +9,7 @@ from run_builders import (
     frame_id,
     frame_input,
     make_request,
+    run_collecting,
 )
 
 from contextmap.geometric_mapping import MapId
@@ -23,10 +24,11 @@ SERVICE = SensorAssociationService()
 
 
 def test_every_frame_is_associated_with_its_observations_quality_and_diagnostics() -> None:
-    outcome = SERVICE.run(make_request())
+    outcome, frames = run_collecting(make_request())
 
-    assert [frame.source_observation_id for frame in outcome.frames] == [frame_id(0), frame_id(1)]
-    first = outcome.frames[0]
+    assert outcome.frame_count == 2
+    assert [frame.source_observation_id for frame in frames] == [frame_id(0), frame_id(1)]
+    first = frames[0]
     assert [o.region_id for o in first.observations] == ["region-A", "region-B"]
     assert [q.spatial_observation_id for q in first.qualities] == [
         o.spatial_observation_id for o in first.observations
@@ -40,16 +42,16 @@ def test_every_frame_is_associated_with_its_observations_quality_and_diagnostics
 
 
 def test_the_observations_of_a_frame_record_the_run_configuration() -> None:
-    outcome = SERVICE.run(make_request())
+    outcome, frames = run_collecting(make_request())
 
-    provenance = outcome.frames[0].observations[0].provenance
+    provenance = frames[0].observations[0].provenance
     assert provenance.configuration_fingerprint == outcome.configuration_fingerprint
     assert provenance.code_version == "test"
     assert provenance.visibility_policy_id == OCCLUSION.policy_id
 
 
 def test_the_outcome_names_the_upstream_artifacts_the_run_consumed() -> None:
-    outcome = SERVICE.run(make_request())
+    outcome, _ = run_collecting(make_request())
 
     assert outcome.geometric_map.map_id == MapId("map-0001")
     assert outcome.sequence_artifact_id == SEQUENCE_ID
@@ -63,9 +65,9 @@ def test_the_outcome_names_the_upstream_artifacts_the_run_consumed() -> None:
 def test_a_frame_whose_pose_is_rejected_is_reported_and_the_run_continues() -> None:
     late = frame_input(1, time_ns=10_000_000_000)
 
-    outcome = SERVICE.run(make_request(frames=[frame_input(0), late]))
+    outcome, frames = run_collecting(make_request(frames=[frame_input(0), late]))
 
-    assert [frame.source_observation_id for frame in outcome.frames] == [frame_id(0)]
+    assert [frame.source_observation_id for frame in frames] == [frame_id(0)]
     (rejected,) = outcome.rejected
     assert isinstance(rejected, RejectedProjection)
     assert rejected.source_observation_id == frame_id(1)
@@ -73,9 +75,9 @@ def test_a_frame_whose_pose_is_rejected_is_reported_and_the_run_continues() -> N
 
 
 def test_native_and_enhanced_dense_channels_stay_distinct_evidence() -> None:
-    outcome = SERVICE.run(make_request(channels=[NATIVE, ENHANCED]))
+    outcome, frames = run_collecting(make_request(channels=[NATIVE, ENHANCED]))
 
-    samples = outcome.frames[0].dense_samples
+    samples = frames[0].dense_samples
     assert set(samples) == {"dino-native", "dino-enhanced"}
     native, enhanced = samples["dino-native"], samples["dino-enhanced"]
     assert native.provenance.enhancement is None
@@ -87,9 +89,9 @@ def test_native_and_enhanced_dense_channels_stay_distinct_evidence() -> None:
 
 
 def test_a_run_with_no_dense_channel_samples_no_feature() -> None:
-    outcome = SERVICE.run(make_request())
+    outcome, frames = run_collecting(make_request())
 
-    assert outcome.frames[0].dense_samples == {}
+    assert frames[0].dense_samples == {}
     assert outcome.dense_channels == ()
 
 
@@ -97,38 +99,38 @@ def test_a_frame_without_the_dense_map_of_a_declared_channel_is_rejected() -> No
     incomplete = dataclasses.replace(frame_input(0, channels=[NATIVE]), dense_maps={})
 
     with pytest.raises(AssociationInputError, match="dino-native"):
-        SERVICE.run(make_request(frames=[incomplete], channels=[NATIVE]))
+        run_collecting(make_request(frames=[incomplete], channels=[NATIVE]))
 
 
 def test_channel_identities_must_be_unique() -> None:
     with pytest.raises(AssociationInputError, match="channel"):
-        SERVICE.run(make_request(channels=[NATIVE, NATIVE]))
+        run_collecting(make_request(channels=[NATIVE, NATIVE]))
 
 
 def test_a_frame_cannot_appear_twice() -> None:
     with pytest.raises(AssociationInputError, match="frame"):
-        SERVICE.run(make_request(frames=[frame_input(0), frame_input(0)]))
+        run_collecting(make_request(frames=[frame_input(0), frame_input(0)]))
 
 
 def test_a_trusted_reference_gives_the_quality_and_the_diagnostics_a_residual() -> None:
-    outcome = SERVICE.run(make_request(frames=[frame_input(0, with_reference=True)]))
+    _, frames = run_collecting(make_request(frames=[frame_input(0, with_reference=True)]))
 
-    frame = outcome.frames[0]
+    frame = frames[0]
     assert frame.diagnostics.reprojection is not None
     assert frame.diagnostics.reprojection.median_px == pytest.approx(1.0)
     assert all(q.reprojection == frame.diagnostics.reprojection for q in frame.qualities)
 
 
 def test_the_configuration_fingerprint_is_deterministic_and_tracks_the_configuration() -> None:
-    base = SERVICE.run(make_request()).configuration_fingerprint
+    base = run_collecting(make_request())[0].configuration_fingerprint
 
-    assert base == SERVICE.run(make_request()).configuration_fingerprint
+    assert base == run_collecting(make_request())[0].configuration_fingerprint
     assert base.startswith("sha256:")
     wider = dataclasses.replace(OCCLUSION, neighborhood_radius_cells=3)
-    assert base != SERVICE.run(make_request(occlusion=wider)).configuration_fingerprint
-    assert base != SERVICE.run(make_request(channels=[NATIVE])).configuration_fingerprint
+    assert base != run_collecting(make_request(occlusion=wider))[0].configuration_fingerprint
+    assert base != run_collecting(make_request(channels=[NATIVE]))[0].configuration_fingerprint
     bilinear = DenseChannel(channel_id="dino-native", interpolation=InterpolationPolicy.BILINEAR)
     assert (
-        SERVICE.run(make_request(channels=[NATIVE])).configuration_fingerprint
-        != SERVICE.run(make_request(channels=[bilinear])).configuration_fingerprint
+        run_collecting(make_request(channels=[NATIVE]))[0].configuration_fingerprint
+        != run_collecting(make_request(channels=[bilinear]))[0].configuration_fingerprint
     )

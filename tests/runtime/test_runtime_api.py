@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory, request
 from runtime_worlds import World, world_executors
 
@@ -34,6 +35,7 @@ from contextmap.runtime import (
     Runtime,
     RuntimeRunRecord,
     StaticCatalog,
+    check_selection,
     resolve_effective_config,
 )
 
@@ -42,6 +44,7 @@ SECRET = "s3cr3t-value-123"
 TARGET = ["semantic_fusion"]
 PLAN_ORDER = (
     "ingestion",
+    "pose_ingestion",
     "visual_perception",
     "state_estimation",
     "geometric_mapping",
@@ -53,7 +56,19 @@ PLAN_ORDER = (
     "spatial_relations",
     "context_map",
 )
-RUN_ORDER = PLAN_ORDER[:7]
+# ``pose_ingestion`` (issue #555) stays off by default in this suite's config, unlike
+# ``point_representation``, which ``selected_document()`` enables explicitly -- so a resolved
+# plan's actual stages/order exclude it, while a full catalog listing (``status.executors``,
+# ``capabilities()``) still names it.
+ACTIVE_PLAN_ORDER = tuple(stage for stage in PLAN_ORDER if stage != "pose_ingestion")
+# The order a run scoped to ``TARGET`` (``semantic_fusion``) actually executes: the active
+# stages' prefix up to and including it, since nothing after it is a dependency of that target.
+RUN_ORDER = ACTIVE_PLAN_ORDER[: ACTIVE_PLAN_ORDER.index("semantic_fusion") + 1]
+# `canonical/1`'s own topology, extended by the ``unavailable_future_stage`` fixture with a
+# fictional ``scene_graph`` stage marked unavailable -- it never joins ``run_stages`` because it
+# is not a dependency of any real target.
+PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE = (*PLAN_ORDER, "scene_graph")
+ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE = (*ACTIVE_PLAN_ORDER, "scene_graph")
 
 
 def _ready(_name: str) -> bool:
@@ -85,9 +100,15 @@ def _runtime(
     return runtime, world
 
 
+# O dataset é a sequência física do catálogo de teste (`Lineage(sequence=...)`).
+DATASET = "corridor-02"
+
+
 def _write(tmp_path: Path, document: dict[str, Any] | None = None) -> Path:
     path = tmp_path / "experiment.json"
-    path.write_text(json.dumps(document or selected_document()), encoding="utf-8")
+    document = document or selected_document()
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    path.write_text(json.dumps(document), encoding="utf-8")
     return path
 
 
@@ -132,23 +153,61 @@ def test_status_describes_the_runtime_and_what_it_is_wired_to(tmp_path: Path) ->
     assert (bare.workspace, bare.executors, bare.verifier_configured) == (None, (), False)
 
 
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_capabilities_list_every_stage_in_order_with_its_variation_points() -> None:
     capabilities = Runtime(module_available=_ready, environ={}).capabilities()
     by_stage = {capability.stage_id: capability for capability in capabilities}
 
-    assert tuple(by_stage) == PLAN_ORDER
+    assert tuple(by_stage) == PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
     ingestion = by_stage["ingestion"]
     assert ingestion.implemented
     assert [component.component_id for component in ingestion.components] == [
         "ingestion.source_adapter"
     ]
     assert [b.backend_id for b in ingestion.components[0].backends] == ["ros1_bag", "ros2_bag"]
-    unimplemented = by_stage["semantic_mapping"]
+    unimplemented = by_stage["scene_graph"]
     assert not unimplemented.implemented
     assert "not implemented yet" in unimplemented.reason
     assert unimplemented.components == ()
     assert by_stage["point_representation"].optional
     assert not by_stage["point_representation"].default_enabled
+
+
+def test_an_optional_component_round_trips_through_discovery_edit_and_validation(
+    tmp_path: Path,
+) -> None:
+    """P2 #3 of the PR #540 review: ``RuntimeComponent.optional`` and the edit contract agree.
+
+    ``entity_resolution.semantic_compatibility`` may legitimately have no backend selected.
+    Discovery must say so (``RuntimeComponent.optional``), and the edit that lets a frontend
+    choose it must accept "no backend" as one of ``allowed`` -- not describe a ``current`` of
+    ``None`` while claiming only concrete backend ids are accepted.
+    """
+    runtime = Runtime(module_available=_ready, environ={})
+    component_id = "entity_resolution.semantic_compatibility"
+
+    # Discovery: o componente se declara opcional.
+    capability = next(c for c in runtime.capabilities() if c.stage_id == "entity_resolution")
+    component = next(c for c in capability.components if c.component_id == component_id)
+    assert component.optional
+
+    document = selected_document()
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    config = runtime.resolve_config(files=[path])
+
+    # Edição: "sem backend" é um valor aceito, não só o que `current` descreve.
+    plan = runtime.resolve_plan(config)
+    edit = next(e for e in plan.editable if e.path == f"components.{component_id}.backend")
+    assert edit.current is None
+    assert edit.allowed is not None
+    assert None in edit.allowed
+
+    # Validação: aplicar explicitamente "sem backend" continua uma seleção completa.
+    validated = runtime.resolve_config(files=[path], overrides=[f"{edit.path}=null"])
+    assert validated.config.components[component_id].backend is None
+    assert check_selection(validated.config) == ()
 
 
 def test_a_backend_that_cannot_be_used_says_why() -> None:
@@ -314,6 +373,7 @@ def test_an_unsupported_stage_or_backend_is_refused_at_resolution(
         _config(runtime, tmp_path, override)
 
 
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
@@ -322,10 +382,15 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
 
     by_stage = {stage.stage_id: stage for stage in plan.stages}
     assert plan.preset == "canonical/1"
-    assert plan.order == PLAN_ORDER
-    assert tuple(by_stage) == PLAN_ORDER
+    assert plan.order == ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
+    assert tuple(by_stage) == ACTIVE_PLAN_ORDER_WITH_UNAVAILABLE_FUTURE_STAGE
     assert plan.run_stages == RUN_ORDER
-    assert (plan.config_digest, plan.disabled_stages, plan.problems) == (config.digest, (), ())
+    # pose_ingestion (issue #555) is off by default; nothing else is disabled in this config.
+    assert (plan.config_digest, plan.disabled_stages, plan.problems) == (
+        config.digest,
+        ("pose_ingestion",),
+        (),
+    )
     association = by_stage["sensor_association"]
     assert [(item.name, item.source) for item in association.inputs] == [
         ("sequence", "ingestion"),
@@ -339,8 +404,8 @@ def test_the_resolved_plan_exposes_topology_wiring_and_selected_backends(tmp_pat
     assert by_stage["point_representation"].optional
     assert by_stage["point_representation"].output == "PointRepresentationRunArtifact"
     assert by_stage["ingestion"].in_scope
-    assert not by_stage["semantic_mapping"].available
-    assert not by_stage["semantic_mapping"].in_scope
+    assert not by_stage["scene_graph"].available
+    assert not by_stage["scene_graph"].in_scope
     assert by_stage["ingestion"].config_digest
 
 
@@ -353,7 +418,8 @@ def test_a_disabled_optional_stage_is_listed_and_its_branch_disappears(tmp_path:
 
     fusion = next(stage for stage in plan.stages if stage.stage_id == "semantic_fusion")
     toggle = next(e for e in plan.editable if e.path == "pipeline.stages.point_representation")
-    assert plan.disabled_stages == ("point_representation",)
+    # pose_ingestion is also off by default (issue #555); only point_representation was toggled.
+    assert set(plan.disabled_stages) == {"pose_ingestion", "point_representation"}
     assert plan.order is not None
     assert "point_representation" not in plan.order
     assert "representation" not in [item.name for item in fusion.inputs]
@@ -394,6 +460,7 @@ def test_supplied_upstream_artifacts_take_the_place_of_their_stages(tmp_path: Pa
     assert [problem.path for problem in refused.problems] == ["provided.ingestion"]
 
 
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_value(
     tmp_path: Path,
 ) -> None:
@@ -407,7 +474,7 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
     assert "components.ingestion.source_adapter.backend" in edits
     assert edits["components.ingestion.source_adapter.backend"].allowed == ("ros1_bag", "ros2_bag")
     assert edits["policies.debug_level"].allowed == ("none", "standard", "full")
-    assert "inputs.selections.semantic_mapping" not in edits  # capability ainda inexistente
+    assert "inputs.selections.scene_graph" not in edits  # capability ainda inexistente
     for edit in plan.editable:
         if edit.current is None:
             continue
@@ -423,6 +490,124 @@ def test_every_declared_edit_is_a_real_override_path_with_a_truthful_current_val
 
 
 # --- preflight --------------------------------------------------------------------------
+
+
+def test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration(
+    tmp_path: Path,
+) -> None:
+    """Blocker #2 of the PR #387 review: ``Runtime(executors={})`` is no longer a dead end.
+
+    A frontend that never builds an executor by hand can still preflight (and run) the
+    stages ``compose_executors`` can build from the configuration alone; only ``ingestion``
+    (needs a request no configuration carries) and ``visual_perception`` (no real executor
+    yet) remain genuinely blocked.
+    """
+    runtime = Runtime(
+        workspace=tmp_path / "ws", module_available=_ready, environ={}
+    )  # executors=None: nada injetado
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert not report.ok  # capabilities sem executor real continuam honestamente ausentes
+    assert set(report.missing_executors) == {
+        "ingestion",
+        "visual_perception",
+        "point_representation",
+    }
+    for stage in ("state_estimation", "geometric_mapping", "sensor_association", "semantic_fusion"):
+        assert stage not in report.missing_executors
+
+
+def test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade(
+    tmp_path: Path,
+) -> None:
+    """``providers=`` reaches the facade's own composition path exactly like the CLI's.
+
+    ``sam3`` and ``qwen`` (the default fixture's region discovery and semantic
+    interpretation backends) have no bundled model loader: without a ``RuntimeProvider`` for
+    each, ``visual_perception`` stays a genuine ``missing_executors`` entry (see
+    ``test_a_runtime_with_no_injected_executors_still_composes_them_from_configuration``).
+    Supplying them through ``Runtime(providers=...)`` -- not a hand-built executor for the
+    whole stage -- lets ``compose_executors`` build the real thing.
+    """
+    providers = {
+        "visual_perception.region_discovery": lambda _config, _secrets: object(),
+        "visual_perception.semantic_interpretation": lambda _config, _secrets: object(),
+    }
+    runtime = Runtime(
+        workspace=tmp_path / "ws", providers=providers, module_available=_ready, environ={}
+    )
+    config = _config(runtime, tmp_path)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
+def test_a_declared_provider_target_lets_visual_perception_compose_with_no_python_providers(
+    tmp_path: Path,
+) -> None:
+    """The facade's counterpart of the CLI's decisive #507 proof.
+
+    Unlike ``test_supplied_providers_let_visual_perception_compose_through_the_runtime_facade``
+    above, this ``Runtime`` is constructed with no ``providers=`` at all: the runtime for
+    ``sam3``/``qwen`` instead comes from a ``resources.providers`` target declared in the
+    resolved configuration, resolved lazily by
+    ``contextmap.runtime.composition.resolve_provider`` from a real importable module.
+    """
+    runtime = Runtime(workspace=tmp_path / "ws", module_available=_ready, environ={})
+    targets = json.dumps(
+        {
+            "visual_perception.region_discovery": "runtime_provider_fixtures:load_region_discovery",
+            "visual_perception.semantic_interpretation": (
+                "runtime_provider_fixtures:load_semantic_interpretation"
+            ),
+        }
+    )
+    config = _config(runtime, tmp_path, f"resources.providers={targets}")
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    assert "visual_perception" not in report.missing_executors
+
+
+def test_a_provider_given_to_runtime_reaches_an_optional_entity_resolution_channel(
+    tmp_path: Path,
+) -> None:
+    """P2 #2 of the PR #540 review: ``Runtime(providers=...)`` must reach ``compose_executors``.
+
+    ``entity_resolution.appearance``, once selected, needs a ``FeatureVectorSource`` from a
+    ``RuntimeProvider`` -- the same mechanism sam3/qwen/gemini already use. Before this fix,
+    ``Runtime`` had no way to accept or forward ``providers``, so selecting this optional
+    channel silently dropped the whole ``entity_resolution`` executor instead of composing it.
+    """
+    document = selected_document()
+    document["inputs"] = {**document.get("inputs", {}), "sequence": DATASET}
+    document["components"]["entity_resolution"]["appearance"] = {
+        "backend": "entity-appearance-comparison-v1",
+        "entity-appearance-comparison-v1": {
+            "embedding_space_id": "clip-vit-b32",
+            "min_supporting_similarity": 0.8,
+        },
+    }
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    def provide(config: Any, secrets: Any) -> object:
+        return object()  # um FeatureVectorSource real não importa aqui, só a propagação
+
+    runtime = Runtime(
+        workspace=tmp_path / "ws",
+        providers={"entity_resolution.appearance": provide},
+        module_available=_ready,
+        environ={},
+    )
+    config = runtime.resolve_config(files=[path])
+
+    report = runtime.preflight(config, targets=["entity_resolution"])
+
+    assert "entity_resolution" not in report.missing_executors
 
 
 def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Path) -> None:
@@ -442,17 +627,18 @@ def test_preflight_succeeds_and_reports_the_identities_it_would_use(tmp_path: Pa
     assert world.runs == []
 
 
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     runtime, _ = _runtime(
         tmp_path, executors=False, module_available=lambda name: name != "rosbags"
     )
     config = _config(runtime, tmp_path)
 
-    report = runtime.preflight(config, targets=[*TARGET, "semantic_mapping", "nonexistent"])
+    report = runtime.preflight(config, targets=[*TARGET, "scene_graph", "nonexistent"])
 
     paths = [problem.path for problem in report.problems]
     assert not report.ok
-    assert "stages.semantic_mapping" in paths  # capability ainda inexistente
+    assert "stages.scene_graph" in paths  # capability ainda inexistente
     assert "targets.nonexistent" in paths
     assert "components.ingestion.source_adapter" in paths  # módulo opcional ausente
     assert any(
@@ -460,7 +646,7 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
         for problem in report.problems
     )
     assert "ingestion" in report.missing_executors
-    assert "semantic_mapping" not in report.missing_executors
+    assert "scene_graph" not in report.missing_executors
 
 
 def test_preflight_names_a_missing_secret_without_any_value(tmp_path: Path) -> None:
@@ -654,15 +840,16 @@ def test_a_blocked_run_is_a_result_and_nothing_executed(tmp_path: Path) -> None:
     assert set(_outcomes(result.record).values()) == {"pending"}
 
 
+@pytest.mark.usefixtures("unavailable_future_stage")
 def test_an_unimplemented_stage_blocks_the_run_explicitly(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
 
-    result = runtime.run(_config(runtime, tmp_path), targets=["semantic_mapping"])
+    result = runtime.run(_config(runtime, tmp_path), targets=["scene_graph"])
 
     assert result.status == "blocked"
     assert world.runs == []
     assert any(
-        problem.path == "stages.semantic_mapping" and "not implemented yet" in problem.message
+        problem.path == "stages.scene_graph" and "not implemented yet" in problem.message
         for problem in result.record.blocked_problems
     )
 
@@ -860,7 +1047,7 @@ def test_list_runs_is_deterministic_numeric_and_lists_unreadable_records(tmp_pat
     runtime.run(config, targets=TARGET)
     world.fail_at = "ingestion"
     runtime.run(config, targets=TARGET)
-    base = tmp_path / "ws" / "runtime"
+    base = tmp_path / "ws" / DATASET
     (base / "run-9999").mkdir()
     (base / "run-9999" / "status.json").write_text("{not json", encoding="utf-8")
     (base / "run-10000").mkdir()
@@ -1001,3 +1188,33 @@ def test_an_injected_adapter_factory_backs_the_ingestion_service(tmp_path: Path)
     report = runtime.ingestion(config).preflight(request(tmp_path))
 
     assert report.ok, report.problems
+
+
+def test_list_runs_spans_every_dataset_of_the_workspace_and_orders_by_dataset_then_number(
+    tmp_path: Path,
+) -> None:
+    runtime, _ = _runtime(tmp_path)
+    base = tmp_path / "ws"
+    for dataset, names in (
+        ("corridor-03", ["run-0002"]),
+        ("corridor-02", ["run-0010", "run-0002"]),
+    ):
+        for name in names:
+            (base / dataset / name).mkdir(parents=True)
+
+    runs = runtime.list_runs()
+
+    assert [(run.run_id, run.dataset) for run in runs] == [
+        ("run-0002", "corridor-02"),
+        ("run-0010", "corridor-02"),
+        ("run-0002", "corridor-03"),
+    ]
+
+
+def test_a_run_id_present_in_two_datasets_is_ambiguous_and_never_guessed(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    for dataset in ("corridor-02", "corridor-03"):
+        (tmp_path / "ws" / dataset / "run-0001").mkdir(parents=True)
+
+    with pytest.raises(RunRecordError, match="several datasets"):
+        runtime.inspect_run("run-0001")

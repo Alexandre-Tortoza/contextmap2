@@ -264,3 +264,43 @@ def test_load_detects_corrupt_payload(tmp_path: Path) -> None:
     reader = FeatureStoreReader(tmp_path, (corrupted_entry,))
     with pytest.raises(FeaturePayloadIntegrityError, match="unsupported or corrupt"):
         reader.load(SourceObservationId("frame-0124"), feature.feature_id)
+
+
+def _current_rss_bytes() -> int:
+    """RSS corrente do processo; ru_maxrss seria pico monotônico e esconderia a liberação."""
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    pytest.skip("VmRSS unavailable on this platform")
+
+
+def test_load_does_not_hold_the_serialized_bytes_and_the_array_at_once(tmp_path: Path) -> None:
+    """load() read the whole .npy into bytes, hashed it, then decoded from those bytes (#518).
+
+    For a real dense payload that made peak memory about twice the array itself.
+    """
+    rows, cols = 2048, 2048  # 16 MB float32
+    payload_bytes = rows * cols * 4
+    feature = replace(
+        _dense_feature(),
+        shape=(rows, cols),
+        payload_reference="frame-0124/feature-dense-0000.npy",
+    )
+    writer = FeatureStoreWriter(tmp_path)
+    writer.write(
+        feature,
+        SourceObservationId("frame-0124"),
+        np.full((rows, cols), 3.5, dtype="float32"),
+    )
+    write_feature_index(tmp_path, writer.entries())
+
+    reader = FeatureStoreReader.open(tmp_path)
+    before = _current_rss_bytes()
+    loaded = reader.load(SourceObservationId("frame-0124"), FeatureId("feature-dense-0000"))
+    growth = _current_rss_bytes() - before
+
+    assert loaded.shape == (rows, cols)
+    assert growth < payload_bytes * 3 // 2, (
+        f"load() grew RSS by {growth / 2**20:.1f} MB for a {payload_bytes / 2**20:.0f} MB payload; "
+        "the serialized bytes and the decoded array must not coexist"
+    )

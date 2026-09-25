@@ -14,12 +14,12 @@ Um frontend importa **somente** de `contextmap.runtime` e nunca precisa conhecer
 
 | Operação | O que faz | Delega a |
 |---|---|---|
-| `status()` | versão, versões de schema, perfis conhecidos, workspace, executores e verificador ligados | catálogo, schemas |
+| `status()` | versão, versões de schema, perfis conhecidos, workspace, executores **injetados** na construção e verificador ligados | catálogo, schemas |
 | `capabilities()` | cada estágio, seus pontos de variação e se cada backend pode ser usado **aqui**, com o motivo | catálogo + checagem de disponibilidade |
 | `resolve_config(profile, files, overrides)` | configuração efetiva, com digest e camadas | `resolve_effective_config` |
 | `resolve_plan(config, targets, provided, catalog)` | topologia, ordem, backends, entradas/saídas, escopo e edições permitidas | `resolve_plan`, `scope`, seleção |
-| `preflight(config, …, reuse)` | todos os problemas de uma vez, avisos, identidades e previsão de reuso | `preflight`, `predict_reuse` |
-| `run(config, …, reuse, resume, events, cancellation)` | executa o pipeline ou um subgrafo e persiste o run | `RunJournal`, `run_plan`, `resume_plan` |
+| `preflight(config, …, reuse)` | todos os problemas de uma vez, avisos, identidades e previsão de reuso | `compose_executors`, `preflight`, `predict_reuse` |
+| `run(config, …, reuse, resume, events, cancellation)` | executa o pipeline ou um subgrafo e persiste o run | `compose_executors`, `RunJournal`, `run_plan`, `resume_plan` |
 | `reuse_policy(index, code_identity, force)` | política de reuso sobre um índice | `ReusePolicy`, `FileArtifactStore` |
 | `list_runs()` / `inspect_run(run)` | lista e detalhe **lidos do registro persistido** | `read_run` |
 | `ingestion(config)` | o serviço público de ingestion com o adapter composto | composition root, `IngestionService` |
@@ -62,9 +62,9 @@ Problemas estruturais (ciclo, contrato incompatível, alvo desconhecido, seleç�
 
 - `warnings`: o que não bloqueia, como a ausência de workspace e cada `latest` que foi resolvido (com o artifact escolhido);
 - `predicted_reuse`, com uma política de reuso: o que seria reaproveitado ou recomputado, sem executar nada. O registro do run continua sendo a autoridade (a previsão é conservadora);
-- `missing_executors`: só os estágios que **rodariam** e não têm executor; um estágio que certamente será reaproveitado não precisa dele.
+- `missing_executors`: só os estágios que **rodariam** e não têm executor, contando tanto os compostos automaticamente da configuração (`compose_executors`, ver [`composition.md`](composition.md)) quanto os injetados na construção do `Runtime`; um estágio que certamente será reaproveitado não precisa dele.
 
-Estágio inexistente ou de capability ainda não implementada é **explícito**: `stages.semantic_mapping: the semantic_mapping capability is not implemented yet (milestone #12)`; backend ou estágio desconhecido é recusado já na resolução.
+Estágio inexistente ou de capability ainda não implementada é **explícito**: `stages.context_map: the artifact capability is not implemented yet` (para um preset que declare um estágio assim); backend ou estágio desconhecido é recusado já na resolução.
 
 ## Execução
 
@@ -79,7 +79,7 @@ Estágio inexistente ou de capability ainda não implementada é **explícito**:
 
 ## Inspeção de runs: a linhagem persistida é a autoridade
 
-`list_runs()` lista `run-NNNN` em ordem **numérica** (não lexicográfica), inclusive um registro ilegível, que aparece com o motivo em vez de sumir. `inspect_run(run)` aceita um id sob o workspace ou um diretório e devolve o que o registro contém:
+`list_runs()` lista `<dataset>/run-NNNN` ordenando por dataset e depois em ordem **numérica** (não lexicográfica), inclusive um registro ilegível, que aparece com o motivo em vez de sumir; cada `RuntimeRunSummary` traz o `dataset`, porque `run-0001` se repete entre datasets. `inspect_run(run)` aceita um id sob algum dataset do workspace (um id presente em mais de um dataset é ambíguo e é recusado: passe o diretório) ou um diretório, e devolve o que o registro contém:
 
 - estado, `interrupted`, digests, backends por ponto de variação (da configuração persistida), alvos, artifacts fornecidos;
 - por estágio: `outcome` (`pending`, `started`, `reused`, `completed`, `failed`), **entradas exatas** (ids), saída, **decisão de reuso** (com o artifact anterior exato) e tempo;
@@ -132,12 +132,12 @@ for summary in runtime.list_runs():
     print(summary.run_id, summary.status)
 ```
 
-`executors` e `verifier` vêm de quem possui os estágios: o runtime não inventa um executor nem sabe se um artifact indexado ainda existe.
+`verifier` vem de quem possui os estágios: o runtime não sabe, sozinho, se um artifact indexado ainda existe. `executors` já não é a única fonte de executores: `preflight` e `run` mesclam o que foi passado aqui com o que [`compose_executors`](composition.md) consegue montar da própria `config` de cada chamada — o injetado aqui sempre vence, então `executors=` continua servindo para testes e para substituir ou completar um estágio que a composição não sabe montar sozinha (por exemplo `ingestion`). `Runtime(providers=...)` segue a mesma ideia para o `RuntimeProvider` de um backend sem loader empacotado (SAM2, SAM3, Qwen, Gemini, Florence-2…), mas é só metade da história: sem ele **e** sem um alvo `resources.providers` na própria `config` (resolvido por `resolve_provider`, ver [`composition.md`](composition.md#providers-declarados-em-configuração-resourcesproviders)), `visual_perception` fica honestamente ausente de `preflight().missing_executors`. Um `providers=` explícito para o mesmo componente ainda vence sobre um alvo declarado.
 
 ## Lacunas conhecidas
 
-- **A CLI ainda não usa esta fachada.** `contextmap` chama diretamente as mesmas funções (`resolve_effective_config`, `run_plan`, `RunJournal`…), então não há uma segunda especificação do pipeline, mas há duas costuras de código. Migrar a CLI para `Runtime` é trabalho futuro; o comportamento já é equivalente (mesmo digest, mesmo registro).
+- **A CLI ainda não usa esta fachada.** `contextmap` chama diretamente as mesmas funções (`resolve_effective_config`, `run_plan`, `RunJournal`…), então não há uma segunda especificação do pipeline, mas há duas costuras de código — ambas mesclam `compose_executors` com o injetado, do mesmo jeito. Migrar a CLI para `Runtime` é trabalho futuro; o comportamento já é equivalente (mesmo digest, mesmo registro).
 - **Não há catálogo sobre os índices reais de run das capabilities.** `catalog=` recebe um `ArtifactCatalog` (por exemplo `StaticCatalog`/`load_catalog`); reconstruí-lo a partir dos índices exige leitores das capabilities, que o runtime não importa.
-- **Descoberta por perfil.** Só o perfil `canonical/1` existe; `capabilities(profile=...)` já aceita outros.
+- **Descoberta por perfil.** Antes do v0.1.0 sair só `canonical/1` existe, do recorded source ao `ContextMapArtifact`; `capabilities(profile=...)` já aceita outros conforme o catálogo crescer no futuro.
 - **Um run em andamento.** `inspect_run` de um run `running` mostra o que já foi persistido; o acompanhamento ao vivo é pelo sink de eventos, não por leitura repetida.
-- **Sem executores das capabilities.** A execução real do canônico depende de executores que ainda não existem para cada estágio (só a ingestion tem um, `IngestionStageExecutor`); os testes usam estágios falsos.
+- **`ingestion` e `point_representation` sem composição automática.** `compose_executors` monta `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `semantic_mapping` (com `semantic_map_id`/`code_digest` explícitos), `entity_resolution`, `spatial_relations`, `context_map` e, com um `RuntimeProvider` por backend sem loader (via `providers=` ou via `resources.providers` na configuração), `visual_perception`; `ingestion` precisa de um `IngestionRequest` que não é parte de nenhuma configuração (injete um `IngestionStageExecutor`, ou rode `contextmap ingest` e forneça/selecione o artifact publicado), e `point_representation` ainda não tem executor real (depende de modelo/GPU) — os testes desta fachada usam estágios falsos para essas duas.

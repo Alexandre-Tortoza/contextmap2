@@ -32,8 +32,16 @@ from contextmap.sensor_association.models import (
     SpatialObservationId,
 )
 
-QUALITY_DEFINITIONS_VERSION = "observation-quality-v1"
-"""Versioned identity of the component definitions in :class:`ObservationQuality`."""
+QUALITY_DEFINITIONS_VERSION = "observation-quality-v2"
+"""Versioned identity of the component definitions in :class:`ObservationQuality`.
+
+``v2`` (#562): :class:`ReprojectionStatistics` gained ``unevaluated_count`` and now defines its
+rates over the **evaluated** population through :attr:`ReprojectionStatistics.evaluated_count`
+and :attr:`ReprojectionStatistics.invalid_rate`, and it refuses to exist without an evaluated
+correspondence that projects. A residual measured over a population the candidate policy
+narrowed is not the same quantity as one measured over the whole map, so it does not keep the
+same identity.
+"""
 
 
 class QualityComponent(Enum):
@@ -96,6 +104,10 @@ class ReprojectionStatistics:
         correspondence_count: Number of reference correspondences evaluated.
         invalid_count: Of those, the ones that could not be projected (behind the camera or
             outside the image), which contribute no residual.
+        unevaluated_count: Correspondences whose geometry the frame's candidate policy did
+            not evaluate at all, so the frame says nothing about them. They are reported
+            rather than counted as invalid: not projected and not selected are different
+            facts, and a residual over a shrinking population must say so.
         mean_px: Mean residual over the valid correspondences, in pixels.
         median_px: Median residual, in pixels.
         p95_px: 95th percentile residual, in pixels.
@@ -105,6 +117,7 @@ class ReprojectionStatistics:
     reference_id: str
     correspondence_count: int
     invalid_count: int
+    unevaluated_count: int
     mean_px: float
     median_px: float
     p95_px: float
@@ -126,6 +139,23 @@ class ReprojectionStatistics:
                 f"invalid_count {self.invalid_count} must be between 0 and the "
                 f"correspondence_count {self.correspondence_count}"
             )
+        if not 0 <= self.unevaluated_count <= self.correspondence_count:
+            raise ValueError(
+                f"unevaluated_count {self.unevaluated_count} must be between 0 and the "
+                f"correspondence_count {self.correspondence_count}"
+            )
+        if self.invalid_count + self.unevaluated_count > self.correspondence_count:
+            raise ValueError(
+                f"invalid_count {self.invalid_count} and unevaluated_count "
+                f"{self.unevaluated_count} cannot together exceed the correspondence_count "
+                f"{self.correspondence_count}"
+            )
+        if self.invalid_count >= self.correspondence_count - self.unevaluated_count:
+            raise ValueError(
+                "residual statistics need at least one evaluated correspondence the camera model "
+                f"could project, but {self.invalid_count} of {self.evaluated_count} evaluated were "
+                "invalid; a frame with none has no statistics at all"
+            )
         values = (self.mean_px, self.median_px, self.p95_px, self.max_px)
         if not all(math.isfinite(value) and value >= 0 for value in values):
             raise ValueError(f"residuals must be finite and not negative, got {values!r}")
@@ -134,6 +164,24 @@ class ReprojectionStatistics:
                 "residual quantiles must be in order (median <= p95 <= max), got "
                 f"{(self.median_px, self.p95_px, self.max_px)!r}"
             )
+
+    @property
+    def evaluated_count(self) -> int:
+        """Correspondences the frame actually evaluated: the population every rate is over.
+
+        A correspondence the candidate policy excluded says nothing about the camera, so it
+        belongs in neither the numerator nor the denominator of an invalid rate.
+        """
+        return self.correspondence_count - self.unevaluated_count
+
+    @property
+    def invalid_rate(self) -> float:
+        """Share of the **evaluated** correspondences the camera model could not project.
+
+        Never diluted by the unevaluated ones: with 100 references of which 90 fell outside the
+        candidate policy, 1 invalid and 9 valid, this is ``0.1`` and not ``0.01``.
+        """
+        return self.invalid_count / self.evaluated_count
 
 
 @dataclass(frozen=True, kw_only=True)

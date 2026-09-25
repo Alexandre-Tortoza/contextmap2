@@ -10,9 +10,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 
 from contextmap.geometric_mapping import (
+    DEFAULT_BLOCK_POINTS,
     Bounds3D,
     GeometricMap,
     GeometricMapProvenance,
+    GeometryBlock,
     GeometryPoint,
     GeometryPointProvenance,
     GeometryReference,
@@ -39,8 +41,8 @@ from contextmap.ingestion import (
     SourceProvenance,
 )
 from contextmap.ingestion.calibration import compute_content_hash
+from contextmap.sensor_association.candidate_geometry import CandidateGeometryPolicy
 from contextmap.sensor_association.frame_projection import FrameProjection, FrameProjector
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.shared import SourceTimestamp, Vector3
 from contextmap.state_estimation import (
     EstimatorProvenance,
@@ -236,7 +238,32 @@ class ArrayGeometrySource:
         return iter(self._points)
 
     def query_bounds(self, bounds: Bounds3D) -> Iterator[GeometryPoint]:
-        raise NotImplementedError
+        for point in self._points:
+            if bounds.contains(point.coordinates_m, frame_id=self._map.frame_id):
+                yield point
+
+    def iter_blocks(
+        self, *, bounds: Bounds3D | None = None, block_points: int = DEFAULT_BLOCK_POINTS
+    ) -> Iterator[GeometryBlock]:
+        import numpy as np
+
+        if block_points < 1:
+            raise ValueError(f"block_points must be at least 1, got {block_points}")
+        if bounds is not None and bounds.frame_id != self._map.frame_id:
+            raise ValueError(f"bounds are expressed in frame {bounds.frame_id!r}")
+        selected = [
+            (index, point.coordinates_m)
+            for index, point in enumerate(self._points)
+            if bounds is None or bounds.contains(point.coordinates_m, frame_id=self._map.frame_id)
+        ]
+        for start in range(0, len(selected), block_points):
+            chunk = selected[start : start + block_points]
+            yield GeometryBlock(
+                map_id=self._map.map_id,
+                frame_id=self._map.frame_id,
+                indices=np.array([index for index, _ in chunk], dtype=np.int64),
+                coordinates_m=np.array([coordinates for _, coordinates in chunk], dtype=np.float64),
+            )
 
 
 def _geometry_point(
@@ -374,12 +401,17 @@ def map_point_for_camera_point(camera_point: Vector3) -> Vector3:
     return (camera_point[2], -camera_point[0], -camera_point[1])
 
 
+UNBOUNDED_CANDIDATES = CandidateGeometryPolicy(max_range_m=None)
+"""The full-map baseline: every map element is a candidate for every frame."""
+
+
 def make_projector(
     map_points: Sequence[Vector3],
     *,
     calibration: CalibrationSet | None = None,
     poses: Sequence[tuple[int, Vector3, tuple[float, float, float, float]]] | None = None,
     pose_policy: LookupPolicy | None = None,
+    candidate_policy: CandidateGeometryPolicy = UNBOUNDED_CANDIDATES,
 ) -> FrameProjector:
     """A projector over ``map_points``; by default the body sits at the map origin."""
     calibration = calibration if calibration is not None else make_calibration()
@@ -387,7 +419,8 @@ def make_projector(
         make_trajectory(calibration) if poses is None else make_trajectory(calibration, poses)
     )
     return FrameProjector(
-        cloud=GeometryCloud.from_source(ArrayGeometrySource(map_points, calibration=calibration)),
+        geometry=ArrayGeometrySource(map_points, calibration=calibration),
+        candidate_policy=candidate_policy,
         trajectory=make_lookup(trajectory),
         pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
         calibration=calibration,
@@ -402,6 +435,7 @@ def project_frame(
     time_ns: int = 0,
     poses: Sequence[tuple[int, Vector3, tuple[float, float, float, float]]] | None = None,
     pose_policy: LookupPolicy | None = None,
+    candidate_policy: CandidateGeometryPolicy = UNBOUNDED_CANDIDATES,
 ) -> FrameProjection:
     """Project ``map_points`` into the camera frame at ``time_ns``.
 
@@ -409,7 +443,11 @@ def project_frame(
     looked up exactly at time zero.
     """
     projector = make_projector(
-        map_points, calibration=calibration, poses=poses, pose_policy=pose_policy
+        map_points,
+        calibration=calibration,
+        poses=poses,
+        pose_policy=pose_policy,
+        candidate_policy=candidate_policy,
     )
     frame = projector.project(
         make_camera_observation(time_ns),

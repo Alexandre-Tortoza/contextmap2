@@ -17,6 +17,11 @@ from contextmap.geometric_mapping.accumulation import (
     accumulate_plan,
     map_provenance_from_plan,
 )
+from contextmap.geometric_mapping.bulk_geometry import (
+    DEFAULT_BLOCK_POINTS,
+    GeometryBlock,
+    GeometryBlockSource,
+)
 from contextmap.geometric_mapping.geometry_storage import PackedGeometry, ScanRecord
 from contextmap.geometric_mapping.inputs import (
     GeometryInput,
@@ -69,9 +74,7 @@ from contextmap.geometric_mapping.run_artifact import (
     IncompleteMapArtifactError,
     MapArtifactError,
     MapDebugLevel,
-    allocate_map_run_index,
     mapping_configuration_fingerprint,
-    rebuild_map_run_registry,
 )
 from contextmap.geometric_mapping.transformation import (
     GeometryTransformError,
@@ -85,6 +88,7 @@ from contextmap.geometric_mapping.transformation import (
 )
 
 __all__ = [
+    "DEFAULT_BLOCK_POINTS",
     "AccumulatedMap",
     "AccumulationError",
     "Bounds3D",
@@ -94,6 +98,8 @@ __all__ = [
     "GeometricMapArtifactWriter",
     "GeometricMapProvenance",
     "GeometricMapRunId",
+    "GeometryBlock",
+    "GeometryBlockSource",
     "GeometryId",
     "GeometryInput",
     "GeometryInputError",
@@ -131,7 +137,6 @@ __all__ = [
     "TransformedScan",
     "UnsupportedPointCloudLayoutError",
     "accumulate_plan",
-    "allocate_map_run_index",
     "apply_motion_correction_policy",
     "assemble_geometry_inputs",
     "assemble_geometry_inputs_from_artifacts",
@@ -140,7 +145,6 @@ __all__ = [
     "geometry_index_of",
     "map_provenance_from_plan",
     "mapping_configuration_fingerprint",
-    "rebuild_map_run_registry",
     "resolve_point_cloud_layout",
     "transform_scan",
     "transform_scans",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 from dense_builders import make_dense_map, make_enhancement, make_sampling
@@ -11,6 +11,7 @@ from perception_builders import make_claim, make_feature, make_region, make_resu
 from projection_builders import (
     IDENTITY,
     SEQUENCE_ID,
+    UNBOUNDED_CANDIDATES,
     ArrayGeometrySource,
     make_calibration,
     make_camera_observation,
@@ -21,12 +22,17 @@ from projection_builders import (
 )
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.sensor_association.candidate_geometry import CandidateGeometryPolicy
 from contextmap.sensor_association.dense_sampling import InterpolationPolicy
 from contextmap.sensor_association.diagnostics import DiagnosticTolerances, TrustedCorrespondences
 from contextmap.sensor_association.service import (
     AssociationFrameInput,
     DenseChannel,
+    FrameAssociation,
+    FrameSink,
+    SensorAssociationOutcome,
     SensorAssociationRequest,
+    SensorAssociationService,
 )
 from contextmap.sensor_association.visibility import OcclusionPolicy
 from contextmap.state_estimation import LookupPolicy
@@ -131,10 +137,11 @@ def frame_input(
 
 def make_request(
     *,
-    frames: Sequence[AssociationFrameInput] | None = None,
+    frames: Iterable[AssociationFrameInput] | None = None,
     channels: Sequence[DenseChannel] = (),
     occlusion: OcclusionPolicy = OCCLUSION,
     pose_policy: LookupPolicy | None = None,
+    candidates: CandidateGeometryPolicy = UNBOUNDED_CANDIDATES,
 ) -> SensorAssociationRequest:
     calibration = make_calibration()
     source = ArrayGeometrySource(
@@ -151,14 +158,15 @@ def make_request(
         trajectory=make_lookup(trajectory),
         pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
         calibration=calibration,
+        candidate_policy=candidates,
         occlusion_policy=occlusion,
         tolerances=TOLERANCES,
         dense_channels=tuple(channels),
-        frames=tuple(
-            frames
-            if frames is not None
-            else [frame_input(0, channels=channels), frame_input(1, channels=channels)]
-        ),
+        # Repassado sem materializar: um teste que entrega um gerador está medindo a
+        # retenção de entrada do serviço, e `tuple()` aqui destruiria essa medição.
+        frames=frames
+        if frames is not None
+        else (frame_input(0, channels=channels), frame_input(1, channels=channels)),
         code_version="test",
     )
 
@@ -216,3 +224,30 @@ def make_strata_request(*, channels: Sequence[DenseChannel] = ()) -> SensorAssoc
         geometry=source,
         frames=tuple(strata_frame_input(i, channels=channels) for i in range(2)),
     )
+
+
+class CollectingSink:
+    """A ``FrameSink`` that keeps every frame, and optionally passes it on.
+
+    The service releases each frame after handing it over, so a test that needs to assert on
+    all of them has to hold them itself. Wrapping a writer transaction lets a test persist a
+    run *and* keep the frames it persisted.
+    """
+
+    def __init__(self, downstream: FrameSink | None = None) -> None:
+        self.frames: list[FrameAssociation] = []
+        self._downstream = downstream
+
+    def accept(self, frame: FrameAssociation) -> None:
+        if self._downstream is not None:
+            self._downstream.accept(frame)
+        self.frames.append(frame)
+
+
+def run_collecting(
+    request: SensorAssociationRequest,
+) -> tuple[SensorAssociationOutcome, tuple[FrameAssociation, ...]]:
+    """Run the service, keeping every frame it produced."""
+    sink = CollectingSink()
+    outcome = SensorAssociationService().run(request, sink=sink)
+    return outcome, tuple(sink.frames)

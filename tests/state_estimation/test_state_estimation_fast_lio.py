@@ -446,17 +446,13 @@ def test_a_fast_lio_run_persists_with_the_calibration_identity_it_used(tmp_path:
 
     outcome = execute_state_estimation(estimator, request)
     manifest = StateEstimationRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "state_estimation",
         sequence_name="seq",
         run_id=StateEstimationRunId("run-0001"),
         run_index=1,
-        selection_label="full-sequence",
-        backend_label="fast-lio",
     ).finalize(outcome, runtime_s=1.5)
 
-    reader = StateEstimationRunReader(
-        tmp_path / "runs" / "state-estimation" / "seq" / "run-0001__full-sequence__fast-lio"
-    )
+    reader = StateEstimationRunReader(tmp_path / "state_estimation")
     assert manifest.estimator.backend_id == "fast_lio"
     assert manifest.calibration_identity == calibration_identity(request.calibration)
     assert reader.trajectory() == outcome.result.trajectory

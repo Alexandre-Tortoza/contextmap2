@@ -1,0 +1,15 @@
+{
+ "artifact_mb": 924.4,
+ "inputs": 860,
+ "integrity_problems": [],
+ "label": "real (ExternalPose trajectory + real LiDAR; not FAST-LIO)",
+ "peak_rss_mb": 1253,
+ "rejections": {
+  "POSE_LOOKUP_REJECTED": 32
+ },
+ "run_dir": "<VALIDATION_DIR>/geometric_mapping/runs/geometric-mapping/corridor-02/run-0001__ts-w336-90s__external-pose-all-points",
+ "run_id": "gm-all-points-mei",
+ "total_seconds": 12.7,
+ "variant": "all-points",
+ "write_seconds": 3.0
+}

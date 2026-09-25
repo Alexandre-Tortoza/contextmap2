@@ -17,7 +17,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 CANONICAL_PROFILE_ID = "canonical/1"
-"""Versioned identity of the canonical Solution 1 topology and profile."""
+"""Versioned identity of the canonical Solution 1 topology and profile.
+
+Before v0.1.0 ships, this is the repository's one and only topology, end to end: ingestion
+through ``context_map``. There is no released consumer yet to protect from a topology change, so
+this identity is free to keep evolving with the pipeline itself until the release. Once v0.1.0
+ships, a topology change starts a new versioned identity instead (``canonical/2`` and so on,
+never a silent mutation of a published one) -- that discipline begins at the release, not before
+it.
+"""
 
 _ROSBAGS_HINT = "pip install 'contextmap[ros1]'"
 
@@ -69,11 +77,17 @@ class ComponentSpec:
         capability: Owner capability package name.
         slot: Name of the variation point inside the capability.
         backends: Selectable backends keyed by ``backend_id``.
+        optional: Whether a stage that owns this component still composes with no backend
+            selected for it. It marks a genuinely optional variation point (for example one
+            evidence channel of a decision that evaluates several independently): its absence
+            is a valid, explicit configuration, never a default standing in for the missing
+            choice. ``False`` for every variation point a stage always needs to run.
     """
 
     capability: str
     slot: str
     backends: Mapping[str, BackendSpec]
+    optional: bool = False
 
     @property
     def component_id(self) -> str:
@@ -189,11 +203,14 @@ class RuntimePreset:
         raise KeyError(stage_id)
 
 
-def _component(capability: str, slot: str, *backends: BackendSpec) -> ComponentSpec:
+def _component(
+    capability: str, slot: str, *backends: BackendSpec, optional: bool = False
+) -> ComponentSpec:
     return ComponentSpec(
         capability=capability,
         slot=slot,
         backends={backend.backend_id: backend for backend in backends},
+        optional=optional,
     )
 
 
@@ -253,6 +270,31 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="fast_lio", requires=("rosbags",), install_hint=_ROSBAGS_HINT),
     ),
     _component(
+        "geometric_mapping",
+        "pose_lookup",
+        BackendSpec(backend_id="lookup-policy-v1"),
+    ),
+    _component(
+        "geometric_mapping",
+        "motion_correction",
+        BackendSpec(backend_id="motion-correction-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "occlusion",
+        BackendSpec(backend_id="conservative-depth-support-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "tolerances",
+        BackendSpec(backend_id="diagnostic-tolerances-v1"),
+    ),
+    _component(
+        "sensor_association",
+        "pose_policy",
+        BackendSpec(backend_id="lookup-policy-v1"),
+    ),
+    _component(
         "point_representation",
         "encoder",
         BackendSpec(backend_id="geometric_descriptor"),
@@ -269,6 +311,77 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="baseline-evidence-accumulation-v1"),
         BackendSpec(backend_id="quality-aware-evidence-accumulation-v1"),
     ),
+    _component(
+        "entity_resolution",
+        "retrieval",
+        BackendSpec(backend_id="entity-candidate-retrieval-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "resolution",
+        BackendSpec(backend_id="conservative-staged-resolution-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "geometry_comparison",
+        BackendSpec(backend_id="entity-geometry-comparison-v1"),
+    ),
+    _component(
+        "entity_resolution",
+        "semantic_compatibility",
+        BackendSpec(backend_id="entity-semantic-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "temporal_compatibility",
+        BackendSpec(backend_id="entity-temporal-compatibility-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "appearance",
+        BackendSpec(backend_id="entity-appearance-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "entity_resolution",
+        "representation",
+        BackendSpec(backend_id="entity-representation-comparison-v1"),
+        optional=True,
+    ),
+    _component(
+        "semantic_mapping",
+        "geometry_summary",
+        BackendSpec(backend_id="entity-geometry-summary-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "frame_conventions",
+        BackendSpec(backend_id="map-frame-conventions-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "candidate",
+        BackendSpec(backend_id="bounds-neighborhood-candidates-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometry_summary",
+        BackendSpec(backend_id="entity-geometry-summary-v1"),
+    ),
+    _component(
+        "spatial_relations",
+        "geometric_predicate",
+        BackendSpec(backend_id="bounds-geometric-predicates-v1"),
+        optional=True,
+    ),
+    _component(
+        "spatial_relations",
+        "contact_predicate",
+        BackendSpec(backend_id="point-contact-predicates-v1"),
+        optional=True,
+    ),
 )
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
@@ -276,39 +389,29 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 }
 """Every selectable variation point, keyed by ``"<capability>.<slot>"``."""
 
-
-def _unimplemented(
-    stage_id: str,
-    capability: str,
-    milestone: int,
-    *,
-    inputs: tuple[StageInput, ...],
-    output: str,
-) -> StageDeclaration:
-    return StageDeclaration(
-        stage_id=stage_id,
-        capability=capability,
-        available=False,
-        unavailable_reason=(
-            f"the {capability} capability is not implemented yet (milestone #{milestone})"
-        ),
-        inputs=inputs,
-        output=output,
-    )
-
-
 CANONICAL_PRESET = RuntimePreset(
     preset_id=CANONICAL_PROFILE_ID,
     description=(
-        "Full Solution 1 topology, from a recorded source to the ContextMapArtifact. "
-        "Stages whose capability is not implemented yet are declared unavailable and "
-        "reported explicitly instead of being skipped."
+        "The Solution 1 topology, end to end: from a recorded source to the ContextMapArtifact. "
+        "Pre-v0.1.0, this is the repository's only topology and it is free to grow with the "
+        "pipeline; a topology change starts a new versioned identity only once the release ships."
     ),
     stages=(
         StageDeclaration(
             stage_id="ingestion",
             capability="ingestion",
             components=("ingestion.source_adapter",),
+            output=SEQUENCE,
+        ),
+        # Issue #555: an opt-in second ingestion stage, publishing an auxiliary, pose-only
+        # SequenceArtifact for state_estimation to merge with the main one. No component: its
+        # executor is always injected by the caller (see IngestionStageExecutor), same as
+        # "ingestion" itself -- an incremental bridge, not general multi-source ingestion.
+        StageDeclaration(
+            stage_id="pose_ingestion",
+            capability="ingestion",
+            optional=True,
+            default_enabled=False,
             output=SEQUENCE,
         ),
         StageDeclaration(
@@ -327,12 +430,21 @@ CANONICAL_PRESET = RuntimePreset(
             stage_id="state_estimation",
             capability="state_estimation",
             components=("state_estimation.estimator",),
-            inputs=(StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),),
+            inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
+                StageInput(
+                    name="pose_sequence",
+                    contract=SEQUENCE,
+                    source="pose_ingestion",
+                    optional=True,
+                ),
+            ),
             output=TRAJECTORY,
         ),
         StageDeclaration(
             stage_id="geometric_mapping",
             capability="geometric_mapping",
+            components=("geometric_mapping.pose_lookup", "geometric_mapping.motion_correction"),
             inputs=(
                 StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(name="trajectory", contract=TRAJECTORY, source="state_estimation"),
@@ -342,6 +454,11 @@ CANONICAL_PRESET = RuntimePreset(
         StageDeclaration(
             stage_id="sensor_association",
             capability="sensor_association",
+            components=(
+                "sensor_association.occlusion",
+                "sensor_association.tolerances",
+                "sensor_association.pose_policy",
+            ),
             inputs=(
                 StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(
@@ -377,6 +494,7 @@ CANONICAL_PRESET = RuntimePreset(
             capability="semantic_fusion",
             components=("semantic_fusion.support", "semantic_fusion.accumulation"),
             inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(
                     name="association",
                     contract=ASSOCIATION,
@@ -399,32 +517,52 @@ CANONICAL_PRESET = RuntimePreset(
             ),
             output=FUSION,
         ),
-        _unimplemented(
-            "semantic_mapping",
-            "semantic_mapping",
-            12,
-            inputs=(StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),),
+        StageDeclaration(
+            stage_id="semantic_mapping",
+            capability="semantic_mapping",
+            components=("semantic_mapping.geometry_summary",),
+            inputs=(
+                StageInput(name="fusion", contract=FUSION, source="semantic_fusion"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
             output=ENTITIES,
         ),
-        _unimplemented(
-            "entity_resolution",
-            "entity_resolution",
-            13,
+        StageDeclaration(
+            stage_id="entity_resolution",
+            capability="entity_resolution",
+            components=(
+                "entity_resolution.retrieval",
+                "entity_resolution.resolution",
+                "entity_resolution.geometry_comparison",
+                "entity_resolution.semantic_compatibility",
+                "entity_resolution.temporal_compatibility",
+                "entity_resolution.appearance",
+                "entity_resolution.representation",
+            ),
             inputs=(StageInput(name="entities", contract=ENTITIES, source="semantic_mapping"),),
             output=RESOLUTION,
         ),
-        _unimplemented(
-            "spatial_relations",
-            "spatial_relations",
-            14,
-            inputs=(StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),),
+        StageDeclaration(
+            stage_id="spatial_relations",
+            capability="spatial_relations",
+            components=(
+                "spatial_relations.frame_conventions",
+                "spatial_relations.candidate",
+                "spatial_relations.geometry_summary",
+                "spatial_relations.geometric_predicate",
+                "spatial_relations.contact_predicate",
+            ),
+            inputs=(
+                StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
+                StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
+            ),
             output=RELATIONS,
         ),
-        _unimplemented(
-            "context_map",
-            "artifact",
-            15,
+        StageDeclaration(
+            stage_id="context_map",
+            capability="artifact",
             inputs=(
+                StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),
                 StageInput(name="geometry", contract=GEOMETRY, source="geometric_mapping"),
                 StageInput(name="entities", contract=RESOLUTION, source="entity_resolution"),
                 StageInput(name="relations", contract=RELATIONS, source="spatial_relations"),
@@ -434,5 +572,7 @@ CANONICAL_PRESET = RuntimePreset(
     ),
 )
 
-PRESETS: Mapping[str, RuntimePreset] = {CANONICAL_PRESET.preset_id: CANONICAL_PRESET}
+PRESETS: Mapping[str, RuntimePreset] = {
+    CANONICAL_PRESET.preset_id: CANONICAL_PRESET,
+}
 """Known presets. A profile of the same identity starts from each of them."""

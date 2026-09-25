@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_worlds import World
 
 from contextmap.runtime import (
@@ -187,6 +188,27 @@ class TestSuccessfulRun:
         }
         assert completed.data["artifact"]["artifact_id"] == "geometric_mapping-run4"
         assert completed.data["elapsed_s"] >= 0
+
+    def test_run_planned_records_provider_overrides_when_they_happen(self, tmp_path: Path) -> None:
+        """A caller-supplied provider that wins over a declared ``resources.providers``
+        target is visible in the run's own trail, not just silently applied (#507)."""
+        journal, _ = _run(
+            tmp_path, World(), provider_overrides=["visual_perception.region_discovery"]
+        )
+        assert journal is not None
+
+        planned = read_run(journal.directory).events[0]
+
+        assert planned.kind == "run_planned"
+        assert planned.data["provider_overrides"] == ["visual_perception.region_discovery"]
+
+    def test_run_planned_reports_no_overrides_on_an_ordinary_run(self, tmp_path: Path) -> None:
+        journal, _ = _run(tmp_path, World())
+        assert journal is not None
+
+        planned = read_run(journal.directory).events[0]
+
+        assert planned.data["provider_overrides"] == []
 
     def test_a_reused_stage_is_an_event_naming_the_prior_artifact(self, tmp_path: Path) -> None:
         world = World()
@@ -379,12 +401,13 @@ class TestBlockedRun:
         assert world.runs == []
         assert not (journal.directory / "run.lock").exists()
 
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_a_plan_with_structural_problems_is_recorded_without_a_plan_file(
         self, tmp_path: Path
     ) -> None:
         effective = effective_from(tmp_path, _document())
         plan = resolve_plan(effective)
-        execution = plan.scope(targets=["semantic_mapping"])  # capability inexistente
+        execution = plan.scope(targets=["scene_graph"])  # capability inexistente
         journal = RunJournal.create(tmp_path / "ws", effective, execution)
 
         with pytest.raises(PreflightError):

@@ -1,6 +1,9 @@
 """The persistent run journal, run inspection and resume.
 
-A run directory, ``<workspace>/runtime/run-NNNN/``, is the durable trail of one execution:
+A run directory, ``<workspace>/<dataset>/run-NNNN/``, is the durable trail of one execution.
+The dataset is the physical sequence the configuration is about (``inputs.sequence``). The
+journal files below live at the run root; every stage the run executes writes its artifact in
+its own directory next to them, ``<run>/<stage>/``:
 
 - ``effective_config.json`` and ``plan.json``: what was requested and how it was resolved;
 - ``events.jsonl``: the structured events, append-only, one JSON object per line;
@@ -18,7 +21,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,7 +54,29 @@ from contextmap.runtime.reuse import ReusePolicy
 STATUS_FILENAME = "status.json"
 EVENTS_FILENAME = "events.jsonl"
 LOCK_FILENAME = "run.lock"
-RUNS_DIRECTORY = "runtime"
+
+
+def dataset_directory(workspace: str | os.PathLike[str], dataset: str | None) -> Path:
+    """Return ``<workspace>/<dataset>``, the directory that holds the runs of one dataset.
+
+    Args:
+        workspace: The workspace root.
+        dataset: The physical sequence the runs are about (``inputs.sequence``).
+
+    Returns:
+        The dataset directory; it may not exist yet.
+
+    Raises:
+        ValueError: If ``dataset`` is missing, or is not a single path component (a name that
+            could point outside the workspace is refused, never sanitized).
+    """
+    if not dataset:
+        raise ValueError(
+            "a run lives under <workspace>/<dataset>: set inputs.sequence to the dataset name"
+        )
+    if dataset in (".", "..") or Path(dataset).name != dataset:
+        raise ValueError(f"the dataset {dataset!r} must be a single path component")
+    return Path(workspace) / dataset
 
 
 @dataclass(kw_only=True)
@@ -110,7 +135,8 @@ class RunJournal:
         as blocked, once the runner refuses it.
 
         Args:
-            workspace: The workspace; runs live under ``<workspace>/runtime``.
+            workspace: The workspace; a run lives under ``<workspace>/<dataset>``, where the
+                dataset is ``effective.config.inputs.sequence``.
             effective: The effective configuration, persisted as ``effective_config.json``.
             execution: The scoped execution the run will perform.
             code_identity: Identity of the code producing the results, recorded for
@@ -119,8 +145,12 @@ class RunJournal:
 
         Returns:
             The journal of the new run.
+
+        Raises:
+            ValueError: If the configuration names no dataset (``inputs.sequence``) or the
+                name is not a single path component.
         """
-        base = Path(workspace) / RUNS_DIRECTORY
+        base = dataset_directory(workspace, effective.config.inputs.sequence)
         base.mkdir(parents=True, exist_ok=True)
         taken = [
             int(path.name.removeprefix("run-"))
@@ -493,6 +523,7 @@ def resume_plan(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    provider_overrides: Sequence[str] = (),
     journal: RunJournal | None = None,
     events: EventSink | None = None,
     cancellation: CancellationToken | None = None,
@@ -515,6 +546,9 @@ def resume_plan(
         environ: Environment to look secrets up in.
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
+        provider_overrides: Component identities whose caller-supplied provider won over a
+            declared ``resources.providers`` target for it; see :func:`~contextmap.runtime.
+            pipeline.run_plan`.
         journal: The journal of the new run.
         events: An extra receiver of the run's events.
         cancellation: A cooperative cancellation handle.
@@ -537,6 +571,7 @@ def resume_plan(
         environ=environ,
         module_available=module_available,
         provided_runtimes=provided_runtimes,
+        provider_overrides=provider_overrides,
         reuse=reuse,
         journal=journal,
         events=events,

@@ -176,22 +176,50 @@ class ResourcesConfig:
         device: Device handed to every backend that declares a device parameter and
             does not set one itself, or ``None`` to leave each backend's own choice.
         workspace: Directory that holds this execution's artifacts, when chosen.
+        providers: Declared :data:`~contextmap.runtime.composition.RuntimeProvider` targets
+            for backends without a bundled model loader, keyed by component identity
+            (``"<capability>.<slot>"``). Each value is a ``"module:attribute"`` string,
+            resolved lazily -- only for a component actually being composed -- by
+            :func:`~contextmap.runtime.composition.resolve_provider`. This is a deployment
+            decision (which process supplies which model runtime), never a backend's own
+            scientific parameter, so it lives here and not under a backend's own
+            ``components.<capability>.<slot>`` parameters. An explicit ``providers=``
+            argument to :func:`~contextmap.runtime.composition.compose` still wins over a
+            declared target for the same component. See ``docs/composition.md`` for the
+            security posture of resolving a configured target.
     """
 
     device: str | None
     workspace: str | None
+    providers: Mapping[str, str]
+
+
+TRAJECTORY_MODES = ("operational_only", "allow_ground_truth")
 
 
 @dataclass(frozen=True, kw_only=True)
 class PoliciesConfig:
-    """How much diagnostic evidence an execution persists.
+    """How much diagnostic evidence an execution persists, and cross-cutting run policies.
 
     Attributes:
         debug_level: ``"none"``, ``"standard"`` or ``"full"``. Debug output is never a
             contractual dependency of a downstream stage.
+        trajectory_mode: ``"operational_only"`` (default) or ``"allow_ground_truth"`` (issue
+            #555). Governs whether ``state_estimation``'s optional auxiliary pose input, when
+            declared ``pose_role="ground_truth"``, may become the operational trajectory; the
+            default keeps a ground-truth-tagged auxiliary pose from affecting the run at all,
+            exactly as if it were absent.
+        association_max_range_m: Largest distance, in meters, from the camera optical centre
+            at which ``sensor_association`` still evaluates a map element (issue #562).
+            ``None`` (default) evaluates the whole map, exactly as if the policy were absent,
+            so enabling culling is always a deliberate, recorded decision. A value bounds
+            per-frame work and memory by local geometry instead of map size, and narrows the
+            evaluated population: it is a scientific choice, which is why it has no default.
     """
 
     debug_level: str
+    trajectory_mode: str = "operational_only"
+    association_max_range_m: float | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -248,8 +276,13 @@ class RuntimeConfig:
             "resources": {
                 "device": self.resources.device,
                 "workspace": self.resources.workspace,
+                "providers": dict(self.resources.providers),
             },
-            "policies": {"debug_level": self.policies.debug_level},
+            "policies": {
+                "debug_level": self.policies.debug_level,
+                "trajectory_mode": self.policies.trajectory_mode,
+                "association_max_range_m": self.policies.association_max_range_m,
+            },
         }
 
 
@@ -405,14 +438,18 @@ def check_component_selection(
 ) -> ConfigProblem | None:
     """Report a variation point that has no backend selected.
 
+    A component the catalog marks ``optional`` (see :class:`~contextmap.runtime.catalog.
+    ComponentSpec`) is never reported for having no backend: its absence is a valid,
+    explicit configuration, not an incomplete one.
+
     Args:
         component_id: Identity of the variation point, ``"<capability>.<slot>"``.
         component: Its resolved configuration.
 
     Returns:
-        The problem, or ``None`` when a backend is selected.
+        The problem, or ``None`` when a backend is selected or the component is optional.
     """
-    if component.backend is not None:
+    if component.backend is not None or COMPONENTS[component_id].optional:
         return None
     supported = ", ".join(sorted(COMPONENTS[component_id].backends))
     capability, slot = component_id.split(".", 1)
@@ -702,8 +739,8 @@ def _profile_document(profile: str) -> dict[str, Any]:
         },
         "components": components,
         "inputs": {"sequence": None, "selections": {}, "named": {}},
-        "resources": {"device": None, "workspace": None},
-        "policies": {"debug_level": "none"},
+        "resources": {"device": None, "workspace": None, "providers": {}},
+        "policies": {"debug_level": "none", "trajectory_mode": "operational_only"},
     }
 
 
@@ -1062,16 +1099,42 @@ def _references(raw: object, path: str, problems: list[ConfigProblem]) -> tuple[
 
 def _parse_resources(value: object, problems: list[ConfigProblem]) -> ResourcesConfig:
     section = _mapping(value, "resources", problems)
-    _reject_unknown(section, {"device", "workspace"}, "resources", problems)
+    _reject_unknown(section, {"device", "workspace", "providers"}, "resources", problems)
     return ResourcesConfig(
         device=_optional_text(section.get("device"), "resources.device", problems),
         workspace=_optional_text(section.get("workspace"), "resources.workspace", problems),
+        providers=_parse_providers(section.get("providers", {}), problems),
     )
+
+
+def _parse_providers(value: object, problems: list[ConfigProblem]) -> Mapping[str, str]:
+    """Read the declared ``component_id -> "module:attribute"`` provider targets.
+
+    Validation here is only structural (each target is a non-empty string): resolving a
+    target into a callable is deferred to
+    :func:`~contextmap.runtime.composition.resolve_provider`, lazily, only for a component
+    actually being composed. A target need not name a known component: an entry for a
+    component that is never composed simply never resolves, exactly like an unused
+    ``components.<capability>.<slot>`` selection.
+    """
+    providers: dict[str, str] = {}
+    for component_id, target in _mapping(value, "resources.providers", problems).items():
+        path = f"resources.providers.{component_id}"
+        if not isinstance(target, str) or not target:
+            problems.append(ConfigProblem(path=path, message="must be a non-empty string"))
+            continue
+        providers[component_id] = target
+    return MappingProxyType(providers)
 
 
 def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesConfig:
     section = _mapping(value, "policies", problems)
-    _reject_unknown(section, {"debug_level"}, "policies", problems)
+    _reject_unknown(
+        section,
+        {"debug_level", "trajectory_mode", "association_max_range_m"},
+        "policies",
+        problems,
+    )
     level = section.get("debug_level", "none")
     if level not in DEBUG_LEVELS:
         problems.append(
@@ -1081,7 +1144,47 @@ def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesCon
             )
         )
         level = "none"
-    return PoliciesConfig(debug_level=str(level))
+    trajectory_mode = section.get("trajectory_mode", "operational_only")
+    if trajectory_mode not in TRAJECTORY_MODES:
+        problems.append(
+            ConfigProblem(
+                path="policies.trajectory_mode",
+                message=f"is {trajectory_mode!r}; expected one of {', '.join(TRAJECTORY_MODES)}",
+            )
+        )
+        trajectory_mode = "operational_only"
+    return PoliciesConfig(
+        debug_level=str(level),
+        trajectory_mode=str(trajectory_mode),
+        association_max_range_m=_association_range(section, problems),
+    )
+
+
+def _association_range(
+    section: Mapping[str, ConfigValue], problems: list[ConfigProblem]
+) -> float | None:
+    """Read the optional candidate range; anything but a positive finite number is a problem."""
+    declared = section.get("association_max_range_m")
+    if declared is None:
+        return None
+    if isinstance(declared, bool) or not isinstance(declared, int | float):
+        problems.append(
+            ConfigProblem(
+                path="policies.association_max_range_m",
+                message=f"is {declared!r}; expected a distance in meters or no value at all",
+            )
+        )
+        return None
+    value = float(declared)
+    if not math.isfinite(value) or value <= 0:
+        problems.append(
+            ConfigProblem(
+                path="policies.association_max_range_m",
+                message=f"is {value!r}; expected a positive finite distance in meters",
+            )
+        )
+        return None
+    return value
 
 
 def _declared_channels(parameters: Mapping[str, ConfigValue]) -> tuple[ConfigValue, ...]:

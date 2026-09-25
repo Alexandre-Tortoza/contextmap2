@@ -38,17 +38,17 @@ from contextmap.visual_perception.backends.qwen import (
 
 class _FakeQwenRuntime:
     def __init__(self, confidence: float | None = None) -> None:
-        self.calls: list[tuple[tuple[str, ...], str, QwenSemanticConfig]] = []
+        self.calls: list[tuple[tuple[SemanticVisualView, ...], str, QwenSemanticConfig]] = []
         self.confidence = confidence
 
     def generate(
         self,
         *,
-        visual_payload_references: tuple[str, ...],
+        visual_views: tuple[SemanticVisualView, ...],
         prompt: str,
         config: QwenSemanticConfig,
     ) -> QwenGenerationResponse:
-        self.calls.append((visual_payload_references, prompt, config))
+        self.calls.append((visual_views, prompt, config))
         return QwenGenerationResponse(
             text=json.dumps(
                 {
@@ -110,15 +110,18 @@ def test_qwen_maps_request_and_returns_canonical_unscored_claim() -> None:
         temperature=0.0,
     )
     adapter = QwenSemanticInterpreter(config=config, runtime=runtime)
+    request = _request(adapter)
 
-    execution = adapter.interpret(_request(adapter))
+    execution = adapter.interpret(request)
 
     assert isinstance(adapter, SemanticInterpreter)
     assert execution.parsed.claims[0].hypothesis == "wooden pallet"
     assert execution.parsed.claims[0].confidence is None
     assert execution.diagnostics.input_tokens == 120
     assert execution.effective_configuration["quantization"] == "4bit"
-    assert runtime.calls[0][0] == ("outputs/semantic-views/region-0007.jpg",)
+    # O runtime recebe a identidade completa da view (incluindo o sha256), não só o caminho.
+    assert runtime.calls[0][0] == request.visual_views
+    assert runtime.calls[0][0][0].sha256 == hashlib.sha256(_VIEW_PAYLOAD).hexdigest()
     assert "region/v1" in runtime.calls[0][1]
     assert (
         adapter.backend_provenance().configuration_fingerprint == adapter.configuration_fingerprint
@@ -178,7 +181,11 @@ def test_qwen_rejects_model_reported_confidence() -> None:
         runtime=_FakeQwenRuntime(confidence=0.93),
     )
 
-    with pytest.raises(ValueError, match="confidence must be null"):
+    from contextmap.visual_perception import SemanticInterpretationFailedError
+
+    # Still a rejection, but the drifting response is now preserved instead of discarded:
+    # a model reporting its own confidence is exactly the drift you need the raw text for.
+    with pytest.raises(SemanticInterpretationFailedError, match="confidence must be null"):
         adapter.interpret(_request(adapter))
 
 
@@ -237,7 +244,7 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
         semantic_execution_stage_ids=("interpret",),
     )
     writer = PerceptionRunWriter(
-        workspace_root=tmp_path,
+        output_dir=tmp_path / "visual_perception",
         sequence_name="sequence",
         run_id=PerceptionRunId("run-0001"),
         run_index=1,
@@ -246,17 +253,82 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
         enabled_capabilities=frozenset({"semantic_interpreter"}),
         pipeline_preset=preset,
         configuration_digest=resolved.configuration_digest(),
-        selection_label="frame-0124",
-        profile_label="qwen",
     )
     writer.add_result(result)
     writer.add_semantic_view_payload(execution.request.visual_views[0], _VIEW_PAYLOAD)
     writer.add_stage_outcomes(outcomes)
     writer.finalize()
 
-    reader = PerceptionRunReader(
-        tmp_path / "runs" / "visual-perception" / "sequence" / "run-0001__frame-0124__qwen"
-    )
+    reader = PerceptionRunReader(tmp_path / "visual_perception")
     assert reader.list_results()[0].claims[0].hypothesis == "wooden pallet"
     assert reader.list_semantic_executions()[0].request == _request(adapter)
     assert reader.verify_integrity() == []
+
+
+class _NonScalarAttributeQwenRuntime:
+    """Reproduces a real failure family that survives the confidence fix.
+
+    The model returns a list where `attributes` values must be scalars: 163 of the 457
+    rejected responses in the real 360-frame corridor-02 run failed exactly this way. (The
+    once-dominant "missing confidence" family is gone: omitting the key is now legal under
+    UNSCORED_ONLY, since null was its only permitted value.)
+    """
+
+    def generate(
+        self,
+        *,
+        visual_views: tuple[SemanticVisualView, ...],
+        prompt: str,
+        config: QwenSemanticConfig,
+    ) -> QwenGenerationResponse:
+        return QwenGenerationResponse(
+            text=json.dumps(
+                {
+                    "abstained": False,
+                    "claims": [
+                        {
+                            "hypothesis": "wooden pallet",
+                            "role": "primary",
+                            "category": None,
+                            "region_kind": "thing",
+                            "attributes": {"features": ["slatted", "wooden"]},
+                            "confidence": None,
+                        }
+                    ],
+                    "scene_context": None,
+                }
+            ),
+            input_tokens=120,
+            output_tokens=24,
+            peak_memory_bytes=1024,
+            warnings=(),
+        )
+
+
+def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_string() -> None:
+    """PR #438 review: the real raw_response must survive a parse failure."""
+    from contextmap.visual_perception import SemanticInterpretationFailedError
+
+    config = QwenSemanticConfig(
+        model="Qwen/Qwen2.5-VL-3B-Instruct",
+        device="cuda:0",
+        precision="bfloat16",
+        quantization="4bit",
+        max_new_tokens=128,
+        temperature=0.0,
+    )
+    adapter = QwenSemanticInterpreter(config=config, runtime=_NonScalarAttributeQwenRuntime())
+    request = _request(adapter)
+
+    with pytest.raises(SemanticInterpretationFailedError) as raised:
+        adapter.interpret(request)
+
+    failed = raised.value.failure
+    assert "wooden pallet" in failed.raw_response, "the observed response must not be lost"
+    assert failed.raw_response_sha256
+    assert failed.failure.kind == "SemanticResponseParseError"
+    assert "scalar value" in failed.failure.message
+    assert failed.request.request_id == request.request_id, "shares the attempt identity"
+    assert failed.provenance.backend.model == config.model
+    assert failed.diagnostics.input_tokens == 120
+    assert failed.rendered_prompt.text, "the exact prompt sent must be preserved"

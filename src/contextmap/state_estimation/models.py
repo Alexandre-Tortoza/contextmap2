@@ -253,6 +253,17 @@ class TrajectoryProvenance:
         calibration_identity: Hash of the static calibration the estimator
             used; ``None`` when the backend needed none.
         code_version: Code revision that produced the trajectory, when known.
+        auxiliary_sequence_artifact_id: The auxiliary pose ``SequenceArtifact`` (issue #555's
+            bridge) whose observations were actually merged into this trajectory, when one was.
+            ``None`` when no auxiliary sequence was configured, or when one was configured but
+            dropped entirely (a ground-truth-tagged sequence without the explicit opt-in) --
+            because it never contributed, it must not be named here. A pose's own
+            ``PoseProvenance.source_observation_ids`` may belong to either
+            ``sequence_artifact_id`` or this artifact; a reader who only has this run can still
+            close every pose's lineage by opening whichever of the two artifacts this field
+            names, without depending on the runtime's own separate per-stage input lineage.
+        auxiliary_selection_id: Deterministic identity of the auxiliary sequence's selection,
+            alongside ``auxiliary_sequence_artifact_id``. ``None`` under the same conditions.
     """
 
     estimator: EstimatorProvenance
@@ -260,6 +271,8 @@ class TrajectoryProvenance:
     selection_id: str
     calibration_identity: str | None = None
     code_version: str | None = None
+    auxiliary_sequence_artifact_id: SequenceArtifactId | None = None
+    auxiliary_selection_id: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

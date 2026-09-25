@@ -50,7 +50,7 @@ está documentada em
 - `GeometryInputPlan`, `GeometryInput`, `GeometryInputRejection`, `InputRejectionReason`, `PointCloudLayout`, `assemble_geometry_inputs()`, `assemble_geometry_inputs_from_artifacts()` — os scans de um trecho selecionado pareados com pose, extrínseco, layout e estado de correção, com os scans recusados e o motivo.
 - `TransformedScan`, `TracedTransform`, `TransformTrace`, `transform_scan()`, `transform_scans()`, `verify_transform_trace()`, `GeometryTransformError` — os pontos de um scan no frame do mapa junto das coordenadas originais, a cadeia aplicada e o trace de auditoria de um ponto.
 - `MapAccumulator`, `accumulate_plan()`, `AccumulatedMap`, `ScanVoxelPolicy`, `ScanRecord`, `PackedGeometry`, `geometry_index_of()`, `AccumulationError` — acumulação em fluxo dos scans transformados em um mapa, com agregação opcional explícita, índice de origem e a leitura do payload por referência.
-- `GeometricMapArtifactWriter`, `GeometricMapArtifactReader`, `GeometricMapArtifactManifest`, `GeometricMapRunId`, `MapDebugLevel`, `MapArtifactError`, `IncompleteMapArtifactError`, `mapping_configuration_fingerprint()`, `allocate_map_run_index()`, `rebuild_map_run_registry()` — o artefato de mapa persistido, com linhagem, métricas e evidência de debug.
+- `GeometricMapArtifactWriter`, `GeometricMapArtifactReader`, `GeometricMapArtifactManifest`, `GeometricMapRunId`, `MapDebugLevel`, `MapArtifactError`, `IncompleteMapArtifactError`, `mapping_configuration_fingerprint()` — o artefato de mapa persistido, com linhagem, métricas e evidência de debug.
 - `GeometrySource` — fronteira de leitura (`get`, `iter_geometry`, `query_bounds`) que Sensor Association e demais consumidores usam sem depender de como o mapa é armazenado ou indexado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
@@ -60,14 +60,15 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções
 - `contextmap.ingestion`: `FrameId`, `SequenceArtifactId`, `SourceObservationId`, `LidarObservation`, `SequenceSelection`, `CalibrationSet`, `encode_selection`.
 - `contextmap.state_estimation`: `TrajectoryId`, `StateEstimationRunId`, `PoseEstimateId`, `LookupPolicy`, `TimeBounds`, `Trajectory`, `TrajectoryLookup`, `StaticFrameGraph`, `summarize_lookups`.
 - `contextmap.shared`: `SourceTimestamp`, `Vector3`, `Quaternion`, `compose_rigid`, `quaternion_to_rotation_matrix`, `rotate_vector`.
-- `contextmap.shared` (run directory): `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index`, `write_run_registry`.
+- `contextmap.shared` (run directory): `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
 
 ## Módulos que consomem este
 
-Hoje, `sensor_association`, `point_representation`, `semantic_fusion` e
-`evaluation`, sempre através de `contextmap.geometric_mapping`. Os módulos
-planejados `semantic_mapping`, `entity_resolution`, `spatial_relations` e
-`artifact` também deverão consumir essa API pública quando forem materializados.
+Hoje, `sensor_association`, `point_representation`, `semantic_fusion`,
+`semantic_mapping` e `evaluation` consomem esta capability, sempre através de
+`contextmap.geometric_mapping`. Os módulos planejados `entity_resolution`,
+`spatial_relations` e `artifact` também deverão consumir essa API pública quando
+forem materializados.
 
 ## Onde estão os documentos detalhados
 

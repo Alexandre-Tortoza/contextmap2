@@ -1,10 +1,12 @@
 import dataclasses
 import json
 import math
+from typing import Any
 
 import numpy as np
 import pytest
 from dense_builders import make_dense_map, make_dense_result, make_enhancement, make_sampling
+from numpy.typing import NDArray
 from perception_builders import make_region, make_result, rect_mask
 from projection_builders import (
     BODY_TO_CAMERA_ROTATION,
@@ -13,12 +15,18 @@ from projection_builders import (
     make_camera_observation,
     make_prepared_image,
     make_projector,
+    map_point_for_camera_point,
     map_point_for_pixel,
     project_frame,
     scene_frame,
 )
 
-from contextmap.sensor_association import DepthMetric, VisibilityState
+from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
+    DepthMetric,
+    ReprojectionStatistics,
+    VisibilityState,
+)
 from contextmap.sensor_association.dense_sampling import (
     InterpolationPolicy,
     sample_dense_features,
@@ -28,8 +36,12 @@ from contextmap.sensor_association.diagnostics import (
     DiagnosticTolerances,
     FindingCode,
     FindingSeverity,
+    ReprojectionAttempt,
+    ReprojectionOutcome,
     TrustedCorrespondences,
+    _reprojection_findings,
     diagnose_frame,
+    evaluated_correspondences,
     reprojection_statistics,
     time_offset_sweep,
 )
@@ -190,8 +202,9 @@ def test_the_diagnostics_never_fabricate_a_reprojection_without_a_trusted_refere
     diagnostics = _diagnose(scene_frame(*PIXELS))
 
     assert diagnostics.reprojection is None
-    assert diagnostics.reprojection_unavailable_reason is not None
-    assert "trusted" in diagnostics.reprojection_unavailable_reason
+    assert diagnostics.reprojection_attempt.outcome is ReprojectionOutcome.NO_REFERENCE
+    assert diagnostics.reprojection_attempt.reference_id is None
+    assert diagnostics.reprojection_attempt.correspondence_count == 0
     assert diagnostics.findings == ()
 
 
@@ -230,6 +243,33 @@ def test_the_reference_must_be_well_formed() -> None:
     with pytest.raises(ValueError, match="at least one"):
         TrustedCorrespondences(
             reference_id="r", geometry_indices=np.arange(0), observed_pixels=np.zeros((0, 2))
+        )
+
+
+@pytest.mark.parametrize(
+    "indices",
+    [
+        pytest.param(np.array([0.5]), id="fractional"),
+        pytest.param(np.array([float("nan")]), id="nan"),
+        pytest.param(np.array([0.0, 1.0]), id="integral-valued-float"),
+        pytest.param(np.array([0, float("nan")]), id="one-nan-among-integers"),
+    ],
+)
+def test_a_reference_index_that_is_not_an_integer_is_rejected(indices: NDArray[Any]) -> None:
+    """A malformed index must not be mistaken for geometry the candidate policy skipped.
+
+    The lookup matches by equality, so ``0.5`` and ``NaN`` equal no candidate index and used
+    to be counted as unevaluated. ``NaN`` also slips past the bounds guard, because every
+    comparison with it is false. Both turned a malformed trusted reference into an apparent
+    effect of the candidate policy, in the very metric that measures that policy. An
+    integral-valued float is rejected too: it only matches by accident, and the contract is
+    the integer identity of :func:`~contextmap.geometric_mapping.geometry_id_for`.
+    """
+    with pytest.raises(ValueError, match="integer"):
+        TrustedCorrespondences(
+            reference_id="r",
+            geometry_indices=indices,
+            observed_pixels=np.zeros((indices.shape[0], 2)),
         )
 
 
@@ -467,3 +507,187 @@ def test_the_report_is_json_and_keeps_the_raw_components() -> None:
     assert record["visibility"]["visible"] == 4
     assert record["findings"] == []
     assert record["visibility_policy"]["fingerprint"] == POLICY.fingerprint()
+
+
+# --- "not evaluated" is not "not projectable" (review of PR #565) ----------------------------
+
+
+def _reference_beyond(indices: tuple[int, ...], pixels: NDArray[Any]) -> TrustedCorrespondences:
+    return TrustedCorrespondences(
+        reference_id="trusted-range",
+        geometry_indices=np.array(indices),
+        observed_pixels=pixels,
+    )
+
+
+def test_a_reference_the_candidate_policy_excluded_is_a_warning_not_a_failure() -> None:
+    """A range policy that excludes the reference geometry says nothing about the camera.
+
+    Before this, `reprojection_statistics()` returned `None` for both "evaluated and
+    unprojectable" and "never evaluated", and the frame was failed with
+    `NO_REFERENCE_CORRESPONDENCE_PROJECTS` either way -- turning a declared candidate range into
+    a calibration failure.
+    """
+    near = map_point_for_pixel(100.0, 100.0, 3.0)
+    far = map_point_for_camera_point((0.0, 0.0, 60.0))
+    frame = project_frame([near, far], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    resolution = resolve_visibility(frame, POLICY)
+    # A referência nomeia só o elemento global 1, que o recorte de 20 m não avaliou.
+    reference = _reference_beyond((1,), np.array([[320.0, 240.0]]))
+
+    report = diagnose_frame(resolution, tolerances=TOLERANCES, correspondences=reference)
+
+    assert report.reprojection is None
+    codes = {finding.code: finding.severity for finding in report.findings}
+    assert codes[FindingCode.REFERENCE_NOT_EVALUATED] is FindingSeverity.WARNING
+    assert FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS not in codes
+    attempt = report.reprojection_attempt
+    assert attempt.outcome is ReprojectionOutcome.NOT_EVALUATED
+    assert (attempt.correspondence_count, attempt.evaluated_count) == (1, 0)
+    assert attempt.unevaluated_count == 1
+    assert attempt.invalid_rate is None
+
+
+def test_a_reference_the_frame_evaluated_but_cannot_project_is_still_a_failure() -> None:
+    """The original meaning survives: evaluated geometry that will not project is a failure."""
+    behind = map_point_for_camera_point((0.0, 0.0, -4.0))
+    frame = project_frame([behind], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    resolution = resolve_visibility(frame, POLICY)
+    reference = _reference_beyond((0,), np.array([[320.0, 240.0]]))
+
+    report = diagnose_frame(resolution, tolerances=TOLERANCES, correspondences=reference)
+
+    assert report.reprojection is None
+    codes = {finding.code: finding.severity for finding in report.findings}
+    assert codes[FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS] is FindingSeverity.FAILURE
+    assert FindingCode.REFERENCE_NOT_EVALUATED not in codes
+
+
+def test_the_invalid_rate_is_measured_over_the_evaluated_population_only() -> None:
+    """With 90 of 100 references unevaluated, 1 invalid of 10 evaluated is 10%, not 1%.
+
+    The diluted denominator would have hidden a real rate under any sane tolerance.
+    """
+    statistics = ReprojectionStatistics(
+        reference_id="trusted-range",
+        correspondence_count=100,
+        invalid_count=1,
+        unevaluated_count=90,
+        mean_px=1.0,
+        median_px=1.0,
+        p95_px=1.0,
+        max_px=1.0,
+    )
+
+    assert statistics.evaluated_count == 10
+    assert statistics.invalid_rate == pytest.approx(0.1)
+
+    strict = dataclasses.replace(TOLERANCES, max_reprojection_invalid_rate=0.05)
+    findings = _reprojection_findings(
+        statistics, strict, evaluated_count=10, correspondence_count=100
+    )
+
+    codes = [finding.code for finding in findings]
+    assert FindingCode.REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE in codes
+    (rate_finding,) = [f for f in findings if f.code is codes[0]]
+    assert rate_finding.observed == pytest.approx(0.1)
+
+
+def test_statistics_need_at_least_one_evaluated_correspondence_that_projects() -> None:
+    with pytest.raises(ValueError, match="at least one evaluated correspondence"):
+        ReprojectionStatistics(
+            reference_id="trusted-range",
+            correspondence_count=10,
+            invalid_count=4,
+            unevaluated_count=6,
+            mean_px=1.0,
+            median_px=1.0,
+            p95_px=1.0,
+            max_px=1.0,
+        )
+
+
+def test_the_evaluated_count_is_defined_once_and_shared() -> None:
+    near = map_point_for_pixel(100.0, 100.0, 3.0)
+    far = map_point_for_camera_point((0.0, 0.0, 60.0))
+    frame = project_frame([near, far], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    reference = _reference_beyond((0, 1), np.array([[100.0, 100.0], [320.0, 240.0]]))
+
+    assert evaluated_correspondences(frame, reference) == 1
+    statistics = reprojection_statistics(frame, reference)
+    assert statistics is not None
+    assert statistics.evaluated_count == 1
+    assert statistics.unevaluated_count == 1
+
+
+# --- The attempt contract closes its own declared states ------------------------------------
+
+
+def _attempt(**overrides: object) -> ReprojectionAttempt:
+    fields: dict[str, object] = {
+        "outcome": ReprojectionOutcome.MEASURED,
+        "reference_id": "trusted-0001",
+        "correspondence_count": 4,
+        "evaluated_count": 4,
+        "invalid_count": 1,
+    }
+    fields.update(overrides)
+    return ReprojectionAttempt(**fields)  # type: ignore[arg-type]
+
+
+def test_a_frame_with_no_reference_cannot_count_correspondences() -> None:
+    with pytest.raises(ValueError, match="no reference existed"):
+        _attempt(
+            outcome=ReprojectionOutcome.NO_REFERENCE,
+            reference_id=None,
+            correspondence_count=4,
+            evaluated_count=0,
+            invalid_count=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ReprojectionOutcome.NOT_EVALUATED,
+        ReprojectionOutcome.NONE_PROJECTABLE,
+        ReprojectionOutcome.MEASURED,
+    ],
+)
+def test_a_supplied_reference_always_declares_at_least_one_correspondence(
+    outcome: ReprojectionOutcome,
+) -> None:
+    with pytest.raises(ValueError, match="at least one correspondence"):
+        _attempt(outcome=outcome, correspondence_count=0, evaluated_count=0, invalid_count=0)
+
+
+def test_the_empty_attempt_of_a_frame_without_a_reference_is_valid() -> None:
+    attempt = _attempt(
+        outcome=ReprojectionOutcome.NO_REFERENCE,
+        reference_id=None,
+        correspondence_count=0,
+        evaluated_count=0,
+        invalid_count=0,
+    )
+
+    assert attempt.unevaluated_count == 0
+    assert attempt.invalid_rate is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"invalid_count": 5}, "must narrow"),
+        ({"evaluated_count": 5}, "must narrow"),
+        ({"correspondence_count": -1}, "not be negative"),
+        ({"outcome": ReprojectionOutcome.NOT_EVALUATED}, "nothing was evaluated"),
+        ({"outcome": ReprojectionOutcome.NONE_PROJECTABLE}, "every evaluated"),
+        ({"invalid_count": 4, "outcome": ReprojectionOutcome.MEASURED}, "that projects"),
+        ({"reference_id": None}, "exactly when"),
+    ],
+)
+def test_an_attempt_that_contradicts_its_own_counts_is_rejected(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _attempt(**overrides)

@@ -31,17 +31,18 @@ O diagrama representa o fluxo do preset canônico atualmente implementado. Os po
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
-Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2 e CLIP e segue pendente para DINOv3 e AlphaCLIP. Detalhes, resultados e limites estão em [`feature-extraction.md`](feature-extraction.md), [`dinov2.md`](dinov2.md) e [`clip.md`](clip.md).
+Feature Extraction possui identidade e compatibilidade de embeddings, persistência lazy de payload, geometria explícita de mapas densos, pooling mask-aware, diagnostics, avaliação, enhancement opcional e adapters concretos DINOv2, DINOv3, CLIP e AlphaCLIP. Os adapters usam runtimes lazy e testes determinísticos injetados; a validação numérica com pesos reais foi executada para DINOv2, DINOv3 e CLIP e segue pendente para AlphaCLIP. A geometria densa dos diagnostics é contratual: `PerceptionRunWriter.finalize()` vincula `SUCCEEDED`/`WARNING` à `VisualFeature` persistida e recusa divergências de shape/grid, payload, provenance, `EmbeddingSpace` e run proprietário antes de publicar o artifact. Detalhes, resultados e limites estão em [`feature-extraction.md`](feature-extraction.md), [`dinov2.md`](dinov2.md), [`dinov3.md`](dinov3.md) ([relatório da execução real](dinov3-validation.md)) e [`clip.md`](clip.md).
 
 Semantic Interpretation possui contratos canônicos para claims/contexto, request,
 prompt/parser versionados e execução auditável. Qwen, Gemini e Florence-2 implementam
 o boundary `SemanticInterpreter -> SemanticInterpretationExecution` com adapters
 isolados e testes determinísticos. `ClipSemanticScorer` e
 `AlphaClipSemanticScorer` produzem `SemanticScore` separado das claims. Há
-execuções reais registradas de SAM2/SAM3 e DINOv2/CLIP, além de um diagnóstico
-real limitado com Qwen; DINOv3, AlphaCLIP, Gemini e Florence-2 semântico
-continuam sem execução real registrada. Nenhuma dessas validações substitui uma
-avaliação científica comparativa comum, que permanece pendente. O
+execuções reais registradas de SAM2/SAM3, DINOv2/DINOv3/CLIP, Qwen e Florence-2
+semântico (os dois últimos sem anotações humanas); AlphaCLIP e Gemini
+continuam sem execução real registrada, e o Gemini tem cliente validado só com
+transporte simulado. Nenhuma dessas validações substitui uma avaliação
+científica comparativa comum, que permanece pendente. O
 `CANONICAL_PRESET_V1` ainda preserva
 temporariamente os estágios legados de cena/região até a construção de
 `SemanticInterpretationRequest` ser integrada ao preset canônico. Detalhes estão em
@@ -79,14 +80,14 @@ temporariamente os estágios legados de cena/região até a construção de
 
 - `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()` — geradores de identidade determinística.
 
-- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui requests/executions semânticos, views content-addressed e resposta bruta auditável; `RunArtifactManifest`, `allocate_run_index()`, `rebuild_run_registry()`.
+- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui requests/executions semânticos, views content-addressed e resposta bruta auditável; `RunArtifactManifest`.
 - `FeatureStoreWriter`/`FeatureStoreReader` — persistência, indexação e carregamento sob demanda do payload numérico de um `VisualFeature` (`PerceptionRunWriter.add_feature_payload()`/`PerceptionRunReader.feature_store()`); `FeaturePayloadEntry`, `FeatureStoreError`, `FeaturePayloadIntegrityError`.
 - `FeatureExtractionDiagnostic`/`FeatureDebugLevel` — métricas comuns e debug auditável para features densas, globais e de região; integração por `PerceptionRunWriter.add_feature_diagnostic()`/`add_feature_preview()`.
 - `encode_perception_result()`/`decode_perception_result()` (e equivalentes por tipo) — serialização JSON dos contratos públicos.
 
 - `PerceptionEvidenceSet` — view de leitura sobre múltiplos runs selecionados explicitamente; `ObservationEvidence`, `EvidenceSetError`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`semantic-interpretation.md`](semantic-interpretation.md) para requests/evidências semânticas, [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`dense_region_association.md`](dense_region_association.md) para a transformação espacial e o pooling mask-aware, [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) para o estágio opcional native→enhanced, [`dinov2.md`](dinov2.md) para o adapter DINOv2 e sua transformação de patch grid, [`dinov3.md`](dinov3.md) para o adapter DINOv3 e a exclusão explícita de register tokens, [`clip.md`](clip.md) para o adapter visual CLIP e as views global/região, [`alphaclip.md`](alphaclip.md) para o adapter AlphaCLIP e a transformação RGB/máscara, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, [`feature_diagnostics.md`](feature_diagnostics.md) para métricas/debug auditáveis, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos e a regra central de ownership (observação física vs. resultado de inferência), [`semantic-interpretation.md`](semantic-interpretation.md) para requests/evidências semânticas, [`ports.md`](ports.md) para os pontos de substituição de backend, [`service.md`](service.md) para a execução do grafo de estágios e a política de isolamento de falhas, [`pipeline.md`](pipeline.md) para os presets versionados e o grafo declarativo, [`embedding_space.md`](embedding_space.md) para a identidade de espaço de embedding e a regra de compatibilidade, [`dense_region_association.md`](dense_region_association.md) para a transformação espacial e o pooling mask-aware, [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) para o estágio opcional native→enhanced, [`dinov2.md`](dinov2.md) para o adapter DINOv2 e sua transformação de patch grid, [`dinov3.md`](dinov3.md) para o adapter DINOv3 e a exclusão explícita de register tokens, [`clip.md`](clip.md) para o adapter visual CLIP e as views global/região, [`alphaclip.md`](alphaclip.md) para o adapter AlphaCLIP e a transformação RGB/máscara, [`identity.md`](identity.md) para a cadeia completa de rastreabilidade, [`run_artifact.md`](run_artifact.md) para o formato do artefato de run persistido, [`feature_store.md`](feature_store.md) para a persistência/carregamento sob demanda do payload numérico de uma feature, [`mask_store.md`](mask_store.md) para a persistência compacta/carregamento sob demanda da máscara de uma região, [`feature_diagnostics.md`](feature_diagnostics.md) para métricas/debug auditáveis, e [`evidence_set.md`](evidence_set.md) para a view de evidência multi-run.
 
 ## Testes de contrato ponta a ponta
 
@@ -113,6 +114,7 @@ Visual Perception.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — requests canônicos, seleção explícita de evidência e validação de capacidades.
 - [`embedding_space.md`](embedding_space.md) — identidade e compatibilidade de espaços de embedding.
 - [`feature_store.md`](feature_store.md) — persistência, indexação e carregamento lazy de payloads.
+- [`mask_store.md`](mask_store.md) — persistência compacta e carregamento lazy de máscaras de região.
 - [`dense_region_association.md`](dense_region_association.md) — geometria de sampling e pooling dense para região.
 - [`feature_diagnostics.md`](feature_diagnostics.md) — métricas obrigatórias e debug auditável.
 - [`feature_resolution_enhancement.md`](feature_resolution_enhancement.md) — estágio opcional native→enhanced e lineage.

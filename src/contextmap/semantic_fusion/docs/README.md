@@ -12,7 +12,7 @@ flowchart LR
     PR["PointRepresentation<br/>(opcional)"] -. referência .-> SF
     SF --> FE["FusedEvidence<br/>(hipóteses, conflitos, incerteza)"]
     FE --> EVAL["Evaluation<br/>(implementado)"]
-    FE -. próximo boundary .-> DOWN["Semantic Mapping<br/>(planejado)"]
+    FE --> DOWN["Semantic Mapping<br/>(implementado)"]
 ```
 
 Fusão não é identidade. Um `FusionSupport` afirma apenas que observações espaciais veem geometria compatível sob uma política; não afirma mesmo objeto, mesma classe nem identidade persistente entre versões do mapa.
@@ -28,7 +28,7 @@ Fusão não é identidade. Um `FusionSupport` afirma apenas que observações es
 
 ## Estado implementado
 
-Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, a **seleção de canais de evidência** tipados e a **política opcional ciente de qualidade**, que pondera sem descartar evidência, e o **`SemanticFusionRunArtifact`** persistido. A validação vive em `evaluation` e está documentada em [`evaluation/docs/semantic_fusion.md`](../../evaluation/docs/semantic_fusion.md).
+Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObservationGroup`, `FusedHypothesis`, `FusedEvidence` e seus tipos de apoio), o **agrupamento por observação física** sobre uma seleção explícita de runs, a **construção de `FusionSupport`** por sobreposição de geometria e a **política baseline de acumulação** de evidência multi-vista, que preserva ambiguidade, contradição, empate, abstenção e evidência insuficiente sem resolvê-los, a **seleção de canais de evidência** tipados e a **política opcional ciente de qualidade**, que pondera sem descartar evidência, e o **`SemanticFusionRunArtifact`** persistido. A validação vive em `evaluation` e está documentada em [`evaluation/docs/semantic_fusion.md`](../../evaluation/docs/semantic_fusion.md), que registra também a primeira execução real (`corridor-02`, 20 frames, sem claims: nenhuma decisão sobre a política ciente de qualidade foi tomada).
 
 ## Contratos públicos
 
@@ -42,7 +42,7 @@ Existem os **contratos** (`FusionSupport`, `EvidenceContribution`, `PhysicalObse
 - `FusedEvidence`, `FusedEvidenceId`, `FusedEvidenceProvenance` — a evidência acumulada sobre um suporte.
 - `accumulate_quality_aware_evidence()`, `QualityAwareAccumulationPolicy`, `QualityRamp`, `QualityInput`, `QUALITY_AWARE_ACCUMULATION_POLICY_ID` — a política opcional que pondera as contribuições por qualidade mensurável, com rampas declaradas e fator neutro registrado.
 - `QualityWeighting`, `ContributionWeight`, `ComponentFactor`, `ComponentTreatment`, `HypothesisSupport`, `ObservationFactor` — o peso derivado, inspecionável: por componente, por contribuição e o suporte de cada hipótese antes e depois.
-- `SemanticFusionRunWriter`, `SemanticFusionRunReader`, `SemanticFusionRunManifest`, `FusionRunLineage`, `FusionOutcome`, `SemanticFusionDebugLevel`, `SemanticFusionRunId`, `FusionRunArtifactError`, `IncompleteFusionRunArtifactError`, `allocate_fusion_run_index()`, `rebuild_fusion_run_registry()` — o artifact persistido: escrita atômica em fluxo, leitura por identidade, linhagem explícita, métricas separadas e debug nunca contratual.
+- `SemanticFusionRunWriter`, `SemanticFusionRunReader`, `SemanticFusionRunManifest`, `FusionRunLineage`, `FusionOutcome`, `SemanticFusionDebugLevel`, `SemanticFusionRunId`, `FusionRunArtifactError`, `IncompleteFusionRunArtifactError` — o artifact persistido: escrita atômica em fluxo, leitura por identidade, linhagem explícita, métricas separadas e debug nunca contratual.
 - `EvidenceChannel`, `ChannelProvenance` — os canais tipados (claims, scores, features, qualidade, geometria, estrutura 3D) e a proveniência do que alimentou cada canal ativo.
 - `FusedHypothesis`, `FusedHypothesisId`, `HypothesisEvidence`, `EvidenceStance` — um candidato semântico e cada claim que o sustenta, contradiz ou deixa ambíguo.
 - `SupportSignal`, `SupportSignalKind` — score tipado de uma claim, com o modelo que o produziu; `None` significa não pontuado.
@@ -59,15 +59,13 @@ Ver [`contracts.md`](contracts.md) para a referência de campos, as regras de co
 - `contextmap.geometric_mapping`: `GeometrySource`, `GeometryReference`, `GeometryId`, `Bounds3D`, `MapId`.
 - `contextmap.ingestion`: `SourceObservationId`.
 - `contextmap.state_estimation`: `TimeBounds`, reutilizado para o intervalo fechado de aquisição em vez de duplicar a regra.
-- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index`, `write_run_registry`.
+- `contextmap.shared`: `SourceTimestamp`, `Vector3`, `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`.
 
 A dependência de `geometric_mapping`, `ingestion` e `state_estimation` existe apenas para identidades e para o tipo de intervalo temporal, sempre pela API pública; Semantic Fusion não usa a lógica dessas capabilities. Ela está declarada em `tests/architecture/test_boundaries.py`.
 
 ## Módulos que consomem este
 
-Hoje, `evaluation`, sempre através de `contextmap.semantic_fusion`.
-`semantic_mapping` será o consumidor downstream quando esse módulo planejado
-for materializado.
+Hoje, `semantic_mapping` e `evaluation` consomem esta capability, sempre através da API pública de `contextmap.semantic_fusion`.
 
 ## Onde estão os documentos detalhados
 

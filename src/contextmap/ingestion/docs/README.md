@@ -46,12 +46,13 @@ O adapter apenas decodifica e normaliza a fonte. Validação, sincronização, p
 - `CalibrationSet`/`CalibrationEntry` — calibração e frames de coordenadas canônicos; `CameraModel` (`PinholeCameraModel`/`FisheyeCameraModel`/`MeiCameraModel`), `DistortionModel`, `RigidTransform`, `validate_calibration_set()`.
 - `resolve_selection()` — lê um subconjunto determinístico de uma sequência e devolve `SequenceSelectionResult`; `SequenceSelection` (`FullSequenceSelection`/`FrameRangeSelection`/`TimestampRangeSelection`/`ExplicitIdsSelection`), `selection_identity()`.
 - `SourceAdapter` — fronteira (`Protocol`) que qualquer adapter de fonte concreto implementa; `SourceAdapterConfig`, `SourceTopicMapping`, `SourceAdapterCapabilities`, `SourceAdapterWarning`.
+- `TimestampPolicy`/`ConstantOffsetCorrection` — normalização de timestamp por dataset (issue #554); `apply_timestamp_policy()`, `diagnose_source_clock()`, `TimestampCorrectionDiagnostics`, `encode_timestamp_policy()`/`decode_timestamp_policy()`, `DEFAULT_TIMESTAMP_POLICY`.
 - `contextmap.ingestion.adapters.ros1_bag.Ros1BagSourceAdapter` / `contextmap.ingestion.adapters.ros2_bag.Ros2BagSourceAdapter` — implementações concretas para ROS 1/ROS 2 (não reexportadas por `contextmap.ingestion`; importadas pelo path completo, como qualquer backend).
 - `SequenceProvenance` — metadata de proveniência/identidade de conteúdo; `compute_content_identity()`, `compute_source_content_hash()`, `compute_configuration_hash()`, `current_code_version()`.
 - `validate_observations()` e as checagens individuais (`validate_image_observation()`, `validate_lidar_observation()`, `validate_timestamp_ordering()`, `validate_frame_references()`) — validação estrutural sobre observações decodificadas.
 - `summarize_observations()` — sumário legível de uma sequência; `SequenceSummary`, `ModalitySummary`, `SequenceDiagnostics`, `FrameGraphDiagnostics`.
 
-Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido e o layout do workspace local, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
+Ver [`contracts.md`](contracts.md) para a referência completa de campos, unidades e exemplos de mapeamento ROS 1/ROS 2, [`artifact.md`](artifact.md) para o formato do artefato persistido, o `output_dir` recebido do chamador e a identidade, [`synchronization.md`](synchronization.md) para a política de sincronização e suas limitações conhecidas, [`calibration.md`](calibration.md) para o contrato de calibração e convenções de frame, [`selection.md`](selection.md) para o modelo de seleção e replay, [`adapters.md`](adapters.md) para a fronteira de source adapters, [`timestamps.md`](timestamps.md) para a política de normalização de timestamp por dataset, [`backends.md`](backends.md) para decisões específicas de cada adapter concreto, [`provenance.md`](provenance.md) para proveniência, integridade e identidade de conteúdo, [`validation.md`](validation.md) para validação estrutural, e [`diagnostics.md`](diagnostics.md) para sumário legível e diagnósticos persistidos.
 
 ## Módulos consumidos
 
@@ -68,11 +69,12 @@ Fonte bruta → adapter (`Ros1BagSourceAdapter`/`Ros2BagSourceAdapter`) → `Sou
 ## Onde estão os documentos detalhados
 
 - [`contracts.md`](contracts.md) — campos, unidades, ownership, exemplos de mapeamento ROS 1/ROS 2.
-- [`artifact.md`](artifact.md) — formato do artefato de sequência persistido e layout do workspace local.
+- [`artifact.md`](artifact.md) — formato do artefato de sequência persistido, `output_dir` do chamador e identidade.
 - [`synchronization.md`](synchronization.md) — política de sincronização/agrupamento temporal e suas limitações conhecidas.
 - [`calibration.md`](calibration.md) — contrato de calibração e convenções de frame de coordenadas.
 - [`selection.md`](selection.md) — modelo de seleção e replay de sequência.
 - [`adapters.md`](adapters.md) — fronteira (`Protocol`) de source adapters.
+- [`timestamps.md`](timestamps.md) — política de normalização de timestamp por dataset (issue #554).
 - [`backends.md`](backends.md) — decisões específicas de cada adapter concreto (ROS 1, ROS 2).
 - [`provenance.md`](provenance.md) — proveniência, integridade e identidade de conteúdo.
 - [`validation.md`](validation.md) — validação estrutural de observações decodificadas.

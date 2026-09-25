@@ -37,9 +37,9 @@ Os aliases `Vector3` e `Quaternion` e as funções sobre quaternions entraram em
 
 ### Mecânica de run directory em `shared.run_directory`
 
-`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash, e o índice de run é monotônico por capability e sequência calculado a partir dos runs válidos no disco. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory`, `next_run_index` e `write_run_registry` implementam essas regras uma vez, sem conhecer o conteúdo de um run. Um payload maior que a memória é gravado em fluxo por `AtomicRunDirectory.open_binary`, que hasheia durante a escrita, e `check_file_inventory` hasheia em blocos; ambos surgiram do primeiro consumidor real (o payload de geometria) e não mudam as regras.
+`docs/ARTIFACTS.md` fixa as mesmas regras para todo run artifact: uma escrita interrompida não pode parecer um run finalizado, um run finalizado é imutável e nunca sobrescrito, o manifest inventaria cada arquivo contratual com tamanho e hash. `AtomicRunDirectory`, `FileEntry`, `check_file_inventory` implementam essas regras uma vez, sem conhecer o conteúdo de um run. Um payload maior que a memória é gravado em fluxo por `AtomicRunDirectory.open_binary`, que hasheia durante a escrita, e `check_file_inventory` hasheia em blocos; ambos surgiram do primeiro consumidor real (o payload de geometria) e não mudam as regras.
 
-- **quem usa:** `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` e `semantic_fusion`, todos com a mesma regra de `ARTIFACTS.md`;
+- **quem usa:** `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation`, `semantic_fusion` e `semantic_mapping`, todos com a mesma regra de `ARTIFACTS.md`;
 - **owner natural:** nenhuma capability de domínio; a regra é global;
 - **API pública:** apenas `pathlib` e tipos primitivos, sem NumPy nem SDK;
 - **o que continua com cada capability:** quais arquivos existem, os campos do manifest e o que torna um run válido.
@@ -238,7 +238,7 @@ src/contextmap/shared/
 ├── __init__.py
 ├── time.py          # SourceTimestamp
 ├── geometry.py      # Vector3, Quaternion, RotationMatrix e operações rígidas
-└── run_directory.py # escrita atômica, inventário, integridade e registry
+└── run_directory.py # escrita atômica, inventário e integridade
 ```
 
 `identifiers.py` e `provenance.py` não existem; só devem ser criados se surgir

@@ -28,8 +28,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from contextmap.ingestion import (
+    DEFAULT_TIMESTAMP_POLICY,
     MODALITY_NAMES,
     CalibrationError,
     CalibrationSet,
@@ -37,6 +39,7 @@ from contextmap.ingestion import (
     LidarObservation,
     MissingRequiredTopicError,
     SequenceArtifactError,
+    SequenceArtifactId,
     SequenceArtifactReader,
     SequenceArtifactWriter,
     SequenceProvenance,
@@ -45,10 +48,16 @@ from contextmap.ingestion import (
     SourceAdapterError,
     SourceObservation,
     SourceTopicMapping,
+    SourceWindow,
     SynchronizationConfig,
+    TimestampPolicy,
+    apply_timestamp_policy,
     compute_configuration_hash,
     compute_source_content_hash,
     current_code_version,
+    decode_timestamp_policy,
+    diagnose_source_clock,
+    encode_timestamp_policy,
     observation_modality,
     synchronize,
     validate_frame_references,
@@ -126,36 +135,59 @@ class IngestionRequest:
         source_type: Adapter family identity, for example ``"ros1_bag"``.
         source_path: Path of the recorded source.
         sequence_name: Name of the sequence artifact to publish; a single path segment.
-        workspace: Workspace that receives ``sequences/<sequence_name>/<artifact_id>``.
+        output_dir: The final directory of the sequence artifact (in a run, ``<run>/ingestion``).
+            It must not exist: a published artifact is never replaced.
         topics: The topics or channels to read.
         synchronization: The synchronization policy applied before persisting.
         required_topics: Topic names that must exist in the source.
         timestamp_clock_id: Identity of the header clock shared by the topics; derived from
             the source when omitted.
+        timestamp_policy: Dataset-scoped selection of clocks and correction applied to every
+            observation's timestamp before it is validated, synchronized and published (issue
+            #554). The default applies no correction: behavior is unchanged from before this
+            field existed, and only a source explicitly configured otherwise is affected — a
+            live/streaming request never inherits another dataset's correction.
+        window: An explicit temporal window of the source to ingest (issue #506), or
+            ``None`` to ingest the whole source. See
+            :class:`~contextmap.ingestion.SourceWindow`; an adapter that does not support
+            windowing rejects a configured window explicitly instead of silently ignoring
+            it (e.g. :class:`~contextmap.ingestion.adapters.pose_file.PoseFileSourceAdapter`).
         calibration: An externally supplied calibration merged with what the source holds.
         validation: What to do with structural problems.
         hash_source: Whether to hash the source bytes for its content identity. It is
             O(source size); turning it off is recorded in the provenance.
         config_identity: Digest of the runtime effective configuration this request belongs
             to, recorded for reproduction.
+        artifact_id: Identity to publish under; a fresh one is generated when omitted. A run
+            derives it from the stage identity so that identical executions publish the same
+            identity.
+        extra: Adapter-specific configuration not covered by the shared shape above, passed
+            through unchanged to :attr:`~contextmap.ingestion.SourceAdapterConfig.extra` (for
+            example :class:`~contextmap.ingestion.adapters.pose_file.PoseFileSourceAdapter`'s
+            required ``format``/``parent_frame``/``body_frame``/``pose_role``). ``IngestionRequest``
+            never grows a field per adapter family for this.
     """
 
     source_type: str
     source_path: str
     sequence_name: str
-    workspace: str
+    output_dir: str
     topics: SourceTopicMapping
     synchronization: SynchronizationConfig
     required_topics: frozenset[str] = frozenset()
     timestamp_clock_id: str | None = None
+    timestamp_policy: TimestampPolicy = DEFAULT_TIMESTAMP_POLICY
+    window: SourceWindow | None = None
     calibration: CalibrationSet | None = None
     validation: ValidationPolicy = field(default_factory=ValidationPolicy)
     hash_source: bool = True
     config_identity: str | None = None
+    artifact_id: str | None = None
+    extra: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the shape of the request; whether it can run is decided by preflight."""
-        for name in ("source_type", "source_path", "sequence_name", "workspace"):
+        for name in ("source_type", "source_path", "sequence_name", "output_dir"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must not be empty")
         if (
@@ -177,6 +209,8 @@ class IngestionRequest:
             "topics": dataclasses.asdict(self.topics),
             "required_topics": sorted(self.required_topics),
             "timestamp_clock_id": self.timestamp_clock_id,
+            "timestamp_policy": encode_timestamp_policy(self.timestamp_policy),
+            "window": _window_document(self.window),
             "synchronization": {
                 "reference_modality": self.synchronization.reference_modality,
                 "tolerance_nanoseconds": self.synchronization.tolerance_nanoseconds,
@@ -187,29 +221,38 @@ class IngestionRequest:
             else _calibration_identity(self.calibration),
             "hash_source": self.hash_source,
             "config_identity": self.config_identity,
+            "extra": dict(self.extra),
         }
 
     @property
     def identity(self) -> str:
         """Return the deterministic identity of what this request asks for.
 
-        The workspace is where the result is written, not part of what is ingested, so two
-        requests that differ only in it have the same identity.
+        The output directory and the identity to publish under say where and as what the result
+        is written, not what is ingested, so two requests that differ only in them have the same
+        identity.
         """
         return _digest(self.to_document())
 
     @classmethod
     def from_document(
-        cls, document: Mapping[str, Any], *, workspace: str, source_type: str | None = None
+        cls,
+        document: Mapping[str, Any],
+        *,
+        output_dir: str,
+        source_type: str | None = None,
+        artifact_id: str | None = None,
     ) -> IngestionRequest:
         """Build a request from a primitive document, as a CLI or a TUI form produces it.
 
         Args:
             document: A mapping with ``source_path``, ``sequence_name``, ``topics``,
                 ``synchronization`` and optionally ``required_topics``, ``timestamp_clock_id``,
-                ``validation``, ``hash_source`` and ``config_identity``.
-            workspace: The output workspace.
+                ``timestamp_policy``, ``window``, ``validation``, ``hash_source``,
+                ``config_identity`` and ``extra``.
+            output_dir: The final directory of the sequence artifact.
             source_type: The adapter family, when the document does not carry it.
+            artifact_id: The identity to publish under, when the caller fixes it.
 
         Returns:
             The request.
@@ -228,14 +271,18 @@ class IngestionRequest:
                 source_type=document.get("source_type", source_type) or "",
                 source_path=document["source_path"],
                 sequence_name=document["sequence_name"],
-                workspace=workspace,
+                output_dir=output_dir,
                 topics=topics,
                 synchronization=synchronization,
                 required_topics=frozenset(document.get("required_topics", ())),
                 timestamp_clock_id=document.get("timestamp_clock_id"),
+                timestamp_policy=decode_timestamp_policy(document.get("timestamp_policy")),
+                window=_window_from_document(document.get("window")),
                 validation=validation,
                 hash_source=document.get("hash_source", True),
                 config_identity=document.get("config_identity"),
+                artifact_id=artifact_id,
+                extra=dict(document.get("extra", {})),
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"invalid ingestion request: {error!r}") from error
@@ -532,17 +579,20 @@ class IngestionService:
             problems.append(_problem("request.timestamp_clock_id", "must not be empty"))
 
     def _check_output(self, request: IngestionRequest, problems: list[ConfigProblem]) -> None:
-        workspace = Path(request.workspace)
-        if workspace.exists() and not workspace.is_dir():
-            problems.append(_problem("output.workspace", f"{workspace} is not a directory"))
+        output = Path(request.output_dir)
+        if output.exists():
+            problems.append(
+                _problem(
+                    "output.output_dir",
+                    f"{output} already exists: a published artifact is never replaced",
+                )
+            )
             return
-        nearest = workspace
+        nearest = output.parent
         while not nearest.exists() and nearest != nearest.parent:
             nearest = nearest.parent
-        if not os.access(nearest, os.W_OK):
-            problems.append(
-                _problem("output.workspace", f"{workspace} cannot be created or written")
-            )
+        if not nearest.is_dir() or not os.access(nearest, os.W_OK):
+            problems.append(_problem("output.output_dir", f"{output} cannot be created or written"))
 
     def _build_adapter(
         self, request: IngestionRequest, problems: list[ConfigProblem]
@@ -637,14 +687,18 @@ class IngestionService:
                 )
             )
 
+        # O serviço é o chamador do writer: ele escolhe a identidade e o diretório final. O writer
+        # apenas grava onde lhe mandam e nunca aloca nada.
+        artifact_id = SequenceArtifactId(request.artifact_id or uuid4().hex)
+        directory = Path(request.output_dir)
         with SequenceArtifactWriter(
-            workspace_root=Path(request.workspace), sequence_name=request.sequence_name
+            output_dir=directory, sequence_name=request.sequence_name, artifact_id=artifact_id
         ) as writer:
             calibration = self._read(run, adapter, writer)
             self._validate(run, calibration)
             diagnostics = self._synchronize(run)
             manifest = self._publish(run, adapter, writer, calibration, diagnostics)
-        self._verify(run, manifest)
+        self._verify(run, manifest, directory)
 
     def _read(
         self, run: _Run, adapter: SourceAdapter, writer: SequenceArtifactWriter
@@ -657,6 +711,7 @@ class IngestionService:
                 observation = next(iterator)
             except StopIteration:
                 break
+            observation = apply_timestamp_policy(observation, run.request.timestamp_policy)
             run.content_problems.extend(_content_problems(observation))
             try:
                 writer.add_observation(observation)
@@ -673,6 +728,9 @@ class IngestionService:
         except Exception as error:
             raise run.abort_source(error) from error
         run.adapter_warnings = tuple(warning.reason for warning in adapter.warnings())
+        run.timestamp_diagnostics = diagnose_source_clock(
+            run.metadata, correction=run.request.timestamp_policy.correction
+        )
         return calibration
 
     def _validate(self, run: _Run, calibration: CalibrationSet | None) -> None:
@@ -724,13 +782,18 @@ class IngestionService:
         run.check_cancelled()
         run.begin("writing-artifact")
         request = run.request
-        warnings = (*run.adapter_warnings, *run.validation_problems)
+        timestamp_warnings = (
+            run.timestamp_diagnostics.warnings() if run.timestamp_diagnostics else ()
+        )
+        warnings = (*run.adapter_warnings, *run.validation_problems, *timestamp_warnings)
         run.warnings = warnings
         try:
             if calibration is not None:
                 writer.set_calibration(calibration)
             writer.set_provenance(
-                _provenance(request, calibration, run.policy, warnings, source_hash(request))
+                _provenance(
+                    request, calibration, run.policy, warnings, source_hash(request, adapter)
+                )
             )
             writer.set_diagnostics(warnings=warnings, synchronization=diagnostics)
             return writer.finalize()
@@ -739,13 +802,7 @@ class IngestionService:
         except (SequenceArtifactError, OSError) as error:
             raise run.abort("output", error) from error
 
-    def _verify(self, run: _Run, manifest: Any) -> None:
-        directory = (
-            Path(run.request.workspace)
-            / "sequences"
-            / run.request.sequence_name
-            / str(manifest.artifact_id)
-        )
+    def _verify(self, run: _Run, manifest: Any, directory: Path) -> None:
         run.manifest = manifest
         run.artifact_path = directory
         problems = SequenceArtifactReader(directory).verify_integrity()
@@ -788,6 +845,7 @@ class _Run:
         self.content_problems: list[str] = []
         self.validation_problems: tuple[str, ...] = ()
         self.adapter_warnings: tuple[str, ...] = ()
+        self.timestamp_diagnostics: Any = None
         self.warnings: tuple[str, ...] = ()
         self.processing = 0
         self.dropped = 0
@@ -884,11 +942,15 @@ class _Run:
 
 
 class IngestionStageExecutor:
-    """Runs canonical ingestion as the ``ingestion`` stage of the runtime DAG.
+    """Runs canonical ingestion as an ingestion-producing stage of the runtime DAG.
 
     The stage has no upstream artifact; what to ingest comes from the request given here.
     A failed or cancelled ingestion becomes a :class:`~contextmap.runtime.lifecycle.StageFailure`
     carrying the ingestion's own failure category, so the run record says why.
+
+    Two instances of this executor, bound to different requests (for example a bag and a
+    pose file) and different ``stage_id``s, can take part in the same run -- see issue #555's
+    auxiliary ``pose_ingestion`` stage.
     """
 
     def __init__(
@@ -896,13 +958,28 @@ class IngestionStageExecutor:
         service: IngestionService,
         request: IngestionRequest,
         *,
+        stage_id: str = "ingestion",
         event_sink: EventSink | None = None,
         cancellation: CancellationToken | None = None,
         redact: Callable[[str], str] | None = None,
     ) -> None:
-        """Bind the executor to a service and the request it runs."""
+        """Bind the executor to a service and the request it runs.
+
+        Args:
+            service: Ingestion service to run the request through.
+            request: The ingestion request; only its ``output_dir``/``artifact_id`` are
+                overridden per run, from the stage request.
+            stage_id: Identity recorded on the published :class:`ArtifactRef`. Defaults to
+                ``"ingestion"``, the main sequence stage; a second instance of this executor
+                composing an auxiliary sequence (for example a pose-only one) uses a
+                different id.
+            event_sink: Where ingestion events are published, if anywhere.
+            cancellation: Cooperative cancellation token, if any.
+            redact: Secret-redaction callback passed through to the ingestion service.
+        """
         self._service = service
         self._request = request
+        self._stage_id = stage_id
         self._event_sink = event_sink
         self._cancellation = cancellation
         self._redact = redact
@@ -919,8 +996,14 @@ class IngestionStageExecutor:
         Raises:
             StageFailure: If the ingestion failed or was cancelled.
         """
+        if request.output_dir is None or request.workspace is None:
+            raise StageFailure("ingestion needs the run's output directory", category="execution")
         result = self._service.run(
-            self._request,
+            dataclasses.replace(
+                self._request,
+                output_dir=str(request.output_dir),
+                artifact_id=request.identity(),
+            ),
             event_sink=self._event_sink,
             cancellation=self._cancellation,
             redact=self._redact,
@@ -932,10 +1015,11 @@ class IngestionStageExecutor:
                 category=failure.category if failure else "execution",
             )
         return ArtifactRef(
-            stage_id="ingestion",
+            stage_id=self._stage_id,
             contract="SequenceArtifact",
             artifact_id=result.artifact_id,
             content_hash=result.content_hash,
+            location=request.output_dir.relative_to(request.workspace).as_posix(),
         )
 
 
@@ -969,6 +1053,30 @@ def _adapter_config(request: IngestionRequest) -> SourceAdapterConfig:
         timestamp_clock_id=request.timestamp_clock_id,
         calibration=request.calibration,
         required_topics=request.required_topics,
+        window=request.window,
+        extra=request.extra,
+    )
+
+
+def _window_document(window: SourceWindow | None) -> dict[str, object] | None:
+    """Return the JSON-compatible form of a configured window, or ``None``."""
+    if window is None:
+        return None
+    return {
+        "clock_id": window.clock_id,
+        "start_seconds": window.start_seconds,
+        "end_seconds": window.end_seconds,
+    }
+
+
+def _window_from_document(document: Mapping[str, Any] | None) -> SourceWindow | None:
+    """Decode a window from its JSON-compatible form, or ``None``."""
+    if document is None:
+        return None
+    return SourceWindow(
+        clock_id=document["clock_id"],
+        start_seconds=document["start_seconds"],
+        end_seconds=document["end_seconds"],
     )
 
 
@@ -1005,9 +1113,24 @@ def _without_payload(observation: SourceObservation) -> SourceObservation:
     return observation
 
 
-def source_hash(request: IngestionRequest) -> str | None:
-    """Hash the source's bytes, when the request asks for it."""
-    return compute_source_content_hash(Path(request.source_path)) if request.hash_source else None
+def source_hash(request: IngestionRequest, adapter: SourceAdapter) -> str | None:
+    """Return the source's content identity, when the request asks for it.
+
+    When ``request.window`` restricts what is actually read, the adapter's
+    own :meth:`~contextmap.ingestion.SourceAdapter.content_hash` is used
+    instead of a separate full-source pass: it was already accumulated for
+    free while :meth:`~contextmap.ingestion.SourceAdapter.read_observations`
+    ran, and covers only the window, never the whole source (issue #506).
+    Hashing the whole source regardless of the window would defeat the
+    O(window) cost guarantee windowed ingestion is meant to provide.
+    Without a window, a full pass over the source is still used, matching
+    the identity semantics of unwindowed ingestion.
+    """
+    if not request.hash_source:
+        return None
+    if request.window is not None:
+        return adapter.content_hash()
+    return compute_source_content_hash(Path(request.source_path))
 
 
 def _provenance(
@@ -1021,6 +1144,8 @@ def _provenance(
         "topics": dataclasses.asdict(request.topics),
         "required_topics": sorted(request.required_topics),
         "timestamp_clock_id": request.timestamp_clock_id,
+        "timestamp_policy": encode_timestamp_policy(request.timestamp_policy),
+        "window": _window_document(request.window),
         "synchronization": request.to_document()["synchronization"],
         "validation": dataclasses.asdict(request.validation),
         "hash_source": request.hash_source,

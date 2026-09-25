@@ -19,9 +19,7 @@ from contextmap.state_estimation import (
     StateEstimationRunManifest,
     StateEstimationRunReader,
     StateEstimationRunWriter,
-    allocate_run_index,
     execute_state_estimation,
-    rebuild_run_registry,
 )
 from contextmap.state_estimation.backends.external_pose import (
     ExternalPoseConfig,
@@ -49,28 +47,20 @@ def _writer(
     workspace: Path,
     *,
     index: int = 1,
-    backend_label: str = "external-pose",
     debug_level: StateEstimationDebugLevel = StateEstimationDebugLevel.NONE,
 ) -> StateEstimationRunWriter:
     return StateEstimationRunWriter(
-        workspace_root=workspace,
+        output_dir=_run_dir(workspace, index),
         sequence_name=SEQUENCE,
         run_id=StateEstimationRunId(f"run-{index:04d}"),
         run_index=index,
-        selection_label="full-sequence",
-        backend_label=backend_label,
         debug_level=debug_level,
     )
 
 
-def _run_dir(workspace: Path, index: int = 1, backend_label: str = "external-pose") -> Path:
-    return (
-        workspace
-        / "runs"
-        / "state-estimation"
-        / SEQUENCE
-        / f"run-{index:04d}__full-sequence__{backend_label}"
-    )
+def _run_dir(workspace: Path, index: int = 1) -> Path:
+    """Onde o writer grava: o chamador decide o diretório final, o writer não calcula caminho."""
+    return workspace / f"run-{index:04d}"
 
 
 def _write(
@@ -186,15 +176,13 @@ def test_debug_levels_add_human_evidence_without_changing_the_outputs(tmp_path: 
     )
     poses_by_level: dict[str, bytes] = {}
     for index, level in enumerate(StateEstimationDebugLevel, start=1):
-        _write(
-            tmp_path, outcome, index=index, debug_level=level, backend_label=f"level-{level.value}"
-        )
-        run_dir = _run_dir(tmp_path, index, f"level-{level.value}")
+        _write(tmp_path, outcome, index=index, debug_level=level)
+        run_dir = _run_dir(tmp_path, index)
         poses_by_level[level.value] = (run_dir / "outputs" / "poses.jsonl").read_bytes()
 
-    none = _debug_files(_run_dir(tmp_path, 1, "level-none"))
-    standard = _debug_files(_run_dir(tmp_path, 2, "level-standard"))
-    full = _debug_files(_run_dir(tmp_path, 3, "level-full"))
+    none = _debug_files(_run_dir(tmp_path, 1))
+    standard = _debug_files(_run_dir(tmp_path, 2))
+    full = _debug_files(_run_dir(tmp_path, 3))
 
     assert none == set()
     assert {
@@ -350,17 +338,40 @@ def test_runtime_is_recorded_separately_and_only_when_measured(tmp_path: Path) -
 # --- Run identity -----------------------------------------------------------
 
 
-def test_run_indexes_and_the_registry_follow_the_runs_on_disk(tmp_path: Path) -> None:
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 1
+def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_created(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "ws" / "corridor-02" / "run-0001" / "state_estimation"
+
+    StateEstimationRunWriter(
+        output_dir=target,
+        sequence_name=SEQUENCE,
+        run_id=StateEstimationRunId("state-run"),
+        run_index=1,
+    ).finalize(_outcome())
+
+    assert StateEstimationRunReader(target).manifest.run_id == StateEstimationRunId("state-run")
+    # Sem registro `runs.json` e sem `runs/<capability>/<sequência>/`: só o diretório do artifact.
+    assert sorted(path.name for path in target.parent.iterdir()) == ["state_estimation"]
+    assert sorted(path.name for path in (tmp_path / "ws").iterdir()) == ["corridor-02"]
+
+
+def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
+    tmp_path: Path,
+) -> None:
+    manifest, _ = _write(tmp_path, index=7)
+
+    assert (manifest.run_id, manifest.run_index) == (StateEstimationRunId("run-0007"), 7)
+    assert not (tmp_path / "run-0001").exists()
+
+
+def test_a_second_run_at_the_same_output_directory_is_refused_and_leaves_the_first_intact(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path)
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 2
-    _write(tmp_path, index=2, backend_label="second")
-    (_run_dir(tmp_path).parent / "run-0009__broken").mkdir()
+    before = (_run_dir(tmp_path) / "manifest.json").read_bytes()
 
-    registry_path = _run_dir(tmp_path).parent / "runs.json"
-    registry_path.unlink()
-    rebuild_run_registry(workspace_root=tmp_path, sequence_name=SEQUENCE)
+    with pytest.raises(RunArtifactError):
+        _write(tmp_path)
 
-    registry = json.loads(registry_path.read_text())
-    assert [run["run_index"] for run in registry["runs"]] == [1, 2]
-    assert allocate_run_index(workspace_root=tmp_path, sequence_name=SEQUENCE) == 3
+    assert (_run_dir(tmp_path) / "manifest.json").read_bytes() == before

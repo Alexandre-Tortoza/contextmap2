@@ -19,8 +19,11 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionId,
+    StageDefinition,
+    StageStatus,
     VisualFeature,
     embedding_space_fingerprint,
+    execute_stage_graph,
     feature_id_for,
 )
 from contextmap.visual_perception.backends.clip import (
@@ -178,6 +181,7 @@ def test_embedding_space_is_language_aligned_but_no_scoring_occurs() -> None:
 
     extraction = backend.extract_visual(_image())
     space = extraction.embedding_space
+    assert space is not None
 
     assert space.family == "clip"
     assert space.checkpoint == f"openai/clip-vit-base-patch32@{_REVISION}"
@@ -287,8 +291,6 @@ def test_feature_identity_is_unique_across_composed_feature_stages() -> None:
 
 def test_region_mode_requires_accepted_regions_and_matching_output_count() -> None:
     backend, _, _ = _backend(scope=FeatureScope.REGION, array=np.ones((1, 2), dtype=np.float32))
-    with pytest.raises(ClipInferenceError, match="requires at least one region"):
-        backend.extract_visual(_image())
     with pytest.raises(ClipInferenceError, match="accepted regions"):
         backend.extract_visual(
             _image(), (_region("rejected", x=0, y=0, width=2, height=2, accepted=False),)
@@ -297,6 +299,53 @@ def test_region_mode_requires_accepted_regions_and_matching_output_count() -> No
     wrong_count, _, _ = _backend(scope=FeatureScope.REGION, array=np.ones((2, 2), dtype=np.float32))
     with pytest.raises(ClipInferenceError, match="returned 2 embeddings for 1 views"):
         wrong_count.extract_visual(_image(), (_region("region-a", x=0, y=0, width=2, height=2),))
+
+
+def test_region_mode_with_zero_regions_succeeds_with_zero_features() -> None:
+    """A legitimate empty discovery result must not fail region-scoped CLIP (#380)."""
+    backend, runtime, sink = _backend(
+        scope=FeatureScope.REGION, array=np.ones((1, 2), dtype=np.float32)
+    )
+
+    features = backend.extract(_image(), regions=())
+
+    assert features == ()
+    assert runtime.calls == []
+    assert sink.calls == []
+
+    extraction = backend.extract_visual(_image(), regions=())
+    assert extraction.features == ()
+    assert extraction.embedding_space is None
+    assert extraction.views == ()
+    assert extraction.diagnostics.view_count == 0
+
+
+def test_stage_graph_succeeds_when_region_discovery_finds_nothing() -> None:
+    """A zero-region upstream stage must not turn the feature stage FAILED (#380)."""
+    backend, _, _ = _backend(scope=FeatureScope.REGION, array=np.ones((1, 2), dtype=np.float32))
+    stages = (
+        StageDefinition(
+            stage_id="region_discovery",
+            capability="region_discovery",
+            run=lambda _context: (),
+        ),
+        StageDefinition(
+            stage_id="region_feature_extraction",
+            capability="feature_extractor",
+            run=lambda context: backend.extract(
+                _image(),
+                regions=context["region_discovery"],  # type: ignore[arg-type]
+            ),
+            depends_on=frozenset({"region_discovery"}),
+        ),
+    )
+
+    outcomes = {outcome.stage_id: outcome for outcome in execute_stage_graph(stages)}
+
+    assert outcomes["region_discovery"].status is StageStatus.SUCCEEDED
+    assert outcomes["region_feature_extraction"].status is StageStatus.SUCCEEDED
+    assert outcomes["region_feature_extraction"].error is None
+    assert outcomes["region_feature_extraction"].output == ()
 
 
 @pytest.mark.parametrize("elapsed_seconds", [float("nan"), float("inf")])

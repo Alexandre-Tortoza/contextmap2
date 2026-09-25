@@ -63,7 +63,10 @@ class TestCanonicalProfile:
         assert stages["ingestion"] is True
         assert stages["semantic_fusion"] is True
         assert stages["point_representation"] is False
-        assert "context_map" in stages
+        assert stages["semantic_mapping"] is True
+        assert stages["entity_resolution"] is True
+        assert stages["spatial_relations"] is True
+        assert stages["context_map"] is True
 
     def test_makes_no_backend_choice_on_the_users_behalf(self) -> None:
         config = resolve_effective_config().config
@@ -164,6 +167,17 @@ class TestDigest:
         assert changed != base
         assert changed.startswith("sha256:")
 
+    def test_trajectory_mode_defaults_to_operational_only_and_can_be_overridden(self) -> None:
+        """Issue #555: default behavior with a ground-truth auxiliary pose is unchanged
+        unless this opt-in is set explicitly."""
+        default = resolve_effective_config().config.policies.trajectory_mode
+        overridden = resolve_effective_config(
+            overrides=["policies.trajectory_mode=allow_ground_truth"]
+        ).config.policies.trajectory_mode
+
+        assert default == "operational_only"
+        assert overridden == "allow_ground_truth"
+
     def test_ignores_configuration_that_does_not_reach_the_execution(self, tmp_path: Path) -> None:
         selected = _sam3_document()
         with_unused = _sam3_document()
@@ -247,6 +261,81 @@ class TestBackendScoping:
         assert component.parameters["device"] == "cpu"
 
 
+class TestResourceProviders:
+    """``resources.providers``: declarative ``RuntimeProvider`` targets (#507's real gap)."""
+
+    def test_parses_a_declared_target_per_component(self, tmp_path: Path) -> None:
+        document = _sam3_document()
+        document["resources"] = {
+            "providers": {REGION: "pkg.loaders:load_sam3", INTERPRETER: "pkg.loaders:load_qwen"}
+        }
+        file = _write(tmp_path / "a.json", document)
+
+        resources = resolve_effective_config(files=[file]).config.resources
+
+        assert dict(resources.providers) == {
+            REGION: "pkg.loaders:load_sam3",
+            INTERPRETER: "pkg.loaders:load_qwen",
+        }
+
+    def test_defaults_to_an_empty_mapping(self) -> None:
+        assert dict(resolve_effective_config().config.resources.providers) == {}
+
+    def test_rejects_a_non_string_or_empty_target(self, tmp_path: Path) -> None:
+        document = {"resources": {"providers": {REGION: "", INTERPRETER: 3}}}
+        file = _write(tmp_path / "a.json", document)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            resolve_effective_config(files=[file])
+
+        paths = {problem.path for problem in excinfo.value.problems}
+        assert paths == {f"resources.providers.{REGION}", f"resources.providers.{INTERPRETER}"}
+
+    def test_a_later_file_adds_to_the_declared_targets_without_wiping_earlier_ones(
+        self, tmp_path: Path
+    ) -> None:
+        first = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        second = _write(tmp_path / "b.json", {"resources": {"providers": {INTERPRETER: "pkg:b"}}})
+
+        resources = resolve_effective_config(files=[first, second]).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:a", INTERPRETER: "pkg:b"}
+
+    def test_an_override_replaces_the_whole_declared_providers_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        # component_id já contém um ponto ("visual_perception.region_discovery"), então um
+        # override pontual não consegue nomear uma única chave sem ambiguidade com o próprio
+        # separador de caminho: o override substitui o mapa inteiro, como em qualquer outro
+        # valor JSON (a fusão chave a chave é exclusiva de camadas de arquivo).
+        file = _write(tmp_path / "a.json", {"resources": {"providers": {REGION: "pkg:a"}}})
+        replacement = json.dumps({REGION: "pkg:b"})
+
+        resources = resolve_effective_config(
+            files=[file], overrides=[f"resources.providers={replacement}"]
+        ).config.resources
+
+        assert dict(resources.providers) == {REGION: "pkg:b"}
+
+    def test_round_trips_through_to_document(self) -> None:
+        target = {"visual_perception.region_discovery": "pkg:load"}
+
+        config = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps(target)}"]
+        ).config
+
+        assert config.to_document()["resources"]["providers"] == target
+
+    def test_changes_the_digest(self) -> None:
+        base = resolve_effective_config().digest
+
+        changed = resolve_effective_config(
+            overrides=[f"resources.providers={json.dumps({REGION: 'pkg:a'})}"]
+        ).digest
+
+        assert changed != base
+
+
 class TestStructuralValidation:
     @pytest.mark.parametrize(
         ("document", "fragment"),
@@ -268,6 +357,7 @@ class TestStructuralValidation:
             ),
             ({"resources": {"device": 3}}, "resources.device"),
             ({"policies": {"debug_level": "loud"}}, "debug_level"),
+            ({"policies": {"trajectory_mode": "always_ground_truth"}}, "trajectory_mode"),
             ({"inputs": {"selections": {"ingestion": 3}}}, "inputs.selections"),
         ],
     )
@@ -397,6 +487,31 @@ class TestSelectionCompleteness:
 
         assert check_selection(effective.config) == ()
 
+    def test_an_unselected_optional_evidence_channel_is_never_reported_as_incomplete(
+        self, tmp_path: Path
+    ) -> None:
+        """The geometry-only path is a complete selection, not an incomplete one.
+
+        ``_all_selected()`` never chooses a backend for the optional Entity Resolution channels
+        or Spatial Relations predicates: their absence must not surface as a problem.
+        """
+        file = _write(tmp_path / "a.json", _all_selected())
+
+        effective = resolve_effective_config(files=[file])
+
+        paths = {
+            problem.path.removeprefix("components.")
+            for problem in check_selection(effective.config)
+        }
+        assert not paths & {
+            "entity_resolution.semantic_compatibility",
+            "entity_resolution.temporal_compatibility",
+            "entity_resolution.appearance",
+            "entity_resolution.representation",
+            "spatial_relations.geometric_predicate",
+            "spatial_relations.contact_predicate",
+        }
+
 
 def _all_selected() -> dict[str, object]:
     return {
@@ -409,9 +524,29 @@ def _all_selected() -> dict[str, object]:
                 "semantic_interpretation": {"backend": "qwen"},
             },
             "state_estimation": {"estimator": {"backend": "external_pose"}},
+            "geometric_mapping": {
+                "pose_lookup": {"backend": "lookup-policy-v1"},
+                "motion_correction": {"backend": "motion-correction-v1"},
+            },
+            "sensor_association": {
+                "occlusion": {"backend": "conservative-depth-support-v1"},
+                "tolerances": {"backend": "diagnostic-tolerances-v1"},
+                "pose_policy": {"backend": "lookup-policy-v1"},
+            },
             "semantic_fusion": {
                 "support": {"backend": "geometry-jaccard-support-v1"},
                 "accumulation": {"backend": "baseline-evidence-accumulation-v1"},
+            },
+            "semantic_mapping": {"geometry_summary": {"backend": "entity-geometry-summary-v1"}},
+            "entity_resolution": {
+                "retrieval": {"backend": "entity-candidate-retrieval-v1"},
+                "resolution": {"backend": "conservative-staged-resolution-v1"},
+                "geometry_comparison": {"backend": "entity-geometry-comparison-v1"},
+            },
+            "spatial_relations": {
+                "frame_conventions": {"backend": "map-frame-conventions-v1"},
+                "candidate": {"backend": "bounds-neighborhood-candidates-v1"},
+                "geometry_summary": {"backend": "entity-geometry-summary-v1"},
             },
         }
     }

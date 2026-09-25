@@ -1,7 +1,10 @@
 """Public contract for the sensor association capability.
 
 Sensor Association turns 2D visual evidence into references to persistent 3D
-geometry. For each region of one image it produces a
+geometry. Each frame evaluates the map geometry its
+:class:`CandidateGeometryPolicy` selects, and every candidate row carries the global
+geometry index it came from, so a reference always names a map element and never
+a position in an array. For each region of one image it produces a
 :class:`SpatialObservation`: the map elements that are visible and inside the
 region, plus the diagnostics that explain the ones that are not. It is evidence
 -- it does not label, identify, fuse or resolve entities, and it copies neither
@@ -16,8 +19,21 @@ from contextmap.sensor_association.camera_models import (
     PixelProjection,
     camera_projection_for,
 )
+from contextmap.sensor_association.candidate_geometry import (
+    CANDIDATE_GEOMETRY_POLICY_ID,
+    CandidateGeometryCloud,
+    CandidateGeometryPolicy,
+    CandidateGeometryReport,
+    CandidateGeometrySelection,
+    select_candidate_geometry,
+)
 from contextmap.sensor_association.dense_sampling import InterpolationPolicy
-from contextmap.sensor_association.diagnostics import DiagnosticTolerances, TrustedCorrespondences
+from contextmap.sensor_association.diagnostics import (
+    DiagnosticTolerances,
+    ReprojectionAttempt,
+    ReprojectionOutcome,
+    TrustedCorrespondences,
+)
 from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.models import (
     AssociationProvenance,
@@ -48,14 +64,14 @@ from contextmap.sensor_association.run_artifact import (
     SensorAssociationRunId,
     SensorAssociationRunManifest,
     SensorAssociationRunReader,
+    SensorAssociationRunTransaction,
     SensorAssociationRunWriter,
-    allocate_run_index,
-    rebuild_run_registry,
 )
 from contextmap.sensor_association.service import (
     AssociationFrameInput,
     DenseChannel,
     FrameAssociation,
+    FrameSink,
     SensorAssociationOutcome,
     SensorAssociationRequest,
     SensorAssociationService,
@@ -63,16 +79,22 @@ from contextmap.sensor_association.service import (
 from contextmap.sensor_association.visibility import OcclusionPolicy
 
 __all__ = [
+    "CANDIDATE_GEOMETRY_POLICY_ID",
     "AssociationFrameInput",
     "AssociationInputError",
     "AssociationProvenance",
     "CalibrationRef",
     "CameraIdentity",
     "CameraProjection",
+    "CandidateGeometryCloud",
+    "CandidateGeometryPolicy",
+    "CandidateGeometryReport",
+    "CandidateGeometrySelection",
     "DenseChannel",
     "DepthMetric",
     "DiagnosticTolerances",
     "FrameAssociation",
+    "FrameSink",
     "IncompleteRunArtifactError",
     "InterpolationPolicy",
     "ObservationQuality",
@@ -83,6 +105,8 @@ __all__ = [
     "PoseRef",
     "ProjectionSummary",
     "QualityComponent",
+    "ReprojectionAttempt",
+    "ReprojectionOutcome",
     "ReprojectionStatistics",
     "RunArtifactError",
     "SemanticClaimRef",
@@ -92,6 +116,7 @@ __all__ = [
     "SensorAssociationRunId",
     "SensorAssociationRunManifest",
     "SensorAssociationRunReader",
+    "SensorAssociationRunTransaction",
     "SensorAssociationRunWriter",
     "SensorAssociationService",
     "SpatialObservation",
@@ -101,8 +126,7 @@ __all__ = [
     "VisibilityDiagnostics",
     "VisibilityState",
     "VisualFeatureRef",
-    "allocate_run_index",
     "camera_projection_for",
-    "rebuild_run_registry",
+    "select_candidate_geometry",
     "spatial_observation_id_for",
 ]

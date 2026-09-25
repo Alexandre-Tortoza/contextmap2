@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from contextmap.runtime._files import publish_text
-from contextmap.runtime.artifacts import ArtifactRef
+from contextmap.runtime.artifacts import ArtifactRef, artifact_directory
 from contextmap.runtime.catalog import PRESETS, RuntimePreset
 from contextmap.runtime.config import (
     ComponentConfig,
@@ -342,12 +342,75 @@ class StageRequest:
             evidence, in deterministic order) for an input that accepts them.
         components: Resolved configuration of the stage's variation points.
         config_digest: Identity of the stage's own configuration.
+        output_dir: The final directory of the stage's artifact, ``<run>/<stage_id>``. The
+            executor hands it, unchanged, to the capability's writer, which creates and
+            finalizes it atomically: the directory does not exist yet, and an executor never
+            computes a path of its own. ``None`` only when the plan runs without a journal
+            (an in-memory execution), where an executor that persists cannot run.
+        workspace: The workspace root the run lives in, or ``None`` without a journal. An
+            executor opens an input through :meth:`directory_of`, which resolves the location of
+            the artifact (possibly written by an earlier run) inside this workspace.
     """
 
     stage_id: str
     inputs: Mapping[str, tuple[ArtifactRef, ...]]
     components: Mapping[str, ComponentConfig]
     config_digest: str
+    output_dir: Path | None = None
+    workspace: Path | None = None
+
+    def identity(self) -> str:
+        """Return the identity of this execution: what a writer records as its run id.
+
+        It combines the stage, the stage's own configuration and the exact content hash of every
+        input, so an identical execution gets an identical identity (and therefore identical
+        content, which keeps reuse valid across runs) while any change of configuration or input
+        gets another. It is a function of the request only, never of the run that asks.
+
+        Returns:
+            32 hexadecimal characters.
+
+        Raises:
+            ValueError: If an input has no content hash: it cannot take part in an identity.
+        """
+        parts = [self.stage_id, self.config_digest]
+        for name in sorted(self.inputs):
+            for ref in self.inputs[name]:
+                if ref.content_hash is None:
+                    raise ValueError(
+                        f"input {name!r} ({ref.artifact_id!r}) has no content hash: an execution "
+                        "identity cannot be derived from it"
+                    )
+                parts.append(f"{name}={ref.content_hash}")
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+
+    def run_number(self) -> int:
+        """Return the number of the run this request belongs to (``run-0003`` gives ``3``).
+
+        Returns:
+            The number, or ``0`` when the request has no output directory or the run is not
+            named ``run-NNNN``. It is the ordinal a writer records as its ``run_index``.
+        """
+        if self.output_dir is None:
+            return 0
+        name = self.output_dir.parent.name
+        return int(name.removeprefix("run-")) if name.removeprefix("run-").isdigit() else 0
+
+    def directory_of(self, ref: ArtifactRef) -> Path:
+        """Return the directory of an input artifact.
+
+        Args:
+            ref: One of the request's input handles.
+
+        Returns:
+            The directory of the artifact, wherever the run that wrote it lives.
+
+        Raises:
+            ValueError: If the request has no workspace, or the handle has no valid location.
+        """
+        if self.workspace is None:
+            raise ValueError("this request has no workspace: run the plan with a journal")
+        return artifact_directory(self.workspace, ref)
 
 
 class StageExecutor(Protocol):
@@ -725,6 +788,7 @@ def run_plan(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
+    provider_overrides: Sequence[str] = (),
     reuse: ReusePolicy | None = None,
     journal: RunJournal | None = None,
     events: EventSink | None = None,
@@ -755,8 +819,14 @@ def run_plan(
         environ: Environment to look secrets up in; defaults to ``os.environ``.
         module_available: Predicate telling whether an optional module is installed.
         provided_runtimes: Component identities whose model runtime the caller supplies.
+        provider_overrides: Component identities whose caller-supplied provider won over a
+            ``resources.providers`` target the effective configuration also declared for it
+            (see ``contextmap.runtime.composition.compose``'s ``on_provider_override``);
+            recorded on the ``run_planned`` event so the override is part of the run's own
+            trail, not just silently applied. Empty on every ordinary run.
         reuse: How to decide between reusing and recomputing, or ``None`` to always run.
-        journal: Persists the run's lifecycle, status and execution record.
+        journal: Persists the run's lifecycle, status and execution record. Its directory is
+            the run root: each stage receives ``<run>/<stage_id>`` as its output directory.
         events: An extra receiver of the run's events.
         cancellation: Cooperative cancellation, checked before each stage.
         redact: Replaces secret values inside a string.
@@ -785,6 +855,7 @@ def run_plan(
         provided={
             stage: [ref.artifact_id for ref in refs] for stage, refs in execution.reused.items()
         },
+        provider_overrides=list(provider_overrides),
     )
     if resume_from is not None:
         emitter.emit(
@@ -811,7 +882,16 @@ def run_plan(
             )
             raise PreflightError(report)
         emitter.emit("run_started")
-        records = _run_stages(execution, executors, reuse, emitter, cancellation, redact, progress)
+        records = _run_stages(
+            execution,
+            executors,
+            reuse,
+            emitter,
+            cancellation,
+            redact,
+            progress,
+            None if journal is None else journal.directory,
+        )
     except (PreflightError, StageExecutionError, RunCancelledError):
         raise
     except KeyboardInterrupt:
@@ -855,6 +935,7 @@ def _run_stages(
     cancellation: CancellationToken | None,
     redact: Callable[[str], str] | None,
     progress: list[str],
+    run_directory: Path | None,
 ) -> list[StageRecord]:
     """Run the stages in order, emitting an event for each step and stopping at a failure."""
     outputs: dict[str, tuple[ArtifactRef, ...]] = dict(execution.reused)
@@ -905,6 +986,8 @@ def _run_stages(
                 inputs=inputs,
                 components=stage.component_configs,
                 config_digest=stage.config_digest,
+                output_dir=None if run_directory is None else run_directory / stage.stage_id,
+                workspace=None if run_directory is None else run_directory.parent.parent,
             )
             try:
                 produced = executor.execute(request)
@@ -919,6 +1002,25 @@ def _run_stages(
                     message=str(error),
                     elapsed=time.monotonic() - began,
                 ) from error
+            expected = (
+                None
+                if request.output_dir is None or request.workspace is None
+                else request.output_dir.relative_to(request.workspace).as_posix()
+            )
+            if expected is not None and produced.location not in (None, expected):
+                raise _stage_failed(
+                    emitter,
+                    stage.stage_id,
+                    progress,
+                    redact,
+                    category=FailureCategory.CONTRACT.value,
+                    exception_type="ContractViolation",
+                    message=(
+                        f"reported the location {produced.location!r}; the stage was given "
+                        f"{expected!r}"
+                    ),
+                    elapsed=time.monotonic() - began,
+                )
             if produced.contract != stage.output or produced.stage_id != stage.stage_id:
                 raise _stage_failed(
                     emitter,

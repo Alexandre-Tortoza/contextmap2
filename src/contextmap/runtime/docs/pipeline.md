@@ -15,10 +15,10 @@ flowchart TD
     SA["sensor_association<br/>SensorAssociationRunArtifact"]
     PR["point_representation<br/>(opcional)<br/>PointRepresentationRunArtifact"]
     SF["semantic_fusion<br/>SemanticFusionRunArtifact"]
-    SM["semantic_mapping<br/>(indisponível)"]
-    ER["entity_resolution<br/>(indisponível)"]
-    SR["spatial_relations<br/>(indisponível)"]
-    CM["context_map<br/>(indisponível)"]
+    SM["semantic_mapping<br/>SemanticEntityArtifact"]
+    ER["entity_resolution<br/>EntityResolutionRunArtifact"]
+    SR["spatial_relations<br/>SpatialRelationsRunArtifact"]
+    CM["context_map<br/>ContextMapArtifact"]
 
     ING --> VP
     ING --> ST
@@ -34,7 +34,12 @@ flowchart TD
     VP --> SF
     GM --> SF
     PR -.-> SF
-    SF --> SM --> ER --> SR
+    SF --> SM
+    GM --> SM
+    SM --> ER
+    ER --> SR
+    GM --> SR
+    ING --> CM
     GM --> CM
     ER --> CM
     SR --> CM
@@ -51,9 +56,12 @@ Uma aresta tracejada é uma entrada **opcional**: ela existe no plano somente qu
 | `sensor_association` | `sequence`, `perception`, `trajectory`, `geometry` | `SensorAssociationRunArtifact` |
 | `point_representation` (opcional) | `geometry` ← `geometric_mapping`, `association` ← `sensor_association` (opcional) | `PointRepresentationRunArtifact` |
 | `semantic_fusion` | `association`, `perception`, `geometry`, `representation` ← `point_representation` (opcional) | `SemanticFusionRunArtifact` |
-| `semantic_mapping` … `context_map` | indisponíveis (milestones #12–#15) | — |
+| `semantic_mapping` | `fusion` ← `semantic_fusion`, `geometry` ← `geometric_mapping` | `SemanticEntityArtifact` |
+| `entity_resolution` | `entities` ← `semantic_mapping` | `EntityResolutionRunArtifact` |
+| `spatial_relations` | `entities` ← `entity_resolution`, `geometry` ← `geometric_mapping` | `SpatialRelationsRunArtifact` |
+| `context_map` | `sequence` ← `ingestion`, `geometry` ← `geometric_mapping`, `entities` ← `entity_resolution`, `relations` ← `spatial_relations` | `ContextMapArtifact` |
 
-Os estágios indisponíveis continuam na topologia, com o motivo; o preflight os reporta se o escopo os incluir.
+Um preset declara esta topologia (ver `RuntimePreset` em `catalog.py`): `canonical/1`, do recorded source ao `ContextMapArtifact`. Antes do v0.1.0 sair não existe consumidor publicado a proteger de uma mudança de topologia, então esta identidade continua livre para evoluir junto com o pipeline; a disciplina de nunca mudar a topologia de um preset já publicado (e de abrir uma nova identidade versionada em vez disso) começa a valer a partir do release, não antes. `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` já têm executor automático (ver [`executors.md`](executors.md)); nenhum estágio da topologia precisa de artifact suprido manualmente hoje. Um estágio de capability ainda inexistente que um preset declare continua na topologia como indisponível, com o motivo, e o preflight o reporta se o escopo o incluir.
 
 ## Estágios opcionais
 
@@ -87,7 +95,7 @@ Há dois padrões, ambos declarativos e validados por contrato:
 
 ## Execução
 
-`run_plan(execution, executors, ...)` roda o preflight e bloqueia tudo se houver problema. Cada estágio recebe um `StageRequest` com os artifacts exatos que o alimentam (reutilizados ou recém-produzidos) e a configuração de seus componentes, e devolve um `ArtifactRef`. Cada entrada é uma **tupla de runs**: um run para uma entrada comum, vários (evidência distinta, em ordem determinística) para uma entrada declarada `multiple`. A primeira falha, ou uma saída que contradiz o contrato declarado, levanta `StageExecutionError` com os estágios já concluídos: nada posterior roda, nada é repetido e nada é substituído. Cada passo emite um evento estruturado (`journal`/`events`) e um `CancellationToken` para o run entre estágios ([`lifecycle.md`](lifecycle.md)).
+`run_plan(execution, executors, ...)` roda o preflight e bloqueia tudo se houver problema. Cada estágio recebe um `StageRequest` com os artifacts exatos que o alimentam (reutilizados ou recém-produzidos) e a configuração de seus componentes, e devolve um `ArtifactRef`. O `StageRequest` também traz `output_dir`, o diretório final do artifact do estágio, `<run>/<estágio>/` (o run é o diretório do `journal`): o executor o entrega, sem alteração, ao writer da capability, que o cria e o finaliza de forma atômica. O diretório ainda não existe e um executor nunca calcula um caminho próprio. Sem `journal` (uma execução em memória) `output_dir` e `workspace` são `None`, e um executor que persiste não pode rodar. Para abrir uma **entrada**, o executor usa `request.directory_of(ref)`, que resolve o `location` do `ArtifactRef` dentro do `workspace`: um artifact reutilizado de um run anterior é aberto onde foi gravado (referenciado, nunca copiado). Um `location` ausente, vazio, absoluto ou que saia do workspace é recusado, e o runner recusa um executor que declare um `location` diferente do diretório que recebeu. Cada entrada é uma **tupla de runs**: um run para uma entrada comum, vários (evidência distinta, em ordem determinística) para uma entrada declarada `multiple`. A primeira falha, ou uma saída que contradiz o contrato declarado, levanta `StageExecutionError` com os estágios já concluídos: nada posterior roda, nada é repetido e nada é substituído. Cada passo emite um evento estruturado (`journal`/`events`) e um `CancellationToken` para o run entre estágios ([`lifecycle.md`](lifecycle.md)).
 
 O `ExecutionRecord` guarda a ordem, as entradas e saídas exatas de cada estágio, a decisão de reuso de cada um (quando há uma `ReusePolicy`) e os artifacts reutilizados.
 
@@ -101,6 +109,6 @@ O DAG roda em CI com executores leves (sem modelo nem GPU): a ordem, as entradas
 
 ## Lacunas conhecidas
 
-- **Não há executores reais das capabilities.** A milestone entrega o runner, o contrato do executor e a topologia; a execução real ponta a ponta exige as políticas de Geometric Mapping e Sensor Association e o vínculo de cada artifact, e pertence à validação end-to-end (#177). O canônico completo resolve e é validado, mas o preflight o bloqueia enquanto as capabilities de #12–#15 não existirem: o caminho suportado é um subgrafo (`targets=[...]`).
+- **`point_representation` e `semantic_mapping` sem executor real.** `contextmap.runtime.executors` tem executores reais para `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `entity_resolution`, `spatial_relations` e, desde #507, `visual_perception` (ver [`executors.md`](executors.md)), e a [composition root](composition.md) os monta automaticamente da configuração (`compose_executors`). `point_representation` depende de backend com modelo/GPU e ainda não tem um; `semantic_mapping` não tem componente de catálogo nem executor automático, então seu artifact precisa ser suprido. Um `targets=[...]` que inclua qualquer um deles sem o artifact suprido precisa de um executor injetado ou fica bloqueado no preflight, explicitamente — nunca simulado.
 - **`FeatureResolutionEnhancement` não é um estágio de topo.** No canônico ele é interno ao preset de Visual Perception; o padrão de inserção acima é o mecanismo, exercitado com estágios de teste.
 - O reuso por identidade está em [`reuse.md`](reuse.md), a seleção de runs com linhagem em [`selection.md`](selection.md) e o ciclo de vida, os eventos e a retomada em [`lifecycle.md`](lifecycle.md); sem uma `ReusePolicy`, o reuso é apenas o artifact fornecido ou selecionado explicitamente.
