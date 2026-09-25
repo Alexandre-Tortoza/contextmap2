@@ -163,3 +163,5 @@ outputs/
 - não escolhe o backend default de Region Discovery; grounding e discovery são capacidades
   distintas e continuam distinguíveis pela `BackendProvenance.capability` e pelo namespace
   do `region_id`.
+
+O primeiro adapter é o LocateAnything, descrito em [`locateanything.md`](locateanything.md).

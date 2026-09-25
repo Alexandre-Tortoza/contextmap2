@@ -19,6 +19,7 @@ flowchart LR
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
     F2 -->|implementado| SI
+    LA["LocateAnything"] -->|implementado| RG
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
     CLIP["CLIP"] -->|implementado| FE
@@ -56,7 +57,7 @@ Os tipos adapter-facing são exportados para configuração, diagnóstico e aval
 
 ## `RegionGrounding`
 
-`capabilities() -> RegionGroundingCapabilities` e `ground(RegionGroundingRequest) -> RegionGroundingExecution`. É um port separado de `RegionDiscovery` porque a entrada é outra: além da imagem, uma query explícita (texto livre ou categorias ordenadas, política versionada e geometria pedida) que entra na identidade do request e é validada antes da inferência. Um adapter de grounding nunca recebe a query pela configuração. Só saídas box viram `Region2D`; pontos permanecem evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md).
+`capabilities() -> RegionGroundingCapabilities` e `ground(RegionGroundingRequest) -> RegionGroundingExecution`. É um port separado de `RegionDiscovery` porque a entrada é outra: além da imagem, uma query explícita (texto livre ou categorias ordenadas, política versionada e geometria pedida) que entra na identidade do request e é validada antes da inferência. Um adapter de grounding nunca recebe a query pela configuração. Só saídas box viram `Region2D`; pontos permanecem evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md). O LocateAnything implementa `RegionGrounding` com runtime injetável; ver [`locateanything.md`](locateanything.md).
 
 ## `FeatureExtractor.required_scope()`
 

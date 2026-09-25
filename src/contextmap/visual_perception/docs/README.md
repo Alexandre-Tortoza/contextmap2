@@ -29,7 +29,7 @@ flowchart LR
 
 O diagrama representa o fluxo do preset canônico atualmente implementado. Os ports continuam independentes da topologia: a ordem e as dependências são definidas pelo `PipelinePreset`, enquanto `service.py` apenas executa o grafo resolvido. Uma evidência produzida aqui permanece evidência de frame/run; ela não vira entidade 3D persistente nem crença fundida dentro deste módulo.
 
-Region Grounding é uma capacidade distinta de Region Discovery: responde a uma query explícita (texto livre ou conjunto ordenado de categorias, política versionada e geometria pedida) sobre uma imagem preparada. A query é entrada de cada `RegionGroundingRequest`, entra na identidade do request, é validada antes da inferência e é persistida com a execução; só saídas box viram `Region2D`, e pontos continuam evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md).
+Region Grounding é uma capacidade distinta de Region Discovery: responde a uma query explícita (texto livre ou conjunto ordenado de categorias, política versionada e geometria pedida) sobre uma imagem preparada. A query é entrada de cada `RegionGroundingRequest`, entra na identidade do request, é validada antes da inferência e é persistida com a execução; só saídas box viram `Region2D`, e pontos continuam evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md); o primeiro adapter, LocateAnything, está em [`locateanything.md`](locateanything.md).
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
@@ -114,6 +114,7 @@ Visual Perception.
 
 - [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
 - [`region-grounding.md`](region-grounding.md) — grounding condicionado por prompt: query, request, identidade, validação antes da inferência, execução, persistência e hooks de medição.
+- [`locateanything.md`](locateanything.md) — adapter LocateAnything: políticas/templates upstream, gramática da resposta, rejeições explícitas, diagnósticos nativos e limites.
 - [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
 - [`feature-extraction.md`](feature-extraction.md) — visão integrada do core de Feature Extraction, contratos, payloads, sampling, pooling, diagnostics, enhancement opcional, avaliação e estado dos backends concretos.
 - [`semantic-interpretation.md`](semantic-interpretation.md) — requests canônicos, seleção explícita de evidência e validação de capacidades.
