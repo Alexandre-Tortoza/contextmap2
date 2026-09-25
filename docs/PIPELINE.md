@@ -66,7 +66,7 @@ flowchart TD
         VP_NORM["normalize_regions()<br/>validar + área + constraints<br/>IoU/containment + merge + budget"]
         VP_REG["Region2D[]<br/>geometry freeze"]
 
-        VP_DENSE["dense_feature_extraction<br/>DINOv2 / DINOv3"]
+        VP_DENSE["dense_feature_extraction<br/>DINOv2 / DINOv3 / SigLIP2"]
         VP_DFEAT["VisualFeature[DENSE]<br/>DenseFeatureMap + payload"]
 
         VP_RFE["region_feature_extraction<br/>CLIP / AlphaCLIP"]
@@ -491,12 +491,12 @@ Detalhes: [region-discovery.md](../src/contextmap/visual_perception/docs/region-
 
 A branch densa recebe apenas a imagem preparada. A branch de região recebe imagem + `Region2D`.
 
-- DINOv2/DINOv3 produzem features densas no preset global atual.
+- DINOv2/DINOv3/SigLIP2 produzem features densas no preset global atual; o SigLIP2 (vision encoder do Eagle 2.5, usado diretamente) também tem um escopo global fora do preset.
 - CLIP/AlphaCLIP produzem features de região.
 - Payloads ficam em `FeatureStore`; `VisualFeature` carrega identidade do espaço, shape, dtype, normalização e referência ao payload.
 - Features de espaços diferentes não são comparadas apenas porque têm a mesma dimensão.
 
-Arquivos: `visual_perception/feature_store.py`, `dense_region_association.py`, `backends/dinov2.py`, `dinov3.py`, `clip.py`, `alphaclip.py`.
+Arquivos: `visual_perception/feature_store.py`, `dense_region_association.py`, `backends/dinov2.py`, `dinov3.py`, `siglip2.py`, `clip.py`, `alphaclip.py`.
 
 Detalhes: [feature-extraction.md](../src/contextmap/visual_perception/docs/feature-extraction.md).
 

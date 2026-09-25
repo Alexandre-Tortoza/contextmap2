@@ -20,6 +20,7 @@ flowchart LR
     F2 -->|implementado| SI
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
+    SIG2["SigLIP2"] -->|implementado| FE
     CLIP["CLIP"] -->|implementado| FE
     CLIP -->|implementado| SS
     ACLIP["AlphaCLIP"] -->|implementado| FE
@@ -37,6 +38,7 @@ Os ports não codificam `RegionDiscovery -> FeatureExtractor -> SemanticInterpre
 
 ```text
 DINOv3 (dense)         requires: PreparedImage                    provides: VisualFeature[] (dense)
+SigLIP2 (dense|global) requires: PreparedImage                    provides: VisualFeature[] (um escopo por instância)
 resolution enhancement requires: DenseFeatureMap                  provides: DenseFeatureMap
 AlphaCLIP (region)     requires: PreparedImage + Region2D[]       provides: VisualFeature[] (region)
 Gemini (region)        requires: SemanticInterpretationRequest    provides: SemanticInterpretationExecution

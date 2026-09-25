@@ -241,6 +241,11 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
             requires=("torch", "transformers", "PIL"),
             device_parameter="device",
         ),
+        BackendSpec(
+            backend_id="siglip2",
+            requires=("torch", "transformers", "PIL"),
+            device_parameter="device",
+        ),
     ),
     _component(
         "visual_perception",

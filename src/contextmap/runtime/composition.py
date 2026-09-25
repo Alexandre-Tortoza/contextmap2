@@ -609,6 +609,30 @@ def _dinov3(context: _Context, component_id: str) -> FeatureFactory:
     return build
 
 
+def _siglip2(context: _Context, component_id: str) -> FeatureFactory:
+    from contextmap.visual_perception.backends.siglip2 import (
+        Siglip2Config,
+        Siglip2FeatureBackend,
+    )
+
+    # O slot de features densas fixa o escopo: um SigLIP2 GLOBAL não produz DenseFeatureMap.
+    config, _ = context.build(component_id, Siglip2Config, fixed={"scope": "dense"})
+    context.ensure_available(component_id)
+
+    def build(scope: FeatureBuildScope) -> FeatureExtractor:
+        return Siglip2FeatureBackend(
+            config=config,
+            run_id=scope.run_id,
+            feature_stage_id=scope.feature_stage_id,
+            source_artifact_id=scope.source_artifact_id,
+            payload_sink=scope.payload_sink,
+            runtime=context.optional_runtime(component_id, config),
+            prepared_image_root=scope.prepared_image_root,
+        )
+
+    return build
+
+
 def _clip(context: _Context, component_id: str) -> FeatureFactory:
     from contextmap.visual_perception.backends.clip import ClipConfig, ClipVisualFeatureBackend
 
@@ -963,7 +987,11 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "sam3": _sam3,
         "florence2": _florence2_regions,
     },
-    "visual_perception.dense_features": {"dinov2": _dinov2, "dinov3": _dinov3},
+    "visual_perception.dense_features": {
+        "dinov2": _dinov2,
+        "dinov3": _dinov3,
+        "siglip2": _siglip2,
+    },
     "visual_perception.region_features": {"clip": _clip, "alphaclip": _alphaclip},
     "visual_perception.semantic_interpretation": {
         "qwen": _qwen,

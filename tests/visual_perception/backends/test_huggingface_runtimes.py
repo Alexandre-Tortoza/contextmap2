@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from contextmap.visual_perception import FeatureScope
-from contextmap.visual_perception.backends import clip, dinov2, dinov3
+from contextmap.visual_perception.backends import clip, dinov2, dinov3, siglip2
 from contextmap.visual_perception.backends._huggingface import preprocess_pixel_values
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -99,6 +99,18 @@ class FakeTransformers(ModuleType):
     def CLIPModel(self) -> SimpleNamespace:
         return SimpleNamespace(from_pretrained=self._load_model)
 
+    @property
+    def SiglipVisionModel(self) -> SimpleNamespace:
+        return SimpleNamespace(from_pretrained=self._load_model)
+
+    @property
+    def AutoConfig(self) -> SimpleNamespace:
+        # Um checkpoint SigLIP2 FixRes de 224 px, a resolução que o adapter configura abaixo.
+        fixed_resolution = SimpleNamespace(
+            model_type="siglip", vision_config=SimpleNamespace(image_size=224, patch_size=16)
+        )
+        return SimpleNamespace(from_pretrained=lambda *args, **kwargs: fixed_resolution)
+
 
 def _fake_torch() -> SimpleNamespace:
     return SimpleNamespace(float32="torch.float32", float16="torch.float16")
@@ -118,6 +130,18 @@ def _runtime(adapter: str, tmp_path: Path) -> tuple[Any, ModuleType, type[Except
             dinov3.HuggingFaceDinoV3Runtime(config=config3, prepared_image_root=tmp_path),
             dinov3,
             dinov3.DinoV3DependencyError,
+        )
+    if adapter == "siglip2":
+        siglip2_config = siglip2.Siglip2Config(
+            checkpoint="google/siglip2-base-patch16-224",
+            revision=REVISION,
+            scope=FeatureScope.DENSE,
+            input_size=224,
+        )
+        return (
+            siglip2.HuggingFaceSiglip2Runtime(config=siglip2_config, prepared_image_root=tmp_path),
+            siglip2,
+            siglip2.Siglip2DependencyError,
         )
     clip_config = clip.ClipConfig(
         checkpoint="openai/clip-vit-large-patch14", revision=REVISION, scope=FeatureScope.GLOBAL
@@ -140,7 +164,7 @@ def _install_sdks(
     monkeypatch.setattr(module, "importlib", SimpleNamespace(import_module=import_module))
 
 
-@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip"])
+@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip", "siglip2"])
 def test_runtimes_load_the_model_with_dtype_instead_of_the_deprecated_torch_dtype(
     adapter: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -154,7 +178,7 @@ def test_runtimes_load_the_model_with_dtype_instead_of_the_deprecated_torch_dtyp
     assert "torch_dtype" not in transformers.model_kwargs
 
 
-@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip"])
+@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip", "siglip2"])
 def test_a_missing_optional_import_in_the_processor_is_a_dependency_error(
     adapter: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -168,7 +192,7 @@ def test_a_missing_optional_import_in_the_processor_is_a_dependency_error(
         runtime._ensure_loaded()
 
 
-@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip"])
+@pytest.mark.parametrize("adapter", ["dinov2", "dinov3", "clip", "siglip2"])
 def test_other_load_failures_stay_model_load_errors(
     adapter: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

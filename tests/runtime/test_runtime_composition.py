@@ -39,13 +39,14 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.state_estimation.backends.external_pose import ExternalPoseEstimator
 from contextmap.state_estimation.backends.fast_lio import FastLioEstimator
-from contextmap.visual_perception import PerceptionRunId
+from contextmap.visual_perception import FeatureScope, PerceptionRunId
 from contextmap.visual_perception.backends.clip import ClipVisualFeatureBackend
 from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
 from contextmap.visual_perception.backends.florence2 import Florence2RegionDiscovery
 from contextmap.visual_perception.backends.gemini import GeminiSemanticInterpreter
 from contextmap.visual_perception.backends.qwen import QwenSemanticInterpreter
 from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDiscovery
+from contextmap.visual_perception.backends.siglip2 import Siglip2FeatureBackend
 
 REGION = "visual_perception.region_discovery"
 INTERPRETER = "visual_perception.semantic_interpretation"
@@ -348,6 +349,35 @@ class TestFeatureBackendsAreRunScoped:
     def test_the_region_features_slot_fixes_the_clip_scope(self, tmp_path: Path) -> None:
         document = selected_document()
         document["components"]["visual_perception"]["region_features"]["clip"]["scope"] = "global"
+
+        with pytest.raises(BackendConfigurationError, match="scope"):
+            _compose(tmp_path, document=document)
+
+    def _siglip2_document(self, **parameters: object) -> dict[str, Any]:
+        document = selected_document()
+        document["components"]["visual_perception"]["dense_features"] = {
+            "backend": "siglip2",
+            "siglip2": {
+                "checkpoint": "google/siglip2-so400m-patch16-512",
+                "revision": "a" * 40,
+                "input_size": 512,
+                **parameters,
+            },
+        }
+        return document
+
+    def test_siglip2_is_selectable_as_the_dense_features_backend(self, tmp_path: Path) -> None:
+        composed = _compose(tmp_path, document=self._siglip2_document())
+        assert composed.dense_features is not None
+
+        dense = composed.dense_features(self._scope(tmp_path))
+
+        assert isinstance(dense, Siglip2FeatureBackend)
+        assert dense.required_scope() is FeatureScope.DENSE
+        assert dense.backend_provenance().model == "google/siglip2-so400m-patch16-512"
+
+    def test_the_dense_features_slot_fixes_the_siglip2_scope(self, tmp_path: Path) -> None:
+        document = self._siglip2_document(scope="global")
 
         with pytest.raises(BackendConfigurationError, match="scope"):
             _compose(tmp_path, document=document)
