@@ -37,9 +37,51 @@ class VisualViewKind(Enum):
     CONTEXTUAL_CROP = "contextual_crop"
 
 
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(character in _SHA256_HEX for character in value)
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticViewConstruction:
+    """How one view's pixels were cut from its source image (#524).
+
+    Attributes:
+        policy_fingerprint: Identity of the view policy that constructed the view.
+        source_image_sha256: SHA-256 of the encoded image the pixels were taken from.
+        pixel_bounds: ``(x_min, y_min, x_max, y_max)`` half-open pixel window of the source
+            image the view covers, in the image's top-left pixel convention.
+    """
+
+    policy_fingerprint: str
+    source_image_sha256: str
+    pixel_bounds: tuple[int, int, int, int]
+
+    def __post_init__(self) -> None:
+        """Reject an unnamed policy, a malformed source hash, or an empty window."""
+        if not self.policy_fingerprint.strip():
+            raise ValueError("view construction policy_fingerprint must not be empty")
+        if not _is_sha256_hex(self.source_image_sha256):
+            raise ValueError(
+                "view construction source_image_sha256 must be 64 lowercase hexadecimal characters"
+            )
+        x_min, y_min, x_max, y_max = self.pixel_bounds
+        if x_min < 0 or y_min < 0 or x_max <= x_min or y_max <= y_min:
+            raise ValueError(
+                f"view construction pixel_bounds must be a non-empty window: {self.pixel_bounds}"
+            )
+
+
 @dataclass(frozen=True, kw_only=True)
 class SemanticVisualView:
-    """Reference one exact image view supplied to semantic inference."""
+    """Reference one exact image view supplied to semantic inference.
+
+    Attributes:
+        construction: How the view was cut from its source image, when a view policy built
+            it; ``None`` for a view supplied as is.
+    """
 
     view_id: str
     kind: VisualViewKind
@@ -47,6 +89,7 @@ class SemanticVisualView:
     source_observation_id: SourceObservationId
     sha256: str
     region_id: RegionId | None = None
+    construction: SemanticViewConstruction | None = None
 
     def __post_init__(self) -> None:
         """Validate identity, payload, scope, and optional content hash."""
@@ -70,8 +113,7 @@ class SemanticVisualView:
             raise ValueError("full-frame visual view must not reference a region_id")
         if self.kind is not VisualViewKind.FULL_FRAME and self.region_id is None:
             raise ValueError("region visual view requires region_id")
-        invalid = any(character not in "0123456789abcdef" for character in self.sha256)
-        if len(self.sha256) != 64 or invalid:
+        if not _is_sha256_hex(self.sha256):
             raise ValueError("visual view sha256 must be 64 lowercase hexadecimal characters")
 
 
@@ -196,15 +238,18 @@ class SemanticInterpreterCapabilities:
     accepts_visual_features: bool
     accepts_scene_context: bool
     required_view_kinds: frozenset[VisualViewKind] = frozenset()
+    max_visual_views: int | None = None
 
     def __post_init__(self) -> None:
-        """Require useful modes/views and consistent required views."""
+        """Require useful modes/views, consistent required views and a usable view bound."""
         if not self.supported_modes:
             raise ValueError("semantic interpreter must support at least one mode")
         if not self.supported_view_kinds:
             raise ValueError("semantic interpreter must support at least one visual view kind")
         if not self.required_view_kinds <= self.supported_view_kinds:
             raise ValueError("required visual view kinds must also be supported")
+        if self.max_visual_views is not None and self.max_visual_views < 1:
+            raise ValueError("max_visual_views must be at least 1 when declared")
 
 
 def validate_semantic_request(
@@ -219,6 +264,12 @@ def validate_semantic_request(
     if unsupported_views:
         values = sorted(kind.value for kind in unsupported_views)
         raise ValueError(f"semantic interpreter does not support visual view kinds: {values}")
+    maximum = capabilities.max_visual_views
+    if maximum is not None and len(request.visual_views) > maximum:
+        raise ValueError(
+            f"semantic interpreter accepts at most {maximum} visual view(s); "
+            f"the request carries {len(request.visual_views)}"
+        )
     missing_views = capabilities.required_view_kinds - requested_view_kinds
     if missing_views:
         values = sorted(kind.value for kind in missing_views)
@@ -245,6 +296,15 @@ def encode_semantic_request(request: SemanticInterpretationRequest) -> dict[str,
                 "source_observation_id": str(view.source_observation_id),
                 "region_id": None if view.region_id is None else str(view.region_id),
                 "sha256": view.sha256,
+                "construction": (
+                    None
+                    if view.construction is None
+                    else {
+                        "policy_fingerprint": view.construction.policy_fingerprint,
+                        "source_image_sha256": view.construction.source_image_sha256,
+                        "pixel_bounds": list(view.construction.pixel_bounds),
+                    }
+                ),
             }
             for view in request.visual_views
         ],
@@ -291,6 +351,7 @@ def decode_semantic_request(record: dict[str, Any]) -> SemanticInterpretationReq
                 source_observation_id=SourceObservationId(item["source_observation_id"]),
                 region_id=(None if item["region_id"] is None else RegionId(item["region_id"])),
                 sha256=item["sha256"],
+                construction=_decode_view_construction(item["construction"]),
             )
             for item in record["visual_views"]
         ),
@@ -318,4 +379,16 @@ def decode_semantic_request(record: dict[str, Any]) -> SemanticInterpretationReq
         prompt_template_id=record["prompt_template_id"],
         requested_output_schema=record["requested_output_schema"],
         configuration_fingerprint=record["configuration_fingerprint"],
+    )
+
+
+def _decode_view_construction(record: dict[str, Any] | None) -> SemanticViewConstruction | None:
+    """Restore a view's construction record, or ``None`` when it was supplied as is."""
+    if record is None:
+        return None
+    x_min, y_min, x_max, y_max = (int(value) for value in record["pixel_bounds"])
+    return SemanticViewConstruction(
+        policy_fingerprint=record["policy_fingerprint"],
+        source_image_sha256=record["source_image_sha256"],
+        pixel_bounds=(x_min, y_min, x_max, y_max),
     )

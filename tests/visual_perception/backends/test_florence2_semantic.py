@@ -316,6 +316,9 @@ def test_capabilities_follow_the_task_and_only_accept_views_where_the_region_fil
     assert scene.supported_view_kinds == frozenset({VisualViewKind.FULL_FRAME})
     assert not region.accepts_visual_features
     assert not region.accepts_scene_context
+    # #524: o limite de uma view é declarado, então uma view policy incompatível falha no
+    # preflight da composição, antes de qualquer request.
+    assert region.max_visual_views == scene.max_visual_views == 1
 
 
 def test_a_contextual_crop_is_rejected_because_the_region_box_inside_it_is_unknown() -> None:
@@ -333,7 +336,7 @@ def test_more_than_one_view_is_rejected_because_florence2_takes_a_single_image()
     second = replace(request.visual_views[0], view_id="crop-2", sha256="2" * 64)
     two_views = replace(request, visual_views=(*request.visual_views, second))
 
-    with pytest.raises(ValueError, match="exactly one"):
+    with pytest.raises(ValueError, match="at most 1 visual view"):
         adapter.interpret(two_views)
 
     assert runtime.calls == []

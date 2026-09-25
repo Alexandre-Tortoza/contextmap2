@@ -284,20 +284,22 @@ class Florence2SemanticInterpreter:
         )
 
     def capabilities(self) -> SemanticInterpreterCapabilities:
-        """Declare the single mode and the views the configured task can interpret."""
+        """Declare the single mode, the views the task can interpret, and one view at most."""
         return SemanticInterpreterCapabilities(
             supported_modes=self._config.supported_modes,
             supported_view_kinds=self._task.view_kinds,
             accepts_visual_features=False,
             accepts_scene_context=False,
+            max_visual_views=1,
         )
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
         """Run the configured task and parse it through the shared canonical boundary.
 
         Raises:
-            ValueError: Before inference, if the request is unsupported, was built for another
-                configuration, carries more than one view, names a prompt policy other than
+            ValueError: Before inference, if the request is unsupported (including more than
+                the one view the capabilities declare), was built for another
+                configuration, names a prompt policy other than
                 :attr:`prompt_template_id`, or asks for an output schema the task envelope
                 does not produce.
             SemanticInterpretationFailedError: If the mapped response cannot be parsed.
@@ -305,8 +307,6 @@ class Florence2SemanticInterpreter:
         validate_semantic_request(request, self.capabilities())
         if request.configuration_fingerprint != self.configuration_fingerprint:
             raise ValueError("Florence-2 request configuration fingerprint does not match adapter")
-        if len(request.visual_views) != 1:
-            raise ValueError("Florence-2 semantic tasks consume exactly one visual view")
         if request.prompt_template_id != self.prompt_template_id:
             raise ValueError(
                 f"Florence-2 consumes only its task-native prompt policy "

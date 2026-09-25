@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         SemanticInterpretationMode,
         SemanticInterpreter,
         SemanticPromptPolicy,
+        SemanticViewPolicy,
     )
 
 RuntimeProvider = Callable[[Any, ResolvedSecrets], object]
@@ -213,6 +214,8 @@ class ComposedRuntime:
             ``prompt_policy`` of an instruction-following backend (Qwen, Gemini), or the
             task-native policy of Florence-2 for the one mode its task serves. A mode absent
             here has no policy, and a request for it is refused instead of given a default.
+        semantic_view_policy: The configured ``view_policy``: which views every semantic
+            request carries and how they are built from the prepared image (#524).
         state_estimator: State estimation backend.
         geometric_mapping_pose_lookup: Pose lookup rule Geometric Mapping uses to place
             each scan.
@@ -248,6 +251,7 @@ class ComposedRuntime:
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
     semantic_prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt] | None = None
+    semantic_view_policy: SemanticViewPolicy | None = None
     state_estimator: StateEstimator | None = None
     geometric_mapping_pose_lookup: LookupPolicy | None = None
     motion_correction: MotionCorrectionPolicy | None = None
@@ -713,10 +717,11 @@ def _alphaclip(context: _Context, component_id: str) -> FeatureFactory:
 
 @dataclass(frozen=True, kw_only=True)
 class _SemanticInterpretation:
-    """A semantic interpreter together with the prompt policy its requests will name."""
+    """A semantic interpreter with the prompt and view policies its requests will carry."""
 
     interpreter: SemanticInterpreter
     prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt]
+    view_policy: SemanticViewPolicy
 
 
 def _instruction_prompts(
@@ -734,8 +739,41 @@ def _instruction_prompts(
     }
 
 
+def _semantic_interpretation(
+    context: _Context,
+    component_id: str,
+    *,
+    interpreter: SemanticInterpreter,
+    prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt],
+    view_policy: SemanticViewPolicy,
+) -> _SemanticInterpretation:
+    """Pair an interpreter with its request policies once it declares it can consume the views.
+
+    Raises:
+        BackendConfigurationError: If the interpreter's capabilities refuse a view kind, the
+            number of views, or lack a required view of the configured ``view_policy``. The
+            check reads only the declaration, so no model is loaded for it.
+    """
+    from contextmap.visual_perception import check_view_policy_supported
+
+    try:
+        check_view_policy_supported(view_policy, interpreter.capabilities())
+    except ValueError as error:
+        backend = context.component(component_id).backend or ""
+        raise BackendConfigurationError(component_id, backend, [f"view_policy: {error}"]) from error
+    return _SemanticInterpretation(
+        interpreter=interpreter, prompts=prompts, view_policy=view_policy
+    )
+
+
+def _instruction_extras() -> dict[str, type[Any]]:
+    """Reserved groups of an instruction-following interpreter: both are always required."""
+    from contextmap.visual_perception import SemanticPromptPolicy, SemanticViewPolicy
+
+    return {"prompt_policy": SemanticPromptPolicy, "view_policy": SemanticViewPolicy}
+
+
 def _qwen(context: _Context, component_id: str) -> _SemanticInterpretation:
-    from contextmap.visual_perception import SemanticPromptPolicy
     from contextmap.visual_perception.backends.qwen import (
         QwenSemanticConfig,
         QwenSemanticInterpreter,
@@ -744,19 +782,21 @@ def _qwen(context: _Context, component_id: str) -> _SemanticInterpretation:
     config, extras = context.build(
         component_id,
         QwenSemanticConfig,
-        extras={"prompt_policy": SemanticPromptPolicy},
-        required=("prompt_policy",),
+        extras=_instruction_extras(),
+        required=("prompt_policy", "view_policy"),
     )
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "QwenRuntime")
-    return _SemanticInterpretation(
+    return _semantic_interpretation(
+        context,
+        component_id,
         interpreter=QwenSemanticInterpreter(config=config, runtime=runtime),
         prompts=_instruction_prompts(extras["prompt_policy"]),
+        view_policy=extras["view_policy"],
     )
 
 
 def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
-    from contextmap.visual_perception import SemanticPromptPolicy
     from contextmap.visual_perception.backends.gemini import (
         GeminiSemanticConfig,
         GeminiSemanticInterpreter,
@@ -765,18 +805,22 @@ def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
     config, extras = context.build(
         component_id,
         GeminiSemanticConfig,
-        extras={"prompt_policy": SemanticPromptPolicy},
-        required=("prompt_policy",),
+        extras=_instruction_extras(),
+        required=("prompt_policy", "view_policy"),
     )
     context.ensure_available(component_id)
     client = context.runtime(component_id, config, "GeminiClient")
-    return _SemanticInterpretation(
+    return _semantic_interpretation(
+        context,
+        component_id,
         interpreter=GeminiSemanticInterpreter(config=config, client=client),
         prompts=_instruction_prompts(extras["prompt_policy"]),
+        view_policy=extras["view_policy"],
     )
 
 
 def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception import SemanticViewPolicy
     from contextmap.visual_perception.backends.florence2_semantic import (
         TASK_PROMPT_POLICY,
         Florence2SemanticConfig,
@@ -794,7 +838,12 @@ def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterp
                 f"({TASK_PROMPT_POLICY}:<task>); select the task instead"
             ],
         )
-    config, _ = context.build(component_id, Florence2SemanticConfig)
+    config, extras = context.build(
+        component_id,
+        Florence2SemanticConfig,
+        extras={"view_policy": SemanticViewPolicy},
+        required=("view_policy",),
+    )
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "Florence2SemanticRuntime")
     interpreter = Florence2SemanticInterpreter(config=config, runtime=runtime)
@@ -802,8 +851,12 @@ def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterp
         template_id=interpreter.prompt_template_id,
         output_schema=interpreter.output_schema_version,
     )
-    return _SemanticInterpretation(
-        interpreter=interpreter, prompts={mode: prompt for mode in config.supported_modes}
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=interpreter,
+        prompts={mode: prompt for mode in config.supported_modes},
+        view_policy=extras["view_policy"],
     )
 
 
@@ -1165,6 +1218,7 @@ def _compose_visual_perception(context: _Context) -> dict[str, object]:
         **composed,
         "semantic_interpreter": semantic.interpreter,
         "semantic_prompts": semantic.prompts,
+        "semantic_view_policy": semantic.view_policy,
     }
 
 
@@ -1409,12 +1463,14 @@ def compose_executors(
         assert visual_perception.region_features is not None
         assert visual_perception.semantic_interpreter is not None
         assert visual_perception.semantic_prompts is not None
+        assert visual_perception.semantic_view_policy is not None
         executors["visual_perception"] = VisualPerceptionExecutor(
             region_discovery=visual_perception.region_discovery,
             dense_features=visual_perception.dense_features,
             region_features=visual_perception.region_features,
             semantic_interpreter=visual_perception.semantic_interpreter,
             semantic_prompts=visual_perception.semantic_prompts,
+            semantic_view_policy=visual_perception.semantic_view_policy,
         )
 
     state_estimation = _compose_stage("state_estimation")

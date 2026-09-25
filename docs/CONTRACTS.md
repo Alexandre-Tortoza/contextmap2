@@ -234,8 +234,11 @@ configuration_fingerprint
 ```
 
 Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
-`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
-quando aplicável. O SHA-256 identifica os bytes exatos entregues ao modelo: os
+`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem, região
+quando aplicável e, quando uma `SemanticViewPolicy` a construiu, o registro
+`construction` (fingerprint da política, SHA-256 da imagem de origem e janela de
+pixels usada). A política de views declara quais views um request de região
+carrega e em que ordem; nada além delas é acrescentado. O SHA-256 identifica os bytes exatos entregues ao modelo: os
 runtimes o verificam antes de abrir a imagem ou enviar bytes a um provider, e um
 payload divergente é falha explícita, não inferência sobre outra evidência.
 Features opcionais preservam `feature_id`,

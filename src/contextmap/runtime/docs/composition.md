@@ -56,7 +56,7 @@ Um provider fornecido para um backend que também empacota um loader **substitui
 
 ## Grupos de parâmetros reservados
 
-Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `prompt_policy` nos interpretadores semânticos Qwen e Gemini (obrigatório, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
+Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `prompt_policy` nos interpretadores semânticos Qwen e Gemini e `view_policy` nos três interpretadores semânticos (obrigatórios, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
 
 ### Política de prompt semântico (#542)
 
@@ -78,6 +78,23 @@ prompt_policy = { scene = "scene/v1", region = "region/v1" }
 - **Florence-2 é nativo da task.** Sua política é o prompt da task configurada (`florence2-task-prompt/1:<task>`), válida só para o modo que a task serve; um `prompt_policy` no bloco `florence2` é recusado com essa explicação, em vez de ser registrado como se o modelo o consumisse.
 - **Composição.** `ComposedRuntime.semantic_prompts` mapeia cada modo para um `SemanticRequestPrompt` (`template_id`, `output_schema`), que o `VisualPerceptionExecutor` copia para `prompt_template_id`/`requested_output_schema` de cada request. Um modo sem entrada (o modo que a task do Florence-2 não serve) falha explicitamente ao montar o request, nunca recebe um padrão.
 - **Identidade e reuso.** Como qualquer parâmetro de backend, `prompt_policy` entra na configuração efetiva, no seu digest e no `config_digest` do estágio `visual_perception`. Trocar só a política recalcula `visual_perception` e, pelas entradas, os estágios que dependem dele; `ingestion`, `state_estimation` e `geometric_mapping` mantêm a identidade e continuam reutilizáveis. A granularidade é a do estágio: Region Discovery e features são recalculados junto, porque Semantic Interpretation ainda não é um estágio próprio do runtime.
+
+### Política de views semânticas (#524)
+
+A política de views de evidência também é selecionada pela configuração, como grupo reservado obrigatório `view_policy` no bloco de **qualquer** backend semântico (Qwen, Gemini e Florence-2), validado por `visual_perception.SemanticViewPolicy`:
+
+```toml
+[components.visual_perception.semantic_interpretation.qwen]
+# ...
+prompt_policy = { scene = "scene/v1", region = "region/v1" }
+view_policy = { region_views = ["masked_subject", "tight_crop", "contextual_crop"], mask_fill_rgb = [0, 0, 0], context_margin_ratio = 0.5, context_boundary = { rgb = [255, 0, 0], width_px = 2 } }
+```
+
+- **Sem padrão.** Sem o grupo, ou com uma política ambígua (views repetidas, sem view presa à região, parâmetro ausente para uma view declarada ou presente para uma view não declarada), `compose()` levanta `BackendConfigurationError` antes de pedir o runtime do modelo. A política equivalente ao comportamento anterior a #524 é `{ region_views = ["tight_crop"] }`.
+- **Preflight contra o backend.** Depois de construir o intérprete (sem carregar modelo), `compose()` confere a política com `interpreter.capabilities()` via `check_view_policy_supported()`: o Florence-2, que aceita exatamente uma view que a região preenche, recusa duas views, recorte contextual ou frame inteiro já na composição.
+- **Composição.** `ComposedRuntime.semantic_view_policy` guarda a política; o `VisualPerceptionExecutor` a entrega à bridge, que só monta requests: os bytes e a linhagem de cada view vêm de `materialize_region_views()`/`materialize_scene_view()`, da capability. A bridge decodifica a imagem preparada (Pillow, como antes) e identifica seus bytes pelo SHA-256 para a linhagem das views.
+- **Identidade e reuso.** Como `prompt_policy`, `view_policy` entra na configuração efetiva, no seu digest e no `config_digest` de `visual_perception`, sem mudar a identidade de `ingestion`, `state_estimation` e `geometric_mapping` nem o fingerprint de configuração do backend.
+- **Extensão (#544).** `prompt_policy` e `view_policy` são grupos irmãos no bloco do backend; a política de request unificada de #544 pode agrupá-los (com o contexto de cena de #529) sem mudar o significado de nenhum dos dois.
 
 ## Ordem de validação
 

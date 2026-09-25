@@ -15,6 +15,7 @@ from contextmap.visual_perception import (
     SemanticInterpreterCapabilities,
     SemanticRequestId,
     SemanticRequestMetadata,
+    SemanticViewConstruction,
     SemanticVisualView,
     VisualViewKind,
     decode_semantic_request,
@@ -146,3 +147,84 @@ def test_capability_validation_rejects_evidence_a_backend_cannot_consume() -> No
         validate_semantic_request(feature_assisted, capabilities)
 
     validate_semantic_request(_request(), capabilities)
+
+
+def test_a_view_construction_record_round_trips_with_the_request() -> None:
+    """#524: how each view was cut from its source image is persisted with the request."""
+    view = SemanticVisualView(
+        view_id="view-0001",
+        kind=VisualViewKind.CONTEXTUAL_CROP,
+        payload_reference="outputs/semantic-views/region-0007-context.png",
+        source_observation_id=SOURCE_ID,
+        region_id=REGION_ID,
+        sha256="0" * 64,
+        construction=SemanticViewConstruction(
+            policy_fingerprint="sha256:policy",
+            source_image_sha256="1" * 64,
+            pixel_bounds=(0, 2, 40, 30),
+        ),
+    )
+    request = _request(visual_views=(view,))
+
+    encoded = encode_semantic_request(request)
+
+    assert encoded["visual_views"][0]["construction"] == {
+        "policy_fingerprint": "sha256:policy",
+        "source_image_sha256": "1" * 64,
+        "pixel_bounds": [0, 2, 40, 30],
+    }
+    assert decode_semantic_request(encoded) == request
+    assert encode_semantic_request(_request())["visual_views"][0]["construction"] is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"policy_fingerprint": " "}, "policy_fingerprint"),
+        ({"source_image_sha256": "xyz"}, "source_image_sha256"),
+        ({"pixel_bounds": (5, 0, 5, 3)}, "pixel_bounds"),
+        ({"pixel_bounds": (-1, 0, 5, 3)}, "pixel_bounds"),
+    ],
+)
+def test_a_view_construction_record_refuses_an_unusable_lineage(
+    changes: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "policy_fingerprint": "sha256:policy",
+        "source_image_sha256": "1" * 64,
+        "pixel_bounds": (0, 0, 4, 3),
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        SemanticViewConstruction(**values)  # type: ignore[arg-type]
+
+
+def test_capabilities_can_bound_the_number_of_views_a_request_carries() -> None:
+    capabilities = SemanticInterpreterCapabilities(
+        supported_modes=frozenset({SemanticInterpretationMode.REGION}),
+        supported_view_kinds=frozenset({VisualViewKind.TIGHT_CROP, VisualViewKind.MASKED_SUBJECT}),
+        accepts_visual_features=False,
+        accepts_scene_context=False,
+        max_visual_views=1,
+    )
+    masked = SemanticVisualView(
+        view_id="view-0002",
+        kind=VisualViewKind.MASKED_SUBJECT,
+        payload_reference="outputs/semantic-views/region-0007-masked.png",
+        source_observation_id=SOURCE_ID,
+        region_id=REGION_ID,
+        sha256="0" * 64,
+    )
+
+    validate_semantic_request(_request(), capabilities)
+    with pytest.raises(ValueError, match="at most 1 visual view"):
+        validate_semantic_request(_request(visual_views=(_view(), masked)), capabilities)
+    with pytest.raises(ValueError, match="max_visual_views"):
+        SemanticInterpreterCapabilities(
+            supported_modes=frozenset({SemanticInterpretationMode.REGION}),
+            supported_view_kinds=frozenset({VisualViewKind.TIGHT_CROP}),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+            max_visual_views=0,
+        )

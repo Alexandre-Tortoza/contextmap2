@@ -11,6 +11,7 @@ from runtime_documents import (
     CANONICAL_PROMPT_POLICY,
     SHA_A,
     SUPPORT_POLICY,
+    TIGHT_CROP_VIEW_POLICY,
     effective_from,
     selected_document,
 )
@@ -46,7 +47,13 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.state_estimation.backends.external_pose import ExternalPoseEstimator
 from contextmap.state_estimation.backends.fast_lio import FastLioEstimator
-from contextmap.visual_perception import FeatureScope, PerceptionRunId, SemanticInterpretationMode
+from contextmap.visual_perception import (
+    FeatureScope,
+    PerceptionRunId,
+    SemanticInterpretationMode,
+    SemanticViewPolicy,
+    VisualViewKind,
+)
 from contextmap.visual_perception.backends.clip import ClipVisualFeatureBackend
 from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
 from contextmap.visual_perception.backends.florence2 import Florence2RegionDiscovery
@@ -322,6 +329,7 @@ class TestCanonicalComposition:
                 "max_retries": 2,
                 "temperature": 0.0,
                 "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+                "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
             },
         }
 
@@ -340,6 +348,7 @@ class TestCanonicalComposition:
 
 SCENE = SemanticInterpretationMode.SCENE
 REGION_MODE = SemanticInterpretationMode.REGION
+_TIGHT_CROP_VIEWS = SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,))
 _CANONICAL_PROMPTS = {
     SCENE: SemanticRequestPrompt(template_id="scene/v1", output_schema="semantic-response/1"),
     REGION_MODE: SemanticRequestPrompt(
@@ -358,6 +367,7 @@ def _gemini_document(prompt_policy: dict[str, str]) -> dict[str, Any]:
             "max_retries": 2,
             "temperature": 0.0,
             "prompt_policy": prompt_policy,
+            "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
         },
     }
     return document
@@ -375,6 +385,7 @@ def _florence2_document(**extra: object) -> dict[str, Any]:
             "precision": "float32",
             "max_new_tokens": 64,
             "temperature": 0.0,
+            "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
             **extra,
         },
     }
@@ -512,6 +523,111 @@ class TestSemanticPromptPolicy:
         prompts = executors["visual_perception"]._semantic_prompts  # type: ignore[attr-defined]
         assert prompts[REGION_MODE].template_id == "region-abstention/v1"
         assert prompts[SCENE].template_id == "scene/v1"
+
+
+class TestSemanticViewPolicy:
+    """#524: the evidence-view policy is configured, validated at composition, and composed."""
+
+    @staticmethod
+    def _qwen_views(view_policy: dict[str, Any] | None) -> dict[str, Any]:
+        document = selected_document()
+        qwen = document["components"]["visual_perception"]["semantic_interpretation"]["qwen"]
+        if view_policy is None:
+            del qwen["view_policy"]
+        else:
+            qwen["view_policy"] = view_policy
+        return document
+
+    def test_the_configured_views_become_the_composed_policy(self, tmp_path: Path) -> None:
+        from contextmap.visual_perception import (
+            SemanticContextBoundary,
+            SemanticViewPolicy,
+            VisualViewKind,
+        )
+
+        document = self._qwen_views(
+            {
+                "region_views": ["masked_subject", "tight_crop", "contextual_crop"],
+                "mask_fill_rgb": [0, 0, 0],
+                "context_margin_ratio": 0.5,
+                "context_boundary": {"rgb": [255, 0, 0], "width_px": 2},
+            }
+        )
+
+        composed = _compose(tmp_path, document=document)
+
+        assert composed.semantic_view_policy == SemanticViewPolicy(
+            region_views=(
+                VisualViewKind.MASKED_SUBJECT,
+                VisualViewKind.TIGHT_CROP,
+                VisualViewKind.CONTEXTUAL_CROP,
+            ),
+            mask_fill_rgb=(0, 0, 0),
+            context_margin_ratio=0.5,
+            context_boundary=SemanticContextBoundary(rgb=(255, 0, 0), width_px=2),
+        )
+
+    def test_the_views_are_never_defaulted(self, tmp_path: Path) -> None:
+        with pytest.raises(BackendConfigurationError, match="view_policy"):
+            _compose(tmp_path, document=self._qwen_views(None))
+
+    def test_an_ambiguous_view_policy_is_refused_before_any_runtime_is_requested(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+
+        with pytest.raises(BackendConfigurationError, match="mask_fill_rgb"):
+            _compose(
+                tmp_path,
+                document=self._qwen_views({"region_views": ["masked_subject"]}),
+                recorder=recorder,
+            )
+
+        assert len(recorder.calls) == 1  # só o runtime de region discovery foi pedido
+
+    @pytest.mark.parametrize(
+        ("views", "message"),
+        [
+            (
+                {"region_views": ["masked_subject", "tight_crop"], "mask_fill_rgb": [0, 0, 0]},
+                "at most 1",
+            ),
+            ({"region_views": ["contextual_crop"], "context_margin_ratio": 0.5}, "contextual_crop"),
+            ({"region_views": ["full_frame", "tight_crop"]}, "full_frame"),
+        ],
+    )
+    def test_florence2_refuses_a_combination_it_cannot_consume_at_composition(
+        self, tmp_path: Path, views: dict[str, Any], message: str
+    ) -> None:
+        with pytest.raises(BackendConfigurationError, match=message):
+            _compose(tmp_path, document=_florence2_document(view_policy=views))
+
+    def test_florence2_accepts_its_single_region_filling_view(self, tmp_path: Path) -> None:
+        document = _florence2_document(
+            view_policy={"region_views": ["masked_subject"], "mask_fill_rgb": [127, 127, 127]}
+        )
+
+        composed = _compose(tmp_path, document=document)
+
+        assert composed.semantic_view_policy is not None
+        assert [kind.value for kind in composed.semantic_view_policy.region_views] == [
+            "masked_subject"
+        ]
+
+    def test_the_composed_executor_carries_the_selected_views(self, tmp_path: Path) -> None:
+        document = self._qwen_views(
+            {"region_views": ["masked_subject", "tight_crop"], "mask_fill_rgb": [0, 0, 0]}
+        )
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(_Recorder()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        policy = executors["visual_perception"]._semantic_view_policy  # type: ignore[attr-defined]
+        assert [kind.value for kind in policy.region_views] == ["masked_subject", "tight_crop"]
 
 
 class TestFeatureBackendsAreRunScoped:
@@ -792,6 +908,7 @@ class TestExplicitFailures:
                 "max_retries": 2,
                 "temperature": 0.0,
                 "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+                "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
             },
         }
 
@@ -2016,6 +2133,7 @@ class TestComposeVisualPerceptionExecutor:
             region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
             semantic_prompts=_CANONICAL_PROMPTS,
+            semantic_view_policy=_TIGHT_CROP_VIEWS,
         )
 
         workspace = tmp_path / "ws"
@@ -2292,6 +2410,7 @@ class TestComposeVisualPerceptionExecutor:
             region_features=composed.region_features,
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
             semantic_prompts=_CANONICAL_PROMPTS,
+            semantic_view_policy=_TIGHT_CROP_VIEWS,
         )
 
         workspace = tmp_path / "ws"
@@ -2457,6 +2576,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
             prompts=_CANONICAL_PROMPTS,
+            view_policy=_TIGHT_CROP_VIEWS,
         )
         bridge.bind(writer)  # type: ignore[arg-type]
 
@@ -2532,6 +2652,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
             prompts=_CANONICAL_PROMPTS,
+            view_policy=_TIGHT_CROP_VIEWS,
         )
         bridge.bind(_RecordingWriter())  # type: ignore[arg-type]
 
@@ -2549,101 +2670,141 @@ class TestSemanticBridgeStreamsItsEvidence:
         assert all(size > 0 for _, size in recorded_views)
 
 
-class TestSemanticBridgeNamesTheSelectedPromptPolicy:
-    """#542: the bridge names the configured policy in each request instead of a fixed id.
+def _without_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for Pillow: every prepared image decodes to the same 16x12 RGB frame.
 
-    Pillow is replaced by a minimal stand-in: what is under test is which prompt policy each
-    request names, not image decoding.
+    What these tests pin is which prompt and which views each request carries, not image
+    decoding, and Pillow is not a dependency of the project.
     """
+    import sys
+    import types
 
-    @staticmethod
-    def _without_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
-        import sys
-        import types
+    import numpy as np
 
-        class _Image:
-            def convert(self, _mode: str) -> _Image:
-                return self
+    class _Image:
+        def __enter__(self) -> _Image:
+            return self
 
-            def crop(self, _box: object) -> _Image:
-                return self
+        def __exit__(self, *_exc: object) -> None:
+            return None
 
-            def save(self, target: Path) -> None:
-                Path(target).write_bytes(b"view bytes")
+        def convert(self, _mode: str) -> _Image:
+            return self
 
-        image_module = types.ModuleType("PIL.Image")
-        image_module.open = lambda _path: _Image()  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "PIL", types.ModuleType("PIL"))
-        monkeypatch.setitem(sys.modules, "PIL.Image", image_module)
+        def __array__(self, dtype: object = None, copy: object = None) -> Any:
+            ys, xs = np.mgrid[0:12, 0:16]
+            return np.stack([xs * 10, ys * 10, xs + ys], axis=-1).astype(np.uint8)
 
-    @staticmethod
-    def _bridge(
-        tmp_path: Path, prompts: dict[SemanticInterpretationMode, SemanticRequestPrompt]
-    ) -> tuple[Any, list[Any]]:
-        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+    image_module = types.ModuleType("PIL.Image")
+    image_module.open = lambda _source: _Image()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "PIL", types.ModuleType("PIL"))
+    monkeypatch.setitem(sys.modules, "PIL.Image", image_module)
 
-        fake = TestSemanticBridgeStreamsItsEvidence._fake_interpreter()
-        requests: list[Any] = []
 
-        class _Recording:
-            def backend_provenance(self) -> Any:
-                return fake.backend_provenance()
+def _prepared_image_and_region(tmp_path: Path, *, masked: bool = False) -> tuple[Any, Any]:
+    from contextmap.ingestion import SourceObservationId
+    from contextmap.visual_perception import (
+        BackendProvenance,
+        BoundingBox2D,
+        InlineMask,
+        PreparedImage,
+        Region2D,
+        RegionId,
+    )
 
-            def interpret(self, request: Any) -> object:
-                requests.append(request)
-                return fake.interpret(request)
+    (tmp_path / "prepared").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prepared" / "frame-0000.png").write_bytes(b"prepared frame bytes")
+    image = PreparedImage(
+        source_observation_id=SourceObservationId("frame-0000"),
+        payload_reference="prepared/frame-0000.png",
+        width=16,
+        height=12,
+    )
+    region = Region2D(
+        region_id=RegionId("region-0000"),
+        bounding_box=BoundingBox2D(x=2, y=2, width=4, height=4),
+        provenance=BackendProvenance(
+            backend_id="fake",
+            capability="region_discovery",
+            provider="fake",
+            model="fake",
+            version="0.1",
+        ),
+        mask=(
+            InlineMask(
+                width=16,
+                height=12,
+                data=tuple(2 <= x < 5 and 2 <= y < 6 for y in range(12) for x in range(16)),
+            )
+            if masked
+            else None
+        ),
+    )
+    return image, region
 
-        class _Writer:
-            def add_stage_outcomes(self, outcomes: Any) -> None: ...
 
-            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None: ...
+class _PayloadWriter:
+    """Records what the bridge hands the run writer."""
 
-        bridge = _LegacySemanticInterpreterBridge(
-            interpreter=_Recording(),  # type: ignore[arg-type]
-            run_id=PerceptionRunId("run-0001"),
-            view_root=tmp_path,
-            prompts=prompts,
-        )
-        bridge.bind(_Writer())  # type: ignore[arg-type]
-        return bridge, requests
+    def __init__(self) -> None:
+        self.payloads: dict[str, bytes] = {}
 
-    @staticmethod
-    def _image_and_region() -> tuple[Any, Any]:
-        from contextmap.ingestion import SourceObservationId
-        from contextmap.visual_perception import (
-            BackendProvenance,
-            BoundingBox2D,
-            PreparedImage,
-            Region2D,
-            RegionId,
-        )
+    def add_stage_outcomes(self, outcomes: Any) -> None: ...
 
-        image = PreparedImage(
-            source_observation_id=SourceObservationId("frame-0000"),
-            payload_reference="prepared/frame-0000.png",
-            width=16,
-            height=12,
-        )
-        region = Region2D(
-            region_id=RegionId("region-0000"),
-            bounding_box=BoundingBox2D(x=0, y=0, width=4, height=4),
-            provenance=BackendProvenance(
-                backend_id="fake",
-                capability="region_discovery",
-                provider="fake",
-                model="fake",
-                version="0.1",
-            ),
-        )
-        return image, region
+    def add_semantic_view_payload(self, view: Any, payload: bytes) -> None:
+        import hashlib
+
+        assert hashlib.sha256(payload).hexdigest() == view.sha256
+        self.payloads[view.payload_reference] = payload
+
+
+def _semantic_bridge(
+    tmp_path: Path,
+    *,
+    prompts: dict[SemanticInterpretationMode, SemanticRequestPrompt] | None = None,
+    view_policy: Any = None,
+    interpreter: Any = None,
+) -> tuple[Any, list[Any], _PayloadWriter]:
+    from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+    from contextmap.visual_perception import SemanticViewPolicy, VisualViewKind
+
+    wrapped = interpreter or TestSemanticBridgeStreamsItsEvidence._fake_interpreter()
+    requests: list[Any] = []
+
+    class _Recording:
+        def backend_provenance(self) -> Any:
+            return wrapped.backend_provenance()
+
+        def interpret(self, request: Any) -> object:
+            requests.append(request)
+            return wrapped.interpret(request)
+
+    writer = _PayloadWriter()
+    bridge = _LegacySemanticInterpreterBridge(
+        interpreter=_Recording(),  # type: ignore[arg-type]
+        run_id=PerceptionRunId("run-0001"),
+        view_root=tmp_path,
+        prompts=_CANONICAL_PROMPTS if prompts is None else prompts,
+        view_policy=(
+            SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,))
+            if view_policy is None
+            else view_policy
+        ),
+    )
+    bridge.bind(writer)  # type: ignore[arg-type]
+    return bridge, requests, writer
+
+
+class TestSemanticBridgeNamesTheSelectedPromptPolicy:
+    """#542: the bridge names the configured policy in each request instead of a fixed id."""
 
     def test_each_request_names_the_policy_selected_for_its_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._without_pillow(monkeypatch)
-        bridge, requests = self._bridge(
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(
             tmp_path,
-            {
+            prompts={
                 SCENE: SemanticRequestPrompt(
                     template_id="scene/v1", output_schema="semantic-response/1"
                 ),
@@ -2652,7 +2813,7 @@ class TestSemanticBridgeNamesTheSelectedPromptPolicy:
                 ),
             },
         )
-        image, region = self._image_and_region()
+        image, region = _prepared_image_and_region(tmp_path)
 
         bridge.interpret_scene(image)
         bridge.interpret_regions(image, [region])
@@ -2670,19 +2831,136 @@ class TestSemanticBridgeNamesTheSelectedPromptPolicy:
     ) -> None:
         from contextmap.runtime.executors import ExecutorError
 
-        self._without_pillow(monkeypatch)
-        bridge, requests = self._bridge(
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(
             tmp_path,
-            {
+            prompts={
                 REGION_MODE: SemanticRequestPrompt(
                     template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
                     output_schema="semantic-response/1",
                 )
             },
         )
-        image, _ = self._image_and_region()
+        image, _ = _prepared_image_and_region(tmp_path)
 
         with pytest.raises(ExecutorError, match="scene"):
             bridge.interpret_scene(image)
 
         assert requests == []
+
+
+class TestSemanticBridgeAssemblesTheSelectedViews:
+    """#524: region requests carry exactly the policy's views, in its order, as built."""
+
+    @staticmethod
+    def _policy() -> Any:
+        from contextmap.visual_perception import SemanticViewPolicy, VisualViewKind
+
+        return SemanticViewPolicy(
+            region_views=(
+                VisualViewKind.FULL_FRAME,
+                VisualViewKind.MASKED_SUBJECT,
+                VisualViewKind.TIGHT_CROP,
+                VisualViewKind.CONTEXTUAL_CROP,
+            ),
+            mask_fill_rgb=(0, 0, 0),
+            context_margin_ratio=0.5,
+        )
+
+    def test_region_requests_carry_the_declared_views_in_order_and_nothing_else(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hashlib
+
+        from contextmap.visual_perception import VisualViewKind, materialize_region_views
+
+        _without_pillow(monkeypatch)
+        policy = self._policy()
+        bridge, requests, writer = _semantic_bridge(tmp_path, view_policy=policy)
+        image, region = _prepared_image_and_region(tmp_path, masked=True)
+
+        bridge.interpret_scene(image)
+        bridge.interpret_regions(image, [region])
+
+        scene, region_request = requests
+        assert [view.kind for view in scene.visual_views] == [VisualViewKind.FULL_FRAME]
+        assert [view.kind for view in region_request.visual_views] == list(policy.region_views)
+        import numpy as np
+
+        expected = materialize_region_views(
+            np.asarray(sys_image_module().open(None)),
+            source_observation_id=image.source_observation_id,
+            source_image_sha256=hashlib.sha256(b"prepared frame bytes").hexdigest(),
+            region=region,
+            policy=policy,
+        )
+        assert region_request.visual_views == tuple(item.view for item in expected)
+        # A view de frame inteiro da região é a mesma evidência da view da cena.
+        assert region_request.visual_views[0] == scene.visual_views[0]
+        assert writer.payloads == {item.view.payload_reference: item.payload for item in expected}
+
+    def test_qwen_receives_the_views_in_the_declared_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        from contextmap.visual_perception.backends.qwen import (
+            QwenGenerationResponse,
+            QwenSemanticConfig,
+            QwenSemanticInterpreter,
+        )
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self.views: list[Any] = []
+
+            def generate(self, *, visual_views: Any, prompt: str, config: Any) -> Any:
+                self.views.append(visual_views)
+                return QwenGenerationResponse(
+                    text=json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                )
+
+        _without_pillow(monkeypatch)
+        runtime = _Runtime()
+        qwen = QwenSemanticInterpreter(
+            config=QwenSemanticConfig(
+                model="Qwen/Qwen-x",
+                device="cpu",
+                precision="float32",
+                max_new_tokens=16,
+                temperature=0.0,
+            ),
+            runtime=runtime,
+        )
+        policy = self._policy()
+        bridge, requests, _ = _semantic_bridge(tmp_path, view_policy=policy, interpreter=qwen)
+        image, region = _prepared_image_and_region(tmp_path, masked=True)
+
+        bridge.interpret_regions(image, [region])
+
+        assert [view.kind for view in runtime.views[0]] == list(policy.region_views)
+        assert runtime.views[0] == requests[0].visual_views
+        # O runtime lê cada view do scratch do run pelo sha256 registrado.
+        from contextmap.visual_perception.backends._semantic_views import read_view_payload
+
+        for view in runtime.views[0]:
+            read_view_payload(tmp_path, view)
+
+    def test_a_masked_subject_of_a_box_only_region_fails_explicitly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(tmp_path, view_policy=self._policy())
+        image, region = _prepared_image_and_region(tmp_path, masked=False)
+
+        with pytest.raises(ValueError, match="inline mask"):
+            bridge.interpret_regions(image, [region])
+
+        assert requests == []
+
+
+def sys_image_module() -> Any:
+    """Return the Pillow stand-in installed by :func:`_without_pillow`."""
+    import sys
+
+    return sys.modules["PIL.Image"]
