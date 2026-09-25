@@ -14,6 +14,7 @@ from run_builders import (
 
 from contextmap.evaluation.sensor_association import (
     EVALUATOR_VERSION,
+    ReprojectionReport,
     SensorAssociationEvaluationError,
     SensorAssociationEvaluationReport,
     StratificationProfile,
@@ -23,6 +24,7 @@ from contextmap.evaluation.sensor_association import (
     evaluate_sensor_association,
 )
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     SensorAssociationRequest,
     SensorAssociationRunId,
     SensorAssociationRunReader,
@@ -81,7 +83,7 @@ def test_the_report_keeps_the_complete_lineage_of_the_run(tmp_path: Path) -> Non
     report = _report(tmp_path, NATIVE, ENHANCED)
     lineage = report.lineage
 
-    assert report.evaluator_version == EVALUATOR_VERSION == "1"
+    assert report.evaluator_version == EVALUATOR_VERSION == "2"
     assert lineage.run_id == "assoc-run-0001"
     assert lineage.sequence_artifact_id == "sequence-0001"
     assert lineage.selection_id == "full-sequence"
@@ -254,7 +256,7 @@ def test_the_report_is_deterministic_and_json(tmp_path: Path) -> None:
     record = json.loads(json.dumps(encode_sensor_association_report(first)))
 
     assert first == second
-    assert record["evaluator_version"] == "1"
+    assert record["evaluator_version"] == "2"
     assert record["lineage"]["configuration_fingerprint"] == first.lineage.configuration_fingerprint
     assert record["physical_observation_count"] == 2
     assert record["strata"][0]["dimension"] == "range"
@@ -356,3 +358,85 @@ def test_a_comparison_rejects_anything_but_the_feature_path_changing(tmp_path: P
         compare_sensor_association_reports([base, other_profile])
     with pytest.raises(SensorAssociationEvaluationError, match="at least two"):
         compare_sensor_association_reports([base])
+
+
+# --- The evaluator must see the candidate policy (review of PR #565) --------------------------
+
+
+def test_the_lineage_carries_the_candidate_policy_the_run_evaluated(tmp_path: Path) -> None:
+    """A run's evaluated population is part of its lineage, not an implementation detail."""
+    report = evaluate_sensor_association(
+        _run(tmp_path, make_strata_request(channels=[NATIVE])), profile=PROFILE
+    )
+
+    assert report.lineage.candidate_policy["max_range_m"] is None
+    assert report.lineage.candidate_policy["policy_id"]
+    assert report.lineage.candidate_policy["fingerprint"].startswith("sha256:")
+    record = encode_sensor_association_report(report)
+    assert record["lineage"]["candidate_policy"] == dict(report.lineage.candidate_policy)
+
+
+def test_a_comparison_refuses_runs_that_evaluated_different_candidate_populations(
+    tmp_path: Path,
+) -> None:
+    """Two runs that culled differently are not "only the feature path changed".
+
+    Before this, a `None` policy and a 1000 m policy could produce identical geometry on a small
+    fixture and pass the comparison, hiding that they are different scientific configurations.
+    """
+    base = evaluate_sensor_association(
+        _run(tmp_path, make_strata_request(channels=[NATIVE]), index=1), profile=PROFILE
+    )
+    culled = evaluate_sensor_association(
+        _run(
+            tmp_path,
+            dataclasses.replace(
+                make_strata_request(channels=[NATIVE]),
+                candidate_policy=CandidateGeometryPolicy(max_range_m=1000.0),
+            ),
+            index=2,
+        ),
+        profile=PROFILE,
+    )
+
+    # A geometria é idêntica: 1000 m engloba a cena inteira. Só a política difere.
+    assert base.observation_count == culled.observation_count
+    assert base.state_counts == culled.state_counts
+
+    with pytest.raises(SensorAssociationEvaluationError, match="candidate_policy"):
+        compare_sensor_association_reports([base, culled])
+
+
+def test_the_reprojection_report_keeps_the_unevaluated_correspondences_apart(
+    tmp_path: Path,
+) -> None:
+    report = evaluate_sensor_association(
+        _run(tmp_path, make_strata_request(channels=[NATIVE])), profile=PROFILE
+    )
+
+    reprojection = report.reprojection
+    assert reprojection.unevaluated_correspondence_count == 0
+    assert reprojection.evaluated_correspondence_count == reprojection.correspondence_count
+    record = encode_sensor_association_report(report)["reprojection"]
+    for field in (
+        "unevaluated_correspondence_count",
+        "evaluated_correspondence_count",
+        "invalid_rate",
+    ):
+        assert field in record
+
+
+def test_the_invalid_rate_of_the_report_is_none_when_nothing_was_evaluated() -> None:
+    empty = ReprojectionReport(
+        frames_with_reference=0,
+        frames_without_reference=3,
+        correspondence_count=10,
+        invalid_correspondence_count=0,
+        unevaluated_correspondence_count=10,
+        frame_median_px=None,
+        frame_p95_px=None,
+    )
+
+    assert empty.evaluated_correspondence_count == 0
+    # Nada avaliado não é taxa zero: é ausência de medição.
+    assert empty.invalid_rate is None

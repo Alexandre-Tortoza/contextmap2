@@ -306,9 +306,17 @@ class SensorAssociationRunWriter:
 class SensorAssociationRunTransaction:
     """One run being written: a frame sink that persists and then forgets each frame.
 
-    Per-frame payloads are appended to open streams and only small run-level aggregates are
-    kept, so the writer's own memory does not grow with the number of frames either. Nothing
-    is visible until :meth:`finalize` publishes the run atomically.
+    Per-frame payloads are appended to open streams and nothing about a frame is retained:
+    no array, no observation, no projection. Nothing is visible until :meth:`finalize`
+    publishes the run atomically.
+
+    What the transaction does keep is bounded and scalar. Counts and byte offsets are
+    constant, and one timing record per frame accumulates because #562 asks for per-frame
+    candidate-query and projection times and ``metrics/runtime.json`` is a single document
+    written only when the caller measured. That record is four primitives, about 567 B, so
+    3096 frames cost under 1.7 MB -- a linear term worth naming rather than hiding, and four
+    orders of magnitude below the 4.3 GB peak of the real 350-frame run. The rule it must keep
+    obeying is that the linear term holds **scalars**, never a frame or an array.
     """
 
     def __init__(self, *, run: AtomicRunDirectory, writer: SensorAssociationRunWriter) -> None:

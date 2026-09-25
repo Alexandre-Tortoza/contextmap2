@@ -63,9 +63,18 @@ class GeometryBlock:
         """Validate that the arrays describe the same points.
 
         Raises:
-            ValueError: If the coordinates are not ``(N, 3)`` or there is not exactly
-                one index per coordinate row.
+            ValueError: If the coordinates are not ``(N, 3)``, there is not exactly one index
+                per coordinate row, or the indices are not an integer array. A float index
+                would be truncated silently by :meth:`reference`, turning ``1.5`` into the
+                identity of element ``1``, so the dtype is part of the contract.
         """
+        import numpy as np
+
+        if not np.issubdtype(self.indices.dtype, np.integer):
+            raise ValueError(
+                f"indices must be an integer array, got dtype {self.indices.dtype}: a geometry "
+                "index is an identity, never a rounded measurement"
+            )
         if self.coordinates_m.ndim != 2 or self.coordinates_m.shape[1] != 3:
             raise ValueError(
                 f"coordinates_m must have shape (N, 3), got {self.coordinates_m.shape}"

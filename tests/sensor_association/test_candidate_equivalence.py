@@ -14,6 +14,7 @@ import math
 import numpy as np
 import pytest
 from projection_builders import (
+    CAMERA_CALIBRATION_ID,
     UNBOUNDED_CANDIDATES,
     make_calibration,
     map_point_for_camera_point,
@@ -32,9 +33,11 @@ from contextmap.sensor_association import (
     CandidateGeometryPolicy,
     OcclusionPolicy,
     VisibilityState,
+    camera_projection_for,
 )
 from contextmap.sensor_association.frame_projection import FrameProjection
 from contextmap.sensor_association.visibility import resolve_visibility
+from contextmap.shared import Vector3
 
 OCCLUSION = OcclusionPolicy(
     cell_size_px=4, neighborhood_radius_cells=2, depth_margin_m=0.1, depth_margin_ratio=0.02
@@ -213,20 +216,78 @@ def test_every_dropped_element_is_farther_than_every_kept_one() -> None:
 # --- Boundaries are never culled by accident -------------------------------------------------
 
 
+def _map_point_at_pixel(calibration: CalibrationSet, u: float, v: float, range_m: float) -> Vector3:
+    """The map-frame point whose ray the camera's **own** model sends to pixel ``(u, v)``.
+
+    Inverting the pinhole by hand would only ever test pinhole. Going through
+    :meth:`CameraProjection.unproject` makes the same boundary case real for fisheye and MEI,
+    whose in-image direction sets are shaped quite differently.
+    """
+    camera = camera_projection_for(calibration.entries[CAMERA_CALIBRATION_ID])
+    ray = camera.unproject(np.array([[u, v]]))[0]
+    return map_point_for_camera_point(
+        (float(ray[0]) * range_m, float(ray[1]) * range_m, float(ray[2]) * range_m)
+    )
+
+
+@pytest.mark.parametrize(
+    "calibration",
+    [
+        pytest.param(make_calibration(), id="pinhole"),
+        pytest.param(make_calibration(model=_fisheye()), id="fisheye"),
+        pytest.param(make_calibration(model=_mei()), id="mei"),
+    ],
+)
 @pytest.mark.parametrize(
     ("u", "v"),
     [(0.0, 0.0), (639.0, 0.0), (0.0, 479.0), (639.0, 479.0), (320.0, 0.0), (0.0, 240.0)],
 )
 def test_an_element_at_an_image_corner_or_edge_within_range_is_still_evaluated(
-    u: float, v: float
+    calibration: CalibrationSet, u: float, v: float
 ) -> None:
-    point = map_point_for_pixel(u, v, 3.0)
+    """A point at the very edge of the field of view is never culled by accident.
 
-    culled = project_frame([point], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    Conservative over-selection is acceptable; false exclusion is not, and the corners are where
+    a bound derived from the optical axis would fail first.
+    """
+    point = _map_point_at_pixel(calibration, u, v, 3.0)
+
+    culled = project_frame(
+        [point], calibration=calibration, candidate_policy=CandidateGeometryPolicy(max_range_m=20.0)
+    )
 
     assert culled.candidate_count == 1
+    assert bool(culled.projectable[0])
     assert bool(culled.in_prepared_image[0])
-    np.testing.assert_allclose(culled.raw_pixels[0], (u, v), atol=1e-9)
+    np.testing.assert_allclose(culled.raw_pixels[0], (u, v), atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "calibration",
+    [
+        pytest.param(make_calibration(), id="pinhole"),
+        pytest.param(make_calibration(model=_fisheye()), id="fisheye"),
+        pytest.param(make_calibration(model=_mei()), id="mei"),
+    ],
+)
+def test_a_boundary_element_survives_culling_exactly_as_the_full_map_would_place_it(
+    calibration: CalibrationSet,
+) -> None:
+    """And it lands on the same pixel in both arms, for every camera model."""
+    corners = [
+        _map_point_at_pixel(calibration, u, v, 4.0)
+        for u, v in ((0.0, 0.0), (639.0, 479.0), (639.0, 0.0), (0.0, 479.0))
+    ]
+
+    baseline = project_frame(corners, calibration=calibration)
+    culled = project_frame(
+        corners, calibration=calibration, candidate_policy=CandidateGeometryPolicy(max_range_m=20.0)
+    )
+
+    assert culled.candidate_count == baseline.candidate_count == len(corners)
+    np.testing.assert_array_equal(culled.raw_pixels, baseline.raw_pixels)
+    np.testing.assert_array_equal(culled.in_prepared_image, baseline.in_prepared_image)
+    assert _state_by_geometry(culled) == _state_by_geometry(baseline)
 
 
 def test_an_element_exactly_at_the_range_boundary_is_evaluated() -> None:

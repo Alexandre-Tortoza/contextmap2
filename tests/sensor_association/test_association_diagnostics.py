@@ -1,10 +1,12 @@
 import dataclasses
 import json
 import math
+from typing import Any
 
 import numpy as np
 import pytest
 from dense_builders import make_dense_map, make_dense_result, make_enhancement, make_sampling
+from numpy.typing import NDArray
 from perception_builders import make_region, make_result, rect_mask
 from projection_builders import (
     BODY_TO_CAMERA_ROTATION,
@@ -13,12 +15,18 @@ from projection_builders import (
     make_camera_observation,
     make_prepared_image,
     make_projector,
+    map_point_for_camera_point,
     map_point_for_pixel,
     project_frame,
     scene_frame,
 )
 
-from contextmap.sensor_association import DepthMetric, VisibilityState
+from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
+    DepthMetric,
+    ReprojectionStatistics,
+    VisibilityState,
+)
 from contextmap.sensor_association.dense_sampling import (
     InterpolationPolicy,
     sample_dense_features,
@@ -29,7 +37,9 @@ from contextmap.sensor_association.diagnostics import (
     FindingCode,
     FindingSeverity,
     TrustedCorrespondences,
+    _reprojection_findings,
     diagnose_frame,
+    evaluated_correspondences,
     reprojection_statistics,
     time_offset_sweep,
 )
@@ -467,3 +477,111 @@ def test_the_report_is_json_and_keeps_the_raw_components() -> None:
     assert record["visibility"]["visible"] == 4
     assert record["findings"] == []
     assert record["visibility_policy"]["fingerprint"] == POLICY.fingerprint()
+
+
+# --- "not evaluated" is not "not projectable" (review of PR #565) ----------------------------
+
+
+def _reference_beyond(indices: tuple[int, ...], pixels: NDArray[Any]) -> TrustedCorrespondences:
+    return TrustedCorrespondences(
+        reference_id="trusted-range",
+        geometry_indices=np.array(indices),
+        observed_pixels=pixels,
+    )
+
+
+def test_a_reference_the_candidate_policy_excluded_is_a_warning_not_a_failure() -> None:
+    """A range policy that excludes the reference geometry says nothing about the camera.
+
+    Before this, `reprojection_statistics()` returned `None` for both "evaluated and
+    unprojectable" and "never evaluated", and the frame was failed with
+    `NO_REFERENCE_CORRESPONDENCE_PROJECTS` either way -- turning a declared candidate range into
+    a calibration failure.
+    """
+    near = map_point_for_pixel(100.0, 100.0, 3.0)
+    far = map_point_for_camera_point((0.0, 0.0, 60.0))
+    frame = project_frame([near, far], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    resolution = resolve_visibility(frame, POLICY)
+    # A referência nomeia só o elemento global 1, que o recorte de 20 m não avaliou.
+    reference = _reference_beyond((1,), np.array([[320.0, 240.0]]))
+
+    report = diagnose_frame(resolution, tolerances=TOLERANCES, correspondences=reference)
+
+    assert report.reprojection is None
+    codes = {finding.code: finding.severity for finding in report.findings}
+    assert codes[FindingCode.REFERENCE_NOT_EVALUATED] is FindingSeverity.WARNING
+    assert FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS not in codes
+    assert report.reprojection_unavailable_reason is not None
+    assert "evaluated none" in report.reprojection_unavailable_reason
+
+
+def test_a_reference_the_frame_evaluated_but_cannot_project_is_still_a_failure() -> None:
+    """The original meaning survives: evaluated geometry that will not project is a failure."""
+    behind = map_point_for_camera_point((0.0, 0.0, -4.0))
+    frame = project_frame([behind], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    resolution = resolve_visibility(frame, POLICY)
+    reference = _reference_beyond((0,), np.array([[320.0, 240.0]]))
+
+    report = diagnose_frame(resolution, tolerances=TOLERANCES, correspondences=reference)
+
+    assert report.reprojection is None
+    codes = {finding.code: finding.severity for finding in report.findings}
+    assert codes[FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS] is FindingSeverity.FAILURE
+    assert FindingCode.REFERENCE_NOT_EVALUATED not in codes
+
+
+def test_the_invalid_rate_is_measured_over_the_evaluated_population_only() -> None:
+    """With 90 of 100 references unevaluated, 1 invalid of 10 evaluated is 10%, not 1%.
+
+    The diluted denominator would have hidden a real rate under any sane tolerance.
+    """
+    statistics = ReprojectionStatistics(
+        reference_id="trusted-range",
+        correspondence_count=100,
+        invalid_count=1,
+        unevaluated_count=90,
+        mean_px=1.0,
+        median_px=1.0,
+        p95_px=1.0,
+        max_px=1.0,
+    )
+
+    assert statistics.evaluated_count == 10
+    assert statistics.invalid_rate == pytest.approx(0.1)
+
+    strict = dataclasses.replace(TOLERANCES, max_reprojection_invalid_rate=0.05)
+    findings = _reprojection_findings(
+        statistics, strict, evaluated_count=10, correspondence_count=100
+    )
+
+    codes = [finding.code for finding in findings]
+    assert FindingCode.REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE in codes
+    (rate_finding,) = [f for f in findings if f.code is codes[0]]
+    assert rate_finding.observed == pytest.approx(0.1)
+
+
+def test_statistics_need_at_least_one_evaluated_correspondence_that_projects() -> None:
+    with pytest.raises(ValueError, match="at least one evaluated correspondence"):
+        ReprojectionStatistics(
+            reference_id="trusted-range",
+            correspondence_count=10,
+            invalid_count=4,
+            unevaluated_count=6,
+            mean_px=1.0,
+            median_px=1.0,
+            p95_px=1.0,
+            max_px=1.0,
+        )
+
+
+def test_the_evaluated_count_is_defined_once_and_shared() -> None:
+    near = map_point_for_pixel(100.0, 100.0, 3.0)
+    far = map_point_for_camera_point((0.0, 0.0, 60.0))
+    frame = project_frame([near, far], candidate_policy=CandidateGeometryPolicy(max_range_m=20.0))
+    reference = _reference_beyond((0, 1), np.array([[100.0, 100.0], [320.0, 240.0]]))
+
+    assert evaluated_correspondences(frame, reference) == 1
+    statistics = reprojection_statistics(frame, reference)
+    assert statistics is not None
+    assert statistics.evaluated_count == 1
+    assert statistics.unevaluated_count == 1

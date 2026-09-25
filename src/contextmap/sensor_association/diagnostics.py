@@ -58,7 +58,11 @@ DIAGNOSTICS_DEFINITIONS_VERSION = "association-diagnostics-v1"
 """Versioned identity of the diagnostic definitions in this module."""
 
 _NO_REFERENCE = "no trusted reference correspondences were provided"
-_NONE_PROJECTS = "no trusted reference correspondence could be projected"
+_NONE_PROJECTS = "no evaluated trusted reference correspondence could be projected"
+_NOT_EVALUATED = (
+    "the frame's candidate policy evaluated none of the trusted reference geometry, so the frame "
+    "says nothing about it"
+)
 
 
 class FindingSeverity(Enum):
@@ -88,8 +92,12 @@ class FindingCode(Enum):
             trusted reference exceeds the tolerance.
         REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE: Too many reference correspondences could
             not be projected.
-        NO_REFERENCE_CORRESPONDENCE_PROJECTS: A trusted reference was provided but none of its
-            correspondences could be projected.
+        NO_REFERENCE_CORRESPONDENCE_PROJECTS: A trusted reference was provided, the frame
+            evaluated its geometry, and the camera model could project none of it.
+        REFERENCE_NOT_EVALUATED: A trusted reference was provided but the frame's candidate
+            policy evaluated none of its geometry, so the frame says nothing about it. That is
+            a limitation of the evaluated population, not a projection failure, which is why it
+            is a warning and not a failure.
     """
 
     POSE_TIME_DELTA_EXCEEDS_TOLERANCE = "pose_time_delta_exceeds_tolerance"
@@ -98,6 +106,7 @@ class FindingCode(Enum):
     REPROJECTION_RESIDUAL_EXCEEDS_TOLERANCE = "reprojection_residual_exceeds_tolerance"
     REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE = "reprojection_invalid_rate_exceeds_tolerance"
     NO_REFERENCE_CORRESPONDENCE_PROJECTS = "no_reference_correspondence_projects"
+    REFERENCE_NOT_EVALUATED = "reference_not_evaluated"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -200,6 +209,19 @@ class TrustedCorrespondences:
             raise ValueError("a trusted reference needs at least one correspondence")
         if not np.isfinite(self.observed_pixels).all():
             raise ValueError("observed_pixels must be finite")
+
+
+def evaluated_correspondences(
+    frame: FrameProjection, correspondences: TrustedCorrespondences
+) -> int:
+    """Count the reference correspondences whose geometry this frame evaluated.
+
+    A frame only evaluates the geometry its candidate policy selected, so a reference may name
+    map elements the frame never looked at. This is the one definition of that count; the
+    residual statistics and the diagnostics both read it rather than each deriving their own.
+    """
+    _, found = frame.rows_for(correspondences.geometry_indices)
+    return int(found.sum())
 
 
 def reprojection_statistics(
@@ -487,8 +509,24 @@ def diagnose_frame(
     reason: str | None = _NO_REFERENCE
     if correspondences is not None:
         reprojection = reprojection_statistics(frame, correspondences)
-        reason = None if reprojection is not None else _NONE_PROJECTS
-        findings.extend(_reprojection_findings(reprojection, tolerances))
+        # "Não avaliado" e "não projetável" são fatos diferentes: o primeiro é a política de
+        # candidatos, o segundo é a câmera. Confundi-los transformava um recorte de alcance em
+        # falha de calibração.
+        evaluated = evaluated_correspondences(frame, correspondences)
+        if reprojection is not None:
+            reason = None
+        elif evaluated == 0:
+            reason = _NOT_EVALUATED
+        else:
+            reason = _NONE_PROJECTS
+        findings.extend(
+            _reprojection_findings(
+                reprojection,
+                tolerances,
+                evaluated_count=evaluated,
+                correspondence_count=int(correspondences.geometry_indices.shape[0]),
+            )
+        )
 
     visible_depth = None
     if resolution.visible_count:
@@ -529,15 +567,40 @@ def diagnose_frame(
 
 
 def _reprojection_findings(
-    statistics: ReprojectionStatistics | None, tolerances: DiagnosticTolerances
+    statistics: ReprojectionStatistics | None,
+    tolerances: DiagnosticTolerances,
+    *,
+    evaluated_count: int,
+    correspondence_count: int,
 ) -> list[DiagnosticFinding]:
+    """Findings for one frame's reprojection, keeping the three outcomes apart.
+
+    ``all unevaluated`` is a warning about the evaluated population; ``evaluated but none
+    projectable`` is a failure about the camera; anything else is measured against tolerances.
+    """
     if statistics is None:
+        if evaluated_count == 0:
+            return [
+                DiagnosticFinding(
+                    code=FindingCode.REFERENCE_NOT_EVALUATED,
+                    severity=FindingSeverity.WARNING,
+                    message=(
+                        f"{_NOT_EVALUATED}: none of its {correspondence_count} correspondences "
+                        "name geometry this frame evaluated"
+                    ),
+                    observed=correspondence_count,
+                    tolerance=None,
+                )
+            ]
         return [
             DiagnosticFinding(
                 code=FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS,
                 severity=FindingSeverity.FAILURE,
-                message=_NONE_PROJECTS,
-                observed=None,
+                message=(
+                    f"{_NONE_PROJECTS}: {evaluated_count} of {correspondence_count} were "
+                    "evaluated and none of them projects"
+                ),
+                observed=evaluated_count,
                 tolerance=None,
             )
         ]
@@ -556,7 +619,9 @@ def _reprojection_findings(
                 tolerance=p95_limit,
             )
         )
-    rate = statistics.invalid_count / statistics.correspondence_count
+    # Sobre a população avaliada, nunca sobre a declarada: correspondências que a política de
+    # candidatos excluiu diluiriam a taxa.
+    rate = statistics.invalid_rate
     rate_limit = tolerances.max_reprojection_invalid_rate
     if rate_limit is not None and rate > rate_limit:
         findings.append(
@@ -564,8 +629,10 @@ def _reprojection_findings(
                 code=FindingCode.REPROJECTION_INVALID_RATE_EXCEEDS_TOLERANCE,
                 severity=FindingSeverity.WARNING,
                 message=(
-                    f"{statistics.invalid_count} of {statistics.correspondence_count} reference "
-                    f"correspondences could not be projected, above the {rate_limit} tolerance"
+                    f"{statistics.invalid_count} of the {statistics.evaluated_count} evaluated "
+                    f"reference correspondences could not be projected, above the {rate_limit} "
+                    f"tolerance ({statistics.unevaluated_count} more were not evaluated and do "
+                    "not count either way)"
                 ),
                 observed=rate,
                 tolerance=rate_limit,

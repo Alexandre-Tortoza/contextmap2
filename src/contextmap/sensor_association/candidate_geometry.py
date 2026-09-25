@@ -153,13 +153,21 @@ class CandidateGeometryCloud:
         """Validate the arrays and the identity they carry.
 
         Raises:
-            ValueError: If the coordinates are not ``(N, 3)``, there is not one index per
-                row, an index falls outside the map, or the indices are not strictly
-                increasing. Strict increase is what lets a persisted geometry support be
-                looked up by binary search and keeps its order that of the map.
+            ValueError: If the coordinates are not ``(N, 3)``, the indices are not an integer
+                array, there is not one index per row, an index falls outside the map, or the
+                indices are not strictly increasing. Strict increase is what lets a persisted
+                geometry support be looked up by binary search and keeps its order that of the
+                map; the integer dtype keeps :meth:`reference` from silently truncating a float
+                into the identity of a different element.
         """
         import numpy as np
 
+        if not np.issubdtype(self.global_indices.dtype, np.integer):
+            raise ValueError(
+                f"global_indices must be an integer array, got dtype "
+                f"{self.global_indices.dtype}: a geometry index is an identity, never a rounded "
+                "measurement"
+            )
         if self.coordinates_m.ndim != 2 or self.coordinates_m.shape[1] != 3:
             raise ValueError(
                 f"coordinates_m must have shape (N, 3), got {self.coordinates_m.shape}"

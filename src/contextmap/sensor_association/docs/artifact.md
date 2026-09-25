@@ -30,7 +30,11 @@ with writer.transaction() as run:
     manifest = run.finalize(outcome)
 ```
 
-O serviço projeta um frame, resolve, associa, mede, diagnostica, entrega ao sink e **solta** suas referências; a transação acrescenta o payload do frame a streams já abertos (`AtomicRunDirectory.open_binary`, que hasheia enquanto escreve) e guarda apenas agregados pequenos — contagens, offsets de byte e os tempos do frame. Nem o serviço nem o writer crescem com o número de frames: o pico é `estado estático do mapa + um frame de candidatos/projeção/visibilidade + buffers do writer`. Antes, a associação retinha ~1,17 GB por frame até o fim do run (#563).
+O serviço projeta um frame, resolve, associa, mede, diagnostica, entrega ao sink e **solta** suas referências; a transação acrescenta o payload do frame a streams já abertos (`AtomicRunDirectory.open_binary`, que hasheia enquanto escreve) e não retém **nada** do frame — nem array, nem observação, nem projeção. O pico é `estado estático do mapa + um frame de candidatos/projeção/visibilidade + buffers do writer`. Antes, a associação retinha ~1,17 GB por frame até o fim do run (#563).
+
+A entrada também é streamada: `SensorAssociationRequest.frames` é um `Iterable` consumido **uma vez**, com validação por frame, então um chamador que produz um frame por vez nunca mantém todos os payloads de imagem vivos — o que custava 2,19 GB no corridor-02.
+
+**O termo linear que sobra, nomeado.** A transação acumula um registro de tempo por frame, porque o #562 pede os tempos de consulta e de projeção por frame e `metrics/runtime.json` é um documento único, escrito só quando o chamador mediu. São quatro primitivos, ~567 B, ou seja **menos de 1,7 MB em 3.096 frames** — quatro ordens de magnitude abaixo do pico de 4,3 GB do run real de 350 frames. O serviço também guarda o conjunto de observações já vistas (~66 B por frame) para recusar um frame repetido em um único passe. A regra que esses termos precisam continuar obedecendo é serem **escalares**, nunca um frame ou um array.
 
 `SensorAssociationOutcome` é, por isso, a identidade, as políticas, os fingerprints, os frames rejeitados e `frame_count` do run — não os frames. Um consumidor lê os frames do artifact, que é onde eles estão.
 

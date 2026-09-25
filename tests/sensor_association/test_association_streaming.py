@@ -335,3 +335,29 @@ def test_without_a_measurement_the_run_writes_no_timing_file(tmp_path: Path) -> 
         run.finalize(SERVICE.run(make_request(), sink=run))
 
     assert not (tmp_path / "association" / "metrics" / "runtime.json").exists()
+
+
+def test_the_transaction_retains_only_scalars_per_frame(tmp_path: Path) -> None:
+    """The linear term the writer keeps must be primitives, never a frame or an array.
+
+    #562 needs per-frame timings and `metrics/runtime.json` is one document, so one small
+    record per frame accumulates. What must never creep in is a reference to the frame itself.
+    """
+    with _writer(tmp_path).transaction() as run:
+        outcome = SERVICE.run(
+            make_request(frames=_many_frames(), pose_policy=LookupPolicy.interpolated()),  # type: ignore[arg-type]
+            sink=run,
+        )
+        timings = list(run._timings)
+        run.finalize(outcome)
+
+    assert len(timings) == 4
+    for record in timings:
+        for value in record.values():
+            assert isinstance(value, str | int | float), value
+        assert set(record) == {
+            "source_observation_id",
+            "candidate_query_seconds",
+            "projection_seconds",
+            "candidate_count",
+        }

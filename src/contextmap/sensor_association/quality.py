@@ -142,6 +142,12 @@ class ReprojectionStatistics:
                 f"{self.unevaluated_count} cannot together exceed the correspondence_count "
                 f"{self.correspondence_count}"
             )
+        if self.invalid_count >= self.correspondence_count - self.unevaluated_count:
+            raise ValueError(
+                "residual statistics need at least one evaluated correspondence the camera model "
+                f"could project, but {self.invalid_count} of {self.evaluated_count} evaluated were "
+                "invalid; a frame with none has no statistics at all"
+            )
         values = (self.mean_px, self.median_px, self.p95_px, self.max_px)
         if not all(math.isfinite(value) and value >= 0 for value in values):
             raise ValueError(f"residuals must be finite and not negative, got {values!r}")
@@ -150,6 +156,24 @@ class ReprojectionStatistics:
                 "residual quantiles must be in order (median <= p95 <= max), got "
                 f"{(self.median_px, self.p95_px, self.max_px)!r}"
             )
+
+    @property
+    def evaluated_count(self) -> int:
+        """Correspondences the frame actually evaluated: the population every rate is over.
+
+        A correspondence the candidate policy excluded says nothing about the camera, so it
+        belongs in neither the numerator nor the denominator of an invalid rate.
+        """
+        return self.correspondence_count - self.unevaluated_count
+
+    @property
+    def invalid_rate(self) -> float:
+        """Share of the **evaluated** correspondences the camera model could not project.
+
+        Never diluted by the unevaluated ones: with 100 references of which 90 fell outside the
+        candidate policy, 1 invalid and 9 valid, this is ``0.1`` and not ``0.01``.
+        """
+        return self.invalid_count / self.evaluated_count
 
 
 @dataclass(frozen=True, kw_only=True)

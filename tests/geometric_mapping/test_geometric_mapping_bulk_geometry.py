@@ -182,3 +182,21 @@ def test_a_block_whose_coordinates_are_not_three_dimensional_is_rejected() -> No
             indices=np.array([0], dtype=np.int64),
             coordinates_m=np.zeros((1, 2)),
         )
+
+
+def test_a_block_whose_indices_are_not_integers_is_rejected() -> None:
+    """A float index would be truncated by ``reference()``, naming a different element."""
+    with pytest.raises(ValueError, match="integer array"):
+        GeometryBlock(
+            map_id=MAP_ID,
+            frame_id=MAP,
+            indices=np.array([1.5, 2.5]),
+            coordinates_m=np.zeros((2, 3)),
+        )
+
+
+def test_every_block_a_packed_map_yields_carries_integer_indices() -> None:
+    geometry = _corridor(scan_count=3, points_per_scan=8)
+
+    for block in geometry.iter_blocks(block_points=5):
+        assert np.issubdtype(block.indices.dtype, np.integer)

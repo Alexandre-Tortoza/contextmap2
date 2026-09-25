@@ -214,3 +214,25 @@ def test_a_cloud_naming_geometry_outside_the_map_is_rejected() -> None:
             coordinates_m=np.zeros((1, 3)),
             global_indices=np.array([len(LINE)], dtype=np.int64),
         )
+
+
+def test_a_cloud_whose_indices_are_not_integers_is_rejected() -> None:
+    """The identity contract is integral: ``reference()`` must never truncate a float."""
+    source = _source()
+
+    with pytest.raises(ValueError, match="integer array"):
+        CandidateGeometryCloud(
+            geometric_map=source.geometric_map,
+            coordinates_m=np.zeros((2, 3)),
+            global_indices=np.array([0.5, 1.5]),
+        )
+
+
+def test_selection_always_produces_integer_global_indices() -> None:
+    for max_range_m in (None, 4.0):
+        selection = select_candidate_geometry(
+            _source(),
+            camera_center_m=(10.0, 0.0, 0.0),
+            policy=CandidateGeometryPolicy(max_range_m=max_range_m),
+        )
+        assert np.issubdtype(selection.cloud.global_indices.dtype, np.integer)
