@@ -1,0 +1,25 @@
+{
+  "aggregation": null,
+  "body_frame": "body",
+  "configuration_fingerprint": "sha256:210e5ecf7147b7ceadb5e14f5360c4bbe6d8f05aab9eac93f0116c3bb993f389",
+  "debug_level": "none",
+  "map_frame": "map",
+  "motion_correction_policy": {
+    "raw": "accept",
+    "unknown": "accept"
+  },
+  "packed_point": {
+    "format": "<3d3dIqI",
+    "size_bytes": 64
+  },
+  "pose_lookup": {
+    "max_interpolation_gap_ns": null,
+    "max_time_delta_ns": null,
+    "mode": "interpolated"
+  },
+  "schema_version": "0.1.0",
+  "spatial_index": {
+    "is_derived": true,
+    "kind": "scan_bounds"
+  }
+}

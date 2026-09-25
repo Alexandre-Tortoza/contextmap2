@@ -1,0 +1,28 @@
+{
+  "candidates_per_entity": {
+    "count": 4,
+    "max": 3,
+    "mean": 3.0,
+    "min": 3
+  },
+  "examined_per_entity": {
+    "count": 4,
+    "max": 3,
+    "mean": 3.0,
+    "min": 3
+  },
+  "merge_group_size": {
+    "histogram": [
+      {
+        "count": 2,
+        "size": 1
+      },
+      {
+        "count": 1,
+        "size": 2
+      }
+    ],
+    "max": 2,
+    "mean": 1.3333333333333333
+  }
+}

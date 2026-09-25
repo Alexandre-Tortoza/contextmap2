@@ -1,0 +1,229 @@
+{
+  "code_version": "test",
+  "counts": [
+    {
+      "name": "blocked_comparisons",
+      "value": 0
+    },
+    {
+      "name": "candidate_pairs",
+      "value": 6
+    },
+    {
+      "name": "candidate_sets",
+      "value": 4
+    },
+    {
+      "name": "channel_appearance_measured",
+      "value": 0
+    },
+    {
+      "name": "channel_appearance_not_evaluated",
+      "value": 3
+    },
+    {
+      "name": "channel_appearance_unavailable",
+      "value": 0
+    },
+    {
+      "name": "channel_geometry_measured",
+      "value": 3
+    },
+    {
+      "name": "channel_geometry_not_evaluated",
+      "value": 0
+    },
+    {
+      "name": "channel_geometry_unavailable",
+      "value": 0
+    },
+    {
+      "name": "channel_point_representation_measured",
+      "value": 0
+    },
+    {
+      "name": "channel_point_representation_not_evaluated",
+      "value": 3
+    },
+    {
+      "name": "channel_point_representation_unavailable",
+      "value": 0
+    },
+    {
+      "name": "channel_semantic_measured",
+      "value": 0
+    },
+    {
+      "name": "channel_semantic_not_evaluated",
+      "value": 3
+    },
+    {
+      "name": "channel_semantic_unavailable",
+      "value": 0
+    },
+    {
+      "name": "channel_temporal_measured",
+      "value": 0
+    },
+    {
+      "name": "channel_temporal_not_evaluated",
+      "value": 3
+    },
+    {
+      "name": "channel_temporal_unavailable",
+      "value": 0
+    },
+    {
+      "name": "compared_pairs",
+      "value": 3
+    },
+    {
+      "name": "decision_distinct",
+      "value": 1
+    },
+    {
+      "name": "decision_match",
+      "value": 1
+    },
+    {
+      "name": "decision_unresolved",
+      "value": 1
+    },
+    {
+      "name": "merged_entities",
+      "value": 1
+    },
+    {
+      "name": "resolved_entities",
+      "value": 3
+    },
+    {
+      "name": "source_entities",
+      "value": 4
+    },
+    {
+      "name": "split_candidates",
+      "value": 0
+    },
+    {
+      "name": "transitivity_contradictions",
+      "value": 0
+    }
+  ],
+  "created_at": "2026-09-25T22:55:49.172448+00:00",
+  "debug_level": "none",
+  "file_inventory": [
+    {
+      "content_hash": "sha256:149f6186ba9008c8dfdd83928b563cc70c8e75126d4a98e1fa115bbc7993c577",
+      "path": "metrics/counts.json",
+      "size_bytes": 994
+    },
+    {
+      "content_hash": "sha256:a67ebbbd364a3a4619653c9c86ce75dd114e825873ac4143faf0a62fb94a0f05",
+      "path": "metrics/distributions.json",
+      "size_bytes": 398
+    },
+    {
+      "content_hash": "sha256:0534dde8f3048a5488a5fb07fb391a1dcdf78ba20bc1af576f5434e44b90c51d",
+      "path": "metrics/payload.json",
+      "size_bytes": 501
+    },
+    {
+      "content_hash": "sha256:9a821a5476440d35322e7a0a158d38e7578e0b3348721146a5643df462bf559a",
+      "path": "outputs/candidate-sets.jsonl",
+      "size_bytes": 3324
+    },
+    {
+      "content_hash": "sha256:7b52161432682ddbfa08497942fba3dbc98b5f167c00942e149b0cf0491e807e",
+      "path": "outputs/match-evidence.jsonl",
+      "size_bytes": 3777
+    },
+    {
+      "content_hash": "sha256:00726deb260183d36e395176caee1bc3ca73c4230a518aa31a9e76160c6ecdfb",
+      "path": "outputs/merge-lineage.jsonl",
+      "size_bytes": 1288
+    },
+    {
+      "content_hash": "sha256:e2855171d193a95b8c3e37bc5fabf2fab9ccd63f4b2c30d5ae343b7d8dd0765d",
+      "path": "outputs/resolution-decisions.jsonl",
+      "size_bytes": 1861
+    },
+    {
+      "content_hash": "sha256:4aa0cb4231fa5a419950a6d7c2a83929e9f9416b84e7f4114c7be8c243b97dab",
+      "path": "outputs/resolved-entities.jsonl",
+      "size_bytes": 12027
+    },
+    {
+      "content_hash": "sha256:4baa1132718f3544dbd46c72621604fdb438114e9539caabe10c46bb04fca2ee",
+      "path": "outputs/resolved-entity-index.jsonl",
+      "size_bytes": 237
+    },
+    {
+      "content_hash": "sha256:455cad6f50fbc70dda4cd09b1cf67d83aff89484135e2bd1395cca9367e1cddc",
+      "path": "outputs/source-to-resolved-index.jsonl",
+      "size_bytes": 428
+    },
+    {
+      "content_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "outputs/split-candidates.jsonl",
+      "size_bytes": 0
+    },
+    {
+      "content_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "outputs/transitivity-contradictions.jsonl",
+      "size_bytes": 0
+    },
+    {
+      "content_hash": "sha256:a20903b71095ae346611f766cdfbc29bcefd58cea2581dec757393f841169fea",
+      "path": "outputs/unresolved-entities.jsonl",
+      "size_bytes": 693
+    }
+  ],
+  "lineage": {
+    "geometric_map_id": "corridor-02--map-run-0001",
+    "perception_run_ids": [
+      "perception-run-0001"
+    ],
+    "point_representation_run_ids": [],
+    "semantic_map_ids": [
+      "semantic-map--0001"
+    ],
+    "semantic_mapping_artifact_digest": "sha256:a9c9c13eb2933ef068f03493fda61ba6d1f74d87e73b13e2a5647db82b9abafc",
+    "semantic_mapping_run_id": "mapping-run-0001",
+    "semantic_mapping_schema_version": "0.1.0",
+    "sequence_artifact_id": "sequence-0001"
+  },
+  "policies": [
+    {
+      "policy": {
+        "configuration_fingerprint": "sha256:d205456800d7f8e0a26b29839363966379ea2a267da71f5c62d13497c8af5ccb",
+        "policy_id": "entity-candidate-retrieval-v1"
+      },
+      "role": "candidate_retrieval"
+    },
+    {
+      "policy": {
+        "configuration_fingerprint": "sha256:cfg",
+        "policy_id": "entity-geometry-comparison-v1"
+      },
+      "role": "channel_geometry"
+    },
+    {
+      "policy": {
+        "configuration_fingerprint": "sha256:77f406ef915c101c7405c8ef77d5a518100d118d21bc924d4e01eeb016255183",
+        "policy_id": "connected-components-materialization-v1"
+      },
+      "role": "materialization"
+    },
+    {
+      "policy": {
+        "configuration_fingerprint": "sha256:policy",
+        "policy_id": "conservative-staged-resolution-v1"
+      },
+      "role": "resolution"
+    }
+  ],
+  "run_id": "entity-resolution--run-0001",
+  "schema_version": "0.1.0",
+  "warnings": []
+}

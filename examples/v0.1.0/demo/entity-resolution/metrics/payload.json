@@ -1,0 +1,15 @@
+{
+  "files": {
+    "outputs/candidate-sets.jsonl": 3324,
+    "outputs/match-evidence.jsonl": 3777,
+    "outputs/merge-lineage.jsonl": 1288,
+    "outputs/resolution-decisions.jsonl": 1861,
+    "outputs/resolved-entities.jsonl": 12027,
+    "outputs/resolved-entity-index.jsonl": 237,
+    "outputs/source-to-resolved-index.jsonl": 428,
+    "outputs/split-candidates.jsonl": 0,
+    "outputs/transitivity-contradictions.jsonl": 0,
+    "outputs/unresolved-entities.jsonl": 693
+  },
+  "total_bytes": 23635
+}

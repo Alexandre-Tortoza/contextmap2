@@ -1,0 +1,68 @@
+{
+  "aggregation_rule": null,
+  "calibration_identity": "sha256:1124a9ca8ed605a856cd7b70e84327aa53eb8765018d4dab7dca76818200eb14",
+  "clock_id": "fixture:header",
+  "code_version": "test",
+  "configuration_fingerprint": "sha256:210e5ecf7147b7ceadb5e14f5360c4bbe6d8f05aab9eac93f0116c3bb993f389",
+  "created_at": "2026-09-25T22:55:49.159147+00:00",
+  "debug_level": "none",
+  "end_time_ns": 900000000,
+  "file_inventory": [
+    {
+      "content_hash": "sha256:8e55cedc96732b61ff0a8d85565ed15a8f1276e9492cee11617397e1ed9f4ef5",
+      "path": "config.json",
+      "size_bytes": 582
+    },
+    {
+      "content_hash": "sha256:9432948364c32e2164e31d56f8f49113ca43f657fc31c541f8703fafd6cab651",
+      "path": "environment.json",
+      "size_bytes": 131
+    },
+    {
+      "content_hash": "sha256:4facef386a4c2d122e74c7e420c62e0eb9f83f6c25f7f8b07bad377da9a6c6ad",
+      "path": "lineage.json",
+      "size_bytes": 669
+    },
+    {
+      "content_hash": "sha256:71ca0d4c856267cb908421a8b711799f469c19afc5464981cff770ad3a7b008f",
+      "path": "metrics/input-plan.json",
+      "size_bytes": 614
+    },
+    {
+      "content_hash": "sha256:1221af8d5005f9efbda2640ea615d785dd5d6031728816c2b1dbffb4f52bb4d6",
+      "path": "metrics/mapping.json",
+      "size_bytes": 718
+    },
+    {
+      "content_hash": "sha256:dea65dd235c27b1b4f8b7beb1fabed21ead6a04a884162d529b4f64529aba949",
+      "path": "outputs/geometry.bin",
+      "size_bytes": 64000
+    },
+    {
+      "content_hash": "sha256:c4655b376b11cf184aff79dca8d7895319ac5eff09f64bf397f560e2f6d7c4ed",
+      "path": "outputs/map-metadata.json",
+      "size_bytes": 1482
+    },
+    {
+      "content_hash": "sha256:e760a948f5a6ab2d473a5ed434501e30b6863ab35c315be42bec75e9ba0fe263",
+      "path": "outputs/source-index.jsonl",
+      "size_bytes": 11097
+    }
+  ],
+  "map_frame": "map",
+  "map_id": "corridor-02--map-run-0001",
+  "point_count": 1000,
+  "rejected_scan_count": 0,
+  "run_id": "map-run-0001",
+  "run_index": 1,
+  "scan_count": 10,
+  "schema_version": "0.1.0",
+  "selection_id": "sha256:f2998f43ed046579c9e3b860c1a110f4bfb6c796443b58c316c4c872d71e23dd",
+  "sequence_artifact_id": "sequence-0001",
+  "sequence_name": "corridor-02",
+  "source_point_count": 1000,
+  "spatial_index_kind": "scan_bounds",
+  "start_time_ns": 0,
+  "state_estimation_run_id": null,
+  "trajectory_id": "run-0001--trajectory"
+}

@@ -1,0 +1,58 @@
+topology canonical/1 sha256:ab971867e1884637180e0ed6598d07728b44d9fe67f8035472667402392b62e4
+   1. ingestion -> SequenceArtifact
+        backend ingestion.source_adapter = ros1_bag
+   2. visual_perception -> PerceptionRunArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        backend visual_perception.region_discovery = sam2
+        backend visual_perception.dense_features = dinov2
+        backend visual_perception.region_features = clip
+        backend visual_perception.semantic_interpretation = qwen
+   3. state_estimation -> StateEstimationRunArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        backend state_estimation.estimator = external_pose
+   4. geometric_mapping -> GeometricMapArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        <- trajectory: state_estimation (StateEstimationRunArtifact)
+        backend geometric_mapping.pose_lookup = lookup-policy-v1
+        backend geometric_mapping.motion_correction = motion-correction-v1
+   5. sensor_association -> SensorAssociationRunArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        <- perception: visual_perception (PerceptionRunArtifact) (several runs)
+        <- trajectory: state_estimation (StateEstimationRunArtifact)
+        <- geometry: geometric_mapping (GeometricMapArtifact)
+        backend sensor_association.occlusion = conservative-depth-support-v1
+        backend sensor_association.tolerances = diagnostic-tolerances-v1
+        backend sensor_association.pose_policy = lookup-policy-v1
+   6. semantic_fusion -> SemanticFusionRunArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        <- association: sensor_association (SensorAssociationRunArtifact) (several runs)
+        <- perception: visual_perception (PerceptionRunArtifact) (several runs)
+        <- geometry: geometric_mapping (GeometricMapArtifact)
+        backend semantic_fusion.support = geometry-jaccard-support-v1
+        backend semantic_fusion.accumulation = baseline-evidence-accumulation-v1
+   7. semantic_mapping -> SemanticEntityArtifact
+        <- fusion: semantic_fusion (SemanticFusionRunArtifact)
+        <- geometry: geometric_mapping (GeometricMapArtifact)
+        backend semantic_mapping.geometry_summary = entity-geometry-summary-v1
+   8. entity_resolution -> EntityResolutionRunArtifact
+        <- entities: semantic_mapping (SemanticEntityArtifact)
+        backend entity_resolution.retrieval = entity-candidate-retrieval-v1
+        backend entity_resolution.resolution = conservative-staged-resolution-v1
+        backend entity_resolution.geometry_comparison = entity-geometry-comparison-v1
+        backend entity_resolution.semantic_compatibility = (not selected)
+        backend entity_resolution.temporal_compatibility = (not selected)
+        backend entity_resolution.appearance = (not selected)
+        backend entity_resolution.representation = (not selected)
+   9. spatial_relations -> SpatialRelationsRunArtifact
+        <- entities: entity_resolution (EntityResolutionRunArtifact)
+        <- geometry: geometric_mapping (GeometricMapArtifact)
+        backend spatial_relations.frame_conventions = map-frame-conventions-v1
+        backend spatial_relations.candidate = bounds-neighborhood-candidates-v1
+        backend spatial_relations.geometry_summary = entity-geometry-summary-v1
+        backend spatial_relations.geometric_predicate = (not selected)
+        backend spatial_relations.contact_predicate = (not selected)
+  10. context_map -> ContextMapArtifact
+        <- sequence: ingestion (SequenceArtifact)
+        <- geometry: geometric_mapping (GeometricMapArtifact)
+        <- entities: entity_resolution (EntityResolutionRunArtifact)
+        <- relations: spatial_relations (SpatialRelationsRunArtifact)

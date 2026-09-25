@@ -1,0 +1,105 @@
+# Configuração canônica do v0.1.0 (perfil `canonical/1`, cenário de aceitação 1.0.5).
+#
+# Cada backend aqui é uma decisão congelada do cenário: o runtime nunca escolhe um no lugar do
+# chamador, mesmo quando a política tem uma única opção. Os caminhos de entrada são
+# PLACEHOLDERS -- o bag do corridor-02 e seu arquivo de pose não são redistribuíveis por este
+# repositório (ver docs/third-party-licenses.md). Troque-os pelos seus.
+#
+# Resolva e confira sem executar nada:
+#   contextmap inspect config -c examples/v0.1.0/canonical-config.toml --json
+#   contextmap inspect plan   -c examples/v0.1.0/canonical-config.toml
+
+schema_version = "0.1.0"
+
+[pipeline]
+preset = "canonical/1"
+
+[inputs]
+# PLACEHOLDER: identidade do SequenceArtifact já ingerido que este run consome.
+sequence = "REPLACE-WITH-YOUR-SEQUENCE-ARTIFACT-ID"
+
+[resources]
+# `cpu` é o que a instalação base e a CI usam. Os backends de visão exigem `cuda` e o extra
+# `vision`; as execuções reais registradas usaram uma RTX 3060 de 8 GB.
+device = "cpu"
+workspace = "outputs/contextmap-workspace"
+
+[policies]
+debug_level = "standard"
+
+# --- Backends, um por ponto de variação, exatamente como o cenário 1.0.5 os congela ---------
+
+[components.ingestion.source_adapter]
+backend = "ros1_bag"
+
+[components.visual_perception.region_discovery]
+backend = "sam2"
+
+[components.visual_perception.region_discovery.sam2]
+model = "facebook/sam2.1-hiera-tiny"
+
+[components.visual_perception.dense_features]
+backend = "dinov2"
+
+[components.visual_perception.dense_features.dinov2]
+model = "facebook/dinov2-base"
+
+[components.visual_perception.region_features]
+backend = "clip"
+
+[components.visual_perception.region_features.clip]
+model = "openai/clip-vit-large-patch14"
+
+# EXPERIMENTAL no v0.1.0: este backend roda no pipeline canônico e sua evidência chega ao mapa,
+# mas a equivalência exata de rerun das claims que ele gera NÃO faz parte do contrato de release
+# (29/90 = 32,2% de concordância entre duas execuções reais idênticas; issue #556).
+[components.visual_perception.semantic_interpretation]
+backend = "qwen"
+
+[components.visual_perception.semantic_interpretation.qwen]
+model = "Qwen/Qwen3-VL-4B-Instruct"
+
+[components.state_estimation.estimator]
+backend = "external_pose"
+
+[components.geometric_mapping.pose_lookup]
+backend = "lookup-policy-v1"
+
+[components.geometric_mapping.motion_correction]
+backend = "motion-correction-v1"
+
+[components.sensor_association.occlusion]
+backend = "conservative-depth-support-v1"
+
+[components.sensor_association.tolerances]
+backend = "diagnostic-tolerances-v1"
+
+[components.sensor_association.pose_policy]
+backend = "lookup-policy-v1"
+
+[components.semantic_fusion.support]
+backend = "geometry-jaccard-support-v1"
+
+[components.semantic_fusion.accumulation]
+backend = "baseline-evidence-accumulation-v1"
+
+[components.semantic_mapping.geometry_summary]
+backend = "entity-geometry-summary-v1"
+
+[components.entity_resolution.retrieval]
+backend = "entity-candidate-retrieval-v1"
+
+[components.entity_resolution.resolution]
+backend = "conservative-staged-resolution-v1"
+
+[components.entity_resolution.geometry_comparison]
+backend = "entity-geometry-comparison-v1"
+
+[components.spatial_relations.frame_conventions]
+backend = "map-frame-conventions-v1"
+
+[components.spatial_relations.candidate]
+backend = "bounds-neighborhood-candidates-v1"
+
+[components.spatial_relations.geometry_summary]
+backend = "entity-geometry-summary-v1"
