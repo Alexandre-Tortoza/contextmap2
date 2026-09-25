@@ -29,7 +29,10 @@ O port consumido pelo Visual Perception Core é `RegionDiscovery.discover(Prepar
 carrega identidade da observação física, run, resultado, pass e proposta nativa. Sua geometria pode
 ser uma bounding box ou uma máscara `InlineMask` materializada. Uma `mask_reference` só é aceita
 junto da máscara materializada que a normalização realmente inspeciona; uma referência opaca não é
-publicada como geometria consumível.
+publicada como geometria consumível. Quando a própria task do backend devolve texto junto com a
+geometria (por exemplo Florence-2 `<OD>`), a proposta o carrega tipado em `native_text`
+(`NativeRegionText`: task, prompt opcional e texto verbatim); ver
+[Texto nativo das tasks do Florence-2](#texto-nativo-das-tasks-do-florence-2-523).
 
 `Region2D` é o contrato único definido pelo Visual Perception Core e representa geometria aceita e
 congelada. O `region_id` é local ao `PerceptionResult`, que fornece os escopos de run e observação;
@@ -104,9 +107,10 @@ visual_perception/
 ├── models.py                 # PreparedImage, Region2D, BackendProvenance
 ├── ports.py                  # RegionDiscovery
 ├── image_preparation.py      # plano auditável de preparação
-├── region_models.py          # RegionCandidate e geometria de proposal
+├── region_models.py          # RegionCandidate, geometria e texto nativo de proposal
 ├── discovery.py              # passes, tiling, remapeamento e adapter boundary
 ├── normalization.py          # filtros, merge e geometry freeze
+├── region_semantic_hints.py  # texto nativo vinculado à região pela linhagem do merge
 ├── diagnostics.py            # outputs e debug do estágio
 └── backends/
     ├── sam2.py
@@ -264,8 +268,9 @@ settings. O task é obrigatório porque diferentes modos de Florence-2 têm sem�
 distintas.
 
 O parser interno pode produzir box, máscara opcional, score opcional, texto parseado e diagnostics.
-O adapter transforma apenas a geometria em `RegionCandidate`. Task, prompt e texto parseado ficam
-como provenance/metadata de descoberta; não geram `SemanticClaim`.
+O adapter transforma a geometria em `RegionCandidate`; task e prompt ficam em provenance, e o texto
+que a task devolveu junto com a proposta vira `RegionCandidate.native_text` (seção seguinte). Nada
+disso gera `SemanticClaim`.
 `Florence2SemanticInterpreter` já implementa interpretação semântica por outro
 port e outro adapter, mesmo que a composition root possa compartilhar o
 lifecycle do modelo carregado.
@@ -273,8 +278,75 @@ lifecycle do modelo carregado.
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
 move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
 chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões.
-Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser
-permanecem metadata de descoberta.
+Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; o texto de cada
+box ou polígono segue com a própria proposta.
+
+### Texto nativo das tasks do Florence-2 (#523)
+
+Algumas tasks do Florence-2 devolvem geometria e texto na **mesma inferência**. O texto é evidência
+dessa inferência sobre aquela proposta, não rótulo do objeto nem crença do mapa. O parser oficial
+(`post_process_generation` do Transformers) define o que cada task entrega:
+
+| Task | Geometria | Texto por proposta |
+|---|---|---|
+| `<REGION_PROPOSAL>` | boxes | vazio (baseline só geométrico) |
+| `<OD>` | boxes | categoria gerada |
+| `<DENSE_REGION_CAPTION>` | boxes | descrição gerada |
+| `<OPEN_VOCABULARY_DETECTION>` | boxes ou polígonos | texto condicionado ao prompt |
+| `<CAPTION_TO_PHRASE_GROUNDING>` | boxes | frase da legenda de entrada |
+| `<REFERRING_EXPRESSION_SEGMENTATION>`, `<REGION_TO_SEGMENTATION>` | polígonos | vazio |
+
+A regra é pelo conteúdo, não por lista de tasks: a proposta recebe `NativeRegionText(task, prompt,
+text)` exatamente quando o parser anexou a ela texto com algum caractere não branco, preservado
+verbatim; texto vazio não gera registro. Assim `<REGION_PROPOSAL>` e as tasks de segmentação ficam
+só geométricas sem nenhum caso especial, e um texto inesperado nunca é descartado em silêncio: ele
+aparece com a task que o produziu. O prompt é a entrada da task (por exemplo a query open
+vocabulary), registrado ao lado do texto porque o condiciona.
+
+Depois da normalização, `derive_region_semantic_hints(candidates, normalization)` produz um
+`RegionSemanticHint` por proposta com texto, ordenado por `candidate_id`. Cada hint preserva o
+`candidate_id` global, observação, run e resultado, a `RegionProvenance` inteira (backend, versão,
+checkpoint, digest da configuração, pass e ID nativo da proposta), o `NativeRegionText` e o vínculo
+com a região canônica:
+
+- `representative`: a geometria congelada da região é a geometria desta proposta;
+- `merged`: a proposta foi incorporada à região, mas a geometria congelada é de outra proposta;
+  o texto descreve a geometria incorporada e não pode ser lido como texto da região;
+- `rejected`: a proposta não alcançou nenhuma região (filtro, ou merge em um grupo cortado pelo
+  budget); `region_id` é `None`.
+
+O vínculo vem da linhagem explícita da normalização (`contributor_candidate_ids` e
+`MergeDecision`), nunca da posição na lista; uma região cuja linhagem não nomeia exatamente um
+representante é recusada com `ValueError`. Todas as propostas de uma região fundida continuam
+auditáveis, cada uma com o próprio texto. A derivação é determinística e independente da ordem de
+entrada.
+
+`Region2D` continua só geométrica, `RegionDiscovery.discover()` devolve as mesmas regiões com ou sem
+texto, e nenhum `SemanticClaim`, entidade, confidence ou crença é criado: um consumidor downstream
+pode ignorar o hint inteiramente. O writer de estágio persiste os hints em
+`outputs/region-semantic-hints.jsonl` e a avaliação semântica os pontua com
+`evaluate_region_semantic_hints()` (ver
+[avaliação de Semantic Interpretation](../../evaluation/docs/semantic-interpretation.md)) a partir do
+mesmo `DiscoveryRunResult`/`NormalizationResult` que a avaliação geométrica mede: uma inferência
+nativa, avaliada nas duas dimensões, sem segundo forward do modelo.
+
+**Decisão.** Das alternativas da issue, foi escolhida a menor que atende a todos os critérios: um
+registro de evidência da própria capability (`NativeRegionText` na proposta e `RegionSemanticHint`
+derivado da linhagem). Foram rejeitadas:
+
+- *execução semântica derivada da saída do Florence-2*: exigiria fabricar
+  `SemanticInterpretationRequest`, views, prompt renderizado e resposta de um
+  `SemanticInterpreter` que não executou, e suas `SemanticClaim` entrariam no `PerceptionResult`
+  e seguiriam para Semantic Fusion, promovendo texto de descoberta a claim;
+- *artifact de inferência compartilhado entre os adapters de descoberta e interpretação*: acoplaria
+  dois adapters por um cache/artifact novo sem consumidor além deste caso (YAGNI), e a interpretação
+  semântica continua podendo rodar o seu próprio forward quando o experimento pedir.
+
+**Limite atual.** O port `RegionDiscovery.discover()` devolve apenas `Region2D`, então o
+`PerceptionRunArtifact` do executor de runtime não carrega hints. Eles existem onde a descoberta e
+a normalização estão materializadas: no writer de estágio e no harness de avaliação de Region
+Discovery. Levá-los ao run artifact exigiria mudar o port e o schema do run, fora do escopo desta
+issue.
 
 ## Relação entre backends
 
@@ -291,7 +363,7 @@ flowchart LR
     RC --> COMMON["normalização comum"] --> REG
 ```
 
-Os três adapters compartilham a mesma política geométrica depois da conversão para `RegionCandidate`. Scores permanecem backend-native e não são comparados como uma confiança universal. Texto de prompt ou labels do parser podem permanecer como metadata/provenance de descoberta, mas não são promovidos automaticamente a `SemanticClaim`.
+Os três adapters compartilham a mesma política geométrica depois da conversão para `RegionCandidate`. Scores permanecem backend-native e não são comparados como uma confiança universal. Texto de prompt fica em provenance e o texto nativo de uma task fica tipado na própria proposta (`NativeRegionText`); nenhum dos dois é promovido a `SemanticClaim`.
 
 ## Normalização, merge e geometry freeze
 
@@ -337,13 +409,15 @@ explicitamente.
 ## Evidência persistida e diagnostics
 
 `RegionDiscoveryEvidenceWriter` finaliza atomicamente o diretório de estágio fornecido pelo chamador e recusa sobrescrever
-um resultado já finalizado. O nome físico do diretório pertence à composição do run, não ao contrato do writer. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
-contratuais. O manifest registra schema, backend, digest da política, nível de debug e hash de cada
-payload. Consumidores downstream não leem `debug/`.
+um resultado já finalizado. O nome físico do diretório pertence à composição do run, não ao contrato do writer. `outputs/regions.jsonl`, `outputs/region-semantic-hints.jsonl`, `outputs/metrics.json` e `manifest.json` são
+contratuais. O manifest (`contextmap.region-discovery-stage/v2`, que passou a incluir os hints)
+registra schema, backend, digest da política, nível de debug e hash de cada payload. O arquivo de
+hints é sempre escrito, vazio quando nenhuma proposta trouxe texto nativo, e derivado da mesma
+descoberta com `derive_region_semantic_hints()`. Consumidores downstream não leem `debug/`.
 
 Os níveis são:
 
-- `none`: somente regiões, métricas e manifest;
+- `none`: somente regiões, hints nativos, métricas e manifest;
 - `standard`: prepared-image reference, configuração efetiva, passes/timings, candidates,
   accepted/rejected, merge decisions e overlays SVG;
 - `full`: conteúdo standard mais `region.json` e máscara PBM por região inline.
@@ -361,7 +435,7 @@ flowchart LR
     NORM["NormalizationResult"] --> REC
     PI["PreparedImage"] --> REC
     REC --> WR["RegionDiscoveryEvidenceWriter"]
-    WR --> OUT["outputs/<br/>regions.jsonl + metrics.json"]
+    WR --> OUT["outputs/<br/>regions.jsonl + region-semantic-hints.jsonl + metrics.json"]
     WR --> MAN["manifest.json<br/>hashes + config digest"]
     WR -. debug standard/full .-> DBG["debug/<br/>passes, candidates, overlays, masks"]
     OUT --> DOWN["consumo contratual / avaliação"]
@@ -431,7 +505,9 @@ A cobertura principal está em:
 - `tests/visual_perception/backends/test_sam2.py`;
 - `tests/visual_perception/backends/test_sam3.py`;
 - `tests/visual_perception/backends/test_florence2.py`;
-- `tests/evaluation/test_region_discovery_evaluation.py`.
+- `tests/visual_perception/test_region_semantic_hints.py`;
+- `tests/evaluation/test_region_discovery_evaluation.py`;
+- `tests/evaluation/test_region_semantic_hint_evaluation.py`.
 
 Esses testes verificam contratos, coordenadas, scale, materialização, adapters, provenance, normalização, persistência e comparação objetiva. O gate do repositório continua sendo `make check`, `make build` e os checks automatizados da PR.
 

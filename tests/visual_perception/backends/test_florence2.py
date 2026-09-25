@@ -10,6 +10,7 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
+    NativeRegionText,
     PreparedImage,
     Region2D,
     RegionDiscovery,
@@ -106,7 +107,11 @@ def test_florence2_normalizes_boxes_and_masks_without_semantic_promotion() -> No
     box_candidate, mask_candidate = output.candidates
     assert box_candidate.mask is None
     assert box_candidate.score is None
-    assert dict(box_candidate.native_metadata)["parsed_text"] == "a requested region"
+    assert box_candidate.native_text == NativeRegionText(
+        task="<REFERRING_EXPRESSION_SEGMENTATION>",
+        prompt="visible regions",
+        text="a requested region",
+    )
     assert mask_candidate.mask is not None
     assert mask_candidate.score is not None
     assert mask_candidate.provenance.backend_id == "florence2_region_discovery"
@@ -265,3 +270,138 @@ def test_official_florence2_runtime_rasterizes_parsed_polygons() -> None:
     assert sum(region.mask) == 6
     assert region.parsed_text == "requested geometry"
     assert dict(output.parsing_diagnostics)["polygon_count"] == 1
+
+
+_CHAIR_BOX = [0.0, 0.0, 2.0, 2.0]
+_TABLE_BOX = [3.0, 1.0, 5.0, 3.0]
+_SQUARE_POLYGON = [[[3.0, 1.0, 5.0, 1.0, 5.0, 3.0, 3.0, 3.0]]]
+
+
+@pytest.mark.parametrize(
+    ("task", "prompt", "parsed", "expected"),
+    [
+        pytest.param(
+            "<REGION_PROPOSAL>",
+            None,
+            {"bboxes": [_CHAIR_BOX, _TABLE_BOX], "labels": ["", ""]},
+            [("florence2-box-000000", None), ("florence2-box-000001", None)],
+            id="region-proposal-geometry-only",
+        ),
+        pytest.param(
+            "<OD>",
+            None,
+            {"bboxes": [_CHAIR_BOX, _TABLE_BOX], "labels": ["chair", "table"]},
+            [("florence2-box-000000", "chair"), ("florence2-box-000001", "table")],
+            id="od-boxes-and-labels",
+        ),
+        pytest.param(
+            "<DENSE_REGION_CAPTION>",
+            None,
+            {"bboxes": [_CHAIR_BOX, _TABLE_BOX], "labels": ["a wooden chair", "a low table"]},
+            [
+                ("florence2-box-000000", "a wooden chair"),
+                ("florence2-box-000001", "a low table"),
+            ],
+            id="dense-region-caption-descriptions",
+        ),
+        pytest.param(
+            "<OPEN_VOCABULARY_DETECTION>",
+            "chair",
+            {
+                "bboxes": [_CHAIR_BOX],
+                "bboxes_labels": ["chair"],
+                "polygons": [],
+                "polygons_labels": [],
+            },
+            [("florence2-box-000000", "chair")],
+            id="open-vocabulary-boxes",
+        ),
+        pytest.param(
+            "<OPEN_VOCABULARY_DETECTION>",
+            "table",
+            {
+                "bboxes": [],
+                "bboxes_labels": [],
+                "polygons": _SQUARE_POLYGON,
+                "polygons_labels": ["table"],
+            },
+            [("florence2-polygon-000000", "table")],
+            id="open-vocabulary-polygons",
+        ),
+        pytest.param(
+            "<REFERRING_EXPRESSION_SEGMENTATION>",
+            "the low table",
+            {"polygons": _SQUARE_POLYGON, "labels": [""]},
+            [("florence2-polygon-000000", None)],
+            id="referring-segmentation-geometry-only",
+        ),
+    ],
+)
+def test_task_native_text_is_typed_evidence_of_its_own_proposal_and_task(
+    task: str,
+    prompt: str | None,
+    parsed: dict[str, object],
+    expected: list[tuple[str, str | None]],
+) -> None:
+    config = Florence2Config(
+        checkpoint="florence-community/Florence-2-large", task=task, prompt=prompt
+    )
+    runtime = TransformersFlorence2Runtime(
+        model=FlorenceModel(), processor=FlorenceProcessor(parsed), image_loader=_materialized_image
+    )
+    backend = Florence2RegionDiscovery(config=config, runtime=runtime)
+
+    candidates = backend.discover_candidates(_input()).candidates
+
+    assert [
+        (
+            candidate.provenance.native_proposal_id,
+            None if candidate.native_text is None else candidate.native_text.text,
+        )
+        for candidate in candidates
+    ] == expected
+    for candidate in candidates:
+        assert "parsed_text" not in dict(candidate.native_metadata)
+        if candidate.native_text is not None:
+            assert candidate.native_text == NativeRegionText(
+                task=task, prompt=prompt, text=candidate.native_text.text
+            )
+        if candidate.provenance.native_proposal_id.startswith("florence2-polygon"):
+            assert candidate.mask is not None
+
+
+class _TextToggledRuntime:
+    def __init__(self, *, with_text: bool) -> None:
+        self._with_text = with_text
+
+    def predict(
+        self, discovery_input: DiscoveryInput, config: Florence2Config
+    ) -> Florence2NativeOutput:
+        return Florence2NativeOutput(
+            regions=tuple(
+                Florence2NativeRegion(
+                    proposal_id=f"florence2-box-{index:06d}",
+                    box=box,
+                    score=None,
+                    parsed_text=label if self._with_text else None,
+                )
+                for index, (box, label) in enumerate(
+                    (((0.0, 0.0, 2.0, 2.0), "chair"), ((3.0, 1.0, 5.0, 3.0), "table"))
+                )
+            )
+        )
+
+
+def test_downstream_consumers_can_ignore_native_text_entirely() -> None:
+    config = Florence2Config(checkpoint="florence-community/Florence-2-large", task="<OD>")
+    image = _input().prepared_image
+
+    with_text = Florence2RegionDiscovery(
+        config=config, runtime=_TextToggledRuntime(with_text=True)
+    ).discover(image)
+    without_text = Florence2RegionDiscovery(
+        config=config, runtime=_TextToggledRuntime(with_text=False)
+    ).discover(image)
+
+    assert with_text == without_text
+    assert all("chair" not in json.dumps(region.to_dict()) for region in with_text)

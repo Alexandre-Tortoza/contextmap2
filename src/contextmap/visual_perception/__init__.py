@@ -167,10 +167,16 @@ from contextmap.visual_perception.region_models import (
     BoundingBox,
     CoordinateConvention,
     InlineMask,
+    NativeRegionText,
     RegionCandidate,
     RegionProvenance,
     RejectedRegionCandidate,
     RejectionReason,
+)
+from contextmap.visual_perception.region_semantic_hints import (
+    HintContribution,
+    RegionSemanticHint,
+    derive_region_semantic_hints,
 )
 from contextmap.visual_perception.run_artifact import (
     IncompleteRunArtifactError,
@@ -285,6 +291,7 @@ __all__ = [
     "FeatureStoreError",
     "FeatureStoreReader",
     "FeatureStoreWriter",
+    "HintContribution",
     "HypothesisRole",
     "IncompleteRunArtifactError",
     "InlineMask",
@@ -295,6 +302,7 @@ __all__ = [
     "MaskStoreWriter",
     "MergeDecision",
     "MergeKind",
+    "NativeRegionText",
     "NormalizationConfig",
     "NormalizationResult",
     "NormalizeOperation",
@@ -323,6 +331,7 @@ __all__ = [
     "RegionPoolingProvenance",
     "RegionPoolingResult",
     "RegionProvenance",
+    "RegionSemanticHint",
     "RejectedRegionCandidate",
     "RejectionReason",
     "RenderedSemanticPrompt",
@@ -383,6 +392,7 @@ __all__ = [
     "decode_perception_result",
     "decode_pipeline_preset",
     "decode_semantic_request",
+    "derive_region_semantic_hints",
     "embedding_space_fingerprint",
     "encode_embedding_space",
     "encode_failed_semantic_interpretation",

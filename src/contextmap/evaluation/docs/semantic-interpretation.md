@@ -109,6 +109,34 @@ aceita.
 `encode_evidence_variant_comparison()` devolvem primitivas JSON com todas as
 identidades.
 
+## Texto nativo de Region Discovery (#523)
+
+Tasks do Florence-2 como `<OD>`, `<DENSE_REGION_CAPTION>` e
+`<OPEN_VOCABULARY_DETECTION>` devolvem texto junto com a geometria. Esse texto
+chega como `RegionSemanticHint` (derivado em Visual Perception, ver
+[Region Discovery](../../visual_perception/docs/region-discovery.md#texto-nativo-das-tasks-do-florence-2-523)),
+não como claim, e tem entrada própria: `evaluate_region_semantic_hints()`.
+
+- Cada `RegionSemanticHintInput` associa um hint a uma `SemanticAnnotation`
+  opcional. Como em `SemanticEvaluationInput`, escolher a referência é decisão
+  de quem chama; ela deve descrever o que a **geometria da própria proposta**
+  cobre. O `contribution` de cada amostra (`representative`, `merged`,
+  `rejected`) mostra se aquela geometria é a da região congelada.
+- A correspondência usa o mesmo `casefold-exact/1` e as mesmas convenções de
+  anotação parcial: sem hipótese aceitável o hint fica não avaliado
+  (`acceptable=None`), e só `rejected_hypotheses` conta como verdade negativa.
+- Um report cobre **uma** configuração nativa (backend, versão, checkpoint,
+  digest, task e prompt), registrada no próprio report; misturar `<OD>` com
+  `<DENSE_REGION_CAPTION>` é recusado (`SemanticEvaluationError`), porque
+  categoria e descrição não formam uma taxa comum. Hint repetido ou lista vazia
+  também são recusados.
+- `encode_region_semantic_hint_report()` devolve primitivas JSON.
+
+Os hints vêm do mesmo `DiscoveryRunResult`/`NormalizationResult` que
+`RegionDiscoveryEvaluator` mede, então uma única inferência nativa é avaliada na
+geometria e no texto, sem segundo forward. Um arm só geométrico
+(`<REGION_PROPOSAL>`) não produz hints e não tem report de texto.
+
 ## Estado de validação e limitações
 
 A CI exercita o schema do relatório, as convenções acima, falhas, repetições,

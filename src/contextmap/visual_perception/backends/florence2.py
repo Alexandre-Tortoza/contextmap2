@@ -25,6 +25,7 @@ from ..region_models import (
     BoundingBox,
     InlineMask,
     JsonScalar,
+    NativeRegionText,
     RegionCandidate,
     RegionProvenance,
 )
@@ -310,9 +311,15 @@ class Florence2RegionDiscovery:
                 ),
             )
 
-        native_metadata = region.metadata
-        if region.parsed_text is not None:
-            native_metadata = (*native_metadata, ("parsed_text", region.parsed_text))
+        # O texto da task vira evidência tipada da própria proposta; um parser que devolve
+        # rótulo vazio (``<REGION_PROPOSAL>``, tasks de segmentação) não produz texto nenhum.
+        native_text = None
+        if region.parsed_text is not None and region.parsed_text.strip():
+            native_text = NativeRegionText(
+                task=self._config.task,
+                prompt=self._config.prompt or None,
+                text=region.parsed_text,
+            )
         query = self._config.task
         if self._config.prompt:
             query = f"{query}:{self._config.prompt}"
@@ -340,7 +347,8 @@ class Florence2RegionDiscovery:
                 native_proposal_id=region.proposal_id,
                 query=query,
             ),
-            native_metadata=native_metadata,
+            native_metadata=region.metadata,
+            native_text=native_text,
         )
 
 
