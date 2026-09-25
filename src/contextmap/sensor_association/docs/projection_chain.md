@@ -37,7 +37,18 @@ Por isso, antes de qualquer projeção exata, `select_candidate_geometry()` esco
 2. a `CandidateGeometryPolicy` declara `max_range_m`, e a caixa alinhada aos eixos que envolve a esfera de raio `max_range_m` vai à porta `GeometryBlockSource.iter_blocks(bounds=)` de Geometric Mapping (ver [`spatial-access.md`](../../geometric_mapping/docs/spatial-access.md));
 3. cada bloco é reduzido pelo teste **exato** `‖P − C‖ ≤ max_range_m`.
 
-A região de candidatos é a **esfera**, nunca a caixa com que a consulta é expressa. É isso que torna o passo seguro para oclusão: todo elemento excluído está estritamente **mais longe** da câmera que todo elemento retido, então um excluído nunca poderia ter sido o suporte de profundidade mais próximo de um retido. Para todo elemento retido, portanto, projeção, pixel, suporte, decisão de oclusão, pertencimento e suporte geométrico são exatamente o que a projeção do mapa inteiro produziria. A única diferença **declarada** é a população avaliada: elementos além de `max_range_m` não são avaliados, e as contagens por frame dizem isso. Uma caixa alinhada aos eixos não teria essa propriedade — um ponto logo fora de uma face está mais perto que um dentro de um canto —, e é por isso que a caixa só decide o que é **lido**.
+A região de candidatos é a **esfera**, nunca a caixa com que a consulta é expressa: uma caixa alinhada aos eixos deixaria um ponto logo fora de uma face mais perto que um dentro de um canto, e é por isso que a caixa só decide o que é **lido**.
+
+O que a esfera garante **depende da `DepthMetric` da câmera**, porque é essa a grandeza que a regra de oclusão compara:
+
+| Métrica | Câmeras | Garantia |
+|---|---|---|
+| `RAY_RANGE` | fisheye, MEI | **Exata.** `depth == range`, então todo excluído está estritamente mais longe que todo retido na grandeza comparada, e a janela de um ponto sempre contém ele mesmo. Um excluído nunca pode ter sido o suporte mais próximo de um retido, e projeção, pixel, suporte, oclusão, pertencimento e suporte geométrico de todo retido são exatamente os do mapa inteiro. |
+| `OPTICAL_AXIS` | pinhole | **Não exata.** A regra compara `z`, e `z ≤ range`, então um excluído pelo alcance pode ter `z` **menor** que um retido — basta estar num ângulo de campo maior. Se os dois caem na mesma janela de células, o culling remove um suporte que o mapa inteiro usaria. |
+
+O sentido do erro no caso pinhole é fixo: remover pontos só pode **elevar** o mínimo de uma janela, então o mecanismo só pode tornar um retido **menos** ocluído. Ele **nunca descarta** geometria que o mapa inteiro associou — que é o que o #562 tinha de garantir —, mas significa que a política de alcance redefine também a população de **suporte**, não só a avaliada.
+
+O regime só é alcançável com grade grossa. Uma sonda numérica pôs o menor alcance de janela capaz de disparar em ~**24 px**, contra os **12 px** de `cell_size_px=4, neighborhood_radius_cells=2` do run do corridor-02. **É uma sonda, não uma cota provada**: diz que a configuração real não está perto do regime, não que nenhuma configuração abaixo de 24 px possa divergir. `tests/sensor_association/test_candidate_equivalence.py` fixa os dois comportamentos, incluindo o par adversarial que de fato diverge.
 
 `max_range_m = None` seleciona o mapa inteiro e é exatamente o comportamento anterior; é o braço de baseline com que a equivalência é comparada, e é o padrão do runtime (`policies.association_max_range_m`), de modo que habilitar o corte é sempre uma decisão deliberada e registrada.
 

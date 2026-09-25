@@ -16,15 +16,38 @@ This module inserts one conservative step before the exact chain::
         -> exact map->camera transform, exact camera model, visibility, membership
 
 The candidate region is a **sphere centred on the camera optical centre**, never the box
-the query is expressed with. That is what makes the step safe for occlusion: every
-excluded element is strictly farther from the camera than every retained one, so an
-excluded element can never have been the nearest depth support of a retained one. For
-every retained element the projection, the pixel, the support, the occlusion decision,
-the membership and the geometry support are therefore exactly what a full-map projection
-would have produced. The one declared difference is the evaluated population itself:
-elements beyond ``max_range_m`` are not evaluated, and the per-frame counts say so. An
-axis-aligned box would not have this property -- a point just outside a face is nearer
-than one inside a corner -- which is why the box only ever prunes what is *read*.
+the query is expressed with: an axis-aligned box would make a point just outside a face
+nearer than one inside a corner, so the box only ever prunes what is *read*.
+
+What the sphere guarantees depends on the camera's
+:class:`~contextmap.sensor_association.DepthMetric`, because that is the quantity the
+occlusion rule compares:
+
+``RAY_RANGE`` (fisheye, MEI)
+    **Exact.** Depth *is* range, so every excluded element is strictly farther than every
+    retained one under the compared quantity, and a point's own cell window always
+    contains itself. An excluded element can therefore never have been the nearest depth
+    support of a retained one, and for every retained element the projection, the pixel,
+    the support, the occlusion decision, the membership and the geometry support are
+    exactly what a full-map projection produces.
+
+``OPTICAL_AXIS`` (pinhole)
+    **Not exact.** The rule compares ``z``, and ``z <= range``, so an element the range
+    policy excludes may still have had a smaller ``z`` than a retained one -- it only has
+    to sit at a larger field angle. When the two fall in one cell window, culling removes
+    a support the full map would have used. The direction is fixed: removing elements can
+    only *raise* a window's minimum, so this can only make a retained element **less**
+    occluded. It never drops geometry the full map associated, but it does mean the range
+    policy redefines the *support* population, not only the evaluated one.
+
+    The regime is reachable only with a coarse grid. A measured probe put the smallest
+    window reach that made it fire at about 24 px, against the 12 px of the corridor-02
+    run's ``cell_size_px=4, neighborhood_radius_cells=2``; that is a probe, not a proven
+    bound. ``test_candidate_equivalence.py`` pins both behaviours.
+
+The declared difference is therefore the evaluated population -- elements beyond
+``max_range_m`` are not evaluated, and the per-frame counts say so -- plus, for an
+optical-axis camera, the support population that follows from it.
 
 ``max_range_m = None`` selects the whole map and is exactly the full-map behaviour, kept
 as the baseline an equivalence experiment compares against.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 from dense_builders import make_dense_map, make_enhancement, make_sampling
@@ -137,7 +137,7 @@ def frame_input(
 
 def make_request(
     *,
-    frames: Sequence[AssociationFrameInput] | None = None,
+    frames: Iterable[AssociationFrameInput] | None = None,
     channels: Sequence[DenseChannel] = (),
     occlusion: OcclusionPolicy = OCCLUSION,
     pose_policy: LookupPolicy | None = None,
@@ -162,11 +162,11 @@ def make_request(
         occlusion_policy=occlusion,
         tolerances=TOLERANCES,
         dense_channels=tuple(channels),
-        frames=tuple(
-            frames
-            if frames is not None
-            else [frame_input(0, channels=channels), frame_input(1, channels=channels)]
-        ),
+        # Repassado sem materializar: um teste que entrega um gerador está medindo a
+        # retenção de entrada do serviço, e `tuple()` aqui destruiria essa medição.
+        frames=frames
+        if frames is not None
+        else (frame_input(0, channels=channels), frame_input(1, channels=channels)),
         code_version="test",
     )
 

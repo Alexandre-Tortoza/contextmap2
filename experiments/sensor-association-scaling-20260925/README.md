@@ -91,13 +91,20 @@ outro. Mesmo método do #181, para os números serem comparáveis com ele.
 | **D** mapa inteiro + streaming | 120,1 s | 6.629 MB | 11 | 4 | 307 | limpa |
 | **C** esfera 20 m + streaming | **33,2 s** | **2.307 MB** | 11 | 4 | 307 | limpa |
 
-### Atribuição independente
+### Atribuição independente **nesta janela de 15 frames**
+
+Os fatores abaixo são desta população. Sobre a trajetória inteira o culling rende ~**2,67×** em
+tempo (4,05 s/frame contra 10,81 s/frame), não os 3,6× da janela — ver
+[`full-sequence.md`](full-sequence.md). Nenhum destes fatores é propriedade geral da
+implementação.
 
 | Mudança | Memória | Tempo |
 |---|---|---|
 | **#563** streaming (A → D) | 22.939 → 6.629 MB (**3,5×**) | 274,7 → 120,1 s (**2,3×**) |
 | **#562** culling (D → C) | 6.629 → 2.307 MB (**2,9×**) | 120,1 → 33,2 s (**3,6×**) |
 | **Combinado** (A → C) | **9,9× menos memória** | **8,3× mais rápido** |
+
+O par 9,9× / 8,3× é o desta janela. Não o cite sem a população.
 
 O ganho de tempo do streaming não era esperado e vale registrar: ele não reduz trabalho
 aritmético algum. A explicação provável é pressão de alocador e de page fault — o braço A
@@ -151,14 +158,22 @@ Por frame, com a população avaliada caindo de 26.630.193 para ~5,5–6,0 M (20
 diferenças encontradas (uma por frame) são a contagem de `occluded`: **24,6 M** avaliando o mapa
 inteiro contra **3,5 M** avaliando os candidatos. Todas classificadas como `declared`.
 
-Isso é a confirmação empírica do invariante que a esfera compra. A região de candidatos é uma
-**esfera centrada no centro óptico**, nunca a caixa alinhada aos eixos com que a consulta é
-expressa: todo elemento excluído está estritamente **mais longe** da câmera que todo elemento
-retido, então um excluído nunca poderia ter sido o suporte de profundidade mais próximo de um
-retido. No mapa real, o corte a 20 m removeu **apenas geometria ocluída** — nenhum ponto visível,
-nenhum ponto associado, nenhuma referência de suporte. Uma caixa não teria essa propriedade (um
-ponto logo fora de uma face está mais perto que um dentro de um canto), e é por isso que a caixa
-só decide o que é **lido**.
+No mapa real, o corte a 20 m removeu **apenas geometria ocluída** — nenhum ponto visível, nenhum
+ponto associado, nenhuma referência de suporte.
+
+Isso é consistente com o invariante que a esfera compra, e aqui ele vale de forma **exata**,
+porque a câmera do corridor-02 é **MEI** e portanto usa `DepthMetric.RAY_RANGE`: `depth == range`,
+então todo excluído está estritamente mais longe que todo retido na grandeza que a regra de
+oclusão compara, e a janela de um ponto sempre contém ele mesmo.
+
+> **O invariante não é incondicional.** Para uma câmera `OPTICAL_AXIS` (pinhole) a regra compara
+> `z`, e `z ≤ range`, então um excluído pelo alcance pode ter `z` menor que um retido e, se caírem
+> na mesma janela de células, o culling remove um suporte que o mapa inteiro usaria. O sentido do
+> erro é fixo — só pode tornar um retido **menos** ocluído, nunca descartar geometria associada —
+> e o regime exige grade grossa (sonda: ~24 px de alcance de janela, contra os 12 px deste run).
+> Ver `src/contextmap/sensor_association/docs/projection_chain.md` e o par adversarial em
+> `tests/sensor_association/test_candidate_equivalence.py`. **A equivalência medida abaixo é
+> evidência empírica sobre esta população e esta câmera, não prova de equivalência geral.**
 
 ## Gates de complexidade em CI
 

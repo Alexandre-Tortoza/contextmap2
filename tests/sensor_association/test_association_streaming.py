@@ -9,22 +9,25 @@ outcome keeps it alive.
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import json
 import weakref
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from run_builders import frame_id, frame_input, make_request
+from run_builders import NATIVE, frame_id, frame_input, make_request
 
 from contextmap.sensor_association import (
+    AssociationInputError,
     SensorAssociationRunId,
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
     SensorAssociationService,
 )
 from contextmap.sensor_association.run_artifact import RunArtifactError
-from contextmap.sensor_association.service import FrameAssociation
+from contextmap.sensor_association.service import AssociationFrameInput, FrameAssociation
 from contextmap.state_estimation import LookupPolicy
 
 SERVICE = SensorAssociationService()
@@ -133,6 +136,79 @@ def test_the_service_holds_no_frame_once_the_run_returns() -> None:
 
     assert outcome.frame_count == 2
     assert sink.still_alive() == 0
+
+
+# --- The input side is bounded too -----------------------------------------------------------
+
+
+def test_a_generator_of_frames_is_consumed_once_and_never_held() -> None:
+    """The run must not retain its inputs either, or memory still grows with frame count.
+
+    A weak reference to each `FrameAssociation` proves only that the *output* is released;
+    the executor used to materialize every image payload up front, which on corridor-02 was
+    2.19 GB alive for the whole run. This holds the service to consuming its frames lazily.
+    """
+    alive: list[weakref.ref[object]] = []
+
+    def produce() -> Iterator[object]:
+        for index in range(4):
+            frame = frame_input(index, time_ns=FRAME_TIMES[index])
+            alive.append(weakref.ref(frame))
+            yield frame
+            del frame
+
+    outcome = SERVICE.run(
+        make_request(frames=produce(), pose_policy=LookupPolicy.interpolated()),  # type: ignore[arg-type]
+        sink=_Releasing(),
+    )
+
+    assert outcome.frame_count == 4
+    gc.collect()
+    # Nenhum AssociationFrameInput sobrevive ao frame que o consumiu.
+    assert sum(1 for ref in alive if ref() is not None) == 0
+
+
+def test_only_one_frame_input_is_alive_while_the_run_advances() -> None:
+    """At most one input survives at a time, whatever the frame count."""
+    live_counts: list[int] = []
+
+    def produce() -> Iterator[object]:
+        for index in range(4):
+            gc.collect()
+            live_counts.append(
+                sum(1 for obj in gc.get_objects() if isinstance(obj, AssociationFrameInput))
+            )
+            yield frame_input(index, time_ns=FRAME_TIMES[index])
+
+    SERVICE.run(
+        make_request(frames=produce(), pose_policy=LookupPolicy.interpolated()),  # type: ignore[arg-type]
+        sink=_Releasing(),
+    )
+
+    # Ao produzir o frame K, no máximo um input está vivo: o K-1, ainda preso à variável de
+    # laço do serviço. Nunca K deles.
+    assert live_counts == [0, 1, 1, 1]
+
+
+def test_a_duplicate_frame_is_still_refused_without_a_second_pass() -> None:
+    def produce() -> Iterator[object]:
+        yield frame_input(0)
+        yield frame_input(0)
+
+    with pytest.raises(AssociationInputError, match="twice"):
+        SERVICE.run(make_request(frames=produce()), sink=_Collecting())  # type: ignore[arg-type]
+
+
+def test_a_frame_missing_a_declared_channel_is_refused_as_it_arrives() -> None:
+    def produce() -> Iterator[object]:
+        yield frame_input(0, channels=[NATIVE])
+        yield dataclasses.replace(frame_input(1, channels=[NATIVE]), dense_maps={})
+
+    with pytest.raises(AssociationInputError, match="dino-native"):
+        SERVICE.run(
+            make_request(frames=produce(), channels=[NATIVE]),  # type: ignore[arg-type]
+            sink=_Collecting(),
+        )
 
 
 # --- The writer transaction is a sink --------------------------------------------------------

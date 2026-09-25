@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -139,7 +139,9 @@ class SensorAssociationRequest:
         candidate_policy: Which map geometry each frame evaluates, before projection.
         occlusion_policy: The visibility parameters.
         tolerances: The diagnostic tolerances.
-        frames: The camera frames to associate.
+        frames: The camera frames to associate, in order. It is consumed **once**, so a
+            generator is welcome and is what keeps the run's input side bounded too: a caller
+            that yields one frame at a time never holds every image payload at once.
         dense_channels: The declared dense-feature evidence channels.
         state_estimation_run_id: The persisted state-estimation run the trajectory came from.
         code_version: Code revision that produces the run, when known.
@@ -158,7 +160,7 @@ class SensorAssociationRequest:
     candidate_policy: CandidateGeometryPolicy
     occlusion_policy: OcclusionPolicy
     tolerances: DiagnosticTolerances
-    frames: tuple[AssociationFrameInput, ...]
+    frames: Iterable[AssociationFrameInput]
     dense_channels: tuple[DenseChannel, ...] = ()
     state_estimation_run_id: StateEstimationRunId | None = None
     code_version: str | None = None
@@ -271,7 +273,7 @@ class SensorAssociationService:
                 identities repeat, a frame lacks the dense map of a declared channel, or any
                 step finds the inputs incompatible.
         """
-        _validate_request(request)
+        channel_ids = _validated_channels(request)
         identity = calibration_identity(request.calibration)
         if identity is None:
             raise AssociationInputError("the calibration set has no identity")
@@ -286,7 +288,11 @@ class SensorAssociationService:
         )
         frame_count = 0
         rejected: list[RejectedProjection] = []
+        seen_observations: set[SourceObservationId] = set()
+        perception_runs: set[PerceptionRunId] = set()
         for frame_input in request.frames:
+            _validate_frame(frame_input, channel_ids, seen_observations)
+            perception_runs.add(frame_input.perception_result.run_id)
             projection = projector.project(frame_input.observation, frame_input.prepared_image)
             if isinstance(projection, RejectedProjection):
                 rejected.append(projection)
@@ -345,7 +351,7 @@ class SensorAssociationService:
             trajectory_id=request.trajectory.trajectory.trajectory_id,
             state_estimation_run_id=request.state_estimation_run_id,
             calibration_identity=identity,
-            perception_run_ids=tuple(sorted({f.perception_result.run_id for f in request.frames})),
+            perception_run_ids=tuple(sorted(perception_runs)),
             candidate_policy=request.candidate_policy,
             occlusion_policy=request.occlusion_policy,
             pose_policy=request.pose_policy,
@@ -358,25 +364,46 @@ class SensorAssociationService:
         )
 
 
-def _validate_request(request: SensorAssociationRequest) -> None:
+def _validated_channels(request: SensorAssociationRequest) -> tuple[str, ...]:
+    """Check what can be checked before the first frame, and return the declared channels.
+
+    Raises:
+        AssociationInputError: If the map cannot be read in blocks, or channel identities
+            repeat.
+    """
     if not isinstance(request.geometry, GeometryBlockSource):
         raise AssociationInputError(
             "sensor association reads the map in vectorized blocks: "
             f"{type(request.geometry).__name__} does not implement GeometryBlockSource"
         )
-    channel_ids = [channel.channel_id for channel in request.dense_channels]
+    channel_ids = tuple(channel.channel_id for channel in request.dense_channels)
     if len(set(channel_ids)) != len(channel_ids):
-        raise AssociationInputError(f"dense channel identities must be unique, got {channel_ids}")
-    observation_ids = [frame.observation.observation_id for frame in request.frames]
-    if len(set(observation_ids)) != len(observation_ids):
+        raise AssociationInputError(
+            f"dense channel identities must be unique, got {list(channel_ids)}"
+        )
+    return channel_ids
+
+
+def _validate_frame(
+    frame: AssociationFrameInput,
+    channel_ids: tuple[str, ...],
+    seen: set[SourceObservationId],
+) -> None:
+    """Validate one frame as it arrives, so the run never has to hold them all.
+
+    Raises:
+        AssociationInputError: If the frame repeats an observation already processed, or lacks
+            the dense map of a declared channel.
+    """
+    observation_id = frame.observation.observation_id
+    if observation_id in seen:
         raise AssociationInputError("a frame cannot appear twice in a run")
-    for frame in request.frames:
-        missing = [c for c in channel_ids if c not in frame.dense_maps]
-        if missing:
-            raise AssociationInputError(
-                f"frame {frame.observation.observation_id!r} has no dense map for the declared "
-                f"channel(s) {missing}"
-            )
+    seen.add(observation_id)
+    missing = [channel for channel in channel_ids if channel not in frame.dense_maps]
+    if missing:
+        raise AssociationInputError(
+            f"frame {observation_id!r} has no dense map for the declared channel(s) {missing}"
+        )
 
 
 def _configuration_fingerprint(request: SensorAssociationRequest) -> str:

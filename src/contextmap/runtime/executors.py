@@ -468,28 +468,34 @@ class SensorAssociationExecutor:
             raise ExecutorError("the sequence artifact carries no calibration")
         # Só as imagens são decodificadas: list_observations() decodificaria também os 364 MB de
         # pointcloud e os 20781 registros de IMU do corridor-02, que esta associação nunca usa
-        # (#511). O payload das imagens em si continua necessário — _frame() hasheia image.data.
-        images: dict[str, ImageObservation] = {}
-        for entry in sequence.iter_index():
-            if entry.modality != "image":
-                continue
-            observation = sequence.observation_at(entry.offset)
-            if isinstance(observation, ImageObservation):
-                images[str(entry.observation_id)] = observation
+        # (#511). O índice guarda apenas o offset de cada imagem: o payload é lido quando o
+        # frame daquela observação é construído e solto logo depois, porque mantê-los todos
+        # vivos custava 2,19 GB no corridor-02 e faria a entrada escalar com o número de
+        # frames, exatamente o que o #563 removeu do lado da saída.
+        offsets = {
+            str(entry.observation_id): entry.offset
+            for entry in sequence.iter_index()
+            if entry.modality == "image"
+        }
         perception = PerceptionRunReader(_one(request, "perception"))
-        frames = tuple(
-            self._frame(images[str(result.source_observation_id)], result)
-            for result in perception.iter_results()
-            if str(result.source_observation_id) in images
-        )
+
+        def frames() -> Iterator[AssociationFrameInput]:
+            for result in perception.iter_results():
+                offset = offsets.get(str(result.source_observation_id))
+                if offset is None:
+                    continue
+                image = sequence.observation_at(offset)
+                if isinstance(image, ImageObservation):
+                    yield self._frame(image, result)
+
         writer = SensorAssociationRunWriter(
             output_dir=output,
             sequence_name=sequence.manifest.sequence_name,
             run_id=SensorAssociationRunId(request.identity()),
             run_index=request.run_number(),
         )
-        # Cada frame é persistido e liberado dentro da transação: o executor nunca retém o
-        # resultado completo do run em memória (#563).
+        # Cada frame é construído sob demanda, persistido e liberado dentro da transação: nem
+        # a entrada nem o resultado do run ficam inteiros em memória (#563).
         with (
             GeometricMapArtifactReader(_one(request, "geometry")) as geometry,
             writer.transaction() as run,
@@ -507,7 +513,7 @@ class SensorAssociationExecutor:
                     candidate_policy=self._candidates,
                     occlusion_policy=self._occlusion,
                     tolerances=self._tolerances,
-                    frames=frames,
+                    frames=frames(),
                     state_estimation_run_id=trajectory.manifest.run_id,
                     code_version=self._code_version,
                     # A reopened perception run never inlines mask pixels (#378); this

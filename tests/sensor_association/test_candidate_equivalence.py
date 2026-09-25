@@ -245,3 +245,109 @@ def test_the_unbounded_policy_evaluates_the_whole_map() -> None:
 
     assert frame.candidate_count == frame.map_point_count == len(SCENE)
     assert [int(index) for index in frame.global_indices] == list(range(len(SCENE)))
+
+
+# --- Where the sphere's guarantee stops, and why -------------------------------------------
+
+# Um par astride do limite de alcance, construído para inverter a ordem de z contra a ordem de
+# alcance: o excluído está mais LONGE (alcance 20,2 > 20) e ao mesmo tempo mais PERTO em z
+# (17,22 < 19,11), porque está num ângulo de campo maior. Só `OPTICAL_AXIS` compara z.
+_ADVERSARIAL_RANGE_M = 20.0
+_RETAINED = (
+    _ADVERSARIAL_RANGE_M * math.sin(0.30),
+    0.0,
+    _ADVERSARIAL_RANGE_M * math.cos(0.30),
+)
+_EXCLUDED = (20.2 * math.sin(0.55), 0.0, 20.2 * math.cos(0.55))
+# Grade grossa: a `OcclusionPolicy` não tem default, e uma janela larga é uma configuração
+# válida. Com a grade do run real (cell 4, raio 2) o par não cai na mesma janela.
+_COARSE = OcclusionPolicy(
+    cell_size_px=64, neighborhood_radius_cells=2, depth_margin_m=0.1, depth_margin_ratio=0.02
+)
+
+
+def _visibility_of_retained(calibration: CalibrationSet, *, max_range_m: float | None) -> str:
+    scene = [map_point_for_camera_point(_RETAINED), map_point_for_camera_point(_EXCLUDED)]
+    frame = project_frame(
+        scene,
+        calibration=calibration,
+        candidate_policy=CandidateGeometryPolicy(max_range_m=max_range_m),
+    )
+    resolution = resolve_visibility(frame, _COARSE)
+    rows, found = frame.rows_for(np.array([0]))
+    assert bool(found[0]), "o ponto retido deve estar sempre na população avaliada"
+    correspondence = resolution.correspondence(
+        int(rows[0]), visible_state=VisibilityState.VISIBLE_UNASSIGNED
+    )
+    return correspondence.visibility.value
+
+
+def test_the_adversarial_pair_really_inverts_depth_against_range() -> None:
+    """The fixture is only meaningful if range and ``z`` disagree; assert that it does."""
+    assert math.dist((0.0, 0.0, 0.0), _EXCLUDED) > _ADVERSARIAL_RANGE_M
+    assert math.dist((0.0, 0.0, 0.0), _RETAINED) <= _ADVERSARIAL_RANGE_M
+    assert _EXCLUDED[2] < _RETAINED[2]
+
+
+def test_a_ray_range_camera_preserves_the_support_of_every_retained_element() -> None:
+    """For fisheye and MEI the sphere is exact: depth *is* range, so the proof holds.
+
+    Every excluded element is strictly farther than every retained one under the very metric
+    the occlusion rule compares, and a point's own window always contains itself, so an
+    excluded element can never have been the nearest support of a retained one.
+    """
+    for calibration in (make_calibration(model=_fisheye()), make_calibration(model=_mei())):
+        baseline = _visibility_of_retained(calibration, max_range_m=None)
+        culled = _visibility_of_retained(calibration, max_range_m=_ADVERSARIAL_RANGE_M)
+
+        assert culled == baseline
+
+
+def test_a_pinhole_camera_can_lose_the_support_that_came_from_a_neighbouring_cell() -> None:
+    """For pinhole the sphere is **not** exact, and this pins the real behaviour.
+
+    ``OPTICAL_AXIS`` compares ``z``, and ``z <= range``, so an element the range policy excludes
+    may still have had a smaller ``z`` than a retained one. Here the excluded element was the
+    retained one's nearest support, so culling makes the retained element *visible* where the
+    full map called it occluded.
+
+    The direction matters: removing elements can only raise a window's minimum, so this
+    mechanism can only make a retained element **less** occluded. It never drops geometry the
+    baseline associated -- what #562 had to guarantee -- but it does mean the range policy
+    redefines the support population for a camera whose depth metric is the optical axis.
+    """
+    pinhole = make_calibration()
+
+    baseline = _visibility_of_retained(pinhole, max_range_m=None)
+    culled = _visibility_of_retained(pinhole, max_range_m=_ADVERSARIAL_RANGE_M)
+
+    assert baseline == VisibilityState.OCCLUDED.value
+    assert culled == VisibilityState.VISIBLE_UNASSIGNED.value
+
+
+def test_the_occlusion_grid_of_the_real_run_is_too_fine_for_that_pair_to_interact() -> None:
+    """With the policy the real corridor-02 run used, the two cells are not neighbours.
+
+    Measured probe: the smallest pixel separation that made this mechanism fire was ~24 px of
+    window reach. The run's ``cell_size_px=4, neighborhood_radius_cells=2`` reaches 12 px. This
+    is a probe, not a proven bound: it says the real configuration is not close to the regime,
+    not that no configuration below 24 px can ever diverge.
+    """
+    fine = OcclusionPolicy(
+        cell_size_px=4, neighborhood_radius_cells=2, depth_margin_m=0.1, depth_margin_ratio=0.02
+    )
+    scene = [map_point_for_camera_point(_RETAINED), map_point_for_camera_point(_EXCLUDED)]
+    frame = project_frame(scene)
+
+    separation = abs(float(frame.prepared_pixels[1, 0] - frame.prepared_pixels[0, 0]))
+    reach_px = (fine.neighborhood_radius_cells + 1) * fine.cell_size_px
+
+    assert separation > 150.0
+    assert reach_px == 12
+    assert separation > reach_px
+    # E com essa grade os dois estados coincidem, como no run real.
+    resolution = resolve_visibility(frame, fine)
+    assert (
+        resolution.correspondence(0, visible_state=VisibilityState.VISIBLE_UNASSIGNED).visibility
+        is VisibilityState.VISIBLE_UNASSIGNED
+    )

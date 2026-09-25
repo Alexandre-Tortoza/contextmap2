@@ -63,9 +63,11 @@ SCHEMA_VERSION = "0.2.0"
 """Sensor Association run artifact schema version written and understood by this module.
 
 ``0.2.0`` is the candidate-selection schema (#562): the manifest gained the required
-``candidate_policy``, every projection record gained ``candidates`` and ``stage_counts``, and
-``point_count`` changed meaning from the map's size to the number of elements the frame
-actually evaluated. ``geometry-support.u32`` and the dense ``eligible_indices`` now hold global
+``candidate_policy``, and every projection record gained ``candidates`` and ``stage_counts``.
+The single ``point_count`` is **gone**: it meant the map's size in ``0.1.0`` and would mean the
+evaluated population here, which a reader could not tell apart, so both concepts are named
+explicitly as ``candidates.map_point_count`` and ``candidates.candidate_count``.
+``geometry-support.u32`` and the dense ``eligible_indices`` now hold global
 geometry indices explicitly rather than candidate rows that happened to coincide with them.
 A ``0.1.0`` artifact is refused with a clear error instead of being migrated: during ``v0.x``
 a run is re-executed, never rewritten.
@@ -974,7 +976,9 @@ def _projection_record(frame: FrameAssociation) -> dict[str, Any]:
         "source_observation_id": str(projection.source_observation_id),
         "image_timestamp": projection.image_timestamp.to_record(),
         "map_id": str(projection.map_id),
-        "point_count": projection.candidate_count,
+        # Sem um `point_count` só: ele significaria o tamanho do mapa no schema 0.1.0 e a
+        # população avaliada no 0.2.0, e um leitor não teria como saber qual. Os dois conceitos
+        # ficam nomeados dentro de `candidates` (#564).
         "candidates": projection.candidates.to_record(),
         "stage_counts": {stage.value: count for stage, count in projection.stage_counts().items()},
         "calibration_ref": encode_calibration_ref(projection.calibration_ref),

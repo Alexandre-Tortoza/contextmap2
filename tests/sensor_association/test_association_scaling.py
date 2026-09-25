@@ -41,6 +41,7 @@ from run_builders import (
     make_request,
 )
 
+from contextmap.geometric_mapping import GeometryReference, geometry_id_for
 from contextmap.sensor_association import (
     CandidateGeometryPolicy,
     SensorAssociationRunId,
@@ -67,6 +68,16 @@ NEARBY: list[Vector3] = [
 ]
 
 
+def _leading_filler(count: int) -> list[Vector3]:
+    """Behind-camera geometry placed **before** the scene, so retained global indices are
+    neither contiguous nor zero-based.
+
+    Without it every culled run keeps indices ``0..n``, exactly where a row and a global index
+    coincide -- the coincidence #562 removed, and the one a test must not rely on.
+    """
+    return [map_point_for_camera_point((0.0, 0.0, -(50.0 + index * 0.5))) for index in range(count)]
+
+
 def _far_filler(count: int) -> list[Vector3]:
     """Map bulk far *behind* the camera: real geometry no frame can ever associate.
 
@@ -82,13 +93,20 @@ def _far_filler(count: int) -> list[Vector3]:
 def _request(
     *,
     filler: int = 0,
+    leading: int = 0,
     candidates: CandidateGeometryPolicy = UNBOUNDED,
     frames: int = 1,
     channels: tuple[object, ...] = (),
 ) -> SensorAssociationRequest:
-    """A request whose local scene is fixed and whose map grows with ``filler``."""
+    """A request whose local scene is fixed and whose map grows with ``filler``.
+
+    ``leading`` puts unassociable geometry *before* the scene, which offsets every retained
+    global index away from its row.
+    """
     base = make_request(channels=list(channels), candidates=candidates)  # type: ignore[arg-type]
-    source = ArrayGeometrySource([*NEARBY, *_far_filler(filler)], calibration=base.calibration)
+    source = ArrayGeometrySource(
+        [*_leading_filler(leading), *NEARBY, *_far_filler(filler)], calibration=base.calibration
+    )
     return dataclasses.replace(
         base,
         geometry=source,
@@ -380,3 +398,78 @@ def test_the_only_declared_difference_is_the_evaluated_population(tmp_path: Path
         full_record["stage_counts"]["behind_camera"]
         > (culled_record["stage_counts"]["behind_camera"])
     )
+
+
+# --- A row is not an index, and the reopened artifact must agree -----------------------------
+
+
+def test_the_retained_indices_are_offset_and_gapped_not_a_prefix_of_the_map() -> None:
+    """The fixture is only meaningful if row != global index; assert that it is."""
+    _, frames = _run_collecting(
+        _request(leading=7, filler=5, candidates=CandidateGeometryPolicy(max_range_m=20.0))
+    )
+
+    projection = frames[0].resolution.frame
+    kept = [int(index) for index in projection.global_indices]
+    assert kept == [7, 8, 9, 10]
+    assert kept != list(range(len(kept)))
+    assert projection.map_reference(0) != projection.map_reference(1)
+
+
+def test_a_reopened_run_resolves_support_and_regions_through_the_offset_indices(
+    tmp_path: Path,
+) -> None:
+    """`regions_of()` binary-searches the persisted support, so its order must be the map's.
+
+    With the retained geometry offset away from row zero, a run that persisted rows instead of
+    global indices would still produce well-formed references and a working reverse lookup --
+    for the *wrong* geometry. Comparing the reopened artifact against the full-map arm by
+    identity is what catches that.
+    """
+    full = SensorAssociationRunReader(_write(tmp_path, _request(leading=7, filler=5), index=1))
+    culled = SensorAssociationRunReader(
+        _write(
+            tmp_path,
+            _request(leading=7, filler=5, candidates=CandidateGeometryPolicy(max_range_m=20.0)),
+            index=2,
+        )
+    )
+
+    supported = {
+        str(observation.spatial_observation_id): full.geometry_support(
+            str(observation.spatial_observation_id)
+        )
+        for observation in full.observations()
+    }
+    assert any(supported.values())
+    for identity, references in supported.items():
+        assert culled.geometry_support(identity) == references
+        # A geometria retida começa no índice 7: nenhuma referência é a do índice zero.
+        assert all(not str(r.geometry_id).endswith("-000000000") for r in references)
+        # E a ordem persistida é crescente, que é o que a busca binária pressupõe.
+        assert list(references) == sorted(references, key=lambda r: str(r.geometry_id))
+
+    for references in supported.values():
+        for reference in references:
+            assert culled.regions_of(frame_id(0), reference) == full.regions_of(
+                frame_id(0), reference
+            )
+            assert culled.regions_of(frame_id(0), reference) != ()
+
+
+def test_a_reopened_run_reports_no_region_for_geometry_the_frame_did_not_associate(
+    tmp_path: Path,
+) -> None:
+    culled = SensorAssociationRunReader(
+        _write(
+            tmp_path,
+            _request(leading=7, filler=5, candidates=CandidateGeometryPolicy(max_range_m=20.0)),
+            index=1,
+        )
+    )
+    map_id = culled.manifest.geometric_map_id
+
+    # Índice 0 é filler atrás da câmera: existe no mapa, nunca foi suporte de região.
+    behind = GeometryReference(map_id=map_id, geometry_id=geometry_id_for(map_id=map_id, index=0))
+
+    assert culled.regions_of(frame_id(0), behind) == ()

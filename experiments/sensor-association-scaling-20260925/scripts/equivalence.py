@@ -74,6 +74,18 @@ def _by_frame(run_dir: Path, relative: str) -> dict[str, dict[str, Any]]:
     return {record["source_observation_id"]: record for record in _records(run_dir, relative)}
 
 
+def _evaluated(projection: dict[str, Any]) -> int:
+    """How many elements the frame evaluated, read per schema and never guessed.
+
+    ``0.1.0`` has one ``point_count``, which was the whole map because that arm evaluated the
+    whole map. ``0.2.0`` dropped the ambiguous field and names both concepts.
+    """
+    candidates = projection.get("candidates")
+    if candidates is not None:
+        return int(candidates["candidate_count"])
+    return int(projection["point_count"])
+
+
 def compare(baseline: Path, optimized: Path) -> dict[str, Any]:
     """Compare two persisted arms and classify every difference."""
     left, right = _manifest(baseline), _manifest(optimized)
@@ -197,8 +209,8 @@ def compare(baseline: Path, optimized: Path) -> dict[str, Any]:
         "geometry_support_identical": not support_changed and not missing and not extra,
         "per_frame": {
             frame_id: {
-                "baseline_evaluated": left_projection[frame_id]["point_count"],
-                "optimized_evaluated": right_projection[frame_id]["point_count"],
+                "baseline_evaluated": _evaluated(left_projection[frame_id]),
+                "optimized_evaluated": _evaluated(right_projection[frame_id]),
                 "optimized_candidate_fraction": right_projection[frame_id]["candidates"][
                     "candidate_fraction"
                 ],
