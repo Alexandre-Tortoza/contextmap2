@@ -472,7 +472,7 @@ A capability `evaluation` persiste documentos JSON imutáveis, escritos por publ
 ├── experiment.json          # ExperimentManifest (contextmap.experiment/v1)
 ├── arms/<arm>/run.json      # topologia resolvida, artifacts por estágio, resultado (…-arm-run/v1)
 ├── arms/<arm>/report.json   # EvaluationReport (contextmap.evaluation-report/v1), só arms concluídos
-└── comparison.json          # ComparisonManifest (…-comparison/v1): métricas lado a lado, artifacts compartilhados
+└── comparison.json          # ComparisonManifest (…-comparison/v1): métricas lado a lado, artifacts compartilhados, pareamento de cada arm com o baseline
 
 evidence.json                # TechniqueEvidence por métrica e estrato (contextmap.technique-evidence/v1)
 decision.json                # TechniqueDecision, presa ao digest da evidência (…-decision/v1)
@@ -480,6 +480,7 @@ decision.json                # TechniqueDecision, presa ao digest da evidência 
 
 - `ReferenceSetManifest` amarra fontes, amostras (por `SourceObservationId`, nunca por saída de percepção), calibrações, anotações com `trust` e proveniência declarados, estratos e splits; a versão muda quando o conteúdo muda.
 - Um arm indisponível ou com resultado inconsistente é registrado como tal e não tem `report.json`; a comparação fica `complete: false`.
+- Um arm concluído cujas entradas executadas diferem do baseline fora dos fatores declarados (estágio não afetado com outro conteúdo, outro evaluator, código ou schemas de anotação) mantém `report.json`, mas fica `invalid` em `comparison.json`, fora das métricas, com as identidades divergentes.
 - Reexecutar um experimento cria outro diretório de run; nunca sobrescreve.
 - Há um subconjunto sintético de CI versionado em `tests/fixtures/ci_subset/<versão>/` (manifesto, anotações e catálogo). Não existe reference set real versionado nem execução real de experimento registrada.
 

@@ -8,15 +8,20 @@ topology is not this module's concern) and emits, immutably:
   configuration, artifact and reference-set identities, and its outcome;
 * one **evaluation report** per completed arm, in the common envelope;
 * one **comparison manifest** that lists the arms' metrics side by side, proves
-  which upstream artifacts they share, and states whether the comparison is
+  which upstream artifacts they share, verifies that every arm is a matched
+  comparison with the reference arm, and states whether the comparison is
   complete.
 
 A failed or unavailable arm stays explicit: it is recorded with the reason, has
 no metrics, and makes the comparison incomplete. A result that does not match
 the manifest (another reference set, another configuration, a recomputed pinned
 artifact, a missing declared metric) is recorded as a failed arm, never as a
-comparable one. There is no fallback and there is no winner: metrics are never
-combined into one score. See ``src/contextmap/evaluation/docs/experiments.md``.
+comparable one. A completed arm whose executed inputs differ from the reference
+arm's in anything its declared factors do not explain (an unaffected stage that
+produced other content, another evaluator, code version or annotation schemas)
+is an invalid comparison: it keeps its report but never enters the metrics.
+There is no fallback and there is no winner: metrics are never combined into one
+score. See ``src/contextmap/evaluation/docs/experiments.md``.
 """
 
 from __future__ import annotations
@@ -28,15 +33,23 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from contextmap.evaluation._persistence import canonical_digest, write_immutable_json
+from contextmap.evaluation._persistence import (
+    canonical_digest,
+    canonical_json,
+    write_immutable_json,
+)
 from contextmap.evaluation.experiments import (
     AblationMode,
+    ArmDifference,
+    DifferenceKind,
     ExperimentArm,
     ExperimentError,
     ExperimentManifest,
     ExperimentVariable,
     FixedControl,
     ResolvedTopology,
+    active_variables,
+    arm_differences,
     experiment_artifact_identity,
     validate_experiment_manifest,
     write_experiment,
@@ -72,7 +85,10 @@ class ArmUnavailableError(Exception):
 
 
 class IncompleteComparisonError(ExperimentError):
-    """Raised when a comparison is used as complete while an arm failed or was unavailable."""
+    """Raised when a comparison is used as complete while an arm is not comparable.
+
+    An arm is not comparable when it failed, was unavailable, or is an invalid comparison.
+    """
 
 
 class ArmStatus(Enum):
@@ -202,20 +218,99 @@ class ArmRunManifest:
 # ------------------------------------------------------------------------- comparison
 
 
+class MatchStatus(Enum):
+    """Whether an arm and the reference arm form a controlled comparison once executed."""
+
+    MATCHED = "matched"
+    """Both completed and their executed inputs differ only where the declared factors do."""
+
+    INVALID = "invalid"
+    """Both completed but an executed input differs without a declaring factor."""
+
+    INCOMPLETE = "incomplete"
+    """The arm or the reference arm did not complete, so the pair cannot be verified."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class ArmMatch:
+    """How one arm matches the reference arm it is compared against.
+
+    Attributes:
+        reference_arm_id: The arm it is compared against (the baseline).
+        factors: ``(variable, value)`` of every variable assigned differently in the two
+            arms: the declared factor assignment of this comparison.
+        status: Matched, invalid or incomplete.
+        declared_differences: Every planned difference between the resolved topologies,
+            each with the variables that declare it (the manifest refuses any other).
+        undeclared_differences: Executed identities that differ with no declaring
+            variable; non-empty exactly when the pair is invalid.
+        matched_sample_count: Physical samples the pair was compared on. Repeated
+            inference and the other arms' variants over the same samples never add to it;
+            ``0`` unless the pair is matched.
+        reason: Why the pair is invalid or incomplete; ``None`` when matched.
+    """
+
+    reference_arm_id: str
+    factors: tuple[tuple[str, str], ...]
+    status: MatchStatus
+    declared_differences: tuple[ArmDifference, ...]
+    undeclared_differences: tuple[ArmDifference, ...]
+    matched_sample_count: int
+    reason: str | None
+
+    def to_record(self) -> dict[str, Any]:
+        """Return the JSON-compatible record."""
+        return {
+            "reference_arm_id": self.reference_arm_id,
+            "factors": [list(item) for item in self.factors],
+            "status": self.status.value,
+            "declared_differences": [item.to_record() for item in self.declared_differences],
+            "undeclared_differences": [item.to_record() for item in self.undeclared_differences],
+            "matched_sample_count": self.matched_sample_count,
+            "reason": self.reason,
+        }
+
+
 @dataclass(frozen=True, kw_only=True)
 class ComparisonArm:
-    """One arm in the comparison, whether or not it completed."""
+    """One arm in the comparison, whether or not it completed.
+
+    Attributes:
+        arm_id: The arm.
+        assignments: The value of every variable in this arm.
+        status: Completed, failed or unavailable.
+        topology_digest: Digest of the arm's resolved topology.
+        failure: Why the arm did not complete.
+        stage_configurations: ``(stage, configuration digest)`` of every stage of the arm.
+        stage_artifacts: The artifact every stage produced or reused; empty when the arm
+            did not complete.
+        match: How the arm matches the reference arm; ``None`` for the reference arm.
+    """
 
     arm_id: str
     assignments: tuple[tuple[str, str], ...]
     status: ArmStatus
     topology_digest: str
     failure: ArmFailure | None
+    stage_configurations: tuple[tuple[str, str], ...]
+    stage_artifacts: tuple[StageArtifact, ...]
+    match: ArmMatch | None
 
     @property
     def comparable(self) -> bool:
-        """Return whether the arm contributes metrics; only a completed arm does."""
-        return self.status is ArmStatus.COMPLETED
+        """Return whether the arm contributes metrics: completed and not an invalid pair."""
+        return self.status is ArmStatus.COMPLETED and (
+            self.match is None or self.match.status is not MatchStatus.INVALID
+        )
+
+    @property
+    def exclusion_reason(self) -> str | None:
+        """Return why the arm contributes no metrics, or ``None`` when it is comparable."""
+        if self.failure is not None:
+            return self.failure.message
+        if self.match is not None and self.match.status is MatchStatus.INVALID:
+            return self.match.reason
+        return None
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
@@ -224,8 +319,11 @@ class ComparisonArm:
             "assignments": [list(item) for item in self.assignments],
             "status": self.status.value,
             "topology_digest": self.topology_digest,
+            "stage_configurations": [list(item) for item in self.stage_configurations],
+            "stage_artifacts": [item.to_record() for item in self.stage_artifacts],
             "comparable": self.comparable,
             "failure": None if self.failure is None else self.failure.to_record(),
+            "match": None if self.match is None else self.match.to_record(),
         }
 
 
@@ -338,13 +436,24 @@ class ComparisonManifest:
 
     @property
     def complete(self) -> bool:
-        """Return whether every arm completed."""
+        """Return whether every arm completed and matched the reference arm."""
         return all(item.comparable for item in self.arms)
 
     @property
     def incomplete_arm_ids(self) -> tuple[str, ...]:
-        """Return the arms that did not complete."""
+        """Return the arms that contribute no metrics: not completed or invalid."""
         return tuple(item.arm_id for item in self.arms if not item.comparable)
+
+    def matching_summary(self) -> dict[str, Any]:
+        """Return how many pairs are matched, invalid or incomplete, and the excluded arms."""
+        statuses = [item.match.status for item in self.arms if item.match is not None]
+        return {
+            "reference_arm_id": self.baseline_arm_id,
+            "matched": statuses.count(MatchStatus.MATCHED),
+            "invalid": statuses.count(MatchStatus.INVALID),
+            "incomplete": statuses.count(MatchStatus.INCOMPLETE),
+            "excluded_arm_ids": list(self.incomplete_arm_ids),
+        }
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible content the digest is computed over."""
@@ -361,6 +470,7 @@ class ComparisonManifest:
             "variables": [item.to_record() for item in self.variables],
             "fixed_controls": [item.to_record() for item in self.fixed_controls],
             "complete": self.complete,
+            "matching": self.matching_summary(),
             "arms": [item.to_record() for item in self.arms],
             "shared_artifacts": [item.to_record() for item in self.shared_artifacts],
             "metrics": [item.to_record() for item in self.metrics],
@@ -372,17 +482,22 @@ class ComparisonManifest:
 
 
 def require_complete_comparison(comparison: ComparisonManifest) -> None:
-    """Refuse a comparison in which any arm failed or was unavailable.
+    """Refuse a comparison in which any arm failed, was unavailable or is not matched.
 
     Raises:
-        IncompleteComparisonError: Naming the arms that did not complete.
+        IncompleteComparisonError: Naming the arms that contribute no metrics and why.
     """
     if not comparison.complete:
-        failed = {item.arm_id: item for item in comparison.arms if not item.comparable}
         reasons = "; ".join(
-            f"{arm_id} ({item.status.value}: "
-            f"{'' if item.failure is None else item.failure.message})"
-            for arm_id, item in failed.items()
+            f"{item.arm_id} ({item.status.value}"
+            + (
+                ", invalid comparison"
+                if item.match is not None and item.match.status is MatchStatus.INVALID
+                else ""
+            )
+            + f": {item.exclusion_reason or ''})"
+            for item in comparison.arms
+            if not item.comparable
         )
         raise IncompleteComparisonError(f"the comparison is incomplete: {reasons}")
 
@@ -393,16 +508,17 @@ def _strata_key(result: MetricResult) -> tuple[tuple[str, str], ...]:
 
 def _metric_comparisons(
     manifest: ExperimentManifest,
-    completed: list[str],
+    comparable: list[str],
     reports: Mapping[str, EvaluationReport],
 ) -> tuple[MetricComparison, ...]:
+    """List every declared metric side by side over the comparable arms only."""
     comparisons: list[MetricComparison] = []
     declared = [(item, MetricKind.QUALITY) for item in manifest.quality_metrics] + [
         (item, MetricKind.PERFORMANCE) for item in manifest.resource_capture
     ]
     for reference, kind in declared:
         per_arm: dict[str, dict[tuple[tuple[str, str], ...], MetricResult]] = {}
-        for arm_id in completed:
+        for arm_id in comparable:
             report = reports[arm_id]
             results = (
                 report.quality_metrics if kind is MetricKind.QUALITY else report.performance_metrics
@@ -416,7 +532,7 @@ def _metric_comparisons(
         for key in strata:
             baseline = per_arm.get(manifest.baseline_arm_id, {}).get(key)
             entries: list[MetricEntry] = []
-            for arm_id in completed:
+            for arm_id in comparable:
                 result = per_arm[arm_id].get(key)
                 if result is None:
                     continue
@@ -482,6 +598,130 @@ def _shared_artifacts(
     return tuple(shared)
 
 
+def _affected_stage_ids(manifest: ExperimentManifest, arm: ExperimentArm) -> set[str]:
+    """Return the stages the arm's factors touch and every stage downstream of them."""
+    reference = manifest.baseline_arm
+    affected = {
+        name
+        for variable in active_variables(manifest.variables, reference, arm)
+        for name in variable.touches
+    }
+    dependents: dict[str, set[str]] = {}
+    for topology in (reference.topology, arm.topology):
+        for item in topology.stages:
+            for dependency in item.depends_on:
+                dependents.setdefault(dependency, set()).add(item.stage_id)
+    pending = list(affected)
+    while pending:
+        for child in dependents.get(pending.pop(), set()) - affected:
+            affected.add(child)
+            pending.append(child)
+    return affected
+
+
+def _executed_differences(
+    manifest: ExperimentManifest,
+    arm_run: ArmRunManifest,
+    reference_run: ArmRunManifest,
+    reports: Mapping[str, EvaluationReport],
+) -> tuple[ArmDifference, ...]:
+    """Return the executed inputs of a completed arm that differ from the reference arm's.
+
+    No factor explains any of them: a stage the factors do not affect must have produced or
+    reused the same content (compared by kind and digest, since a deterministic re-execution
+    has another artifact id but the same content), and both reports must come from the same
+    evaluator, code version and annotation schemas.
+    """
+    affected = _affected_stage_ids(manifest, manifest.arm(arm_run.arm_id))
+    produced = {item.stage_id: item.artifact for item in arm_run.stage_artifacts}
+    differences: list[ArmDifference] = []
+    for item in reference_run.stage_artifacts:
+        found = produced.get(item.stage_id)
+        if item.stage_id in affected or found is None:
+            continue
+        if (found.kind, found.digest) != (item.artifact.kind, item.artifact.digest):
+            differences.append(
+                ArmDifference(
+                    stage_id=item.stage_id,
+                    kind=DifferenceKind.STAGE_ARTIFACT,
+                    field=None,
+                    reference_value=canonical_json(item.artifact.to_record()),
+                    value=canonical_json(found.to_record()),
+                    declared_by=(),
+                )
+            )
+    before = reports[reference_run.arm_id].reproducibility
+    after = reports[arm_run.arm_id].reproducibility
+    for kind, old, new in (
+        (DifferenceKind.EVALUATOR, before.evaluator.to_record(), after.evaluator.to_record()),
+        (DifferenceKind.CODE_VERSION, before.code_version, after.code_version),
+        (
+            DifferenceKind.ANNOTATION_SCHEMAS,
+            sorted(before.annotation_schemas),
+            sorted(after.annotation_schemas),
+        ),
+    ):
+        if old != new:
+            differences.append(
+                ArmDifference(
+                    stage_id=None,
+                    kind=kind,
+                    field=None,
+                    reference_value=canonical_json(old),
+                    value=canonical_json(new),
+                    declared_by=(),
+                )
+            )
+    return tuple(differences)
+
+
+def _match(
+    manifest: ExperimentManifest,
+    arm_run: ArmRunManifest,
+    reference_run: ArmRunManifest,
+    reports: Mapping[str, EvaluationReport],
+) -> ArmMatch:
+    """Verify one arm against the reference arm, from the plan and from what was executed."""
+    reference, arm = manifest.baseline_arm, manifest.arm(arm_run.arm_id)
+
+    def match(
+        status: MatchStatus,
+        reason: str | None,
+        undeclared: tuple[ArmDifference, ...] = (),
+    ) -> ArmMatch:
+        return ArmMatch(
+            reference_arm_id=reference.arm_id,
+            factors=tuple(
+                (item.name, arm.assignment[item.name])
+                for item in active_variables(manifest.variables, reference, arm)
+            ),
+            status=status,
+            declared_differences=arm_differences(manifest.variables, reference, arm),
+            undeclared_differences=undeclared,
+            matched_sample_count=(
+                manifest.physical_sample_count if status is MatchStatus.MATCHED else 0
+            ),
+            reason=reason,
+        )
+
+    for run, role in ((arm_run, "arm"), (reference_run, "the reference arm")):
+        if run.status is not ArmStatus.COMPLETED:
+            failure = "" if run.failure is None else f": {run.failure.message}"
+            return match(
+                MatchStatus.INCOMPLETE,
+                f"{role} {run.arm_id!r} did not complete ({run.status.value}{failure})",
+            )
+    undeclared = _executed_differences(manifest, arm_run, reference_run, reports)
+    if undeclared:
+        return match(
+            MatchStatus.INVALID,
+            "undeclared differences from the reference arm: "
+            + "; ".join(item.describe() for item in undeclared),
+            undeclared,
+        )
+    return match(MatchStatus.MATCHED, None)
+
+
 def build_comparison(
     manifest: ExperimentManifest,
     arm_runs: list[ArmRunManifest],
@@ -489,10 +729,33 @@ def build_comparison(
 ) -> ComparisonManifest:
     """Build the comparison of an experiment's arms.
 
-    Only completed arms contribute metrics and shared artifacts; the others are
-    listed with their reason and make the comparison incomplete.
+    Every arm but the reference arm is matched against it. Only completed, matched arms
+    contribute metrics; the others are listed with their reason and make the comparison
+    incomplete. Shared artifacts are those every completed arm reports identically.
     """
-    completed = [item.arm_id for item in arm_runs if item.status is ArmStatus.COMPLETED]
+    runs = {item.arm_id: item for item in arm_runs}
+    reference_run = runs[manifest.baseline_arm_id]
+    arms = tuple(
+        ComparisonArm(
+            arm_id=item.arm_id,
+            assignments=item.assignments,
+            status=item.status,
+            topology_digest=item.topology_digest,
+            failure=item.failure,
+            stage_configurations=tuple(
+                (stage.stage_id, stage.implementation.configuration_digest)
+                for stage in item.topology.stages
+            ),
+            stage_artifacts=item.stage_artifacts,
+            match=(
+                None
+                if item.arm_id == manifest.baseline_arm_id
+                else _match(manifest, item, reference_run, reports)
+            ),
+        )
+        for item in arm_runs
+    )
+    comparable = [item.arm_id for item in arms if item.comparable]
     return ComparisonManifest(
         experiment=experiment_artifact_identity(manifest),
         reference_set=manifest.selection.reference_set,
@@ -504,18 +767,9 @@ def build_comparison(
         repetitions_per_sample=manifest.repetitions_per_sample,
         variables=manifest.variables,
         fixed_controls=manifest.fixed_controls,
-        arms=tuple(
-            ComparisonArm(
-                arm_id=item.arm_id,
-                assignments=item.assignments,
-                status=item.status,
-                topology_digest=item.topology_digest,
-                failure=item.failure,
-            )
-            for item in arm_runs
-        ),
+        arms=arms,
         shared_artifacts=_shared_artifacts(manifest, arm_runs),
-        metrics=_metric_comparisons(manifest, completed, reports),
+        metrics=_metric_comparisons(manifest, comparable, reports),
     )
 
 
