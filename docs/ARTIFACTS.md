@@ -33,33 +33,41 @@ flowchart LR
 
 ## Workspace local
 
-O canonical pipeline usa filesystem local como storage primário.
+O canonical pipeline usa filesystem local como storage primário. O workspace é organizado por **dataset** e por **run**:
 
 ```text
 workspace/
-├── sequences/
-├── runs/
-├── runtime/
-├── maps/
-├── experiments/
-└── tmp/
+├── <dataset>/                       # a sequência física (`inputs.sequence`), por exemplo `corridor-02`
+│   └── <run>/                       # um run do runtime: `run-NNNN`
+│       ├── effective_config.json    # ┐
+│       ├── plan.json                # │ o diário do run, na raiz do run
+│       ├── status.json              # │ (ver "Registros de execução do runtime")
+│       ├── events.jsonl             # │
+│       ├── execution.json           # │
+│       ├── run.lock                 # ┘
+│       ├── ingestion/               # ┐
+│       ├── visual_perception/       # │
+│       ├── state_estimation/        # │
+│       ├── geometric_mapping/       # │ um diretório por estágio executado,
+│       ├── sensor_association/      # │ com o id do estágio da runtime
+│       ├── point_representation/    # │ (opcional)
+│       ├── semantic_fusion/         # │
+│       ├── semantic_mapping/        # │
+│       ├── entity_resolution/       # │
+│       ├── spatial_relations/       # │
+│       └── context_map/             # ┘ o `ContextMapArtifact` (capability `artifact`)
+├── experiments/                     # relatórios e manifests de avaliação, fora de qualquer run
+└── tmp/                             # conteúdo efêmero
 ```
 
-### `sequences/`
+Regras do layout:
 
-Contém canonical sensor sequences produzidas por Ingestion.
-
-### `runs/`
-
-Contém artifacts das capabilities executáveis, separados por capability e sequence.
-
-### `runtime/`
-
-Contém os **registros de execução do runtime** (`runtime/run-NNNN/`): configuração efetiva, plano, estado, eventos e, para um run concluído, as entradas e saídas exatas de cada estágio. Eles **referenciam** os artifacts por id e hash; não os contêm nem os substituem.
-
-### `maps/`
-
-Pode conter os produtos finais `ContextMapArtifact` ou bundles finais, conforme o schema consolidado.
+- **Um diretório por estágio, nomeado pelo id do estágio da runtime.** O diretório é o artifact: `manifest.json`, `outputs/`, `metrics/` e `debug/` ficam direto dentro dele. O estágio final se chama `context_map` mesmo sendo implementado pela capability `artifact`.
+- **O diário fica na raiz do run**, ao lado das pastas dos estágios. Os nomes do diário e os ids dos estágios nunca colidem.
+- **O run é dono do que executou.** Um estágio reutilizado de um run anterior **não tem pasta** no run novo: ele é **referenciado** por `ArtifactRef` (identidade e hash de conteúdo), nunca copiado. A sequência ingerida pode ter dezenas de GB; copiar seria um erro, e a referência é o que torna a cadeia de reuso auditável.
+- **Não há contadores nem registros por capability.** Não existem `runs/<capability>/<sequência>/run-NNNN__...` nem `runs.json`: o único índice de runs é a própria listagem dos diretórios `<dataset>/run-NNNN` (`Runtime.list_runs()`).
+- **Um artifact nunca é modificado depois de finalizado**, e um run reexecutado é outro `run-NNNN`.
+- `tmp/` nunca é dependência contratual de um artifact válido, e o debug de um artifact nunca é dependência de outro estágio.
 
 ### `experiments/`
 
@@ -67,11 +75,31 @@ Contém os manifests/reports que referenciam runs imutáveis usados em comparaç
 
 O registro **versionado** de uma execução real fica no repositório, em `experiments/<experimento>/` (diretório de topo, fora de `src/` e `tests/`): um bundle leve com o manifest do experimento (identidades e SHA-256 completos das runs de entrada), a seleção, a configuração, os drivers e os relatórios finais, **sem** o dataset nem os artifacts grandes, que continuam fora do Git e são regenerados localmente. Os drivers ficam fora de `src/` e de `tests/` porque são scripts de pesquisa, não código do pacote nem testes, e alterá-los para passar nos gates do pacote quebraria o hash do que foi executado. O teste `tests/evaluation/test_experiment_bundles.py` confere cada bundle contra o próprio manifest (hashes completos, todo arquivo listado, menos de 1 MB, sem caminhos pessoais nem segredos). Exemplo: [`experiments/semantic-fusion-corridor-02-20260921/`](../experiments/semantic-fusion-corridor-02-20260921/README.md).
 
-### `tmp/`
-
-Conteúdo efêmero. Nada em `tmp/` pode ser dependência contratual de um artifact válido.
-
 Remote storage, S3, MinIO, database ou distributed registry não são requisitos do canonical pipeline.
+
+### Contrato dos writers de estágio
+
+Todo writer de artifact de capability segue o mesmo contrato; o runtime só decide **onde** o estágio grava e o writer nunca calcula um caminho.
+
+**Assinatura.** `output_dir` é o diretório final do artifact, obrigatório e *keyword-only*. Ficam na assinatura o que é identidade ou entrada da capability (`sequence_name`, `run_id`, `run_index`, `debug_level` e os parâmetros próprios, como a linhagem da fusão ou o `artifact_id` da ingestion). Saem `workspace_root` e todo rótulo que só existia para montar o nome do diretório (`selection_label`, `backend_label`, `profile_label`, `channel_label`, `policy_label`):
+
+```python
+class StateEstimationRunWriter:
+    def __init__(self, *, output_dir: Path, sequence_name: str, run_id: StateEstimationRunId,
+                 run_index: int, debug_level: StateEstimationDebugLevel = ...) -> None: ...
+```
+
+**Finalização.** O writer cria `output_dir` com `AtomicRunDirectory` (diretório temporário irmão, publicado por rename depois da checagem do inventário), recusa um `output_dir` que já exista e não deixa nada em caso de falha. Ele não cria registro, não escreve `runs.json` e não toca em nenhum outro diretório.
+
+**Identidade.** O writer **nunca aloca** identidade: `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos. `run_index` é um ordinal do chamador (a runtime usa o número de `run-NNNN`) que serve para ordenar candidatos, por exemplo na seleção `latest`; não substitui identidade nem hash. Ids derivados do `run_id`, como `map_id = <sequência>--<run_id>`, continuam iguais, então manifests, leitores e linhagem não mudam. Um executor da runtime deriva `run_id` da identidade do estágio (id do estágio, `config_digest` e hashes de conteúdo das entradas), de modo que execuções idênticas produzem o mesmo id e o mesmo conteúdo, o que mantém o reuso válido entre runs; nos testes, o id é um texto fixo e legível.
+
+**O que foi removido** de todas as capabilities: `_sequence_dir`, `allocate_*_run_index`, `rebuild_*_registry`, os helpers que só serviam a eles (`_valid_run_index`, `_registry_record`), a chamada do registro dentro de `finalize()` e os símbolos do `__init__` e do `__all__`. `contextmap.shared.run_directory` também perdeu `next_run_index` e `write_run_registry`, sem nenhum uso restante.
+
+**Cardinalidade.** Um diretório de estágio guarda **um** artifact, e um pedido de estágio produz um. Uma entrada declarada `multiple` (vários runs de percepção para a associação, vários runs de associação para a fusão) mantém a evidência distinta, mas o executor de um estágio consome **exatamente um** run por entrada: um pedido com vários é recusado, sem escolher um em silêncio. Comparar runs (dois modelos, dois braços de ablação) é executar runs da runtime diferentes, cada um com a sua pasta, e a comparação lê os dois pelo `ArtifactRef`.
+
+**Leitura.** Os leitores abrem o diretório do artifact diretamente e não mudam: manifests, `manifest.json` e o schema continuam iguais.
+
+**Padrão de teste.** O teste escolhe `output_dir` sob `tmp_path` (por exemplo `tmp_path / "run-0001"`, ou `tmp_path / "state_estimation"`) e abre o leitor **nesse mesmo caminho**, sem procurar `run-0001__...` por glob. Um helper `_run_dir(workspace, index)` centraliza o caminho quando o teste grava vários runs. Testes de alocação de índice e de registro são substituídos por testes de que (1) o artifact aparece exatamente em `output_dir` e nada mais é criado ao redor, (2) `run_id` e `run_index` são gravados como recebidos, (3) um segundo run no mesmo `output_dir` é recusado sem alterar o primeiro.
 
 ## Artefatos principais
 
@@ -106,6 +134,7 @@ flowchart TD
 ```
 
 ## Artefatos materializados hoje
+
 
 Na `dev`, nove formatos já existem e são integrados:
 
@@ -155,12 +184,12 @@ flowchart LR
 
 `SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. `SemanticFusionRunArtifact` é o artifact imutável dos suportes de fusão e da evidência fundida. `SemanticMappingRunArtifact` é o artifact imutável das entidades semânticas. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário, inventário com tamanho e SHA-256, índice de run monotônico calculado a partir dos runs válidos e registry reconstruível) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact`, `SemanticMappingRunArtifact`, `EntityResolutionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica em diretório temporário e inventário com tamanho e SHA-256) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact`, `SemanticMappingRunArtifact`, `EntityResolutionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
 ```text
-workspace/sequences/<sequence-name>/<artifact-id>/
+<run>/ingestion/                # o output_dir entregue ao writer
 ├── manifest.json
 ├── index.jsonl
 ├── rgb/
@@ -175,48 +204,44 @@ O índice contém uma observação canônica por linha; payloads grandes de imag
 ### `PerceptionRunArtifact` atual
 
 ```text
-workspace/runs/visual-perception/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<profile>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/
-    │   ├── results.jsonl
-    │   ├── semantic-interpretations.jsonl
-    │   ├── semantic-views/            # bytes exatos fornecidos ao VLM
-    │   └── features/                  # opcional em geral; obrigatório se consumido semanticamente
-    │       ├── feature-index.jsonl
-    │       └── <observation-scope>/*.npy
-    ├── metrics/
-    │   ├── stage-timings.jsonl
-    │   └── feature-extraction.jsonl   # quando há diagnostics de feature
-    └── debug/
-        ├── 30-feature-extraction/     # somente standard/full
-        └── 40-semantic-interpretation/<request-id>/raw-response.txt
+<run>/visual_perception/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json
+├── outputs/
+│   ├── results.jsonl
+│   ├── semantic-interpretations.jsonl
+│   ├── semantic-views/            # bytes exatos fornecidos ao VLM
+│   └── features/                  # opcional em geral; obrigatório se consumido semanticamente
+│       ├── feature-index.jsonl
+│       └── <observation-scope>/*.npy
+├── metrics/
+│   ├── stage-timings.jsonl
+│   └── feature-extraction.jsonl   # quando há diagnostics de feature
+└── debug/
+    ├── 30-feature-extraction/     # somente standard/full
+    └── 40-semantic-interpretation/<request-id>/raw-response.txt
 ```
 
-No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `runs.json` é somente um registry reconstruível; `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
+No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
 
 ### `StateEstimationRunArtifact` atual
 
 ```text
-workspace/runs/state-estimation/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<backend>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/
-    │   ├── trajectory.json        # metadados da trajetória
-    │   ├── poses.jsonl            # uma pose por linha
-    │   ├── pose-index.jsonl       # leitura de uma pose por identidade ou tempo
-    │   ├── frame-summary.json
-    │   └── quality.json
-    ├── metrics/
-    │   ├── preflight.json
-    │   ├── motion.json
-    │   ├── runtime.json           # somente quando medido
-    │   └── diagnostics.jsonl      # somente quando há eventos
-    └── debug/                     # somente standard/full; nunca inventariado
+<run>/state_estimation/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json
+├── outputs/
+│   ├── trajectory.json        # metadados da trajetória
+│   ├── poses.jsonl            # uma pose por linha
+│   ├── pose-index.jsonl       # leitura de uma pose por identidade ou tempo
+│   ├── frame-summary.json
+│   └── quality.json
+├── metrics/
+│   ├── preflight.json
+│   ├── motion.json
+│   ├── runtime.json           # somente quando medido
+│   └── diagnostics.jsonl      # somente quando há eventos
+└── debug/                     # somente standard/full; nunca inventariado
 ```
 
 `manifest.json` traz a linhagem (sequência, seleção, backend e fingerprint de configuração, identidade da calibração, versão do código, frames, clock, contagens) e o inventário dos arquivos contratuais. `debug/` fica fora do inventário, então removê-lo não invalida o run. Um run com preflight de geometria `BLOCKED` nunca é persistido. Detalhes: [State Estimation artifact](../src/contextmap/state_estimation/docs/artifact.md).
@@ -224,23 +249,21 @@ workspace/runs/state-estimation/<sequence-name>/
 ### `GeometricMapArtifact` atual
 
 ```text
-workspace/runs/geometric-mapping/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<profile>/
-    ├── README.md
-    ├── manifest.json
-    ├── lineage.json
-    ├── config.json
-    ├── environment.json
-    ├── outputs/
-    │   ├── geometry.bin           # payload empacotado, lido por mapeamento em memória
-    │   ├── source-index.jsonl     # um registro por scan: origem → geometria, cadeia e limites
-    │   └── map-metadata.json      # GeometricMap: identidade, frame, limites, tempo, proveniência
-    ├── metrics/
-    │   ├── input-plan.json        # scans selecionados, aceitos e recusados, com o motivo
-    │   ├── mapping.json
-    │   └── runtime.json           # somente quando medido
-    └── debug/                     # somente standard/full; nunca inventariado
+<run>/geometric_mapping/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json
+├── lineage.json
+├── config.json
+├── environment.json
+├── outputs/
+│   ├── geometry.bin           # payload empacotado, lido por mapeamento em memória
+│   ├── source-index.jsonl     # um registro por scan: origem → geometria, cadeia e limites
+│   └── map-metadata.json      # GeometricMap: identidade, frame, limites, tempo, proveniência
+├── metrics/
+│   ├── input-plan.json        # scans selecionados, aceitos e recusados, com o motivo
+│   ├── mapping.json
+│   └── runtime.json           # somente quando medido
+└── debug/                     # somente standard/full; nunca inventariado
 ```
 
 A identidade do mapa é `<sequência>--<run_id>` e toda `GeometryReference` a carrega; as referências são locais ao artifact. O `manifest.json` inventaria os arquivos contratuais com tamanho e SHA-256, e `debug/` fica fora do inventário. O leitor abre sem ROS, sem FAST-LIO, sem biblioteca de modelo e sem NumPy, e `geometry()` devolve um `GeometrySource` sobre o payload mapeado, sem lê-lo. A configuração é JSON (`config.json`), não YAML. Detalhes: [Geometric Mapping artifact](../src/contextmap/geometric_mapping/docs/artifact.md).
@@ -248,25 +271,23 @@ A identidade do mapa é `<sequência>--<run_id>` e toda `GeometryReference` a ca
 ### `SensorAssociationRunArtifact` atual
 
 ```text
-workspace/runs/sensor-association/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<canal>/
-    ├── README.md
-    ├── manifest.json
-    ├── outputs/
-    │   ├── spatial-observations.jsonl     # um SpatialObservation por linha
-    │   ├── observation-index.jsonl        # id, frame, região e offsets
-    │   ├── geometry-support.u32           # região → geometria, tabela colunar de uint32
-    │   ├── observation-quality.jsonl      # ObservationQuality por observação
-    │   ├── projection-records.jsonl       # por frame: câmera, pose, extrínseco, cadeia de imagem
-    │   ├── visibility-records.jsonl       # por frame: política, contagens, pertencimento
-    │   ├── dense-feature-associations.jsonl
-    │   └── dense-feature-cells.bin        # índices e pesos, sem vetores de feature
-    ├── metrics/
-    │   ├── frame-diagnostics.jsonl
-    │   ├── summary.json
-    │   └── runtime.json                   # somente quando medido
-    └── debug/                             # somente standard/full; nunca inventariado
+<run>/sensor_association/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json
+├── outputs/
+│   ├── spatial-observations.jsonl     # um SpatialObservation por linha
+│   ├── observation-index.jsonl        # id, frame, região e offsets
+│   ├── geometry-support.u32           # região → geometria, tabela colunar de uint32
+│   ├── observation-quality.jsonl      # ObservationQuality por observação
+│   ├── projection-records.jsonl       # por frame: câmera, pose, extrínseco, cadeia de imagem
+│   ├── visibility-records.jsonl       # por frame: política, contagens, pertencimento
+│   ├── dense-feature-associations.jsonl
+│   └── dense-feature-cells.bin        # índices e pesos, sem vetores de feature
+├── metrics/
+│   ├── frame-diagnostics.jsonl
+│   ├── summary.json
+│   └── runtime.json                   # somente quando medido
+└── debug/                             # somente standard/full; nunca inventariado
 ```
 
 O run não repete XYZ nem vetores de embedding: a geometria é referenciada por posição (a identidade do mapa é posicional) e a amostragem densa guarda índices e pesos. `manifest.json` carrega a linhagem exata (sequência, seleção, mapa geométrico, trajetória, calibração, runs de percepção, políticas, fingerprint, código, canais de features com as fontes exatas) e o inventário; `debug/` fica fora dele. Uma execução nativa e uma melhorada de features compartilham os mesmos artifacts a montante e continuam identificáveis de forma independente. O leitor abre sem ROS, sem modelos e sem NumPy. Detalhes: [Sensor Association artifact](../src/contextmap/sensor_association/docs/artifact.md).
@@ -274,21 +295,19 @@ O run não repete XYZ nem vetores de embedding: a geometria é referenciada por 
 ### `PointRepresentationRunArtifact` atual
 
 ```text
-workspace/runs/point-representation/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<backend>/
-    ├── README.md
-    ├── manifest.json                       # identidade, linhagem e inventário
-    ├── outputs/
-    │   ├── representations.jsonl           # PointRepresentation canônica, uma por linha
-    │   ├── representation-index.jsonl      # representation_id → deslocamento e tamanho
-    │   ├── representation-spaces.json      # RepresentationSpace do run + fingerprint
-    │   ├── geometry-representation-index.jsonl
-    │   ├── failed-supports.jsonl           # suportes que não produziram representação
-    │   └── payloads/vectors.f32|f64        # vetores, uma linha de tamanho fixo cada
-    ├── metrics/
-    │   └── counts.json  support-size.json  norms.json  runtime.json
-    └── debug/                              # somente standard/full; nunca inventariado
+<run>/point_representation/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json                       # identidade, linhagem e inventário
+├── outputs/
+│   ├── representations.jsonl           # PointRepresentation canônica, uma por linha
+│   ├── representation-index.jsonl      # representation_id → deslocamento e tamanho
+│   ├── representation-spaces.json      # RepresentationSpace do run + fingerprint
+│   ├── geometry-representation-index.jsonl
+│   ├── failed-supports.jsonl           # suportes que não produziram representação
+│   └── payloads/vectors.f32|f64        # vetores, uma linha de tamanho fixo cada
+├── metrics/
+│   └── counts.json  support-size.json  norms.json  runtime.json
+└── debug/                              # somente standard/full; nunca inventariado
 ```
 
 O `manifest.json` traz a linhagem (mapa geométrico consumido, seleção dos centros independente da ordem, política de suporte, espaço, encoder e hash do checkpoint, código, contexto de associação **opcional e explícito**) e o inventário. Um suporte que falhou vai para `failed-supports.jsonl` com o motivo; um run só de falhas é um run válido e explícito, e um vetor nunca é inventado. O run abre sem NumPy, sem biblioteca de modelo e sem o mapa geométrico, e os vetores são lidos sob demanda. O escritor ainda acumula em memória; a escrita em fluxo de `shared.run_directory` ainda não foi adotada por ele. Detalhes: [Point Representation artifact](../src/contextmap/point_representation/docs/artifact.md).
@@ -296,23 +315,21 @@ O `manifest.json` traz a linhagem (mapa geométrico consumido, seleção dos cen
 ### `SemanticFusionRunArtifact` atual
 
 ```text
-workspace/runs/semantic-fusion/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<policy>/
-    ├── README.md
-    ├── manifest.json                          # identidade, linhagem explícita, políticas e inventário
-    ├── outputs/
-    │   ├── fusion-supports.jsonl              # um FusionSupport por linha
-    │   ├── fused-evidence.jsonl               # um FusedEvidence por linha (autocontido)
-    │   ├── support-observation-index.jsonl    # suporte → observações, offsets nos dois arquivos
-    │   ├── hypothesis-evidence-index.jsonl    # hipótese → evidência exata
-    │   ├── physical-observation-groups.jsonl  # grupos por frame físico de cada suporte
-    │   ├── contribution-index.jsonl           # contribuição → suporte, observação, resultado, run
-    │   └── excluded-observations.jsonl        # evidência pulada, com o motivo
-    ├── metrics/
-    │   ├── counts.json  distributions.json  payload.json
-    │   └── runtime.json                       # somente quando medido
-    └── debug/                                 # somente standard/full; nunca inventariado
+<run>/semantic_fusion/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json                          # identidade, linhagem explícita, políticas e inventário
+├── outputs/
+│   ├── fusion-supports.jsonl              # um FusionSupport por linha
+│   ├── fused-evidence.jsonl               # um FusedEvidence por linha (autocontido)
+│   ├── support-observation-index.jsonl    # suporte → observações, offsets nos dois arquivos
+│   ├── hypothesis-evidence-index.jsonl    # hipótese → evidência exata
+│   ├── physical-observation-groups.jsonl  # grupos por frame físico de cada suporte
+│   ├── contribution-index.jsonl           # contribuição → suporte, observação, resultado, run
+│   └── excluded-observations.jsonl        # evidência pulada, com o motivo
+├── metrics/
+│   ├── counts.json  distributions.json  payload.json
+│   └── runtime.json                       # somente quando medido
+└── debug/                                 # somente standard/full; nunca inventariado
 ```
 
 O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenções e evidência não pontuada (`None`, nunca zero), e mantém frames físicos e resultados de inferência distintos. Nada a montante é duplicado: claims, scores, features, qualidade e estrutura 3D são referenciados, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, mapa, runs de associação, percepção e Point Representation), as políticas com fingerprint e as identidades que alimentaram cada canal. Um run é escrito em fluxo e publicado de forma atômica, e o leitor abre sem NumPy, sem runtime de percepção e sem biblioteca de modelo, lendo um suporte sem carregar os outros. Semantic Mapping não pode depender de `debug/`. A `schema_version` atual é `0.2.0`: a `0.1.0` somava `inference_results` por suporte (o mesmo campo com outro denominador) e é recusada ao abrir. Detalhes: [Semantic Fusion artifact](../src/contextmap/semantic_fusion/docs/artifact.md).
@@ -320,24 +337,22 @@ O artifact guarda **todas** as hipóteses, com alternativas, conflitos, abstenç
 ### `SemanticMappingRunArtifact` atual
 
 ```text
-workspace/runs/semantic-mapping/<sequence-name>/
-├── runs.json
-└── run-000N__<selection>__<policy>/
-    ├── README.md
-    ├── manifest.json                          # identidade, schemas, code digest, linhagem, política e inventário
-    ├── outputs/
-    │   ├── entities.jsonl                     # uma Entity canônica por linha (autocontida, autoritativa)
-    │   ├── entity-index.jsonl                 # entidade → deslocamento e tamanho
-    │   ├── entity-geometry-index.jsonl        # entidade → mapa, frame, pontos, limites, centroide, diagnósticos
-    │   ├── entity-evidence-index.jsonl        # entidade → evidência fundida e contagens
-    │   ├── entity-observation-index.jsonl     # uma linha por (entidade, frame físico)
-    │   ├── entity-semantic-state.jsonl        # entidade → ambiguidade, primária, labels, atributos, incerteza
-    │   ├── entity-temporal-state.jsonl        # entidade → first/last seen, contagens, ciclo de vida
-    │   └── rejected-candidates.jsonl          # candidatos que não viraram entidade, com o motivo
-    ├── metrics/
-    │   ├── counts.json  distributions.json  payload.json
-    │   └── runtime.json                       # somente quando medido
-    └── debug/                                 # somente standard/full; nunca inventariado
+<run>/semantic_mapping/            # o output_dir entregue ao writer
+├── README.md
+├── manifest.json                          # identidade, linhagem do run de fusão, política e inventário
+├── outputs/
+│   ├── entities.jsonl                     # uma Entity canônica por linha (autocontida, autoritativa)
+│   ├── entity-index.jsonl                 # entidade → deslocamento e tamanho
+│   ├── entity-geometry-index.jsonl        # entidade → mapa, frame, pontos, limites, centroide, diagnósticos
+│   ├── entity-evidence-index.jsonl        # entidade → evidência fundida e contagens
+│   ├── entity-observation-index.jsonl     # uma linha por (entidade, frame físico)
+│   ├── entity-semantic-state.jsonl        # entidade → ambiguidade, primária, labels, atributos, incerteza
+│   ├── entity-temporal-state.jsonl        # entidade → first/last seen, contagens, ciclo de vida
+│   └── rejected-candidates.jsonl          # candidatos que não viraram entidade, com o motivo
+├── metrics/
+│   ├── counts.json  distributions.json  payload.json
+│   └── runtime.json                       # somente quando medido
+└── debug/                                 # somente standard/full; nunca inventariado
 ```
 
 O artifact guarda **todas** as hipóteses, conflitos, abstenções e sinais sem score de cada entidade, mantém frames físicos e resultados de inferência distintos e **não** contém estado de merge, split ou resolução. Nada a montante é duplicado: a evidência é referenciada com a identidade, a versão do schema, o digest do inventário e a sequência canônica do artifact de fusão; features visuais preservam a identidade completa `(perception_run_id, perception_result_id, feature_id)`, e a geometria é guardada como deltas posicionais. `manifest.json` traz a linhagem **explícita** (sequência, run de fusão selecionado, mapa geométrico e, pela linhagem da fusão, as runs de associação, percepção e Point Representation), a política de materialização e o fingerprint da configuração. Também separa `schema_version` de `entity_schema_version` e registra `code_version`/`code_digest`; um run guarda uma política. O leitor abre sem NumPy, sem runtime de percepção, de fusão ou de modelo, resolve uma `EntityReference` sem carregar as demais e recusa uma referência de outro semantic map. Entity Resolution e Spatial Relations não podem depender de `debug/`. Detalhes: [Semantic Mapping artifact](../src/contextmap/semantic_mapping/docs/artifact.md).
@@ -365,7 +380,7 @@ O artifact guarda **todas** as hipóteses, conflitos, abstenções e sinais sem 
 └── debug/                                 # somente standard/full; nunca inventariado
 ```
 
-Diferente dos artifacts anteriores, o escritor recebe o **diretório final** (`output_dir`) e não aloca índice de execução nem mantém `runs.json`; o `run_id` (o escopo de todo id resolvido) vem de quem chama, e o diretório é finalizado de forma atômica (`AtomicRunDirectory`). O artifact guarda **todas** as decisões, não só as `MATCH`, e as contradições de transitividade e os pares deixados em aberto, porque uma fusão nunca substitui a evidência de que veio. Um run nunca é reescrito e uma escrita interrompida não deixa run.
+Como todo writer de estágio, o escritor recebe o **diretório final** (`output_dir`) e não aloca índice de execução nem mantém `runs.json`; o `run_id` (o escopo de todo id resolvido) vem de quem chama, e o diretório é finalizado de forma atômica (`AtomicRunDirectory`). O artifact guarda **todas** as decisões, não só as `MATCH`, e as contradições de transitividade e os pares deixados em aberto, porque uma fusão nunca substitui a evidência de que veio. Um run nunca é reescrito e uma escrita interrompida não deixa run.
 
 Política e linhagem ficam em `manifest.json` (uma política por papel: recuperação, resolução, materialização, divisão e cada canal), como nos artifacts irmãos; não há `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl`. A linhagem nomeia o run de Semantic Mapping selecionado com a **identidade, a versão do schema e o digest do inventário**, e a partir dela o mapa geométrico e os runs de percepção e de Point Representation. Quem consome o run (Spatial Relations) fixa a versão do schema e o `resolution_artifact_digest`, calculado por Entity Resolution com a mesma regra dos artifacts anteriores. Todo registro é reconstruído pelo construtor do contrato na leitura, então uma linha adulterada é recusada; `verify_integrity()` acusa arquivo faltando, tamanho ou hash diferentes; o leitor abre sem NumPy nem qualquer runtime. Detalhes: [artifact de Entity Resolution](../src/contextmap/entity_resolution/docs/artifact.md).
 
@@ -472,16 +487,17 @@ Detalhes: [reference set](../src/contextmap/evaluation/docs/reference-set.md), [
 
 ### Registros de execução do runtime
 
-Uma execução do runtime deixa um registro em `<workspace>/runtime/run-NNNN/`. Ele não é um artifact de capability (tem formato próprio e não passa por `contextmap.shared.run_directory`), mas registra a linhagem exata da execução. O número é alocado de forma atômica, então execuções concorrentes nunca compartilham um diretório.
+Uma execução do runtime deixa um registro em `<workspace>/<dataset>/run-NNNN/`, o diretório do run, e cada estágio que ela executa grava o seu artifact numa pasta ao lado do diário (`<run>/<estágio>/`). Ele não é um artifact de capability (tem formato próprio e não passa por `contextmap.shared.run_directory`), mas registra a linhagem exata da execução. O número é alocado de forma atômica, então execuções concorrentes nunca compartilham um diretório.
 
 ```text
-runtime/run-0001/
+<dataset>/run-0001/
 ├── effective_config.json   # configuração efetiva, digest e camadas; sem segredos
 ├── plan.json               # topologia resolvida, com digest (só sem problema estrutural)
 ├── status.json             # estado atual, reescrito atomicamente
 ├── events.jsonl            # eventos append-only, numerados sem lacuna
 ├── execution.json          # entradas e saídas exatas por estágio (só run concluído)
-└── run.lock                # pid do processo dono, só enquanto o run está vivo
+├── run.lock                # pid do processo dono, só enquanto o run está vivo
+└── <estágio>/              # o artifact de cada estágio executado neste run (não copiado quando reutilizado)
 ```
 
 `status.json` e `events.jsonl` mudam enquanto o run executa; depois de um estado terminal nada é reescrito, e retomar um run cria um run **novo**. Um processo que morre deixa um registro consistente e inspecionável (`interrupted`). O registro é a autoridade sobre a linhagem de uma execução: os estágios são referenciados por `ArtifactRef` (id e hash) e a inspeção nunca infere o que o registro não contém.
@@ -507,18 +523,16 @@ run-0004  # nova execução com configuração diferente
 
 ## Identidade de run
 
-Artifacts de execução devem usar índices monotônicos por capability + sequence quando aplicável.
-
-Exemplo:
+A identidade de um artifact de estágio é entregue pelo chamador (`run_id`), nunca alocada pelo writer ([Contrato dos writers de estágio](#contrato-dos-writers-de-estágio)). Cada execução da runtime é um `run-NNNN` próprio dentro do dataset, e cada estágio executado vive em `<run>/<estágio>/`:
 
 ```text
-workspace/runs/visual-perception/corridor-02/
-├── run-0001__frames-0120-0260__sam3-dinov2-gemini/
-├── run-0002__frames-0120-0260__sam3-dinov2-qwen/
-└── run-0003__frames-0120-0260__sam3-dinov2-gemini-prompt-v2/
+workspace/corridor-02/
+├── run-0001/state_estimation/    # ExternalPose, versão A
+├── run-0002/state_estimation/    # ExternalPose, versão B da configuração
+└── run-0003/                     # só o diário: tudo reutilizado por ArtifactRef
 ```
 
-O run index é conveniente e legível, mas não substitui artifact identity, hashes e manifest.
+O `run_index` gravado no manifest é um ordinal legível fornecido pelo chamador, mas não substitui artifact identity, hashes e manifest.
 
 Timestamp de criação pertence ao manifest. Ele não precisa ser o identificador principal do diretório.
 
@@ -527,7 +541,7 @@ Timestamp de criação pertence ao manifest. Ele não precisa ser o identificado
 Cada capability pode ter payloads diferentes, mas a organização conceitual deve permanecer previsível:
 
 ```text
-run-000N__<selection>__<profile>/
+<run>/<estágio>/
 ├── README.md
 ├── manifest.json
 ├── config.yaml
@@ -865,16 +879,15 @@ Nenhum payload precisa ser copiado para construir essa view.
 
 ## Registry local
 
-Um `runs.json` ou índice equivalente pode ajudar discovery, mas deve ser reconstruível.
+Não há registro por capability: o discovery é a listagem dos diretórios `<dataset>/run-NNNN` (`Runtime.list_runs()`), e o índice de reuso e o catálogo de seleção da runtime são insumos explícitos e reconstruíveis.
 
 O artifact individual é self-describing através do próprio manifest.
 
 Consequências:
 
-- um run pode ser aberto sem registry global;
-- registry ausente não invalida artifacts corretos;
-- registry stale pode ser reconstruído a partir dos manifests;
-- diretórios incompletos não entram como runs válidos.
+- um run pode ser aberto apenas pelo seu diretório, sem registry algum;
+- não existe registry que possa ficar stale: o discovery é a listagem de `<dataset>/run-NNNN`;
+- diretórios incompletos nunca aparecem como runs, porque o diretório final só existe depois da finalização atômica.
 
 ## Reuso e cache identity
 
@@ -1078,7 +1091,7 @@ Provider/model identity, request metadata não sensível, latency, retry count e
 1. Artifacts finalizados são imutáveis.
 2. Reexecução gera nova identity.
 3. `outputs/` é contratual, `debug/` não é.
-4. Um run pode ser aberto sem registry global.
+4. Um run pode ser aberto pelo seu diretório, sem registry.
 5. Runs upstream são selecionados explicitamente.
 6. Identity depende de conteúdo/configuração relevante, não apenas path.
 7. Reuso nunca altera o artifact reutilizado.

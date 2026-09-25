@@ -20,10 +20,12 @@ from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
     SemanticBackendDiagnostics,
     SemanticInterpretationExecution,
+    semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
     SemanticConfidencePolicy,
     SemanticPromptTemplate,
+    SemanticResponseParseError,
     parse_semantic_response,
     render_semantic_prompt,
 )
@@ -235,23 +237,36 @@ class GeminiSemanticInterpreter:
             ),
         )
         configuration: Mapping[str, JsonScalar] = MappingProxyType(self._config.to_dict())
-        return SemanticInterpretationExecution(
-            request=request,
-            rendered_prompt=rendered,
-            raw_response=response.text,
-            parsed=parse_semantic_response(
+        diagnostics = SemanticBackendDiagnostics(
+            latency_ms=(time.monotonic() - started) * 1000,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            retries=retries,
+            warnings=response.warnings,
+        )
+        try:
+            parsed = parse_semantic_response(
                 response.text,
                 request,
                 provenance,
                 confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
-            ),
-            diagnostics=SemanticBackendDiagnostics(
-                latency_ms=(time.monotonic() - started) * 1000,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                retries=retries,
-                warnings=response.warnings,
-            ),
+            )
+        except SemanticResponseParseError as error:
+            raise semantic_failure_from_parse_error(
+                error,
+                request=request,
+                rendered_prompt=rendered,
+                raw_response=response.text,
+                provenance=provenance,
+                diagnostics=diagnostics,
+                effective_configuration=configuration,
+            ) from error
+        return SemanticInterpretationExecution(
+            request=request,
+            rendered_prompt=rendered,
+            raw_response=response.text,
+            parsed=parsed,
+            diagnostics=diagnostics,
             effective_configuration=configuration,
         )
 

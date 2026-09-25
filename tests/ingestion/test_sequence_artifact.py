@@ -951,3 +951,35 @@ def test_failed_cleanup_is_attached_to_the_original_error_instead_of_replacing_i
         raise RuntimeError("boom")
 
     assert any("temporary" in note for note in excinfo.value.__notes__)
+
+
+def test_index_entry_carries_modality_so_callers_can_filter_without_decoding_payloads(
+    tmp_path: Path,
+) -> None:
+    """Semantic Fusion only needs image timestamps, but had to decode every payload (#514).
+
+    ``index.jsonl`` already records each observation's modality, so a caller can select the
+    image observations while paying only the index cost. On the real corridor-02 sequence
+    that is a 24 MB index instead of a 2.6 GB decode.
+    """
+    writer = _writer(tmp_path)
+    _build_fixture_sequence(writer)
+    writer.finalize()
+
+    reader = SequenceArtifactReader(_output_dir(tmp_path))
+    entries = list(reader.iter_index())
+
+    assert [entry.modality for entry in entries] == [
+        "image",
+        "image",
+        "lidar",
+        "imu",
+        "external_pose",
+    ]
+    image_timestamps = {
+        entry.observation_id: entry.timestamp for entry in entries if entry.modality == "image"
+    }
+    assert set(image_timestamps) == {
+        SourceObservationId("frame-0001"),
+        SourceObservationId("frame-0002"),
+    }

@@ -11,7 +11,7 @@ composition root's job.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from contextmap.state_estimation.ports import (
     StateEstimationError,
@@ -98,7 +98,43 @@ def execute_state_estimation(
 
     result = estimator.estimate(request)
     _require_result_answers_request(estimator, request, requirements, result)
+    result = _with_auxiliary_lineage(request, result)
     return StateEstimationOutcome(preflight=report, result=result)
+
+
+def _with_auxiliary_lineage(
+    request: StateEstimationRequest, result: StateEstimationResult
+) -> StateEstimationResult:
+    """Copy the request's auxiliary sequence identity onto the published trajectory's provenance.
+
+    Issue #555's auxiliary pose bridge merges an auxiliary sequence's observations into
+    ``request.observations`` before any backend runs; no backend is aware of the merge or of
+    which artifact the merged observations came from, so this -- not any individual backend --
+    is where every backend's ``TrajectoryProvenance`` is made to name that artifact, whichever
+    backend answered the request.
+
+    Args:
+        request: The request a backend just answered.
+        result: What the backend returned, already checked against the request.
+
+    Returns:
+        ``result`` unchanged when ``request.auxiliary_sequence_artifact_id`` is ``None``;
+        otherwise the same result with the trajectory's provenance carrying the auxiliary
+        artifact and selection identity.
+    """
+    if request.auxiliary_sequence_artifact_id is None:
+        return result
+    return replace(
+        result,
+        trajectory=replace(
+            result.trajectory,
+            provenance=replace(
+                result.trajectory.provenance,
+                auxiliary_sequence_artifact_id=request.auxiliary_sequence_artifact_id,
+                auxiliary_selection_id=request.auxiliary_selection_id,
+            ),
+        ),
+    )
 
 
 def _require_result_answers_request(

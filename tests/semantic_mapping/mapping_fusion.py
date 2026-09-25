@@ -82,7 +82,7 @@ def write_run(
     excluded: Sequence[ExcludedObservation] = (),
 ) -> FusionRun:
     """Persist fusion outcomes as a real run artifact and reopen it from disk."""
-    run_dir = workspace / "run-0001"
+    run_dir = workspace / "semantic_fusion"
     manifest = SemanticFusionRunWriter(
         output_dir=run_dir,
         sequence_name="sequence-0001",
@@ -156,7 +156,7 @@ def write_mapping_run(
     rejections: Sequence[CandidateRejection] = (),
 ) -> Path:
     """Persist entities as a real Semantic Mapping run and return the run directory."""
-    run_dir = workspace / "run-0001"
+    run_dir = workspace / "semantic_mapping"
     SemanticMappingRunWriter(
         output_dir=run_dir,
         sequence_name="sequence-0001",

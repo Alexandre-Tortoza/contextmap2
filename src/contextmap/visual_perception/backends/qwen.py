@@ -25,10 +25,12 @@ from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
     SemanticBackendDiagnostics,
     SemanticInterpretationExecution,
+    semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
     SemanticConfidencePolicy,
     SemanticPromptTemplate,
+    SemanticResponseParseError,
     parse_semantic_response,
     render_semantic_prompt,
 )
@@ -204,25 +206,40 @@ class QwenSemanticInterpreter:
                 f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
             ),
         )
-        parsed = parse_semantic_response(
-            response.text,
-            request,
-            provenance,
-            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        diagnostics = SemanticBackendDiagnostics(
+            latency_ms=latency_ms,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            peak_memory_bytes=response.peak_memory_bytes,
+            warnings=response.warnings,
         )
         configuration: Mapping[str, JsonScalar] = MappingProxyType(self._config.to_dict())
+        try:
+            parsed = parse_semantic_response(
+                response.text,
+                request,
+                provenance,
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            )
+        except SemanticResponseParseError as error:
+            # A resposta foi realmente observada: preserva-la e o ponto. Reduzi-la a
+            # str(error) perderia o que o modelo disse, que e a evidencia que permite
+            # diagnosticar truncamento, drift de schema ou prompt mal especificado.
+            raise semantic_failure_from_parse_error(
+                error,
+                request=request,
+                rendered_prompt=rendered,
+                raw_response=response.text,
+                provenance=provenance,
+                diagnostics=diagnostics,
+                effective_configuration=configuration,
+            ) from error
         return SemanticInterpretationExecution(
             request=request,
             rendered_prompt=rendered,
             raw_response=response.text,
             parsed=parsed,
-            diagnostics=SemanticBackendDiagnostics(
-                latency_ms=latency_ms,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                peak_memory_bytes=response.peak_memory_bytes,
-                warnings=response.warnings,
-            ),
+            diagnostics=diagnostics,
             effective_configuration=configuration,
         )
 

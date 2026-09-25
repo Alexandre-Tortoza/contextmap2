@@ -36,6 +36,7 @@ from contextmap.evaluation.semantic_interpretation import (
     SemanticEvaluationContext,
     SemanticEvaluationFailure,
     SemanticEvaluationInput,
+    SemanticEvaluationReport,
     SemanticStratum,
     StratumSource,
     evaluate_semantic_interpretation,
@@ -279,6 +280,20 @@ def _execution(
     )
 
 
+def _semantic_report() -> SemanticEvaluationReport:
+    """One minimal evaluated semantic report, shared by the attempt-accounting tests."""
+    return evaluate_semantic_interpretation(
+        context=_semantic_context(),
+        inputs=(
+            SemanticEvaluationInput(
+                execution=_execution("r1"),
+                evidence_variant_id="tight-crop",
+                annotation=SemanticAnnotation(acceptable_hypotheses=("wooden pallet",)),
+            ),
+        ),
+    )
+
+
 def test_semantic_report_becomes_quality_and_performance_metrics() -> None:
     report = evaluate_semantic_interpretation(
         context=_semantic_context(),
@@ -464,3 +479,66 @@ def test_any_stage_report_can_ride_in_the_envelope_with_shared_metadata() -> Non
     assert wrapped.quality_metrics == () and wrapped.performance_metrics == ()
     assert wrapped.stage_report is not None
     assert wrapped.reproducibility == metadata
+
+
+def test_the_lifted_report_carries_the_parse_failure_rate() -> None:
+    """A stage where a third of the responses never parsed must not read as fully healthy."""
+    from contextmap.evaluation import SemanticAttemptAccounting, SemanticMeasurementStatus
+
+    report = _semantic_report()
+    lifted = semantic_interpretation_evaluation_report(
+        report,
+        registry=REGISTRY,
+        reference_set=_reference(),
+        attempts=SemanticAttemptAccounting(attempted=3, parsed=2, parse_failed=1),
+    )
+
+    quality = _by_metric(lifted.quality_metrics)
+    assert quality["semantic.parse_failure_rate"].value == pytest.approx(1 / 3)
+    assert quality["semantic.parse_failure_rate"].sample_count == 3
+    assert lifted.stage_report is not None
+    attempts = lifted.stage_report["attempts"]
+    assert attempts == {
+        "attempted": 3,
+        "parsed": 2,
+        "parse_failed": 1,
+        "measurement_status": SemanticMeasurementStatus.COMPLETE.value,
+    }
+
+
+def test_a_legacy_run_reports_no_parse_failure_rate_instead_of_zero() -> None:
+    """Never tracked is not the same as zero failures; reporting 0.0 would hide the gap."""
+    from contextmap.evaluation import SemanticAttemptAccounting, SemanticMeasurementStatus
+
+    lifted = semantic_interpretation_evaluation_report(
+        _semantic_report(),
+        registry=REGISTRY,
+        reference_set=_reference(),
+        attempts=SemanticAttemptAccounting(
+            attempted=616,
+            parsed=616,
+            parse_failed=0,
+            measurement_status=SemanticMeasurementStatus.LEGACY_LOWER_BOUND,
+        ),
+    )
+
+    quality = _by_metric(lifted.quality_metrics)
+    assert quality["semantic.parse_failure_rate"].status is MetricStatus.NOT_APPLICABLE
+    assert quality["semantic.parse_failure_rate"].value is None
+    assert lifted.stage_report is not None
+    assert (
+        lifted.stage_report["attempts"]["measurement_status"]
+        == SemanticMeasurementStatus.LEGACY_LOWER_BOUND.value
+    )
+
+
+def test_a_report_without_attempt_accounting_stays_backward_compatible() -> None:
+    """Callers that do not supply the accounting keep working, with the metric unavailable."""
+    lifted = semantic_interpretation_evaluation_report(
+        _semantic_report(), registry=REGISTRY, reference_set=_reference()
+    )
+
+    quality = _by_metric(lifted.quality_metrics)
+    assert quality["semantic.parse_failure_rate"].status is MetricStatus.NOT_APPLICABLE
+    assert lifted.stage_report is not None
+    assert "attempts" not in lifted.stage_report

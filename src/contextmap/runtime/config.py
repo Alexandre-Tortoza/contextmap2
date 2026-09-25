@@ -194,16 +194,25 @@ class ResourcesConfig:
     providers: Mapping[str, str]
 
 
+TRAJECTORY_MODES = ("operational_only", "allow_ground_truth")
+
+
 @dataclass(frozen=True, kw_only=True)
 class PoliciesConfig:
-    """How much diagnostic evidence an execution persists.
+    """How much diagnostic evidence an execution persists, and cross-cutting run policies.
 
     Attributes:
         debug_level: ``"none"``, ``"standard"`` or ``"full"``. Debug output is never a
             contractual dependency of a downstream stage.
+        trajectory_mode: ``"operational_only"`` (default) or ``"allow_ground_truth"`` (issue
+            #555). Governs whether ``state_estimation``'s optional auxiliary pose input, when
+            declared ``pose_role="ground_truth"``, may become the operational trajectory; the
+            default keeps a ground-truth-tagged auxiliary pose from affecting the run at all,
+            exactly as if it were absent.
     """
 
     debug_level: str
+    trajectory_mode: str = "operational_only"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -262,7 +271,10 @@ class RuntimeConfig:
                 "workspace": self.resources.workspace,
                 "providers": dict(self.resources.providers),
             },
-            "policies": {"debug_level": self.policies.debug_level},
+            "policies": {
+                "debug_level": self.policies.debug_level,
+                "trajectory_mode": self.policies.trajectory_mode,
+            },
         }
 
 
@@ -720,7 +732,7 @@ def _profile_document(profile: str) -> dict[str, Any]:
         "components": components,
         "inputs": {"sequence": None, "selections": {}, "named": {}},
         "resources": {"device": None, "workspace": None, "providers": {}},
-        "policies": {"debug_level": "none"},
+        "policies": {"debug_level": "none", "trajectory_mode": "operational_only"},
     }
 
 
@@ -1109,7 +1121,7 @@ def _parse_providers(value: object, problems: list[ConfigProblem]) -> Mapping[st
 
 def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesConfig:
     section = _mapping(value, "policies", problems)
-    _reject_unknown(section, {"debug_level"}, "policies", problems)
+    _reject_unknown(section, {"debug_level", "trajectory_mode"}, "policies", problems)
     level = section.get("debug_level", "none")
     if level not in DEBUG_LEVELS:
         problems.append(
@@ -1119,7 +1131,16 @@ def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesCon
             )
         )
         level = "none"
-    return PoliciesConfig(debug_level=str(level))
+    trajectory_mode = section.get("trajectory_mode", "operational_only")
+    if trajectory_mode not in TRAJECTORY_MODES:
+        problems.append(
+            ConfigProblem(
+                path="policies.trajectory_mode",
+                message=f"is {trajectory_mode!r}; expected one of {', '.join(TRAJECTORY_MODES)}",
+            )
+        )
+        trajectory_mode = "operational_only"
+    return PoliciesConfig(debug_level=str(level), trajectory_mode=str(trajectory_mode))
 
 
 def _declared_channels(parameters: Mapping[str, ConfigValue]) -> tuple[ConfigValue, ...]:

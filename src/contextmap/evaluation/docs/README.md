@@ -2,7 +2,7 @@
 
 ## Responsabilidade
 
-Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip) e Entity Resolution (validação de um `EntityResolutionRunArtifact` e avaliação de identidade contra uma referência explícita, com fusão falsa, duplicata e recuperação em separado). Além dos harnesses por capability, o módulo possui o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
+Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar os resultados do pipeline. As implementações atuais cobrem Feature Extraction, Region Discovery e Semantic Interpretation por meio de relatórios determinísticos sobre contratos públicos de `visual_perception`, State Estimation (relatórios sobre `Trajectory` e seus artifacts), Sensor Association (relatórios estratificados sobre um `SensorAssociationRunArtifact`), Geometric Mapping (validação de um `GeometricMapArtifact` persistido), Point Representation (harness de ablação entre `off`, descritor determinístico e encoders aprendidos) Semantic Fusion (consistência multi-vista, preservação de incerteza e ablações de política e de canais) e Semantic Mapping (validação de um `SemanticMappingRunArtifact` em seis camadas: contrato, preservação semântica, linhagem de evidência, tempo, fronteira de materialização e round-trip) e Entity Resolution (validação de um `EntityResolutionRunArtifact` e avaliação de identidade contra uma referência explícita, com fusão falsa, duplicata e recuperação em separado). Além dos harnesses por capability, o módulo possui o **cenário end-to-end** congelado e a matriz de aceitação (`end_to_end`, `canonical_scenario`) e o **reference set** versionado (manifesto de amostras, anotações, proveniência e splits) contra o qual as avaliações oficiais rodam.
 
 ## O que este módulo explicitamente não possui
 
@@ -126,6 +126,20 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 - `compare_representation_arms()`/`RepresentationAblationReport` — comparação lado a lado que rejeita drift de mapa, centros e configuração downstream; sem score nem vencedor.
 - `encode_representation_arm_report()`/`encode_representation_ablation_report()` — representação JSON com todas as identidades.
 
+### Cenário end-to-end e matriz de aceitação
+
+- `E2EScenario`/`ScenarioSubject`/`ScenarioStage`/`AblationOnlyOption` — o cenário congelado: a sequência registrada e a seleção fixadas por identidade, o perfil canônico de backends e as opções que só entram por ablação. Tem `digest` próprio e `matrix_digest`; um snapshot JSON revisável fica em `docs/scenarios/`.
+- `canonical_real_scenario()`/`canonical_ci_scenario()` — o cenário sobre a amostra real do `corridor-02` e sobre o subconjunto sintético de CI, com a mesma matriz.
+- `scenario_runtime_document()` — o documento de configuração do runtime que expressa o perfil canônico (preset, opcionais desligados, seleção de backend), sem uma segunda fonte de verdade.
+- `AcceptanceGate`/`GateKind` — um gate por requisito de estágio, com a capability responsável, as métricas do registro e as anotações que exige. Não há score global.
+- `GateResult`/`GateStatus`/`EvidenceClass` — resultado por gate: `passed`, `failed`, `blocked` ou `not_evaluated`, com evidência `real` ou `fake_contract` e a capability que responde por falha ou bloqueio.
+- `assemble_acceptance_report()`/`AcceptanceReport`/`unmet_required_gates()`/`encode_acceptance_report()`/`write_acceptance_report()` — o relatório de aceitação: exatamente um resultado por gate, evidência de contrato nunca cumpre um gate, escrita imutável.
+
+### Invariantes entre estágios
+
+- `check_cross_stage()`/`CrossStageInputs`/`CrossStageReport`/`CrossStageFinding` — lineage, frames, rastreabilidade e identidade física entre os artifacts persistidos; cada achado nomeia a capability responsável e o avaliador nunca repara um artifact.
+- `cross_stage_gate_results()` — converte o relatório nos quatro gates `cross_stage.*`: falha com achado, `blocked` quando restam fronteiras não verificáveis, aprovado só com todas verificadas.
+
 ### Reference set
 
 - `ReferenceSetManifest`/`ReferenceSetIdentity` — manifesto versionado e hasheado do reference set: fontes, calibrações, amostras ligadas a `SourceObservationId`, estratos, anotações, proveniência e splits.
@@ -150,8 +164,8 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 ### Subconjunto de fixtures para CI
 
 - `generate_ci_fixture_subset()`/`build_synthetic_sequence()` — gera, só com fórmulas, uma sequência sintética canônica (RGB, LiDAR, pose, calibração), o reference set do subconjunto e o catálogo; commitado em `tests/fixtures/ci_subset/<versão>/`.
-- `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash; a matriz de cobertura registra explicitamente o que o subconjunto **não** cobre (fusão multi-vista e round-trip do `ContextMapArtifact`).
-- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A regressão entre módulos que ele sustenta é parcial: a cadeia "da ingestão até o artifact final" (#172) depende de fusão multi-vista, do `ContextMapArtifact` e de Entity Resolution/Spatial Relations.
+- `FixtureCatalogue`/`FixtureCase`/`CoverageEntry` — casos com id estável, casos-limite, saídas esperadas, tolerâncias, proveniência, licença, redistribuição e hash.
+- O subconjunto protege contra regressões e não substitui a avaliação com dados reais. A cadeia "da ingestão até o artifact final" (#172) existe como uma segunda regressão, `tests/end_to_end/chain.py`/`acceptance.py`: roda o código real de todo estágio -- incluindo fusão multi-vista, Entity Resolution, Spatial Relations e a montagem do `ContextMapArtifact` -- sobre o subconjunto sintético, sem GPU nem rede, e valida o round-trip completo do artifact final.
 
 ### Registro de métricas e relatório comum
 
@@ -210,6 +224,7 @@ pipeline principal.
 - [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
+- [`end-to-end.md`](end-to-end.md) — cenário canônico congelado, perfil de backends, opções só por ablação, matriz de aceitação por estágio, relatório sem score global e regras de versionamento.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.

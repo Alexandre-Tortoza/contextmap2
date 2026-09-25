@@ -161,7 +161,7 @@ def build_geometry_artifact(
         motion_correction=None,
         state_estimation_run_id=None,
     )
-    run_dir = workspace_root / "run-0001"
+    run_dir = workspace_root / "geometric_mapping"
     manifest = GeometricMapArtifactWriter(
         output_dir=run_dir,
         sequence_name=SEQUENCE_NAME,

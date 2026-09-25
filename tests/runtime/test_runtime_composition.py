@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 import runtime_provider_fixtures
 from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import EXTENDED_PROFILE_ID, ConfigurationError
+from contextmap.runtime import ConfigurationError
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -90,18 +90,6 @@ def _compose(
     options.setdefault("module_available", lambda _name: True)
     options.setdefault("environ", {})
     return compose(effective_from(tmp_path, document), providers=_providers(recorder), **options)
-
-
-def _extended_document(document: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``selected_document()`` (or ``document``) resolved against ``canonical/2``.
-
-    ``canonical/1``, the default profile, ends at ``semantic_fusion``: Entity Resolution and
-    Spatial Relations only exist under the extended topology (see the P1 fix of the PR #540
-    review, ``docs/runtime-composition.md``).
-    """
-    document = selected_document() if document is None else document
-    document.setdefault("pipeline", {})["preset"] = EXTENDED_PROFILE_ID
-    return document
 
 
 # Mesmas coordenadas que ``runtime_entities.InMemoryGeometrySource`` deriva para os índices
@@ -803,19 +791,19 @@ class TestStagesAndExtensionPoints:
         assert composed.point_encoder is None
         assert "point_representation" not in composed.stages
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_stages_without_an_implemented_capability_are_listed_not_simulated(
         self, tmp_path: Path
     ) -> None:
         composed = _compose(tmp_path)
 
-        assert set(composed.unavailable_stages) == {"context_map"}
-        assert "milestone" in composed.unavailable_stages["context_map"]
+        assert set(composed.unavailable_stages) == {"scene_graph"}
+        assert "milestone" in composed.unavailable_stages["scene_graph"]
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_asking_explicitly_for_an_unavailable_stage_fails_clearly(self, tmp_path: Path) -> None:
-        with pytest.raises(StageUnavailableError, match="context_map"):
-            _compose(tmp_path, stages=["context_map"])
+        with pytest.raises(StageUnavailableError, match="scene_graph"):
+            _compose(tmp_path, stages=["scene_graph"])
 
     def test_a_subset_of_stages_builds_only_those(self, tmp_path: Path) -> None:
         recorder = _Recorder()
@@ -844,11 +832,9 @@ class TestCatalogAgreement:
         assert composable_backends() == declared
 
     def test_every_available_stage_of_the_catalog_has_a_composer(self) -> None:
-        from contextmap.runtime.catalog import EXTENDED_PRESET
+        from contextmap.runtime.catalog import CANONICAL_PRESET
 
-        # EXTENDED_PRESET é o superconjunto de estágios declarados (canonical/1 + os três que
-        # só canonical/2 adiciona), então cobre todo estágio que precisaria de um composer.
-        available = {stage.stage_id for stage in EXTENDED_PRESET.stages if stage.available}
+        available = {stage.stage_id for stage in CANONICAL_PRESET.stages if stage.available}
 
         assert composed_stages() == available
 
@@ -866,6 +852,7 @@ class TestComposeExecutors:
         self, tmp_path: Path
     ) -> None:
         from contextmap.runtime.executors import (
+            ContextMapExecutor,
             EntityResolutionExecutor,
             GeometricMappingExecutor,
             SemanticFusionExecutor,
@@ -875,7 +862,7 @@ class TestComposeExecutors:
         )
 
         executors = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
         )
@@ -887,6 +874,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
         assert isinstance(executors["state_estimation"], StateEstimationExecutor)
         assert isinstance(executors["geometric_mapping"], GeometricMappingExecutor)
@@ -894,6 +882,7 @@ class TestComposeExecutors:
         assert isinstance(executors["semantic_fusion"], SemanticFusionExecutor)
         assert isinstance(executors["entity_resolution"], EntityResolutionExecutor)
         assert isinstance(executors["spatial_relations"], SpatialRelationsExecutor)
+        assert isinstance(executors["context_map"], ContextMapExecutor)
         # Nunca fabricado: capabilities sem executor real continuam ausentes, honestamente.
         # visual_perception fica de fora aqui porque a seleção padrão usa sam3, que não tem
         # loader embutido (precisa de um provider) -- não porque falte um VisualPerceptionExecutor
@@ -902,6 +891,71 @@ class TestComposeExecutors:
         assert "visual_perception" not in executors
         assert "point_representation" not in executors
         assert "semantic_mapping" not in executors
+
+    def test_the_trajectory_mode_policy_is_threaded_into_state_estimation(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #555: the ground-truth opt-in is a runtime policy, never a new
+        StateEstimationRequest field -- it only decides how the executor is built."""
+        from contextmap.runtime.executors import StateEstimationExecutor
+
+        default_executors = compose_executors(
+            effective_from(tmp_path, selected_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        document = selected_document()
+        document["policies"] = {"trajectory_mode": "allow_ground_truth"}
+        opted_in_executors = compose_executors(
+            effective_from(tmp_path, document),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        default_state_estimation = default_executors["state_estimation"]
+        opted_in_state_estimation = opted_in_executors["state_estimation"]
+        assert isinstance(default_state_estimation, StateEstimationExecutor)
+        assert isinstance(opted_in_state_estimation, StateEstimationExecutor)
+        assert default_state_estimation._allow_ground_truth_trajectory is False
+        assert opted_in_state_estimation._allow_ground_truth_trajectory is True
+
+    def test_pose_ingestion_is_never_composed_even_when_enabled(self, tmp_path: Path) -> None:
+        """Issue #555: like "ingestion" itself, this stage always needs a caller-supplied
+        IngestionRequest (here, a pose file path) -- never something this function can
+        derive from configuration alone."""
+        document = selected_document()
+        document["pipeline"]["stages"]["pose_ingestion"] = True
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        assert "pose_ingestion" not in executors
+
+    def test_semantic_mapping_composes_only_when_map_id_and_code_digest_are_both_given(
+        self, tmp_path: Path
+    ) -> None:
+        """Neither identity is configuration: this function never invents one (issue #177)."""
+        from contextmap.runtime.executors import SemanticMappingExecutor
+        from contextmap.semantic_mapping import SemanticMapId
+
+        without_identity = compose_executors(
+            effective_from(tmp_path, selected_document()),
+            module_available=lambda _name: True,
+            environ={},
+        )
+        assert "semantic_mapping" not in without_identity
+
+        with_identity = compose_executors(
+            effective_from(tmp_path, selected_document()),
+            module_available=lambda _name: True,
+            environ={},
+            semantic_map_id=SemanticMapId("semantic-map--test"),
+            code_digest="sha256:" + "cd" * 32,
+        )
+        assert isinstance(with_identity["semantic_mapping"], SemanticMappingExecutor)
 
     def test_spatial_relations_executor_reads_geometry_summary_only_from_its_policies(
         self, tmp_path: Path
@@ -917,7 +971,7 @@ class TestComposeExecutors:
         from contextmap.runtime.executors import SpatialRelationsExecutor
 
         executors = compose_executors(
-            effective_from(tmp_path, _extended_document()),
+            effective_from(tmp_path, selected_document()),
             module_available=lambda _name: True,
             environ={},
         )
@@ -931,7 +985,7 @@ class TestComposeExecutors:
     def test_a_stage_whose_variation_points_are_not_selected_is_left_out_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = _extended_document()
+        document = selected_document()
         del document["components"]["geometric_mapping"]
         del document["components"]["sensor_association"]
 
@@ -944,6 +998,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
 
     def test_a_broken_backend_in_one_stage_never_costs_another_stage_its_executor(
@@ -955,7 +1010,7 @@ class TestComposeExecutors:
         (see ``DiagnosticTolerances.__post_init__``), so composing that stage fails; the
         other stages, whose own configuration is unrelated, still compose normally.
         """
-        document = _extended_document()
+        document = selected_document()
         document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
             "max_reprojection_invalid_rate"
         ] = 2.0
@@ -970,6 +1025,7 @@ class TestComposeExecutors:
             "semantic_fusion",
             "entity_resolution",
             "spatial_relations",
+            "context_map",
         }
 
     def test_an_unselected_optional_channel_leaves_it_none_never_a_default_policy(
@@ -981,7 +1037,7 @@ class TestComposeExecutors:
         compatibility``, ``appearance``, ``representation``, ``geometric_predicate`` or
         ``contact_predicate``: the stages still compose, with the geometry-only path.
         """
-        composed = _compose(tmp_path, document=_extended_document())
+        composed = _compose(tmp_path, document=selected_document())
 
         channels = composed.entity_comparison_channels
         assert channels is not None
@@ -1001,7 +1057,7 @@ class TestComposeExecutors:
     def test_an_incomplete_required_selection_leaves_the_stage_absent_not_fabricated(
         self, tmp_path: Path
     ) -> None:
-        document = _extended_document()
+        document = selected_document()
         del document["components"]["entity_resolution"]["geometry_comparison"]
 
         executors = compose_executors(
@@ -1141,7 +1197,7 @@ class TestComposeExecutors:
             content_hash=inventory_digest(manifest.file_inventory),
             location="corridor-02/run-0001/semantic_mapping",
         )
-        effective = effective_from(tmp_path, _extended_document())
+        effective = effective_from(tmp_path, selected_document())
         executors = compose_executors(effective, module_available=lambda _name: True, environ={})
         output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
         request = StageRequest(
@@ -1203,7 +1259,7 @@ class TestComposeExecutors:
         # está em "map". A escolha do nome do frame é um detalhe de configuração deste teste, não
         # uma invariante do domínio -- então o documento local é ajustado para concordar com a
         # geometria real, em vez de forçar a geometria a se chamar "odom".
-        document = _extended_document()
+        document = selected_document()
         document["components"]["spatial_relations"]["frame_conventions"][
             "map-frame-conventions-v1"
         ]["map_frame"] = "map"
@@ -1321,6 +1377,191 @@ class TestComposeExecutors:
             "fingerprint": expected_policy.fingerprint(),
             "parameters": dataclasses.asdict(expected_policy),
         }
+
+    def test_the_context_map_executor_is_the_real_thing_and_assembles_a_real_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """The composed ``ContextMapExecutor`` assembles a real ``ContextMap`` (issue #177).
+
+        Chains the same real entity_resolution -> spatial_relations construction as
+        ``test_the_spatial_relations_executor_is_the_real_thing_and_runs_against_real_artifacts``,
+        one hop further, feeding the composed executor the real geometric map, the real
+        spatial-relations run it just produced, and a real, minimal sequence artifact whose
+        identity matches the one the geometric map was actually built over (issue #438 review:
+        ``ContextMapExecutor`` now opens and verifies this, so a stand-in with an unrelated
+        identity is no longer accepted).
+        """
+        import json
+
+        from runtime_entities import make_entity
+
+        from contextmap.ingestion import (
+            FrameId,
+            ImuObservation,
+            SensorId,
+            SequenceArtifactWriter,
+            SourceObservationId,
+            SourceProvenance,
+        )
+        from contextmap.ingestion.sequence_provenance import SequenceProvenance
+        from contextmap.runtime import ArtifactRef
+        from contextmap.runtime.executors import inventory_digest
+        from contextmap.runtime.pipeline import StageRequest
+        from contextmap.semantic_fusion import SemanticFusionRunId
+        from contextmap.semantic_mapping import (
+            MappingRunLineage,
+            SemanticMapId,
+            SemanticMappingRunId,
+            SemanticMappingRunWriter,
+        )
+        from contextmap.shared import SourceTimestamp
+        from contextmap.visual_perception import PerceptionRunId
+
+        workspace = tmp_path / "ws"
+        document = selected_document()
+        document["components"]["spatial_relations"]["frame_conventions"][
+            "map-frame-conventions-v1"
+        ]["map_frame"] = "map"
+        effective = effective_from(tmp_path, document)
+        executors = compose_executors(
+            effective, module_available=lambda _name: True, environ={}, code_version="test"
+        )
+        assert "context_map" in executors
+
+        geometry_dir = workspace / "corridor-02" / "run-0001" / "geometric_mapping"
+        geometry_manifest = _write_aligned_geometric_map(geometry_dir)
+        geometry_ref = ArtifactRef(
+            stage_id="geometric_mapping",
+            contract="GeometricMapArtifact",
+            artifact_id=str(geometry_manifest.map_id),
+            content_hash=inventory_digest(geometry_manifest.file_inventory),
+            location=geometry_dir.relative_to(workspace).as_posix(),
+        )
+
+        semantic_map_id = SemanticMapId("semantic-map-ci")
+        fusion_artifact_digest = "sha256:" + "ab" * 32
+        entities = [
+            make_entity(
+                "entity--support-000001",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(0, 1, 2, 3),
+                fusion_artifact_digest=fusion_artifact_digest,
+            ),
+            make_entity(
+                "entity--support-000002",
+                semantic_map_id=semantic_map_id,
+                map_id=geometry_manifest.map_id,
+                indexes=(4, 5, 6, 7),
+                fusion_artifact_digest=fusion_artifact_digest,
+            ),
+        ]
+        mapping_dir = workspace / "corridor-02" / "run-0001" / "semantic_mapping"
+        mapping_manifest = SemanticMappingRunWriter(
+            output_dir=mapping_dir,
+            sequence_name="corridor-02",
+            run_id=SemanticMappingRunId("run-0001--semantic-mapping"),
+            run_index=1,
+            semantic_map_id=semantic_map_id,
+            lineage=MappingRunLineage(
+                sequence_artifact_id="sequence-0001",
+                geometric_map_id=geometry_manifest.map_id,
+                fusion_run_id=SemanticFusionRunId("fusion-run-0001"),
+                fusion_schema_version="0.1.0",
+                fusion_artifact_digest=fusion_artifact_digest,
+                association_run_ids=("association-run-0001",),
+                perception_run_ids=(PerceptionRunId("perception-run-0001"),),
+                point_representation_run_ids=(),
+            ),
+            code_version="test",
+            code_digest="sha256:" + "cd" * 32,
+        ).write(entities)
+        entities_ref = ArtifactRef(
+            stage_id="semantic_mapping",
+            contract="SemanticEntityArtifact",
+            artifact_id=str(mapping_manifest.run_id),
+            content_hash=inventory_digest(mapping_manifest.file_inventory),
+            location=mapping_dir.relative_to(workspace).as_posix(),
+        )
+
+        resolution_output_dir = workspace / "corridor-02" / "run-0001" / "entity_resolution"
+        resolution_ref = executors["entity_resolution"].execute(
+            StageRequest(
+                stage_id="entity_resolution",
+                inputs={"entities": (entities_ref,)},
+                components={},
+                config_digest=effective.digest,
+                output_dir=resolution_output_dir,
+                workspace=workspace,
+            )
+        )
+
+        relations_output_dir = workspace / "corridor-02" / "run-0001" / "spatial_relations"
+        relations_ref = executors["spatial_relations"].execute(
+            StageRequest(
+                stage_id="spatial_relations",
+                inputs={"entities": (resolution_ref,), "geometry": (geometry_ref,)},
+                components={},
+                config_digest=effective.digest,
+                output_dir=relations_output_dir,
+                workspace=workspace,
+            )
+        )
+        # Sequence real, mínima: ContextMapExecutor agora abre este artifact e exige que sua
+        # identidade seja exatamente a que o mapa geométrico foi construído sobre
+        # (``geometry_manifest.sequence_artifact_id``, "aligned-sequence" -- ver
+        # ``_write_aligned_geometric_map``), não um stand-in com identidade arbitrária.
+        sequence_dir = workspace / "corridor-02" / "sequence"
+        with SequenceArtifactWriter(
+            output_dir=sequence_dir,
+            sequence_name="corridor-02",
+            artifact_id=geometry_manifest.sequence_artifact_id,
+        ) as sequence_writer:
+            sequence_writer.add_observation(
+                ImuObservation(
+                    observation_id=SourceObservationId("imu-0000"),
+                    sensor_id=SensorId("imu"),
+                    frame_id=FrameId("imu"),
+                    timestamp=SourceTimestamp(
+                        seconds=0, nanoseconds=0, clock_id="fixture:aligned-map"
+                    ),
+                    provenance=SourceProvenance(source_type="fixture", source_path="fixtures/imu"),
+                )
+            )
+            sequence_writer.set_provenance(
+                SequenceProvenance(source_type="fixture", source_path="fixtures/imu")
+            )
+            sequence_manifest = sequence_writer.finalize()
+        sequence_ref = ArtifactRef(
+            stage_id="ingestion",
+            contract="SequenceArtifact",
+            artifact_id=str(sequence_manifest.artifact_id),
+            content_hash=inventory_digest(sequence_manifest.file_inventory),
+            location=sequence_dir.relative_to(workspace).as_posix(),
+        )
+
+        context_map_output_dir = workspace / "corridor-02" / "run-0001" / "context_map"
+        context_map_ref = executors["context_map"].execute(
+            StageRequest(
+                stage_id="context_map",
+                inputs={
+                    "sequence": (sequence_ref,),
+                    "geometry": (geometry_ref,),
+                    "entities": (resolution_ref,),
+                    "relations": (relations_ref,),
+                },
+                components={},
+                config_digest=effective.digest,
+                output_dir=context_map_output_dir,
+                workspace=workspace,
+            )
+        )
+
+        assert context_map_ref.contract == "ContextMapArtifact"
+        manifest_record = json.loads(
+            (context_map_output_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest_record["entity_count"] == 2
 
 
 class TestComposeVisualPerceptionExecutor:
@@ -1490,6 +1731,13 @@ class TestComposeVisualPerceptionExecutor:
                 ]
 
         class _FakeSemanticInterpreter:
+            """Implements the real ``interpret()`` port, like every real backend does today.
+
+            The executor bridges this to its own legacy ``interpret_scene``/``interpret_regions``
+            dispatch (see ``_LegacySemanticInterpreterBridge``); a fake standing in for a real
+            backend must match what a real backend implements.
+            """
+
             def backend_provenance(self) -> BackendProvenance:
                 return BackendProvenance(
                     backend_id="fake_semantic_interpreter",
@@ -1499,13 +1747,43 @@ class TestComposeVisualPerceptionExecutor:
                     version="0.1",
                 )
 
-            def interpret_scene(self, image: PreparedImage) -> None:
-                return None
+            def interpret(self, request: Any) -> object:
+                import json
 
-            def interpret_regions(
-                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
-            ) -> list[object]:
-                return []
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",  # type: ignore[attr-defined]
+                    prompt_template_id=request.prompt_template_id,  # type: ignore[attr-defined]
+                    output_schema_version=request.requested_output_schema,  # type: ignore[attr-defined]
+                )
+                return SemanticInterpretationExecution(
+                    request=request,  # type: ignore[arg-type]
+                    rendered_prompt=rendered,
+                    raw_response=raw_response,
+                    parsed=parse_semantic_response(
+                        raw_response,
+                        request,  # type: ignore[arg-type]
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
 
         executor = VisualPerceptionExecutor(
             region_discovery=_FakeRegionDiscovery(),  # type: ignore[arg-type]
@@ -1575,6 +1853,25 @@ class TestComposeVisualPerceptionExecutor:
         for result in results:
             assert len(result.regions) == 1
             assert len(result.features) == 2  # one dense + one region feature
+
+        # The legacy scene/region dispatch (`_LegacySemanticInterpreterBridge`) reduces every
+        # real `interpret()` call to the `SceneContext`/`SemanticClaim` the stage graph needs,
+        # but the real `SemanticInterpretationExecution` evidence (rendered prompt, raw
+        # response, diagnostics) and its view payload must still be recoverable from the
+        # finalized artifact -- one execution per image (scene) plus one per region.
+        from contextmap.visual_perception.backends._semantic_views import read_view_payload
+
+        semantic_executions = reader.list_semantic_executions()
+        assert {
+            str(execution.request.source_observation_id) for execution in semantic_executions
+        } == {"frame-0000", "frame-0001"}
+        assert {execution.request.mode.value for execution in semantic_executions} == {
+            "scene",
+            "region",
+        }
+        for execution in semantic_executions:
+            for view in execution.request.visual_views:
+                assert read_view_payload(output_dir, view) is not None
 
     def test_a_mask_conditioned_region_features_backend_gets_the_region_own_mask(
         self, tmp_path: Path
@@ -1676,6 +1973,13 @@ class TestComposeVisualPerceptionExecutor:
                 ]
 
         class _FakeSemanticInterpreter:
+            """Implements the real ``interpret()`` port, like every real backend does today.
+
+            The executor bridges this to its own legacy ``interpret_scene``/``interpret_regions``
+            dispatch (see ``_LegacySemanticInterpreterBridge``); a fake standing in for a real
+            backend must match what a real backend implements.
+            """
+
             def backend_provenance(self) -> BackendProvenance:
                 return BackendProvenance(
                     backend_id="fake_semantic_interpreter",
@@ -1685,13 +1989,43 @@ class TestComposeVisualPerceptionExecutor:
                     version="0.1",
                 )
 
-            def interpret_scene(self, image: PreparedImage) -> None:
-                return None
+            def interpret(self, request: Any) -> object:
+                import json
 
-            def interpret_regions(
-                self, image: PreparedImage, regions: list[Region2D] | tuple[Region2D, ...]
-            ) -> list[object]:
-                return []
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",  # type: ignore[attr-defined]
+                    prompt_template_id=request.prompt_template_id,  # type: ignore[attr-defined]
+                    output_schema_version=request.requested_output_schema,  # type: ignore[attr-defined]
+                )
+                return SemanticInterpretationExecution(
+                    request=request,  # type: ignore[arg-type]
+                    rendered_prompt=rendered,
+                    raw_response=raw_response,
+                    parsed=parse_semantic_response(
+                        raw_response,
+                        request,  # type: ignore[arg-type]
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
 
         class _FakeAlphaClipRuntime:
             def encode(
@@ -1794,3 +2128,193 @@ def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path)
 
     after = {name for name in ("torch", "transformers") if name in sys.modules}
     assert after <= before
+
+
+class TestSemanticBridgeStreamsItsEvidence:
+    """PR #438 review: the bridge must not hold view payloads until the image loop ends."""
+
+    @staticmethod
+    def _fake_interpreter() -> Any:
+        from contextmap.visual_perception import BackendProvenance
+
+        class _Fake:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret(self, request: Any) -> object:
+                import json
+
+                from contextmap.visual_perception import (
+                    SemanticBackendDiagnostics,
+                    SemanticConfidencePolicy,
+                    SemanticInferenceProvenance,
+                    SemanticInterpretationExecution,
+                    SemanticPromptTemplate,
+                    parse_semantic_response,
+                    render_semantic_prompt,
+                )
+
+                template = SemanticPromptTemplate.default_for(request.mode)
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raw = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",
+                    prompt_template_id=request.prompt_template_id,
+                    output_schema_version=request.requested_output_schema,
+                )
+                return SemanticInterpretationExecution(
+                    request=request,
+                    rendered_prompt=rendered,
+                    raw_response=raw,
+                    parsed=parse_semantic_response(
+                        raw,
+                        request,
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
+
+        return _Fake()
+
+    @staticmethod
+    def _prepared_image(view_root: Path, observation_id: str) -> Any:
+        # Pillow is not a dependency of this project (the bridge itself reaches it through
+        # importlib for that reason), so the test skips instead of failing where it is absent.
+        image_module = pytest.importorskip("PIL.Image")
+
+        from contextmap.ingestion import SourceObservationId
+        from contextmap.visual_perception import PreparedImage
+
+        prepared_dir = view_root / "prepared"
+        prepared_dir.mkdir(parents=True, exist_ok=True)
+        image_module.new("RGB", (16, 12), (10, 20, 30)).save(prepared_dir / f"{observation_id}.png")
+        return PreparedImage(
+            source_observation_id=SourceObservationId(observation_id),
+            payload_reference=f"prepared/{observation_id}.png",
+            width=16,
+            height=12,
+        )
+
+    def test_each_execution_reaches_the_writer_before_the_next_frame(self, tmp_path: Path) -> None:
+        """_write_view() read the bytes back and kept them in self._evidence for the whole run.
+
+        That is O(semantic requests x image size) resident, which undoes the writer's streaming.
+        """
+        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+
+        class _RecordingWriter:
+            def __init__(self) -> None:
+                self.outcomes: list[object] = []
+                self.views: list[tuple[str, int]] = []
+
+            def add_stage_outcomes(self, outcomes: Any) -> None:
+                self.outcomes.extend(outcomes)
+
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None:
+                self.views.append((view.payload_reference, len(payload)))
+
+        writer = _RecordingWriter()
+        bridge = _LegacySemanticInterpreterBridge(
+            interpreter=self._fake_interpreter(),
+            run_id=PerceptionRunId("run-0001"),
+            view_root=tmp_path,
+        )
+        bridge.bind(writer)  # type: ignore[arg-type]
+
+        bridge.interpret_scene(self._prepared_image(tmp_path, "frame-0000"))
+
+        assert writer.views, "the view payload must reach the writer as soon as interpret() returns"
+        assert writer.outcomes, "the execution must reach the writer as soon as interpret() returns"
+        assert not getattr(bridge, "_evidence", []), "the bridge must retain no payload"
+
+    def test_a_rejected_response_is_recorded_in_the_artifact_not_lost(self, tmp_path: Path) -> None:
+        """The stage still fails, but the model's real answer reaches the failures stream."""
+        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+        from contextmap.visual_perception import (
+            SemanticBackendDiagnostics,
+            SemanticConfidencePolicy,
+            SemanticInferenceProvenance,
+            SemanticPromptTemplate,
+            render_semantic_prompt,
+            semantic_failure_from_parse_error,
+        )
+        from contextmap.visual_perception.semantic_prompt import SemanticResponseParseError
+
+        raw = '{"abstained": false, "claims": [{"hypothesis": "a door"}]}'
+
+        class _RejectingInterpreter:
+            def backend_provenance(self) -> Any:
+                from contextmap.visual_perception import BackendProvenance
+
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret(self, request: Any) -> object:
+                template = SemanticPromptTemplate.default_for(request.mode)
+                rendered = render_semantic_prompt(
+                    request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
+                )
+                raise semantic_failure_from_parse_error(
+                    SemanticResponseParseError(
+                        "claim[0] is missing required fields: ['confidence']", raw_response=raw
+                    ),
+                    request=request,
+                    rendered_prompt=rendered,
+                    raw_response=raw,
+                    provenance=SemanticInferenceProvenance(
+                        backend=self.backend_provenance(),
+                        task_identity=f"fake-{request.mode.value}",
+                        prompt_template_id=request.prompt_template_id,
+                        output_schema_version=request.requested_output_schema,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=3.0),
+                    effective_configuration={"backend": "fake"},
+                )
+
+        recorded: list[Any] = []
+        recorded_views: list[tuple[str, int]] = []
+
+        class _RecordingWriter:
+            def add_stage_outcomes(self, outcomes: Any) -> None: ...
+
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None:
+                recorded_views.append((view.payload_reference, len(payload)))
+
+            def add_failed_semantic_interpretation(self, failed: Any) -> None:
+                recorded.append(failed)
+
+        bridge = _LegacySemanticInterpreterBridge(
+            interpreter=_RejectingInterpreter(),  # type: ignore[arg-type]
+            run_id=PerceptionRunId("run-0001"),
+            view_root=tmp_path,
+        )
+        bridge.bind(_RecordingWriter())  # type: ignore[arg-type]
+
+        with pytest.raises(Exception, match="confidence"):
+            bridge.interpret_scene(self._prepared_image(tmp_path, "frame-0000"))
+
+        assert len(recorded) == 1, "the rejected response must be recorded before the stage fails"
+        assert recorded[0].raw_response == raw
+        assert recorded[0].failure.kind == "SemanticResponseParseError"
+        # The view that produced the rejected response must reach the artifact too, otherwise
+        # it stays in the scratch the executor deletes and the reference dangles.
+        assert [reference for reference, _ in recorded_views] == [
+            view.payload_reference for view in recorded[0].request.visual_views
+        ]
+        assert all(size > 0 for _, size in recorded_views)

@@ -178,3 +178,44 @@ class MapFrame:
             and self.unit is other.unit
             and self.handedness is other.handedness
         )
+
+
+CANONICAL_MAP_FRAME_DECLARATION_ID = "estimator-local-map-frame-v1"
+"""Identity of :func:`estimator_local_map_frame`'s declaration, versioned like any other policy."""
+
+
+def estimator_local_map_frame(*, frame_id: str, up_direction: Vector3 | None = None) -> MapFrame:
+    """The one map-frame declaration Solution 1's canonical profile uses today.
+
+    Every source this repository ingests (ROS) already follows REP-103: metric, right-handed
+    coordinates. No capability upstream of ``ContextMap`` surveys or externally anchors its
+    output, so the origin is always wherever the state-estimation run happened to start --
+    :attr:`AnchorKind.ESTIMATOR_LOCAL`, never :attr:`AnchorKind.EXTERNALLY_ANCHORED`. This does
+    not invent that convention per call: it names it once, as an explicit, versioned identity
+    (:data:`CANONICAL_MAP_FRAME_DECLARATION_ID`), the same way every other scientific policy in
+    this codebase is named rather than silently assumed.
+
+    Args:
+        frame_id: Identity of the map frame; the caller's own geometry manifest already knows
+            it, so this function never invents one.
+        up_direction: The map frame's up axis, when a run declared one (for example Spatial
+            Relations' own ``FrameConventions.up_axis.vector``) -- never derived independently,
+            so it can never disagree with what the map's own evidence was actually produced
+            under. ``None`` when no run declared one: an estimator-local frame never guarantees
+            a known up direction (see :class:`MapFrame`).
+
+    Returns:
+        A frame declaring :data:`~contextmap.artifact.frame.LengthUnit.METER`,
+        :data:`~contextmap.artifact.frame.Handedness.RIGHT_HANDED` and an estimator-local anchor.
+    """
+    return MapFrame(
+        frame_id=frame_id,
+        unit=LengthUnit.METER,
+        handedness=Handedness.RIGHT_HANDED,
+        up_direction=up_direction,
+        anchor=MapAnchor(
+            kind=AnchorKind.ESTIMATOR_LOCAL,
+            origin_definition="pose of the first accepted scan of the state estimation run",
+            reference_frame_id=None,
+        ),
+    )

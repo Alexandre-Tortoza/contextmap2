@@ -61,7 +61,7 @@ O catálogo traz a matriz de cobertura, verificada em CI, com o que **não** est
 - respostas enlatadas → `parse_semantic_response` → claims esperados, e avaliação contra a anotação semântica;
 - o reference set do subconjunto → validação de integridade sem achados.
 
-**Escopo (#172).** Esta regressão cobre só os elos acima. Ela **não** é a regressão entre módulos "da ingestão até o artifact final": isso exige a fusão multi-vista (saídas sintéticas de Sensor Association) e o round-trip do `ContextMapArtifact`, que dependem das milestones de schema e serialização do artifact, e a identidade e as relações seguem só em nível de anotação até existirem Entity Resolution e Spatial Relations. Por isso a issue #172 segue aberta: o que existe é o subconjunto e sua regressão parcial, não o critério completo.
+**Escopo (#172).** Esta regressão cobre só os elos acima; a cadeia entre módulos "da ingestão até o artifact final" é uma regressão separada, `tests/end_to_end/chain.py`/`acceptance.py` (`synthetic_chain()`): ela roda o código real de todo estágio (ingestão, percepção enlatada, state estimation, geometric mapping, sensor association, semantic fusion, semantic mapping, entity resolution, spatial relations e a montagem do `ContextMapArtifact`) sobre o subconjunto sintético e valida o round-trip completo, sem GPU nem rede. Nenhuma decisão geométrica/de contato é fabricada: sem avaliador selecionado, todo candidato de relação fica honestamente `UNRESOLVED`.
 
 ## Versionamento e revisão
 

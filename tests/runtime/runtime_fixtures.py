@@ -10,27 +10,30 @@ from contextmap.runtime import catalog
 
 
 @pytest.fixture
-def unavailable_context_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Append a stage whose capability does not exist, as a later preset will declare it.
+def unavailable_future_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Add a stage marked unavailable, as the catalog does for a capability that is missing.
 
-    The canonical preset declares only what executes today, so the behavior of an unavailable
-    stage (reported in the topology, blocked at preflight, never simulated) is exercised on a
-    preset with a ``context_map`` stage marked unavailable, and the real catalog is left
-    untouched.
+    Every capability of the canonical/1 topology exists today (including ``context_map``, now
+    real), so the behavior of an unavailable stage (reported in the topology, blocked at
+    preflight, never simulated) is exercised on a preset extended with a fictional
+    ``scene_graph`` stage marked unavailable -- no such capability exists at all -- and the
+    real catalog is left untouched.
     """
     preset = catalog.CANONICAL_PRESET
-    later = catalog.StageDeclaration(
-        stage_id="context_map",
-        capability="artifact",
+    scene_graph_stage = catalog.StageDeclaration(
+        stage_id="scene_graph",
+        capability="scene_graph",
         available=False,
-        unavailable_reason="the artifact capability is not implemented yet (milestone #15)",
+        unavailable_reason="the scene_graph capability is not implemented yet (milestone #15)",
         inputs=(
-            catalog.StageInput(name="fusion", contract=catalog.FUSION, source="semantic_fusion"),
+            catalog.StageInput(
+                name="geometry", contract="GeometricMapArtifact", source="geometric_mapping"
+            ),
         ),
-        output="ContextMapArtifact",
+        output="SceneGraphArtifact",
     )
     monkeypatch.setitem(
         catalog.PRESETS,
         preset.preset_id,
-        dataclasses.replace(preset, stages=(*preset.stages, later)),
+        dataclasses.replace(preset, stages=(*preset.stages, scene_graph_stage)),
     )

@@ -65,6 +65,7 @@ if TYPE_CHECKING:
         GeometryOverlapSupportPolicy,
         QualityAwareAccumulationPolicy,
     )
+    from contextmap.semantic_mapping import GeometrySummaryPolicy, SemanticMapId
     from contextmap.sensor_association import DiagnosticTolerances, OcclusionPolicy
     from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
@@ -194,6 +195,7 @@ class ComposedRuntime:
         occlusion_policy: Sensor Association visibility rule.
         association_tolerances: Sensor Association diagnostic tolerances.
         association_pose_policy: Pose lookup rule Sensor Association uses per frame.
+        semantic_mapping_geometry_summary: Semantic Mapping's entity-geometry summary policy.
         entity_retrieval_policy: Entity Resolution candidate retrieval policy.
         entity_comparison_channels: The evidence channels Entity Resolution evaluates; geometry
             is always present, every other channel is ``None`` when not selected.
@@ -223,6 +225,7 @@ class ComposedRuntime:
     occlusion_policy: OcclusionPolicy | None = None
     association_tolerances: DiagnosticTolerances | None = None
     association_pose_policy: LookupPolicy | None = None
+    semantic_mapping_geometry_summary: GeometrySummaryPolicy | None = None
     entity_retrieval_policy: CandidateRetrievalPolicy | None = None
     entity_comparison_channels: ComparisonChannels | None = None
     entity_resolution_policy: ConservativeResolutionPolicy | None = None
@@ -988,6 +991,7 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
     "entity_resolution.representation": {
         "entity-representation-comparison-v1": _entity_representation
     },
+    "semantic_mapping.geometry_summary": {"entity-geometry-summary-v1": _geometry_summary_policy},
     "spatial_relations.frame_conventions": {"map-frame-conventions-v1": _frame_conventions},
     "spatial_relations.candidate": {"bounds-neighborhood-candidates-v1": _candidate_policy},
     "spatial_relations.geometry_summary": {"entity-geometry-summary-v1": _geometry_summary_policy},
@@ -1067,7 +1071,7 @@ def _compose_semantic_fusion(context: _Context) -> dict[str, object]:
 
 
 def _compose_nothing(context: _Context) -> dict[str, object]:
-    """Compose a stage with no variation point yet: its service is stateless capability code."""
+    """Compose a stage with no variation point: its service is stateless capability code."""
     return {}
 
 
@@ -1088,6 +1092,14 @@ def _compose_entity_resolution(context: _Context) -> dict[str, object]:
     }
 
 
+def _compose_semantic_mapping(context: _Context) -> dict[str, object]:
+    return {
+        "semantic_mapping_geometry_summary": _construct(
+            context, "semantic_mapping.geometry_summary"
+        )
+    }
+
+
 def _compose_spatial_relations(context: _Context) -> dict[str, object]:
     from contextmap.spatial_relations import RelationsRunPolicies
 
@@ -1103,15 +1115,17 @@ def _compose_spatial_relations(context: _Context) -> dict[str, object]:
 
 _STAGE_COMPOSERS: Mapping[str, Callable[[_Context], dict[str, object]]] = {
     "ingestion": _compose_ingestion,
+    "pose_ingestion": _compose_nothing,
     "visual_perception": _compose_visual_perception,
     "state_estimation": _compose_state_estimation,
     "geometric_mapping": _compose_geometric_mapping,
     "sensor_association": _compose_sensor_association,
     "point_representation": _compose_point_representation,
     "semantic_fusion": _compose_semantic_fusion,
-    "semantic_mapping": _compose_nothing,
+    "semantic_mapping": _compose_semantic_mapping,
     "entity_resolution": _compose_entity_resolution,
     "spatial_relations": _compose_spatial_relations,
+    "context_map": _compose_nothing,
 }
 
 
@@ -1131,6 +1145,9 @@ def compose_executors(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     on_provider_override: Callable[[str], None] | None = None,
+    semantic_map_id: SemanticMapId | None = None,
+    code_digest: str | None = None,
+    code_version: str | None = None,
 ) -> dict[str, StageExecutor]:
     """Compose the real :class:`~contextmap.runtime.pipeline.StageExecutor` a DAG run needs.
 
@@ -1145,18 +1162,22 @@ def compose_executors(
     explains why such a stage will not run; this function never hides that behind a guess.
 
     ``state_estimation``, ``geometric_mapping``, ``sensor_association``, ``semantic_fusion``,
-    ``visual_perception``, ``entity_resolution`` and ``spatial_relations`` can be composed
-    this way: each needs only the effective configuration and the upstream artifacts the DAG
-    already carries.
+    ``visual_perception``, ``semantic_mapping``, ``entity_resolution``, ``spatial_relations`` and
+    ``context_map`` can be composed this way: each needs only the effective configuration and the
+    upstream artifacts the DAG already carries -- except ``semantic_mapping``, which also needs
+    ``semantic_map_id`` and ``code_digest`` (see below).
 
-    - ``ingestion`` is not composed here: :class:`~contextmap.runtime.ingestion_service.
+    - ``ingestion`` and ``pose_ingestion`` (issue #555's opt-in auxiliary pose stage, see
+      ``catalog.py``) are not composed here: :class:`~contextmap.runtime.ingestion_service.
       IngestionStageExecutor` needs a concrete ``IngestionRequest`` (source path, topics,
       synchronization tolerance) that is per-invocation input, never part of a resolved
       configuration -- it is what the ``ingest`` command's own flags build. A caller that
-      wants ``ingestion`` to run inside :func:`~contextmap.runtime.pipeline.run_plan`
-      still injects an :class:`~contextmap.runtime.ingestion_service.IngestionStageExecutor`
-      explicitly; the ordinary canonical path is to run ``contextmap ingest`` first and
-      feed its published artifact to ``run``/``stage`` as a provided or selected input.
+      wants either stage to run inside :func:`~contextmap.runtime.pipeline.run_plan`
+      still injects its own :class:`~contextmap.runtime.ingestion_service.
+      IngestionStageExecutor` explicitly (a second instance, under ``stage_id=
+      "pose_ingestion"``, for the auxiliary one); the ordinary canonical path is to run
+      ``contextmap ingest`` first and feed its published artifact to ``run``/``stage`` as a
+      provided or selected input.
     - ``visual_perception`` is composed only when all four of its variation points
       (``region_discovery``, ``dense_features``, ``region_features``,
       ``semantic_interpretation``) are genuinely selected and available -- a partially
@@ -1167,9 +1188,14 @@ def compose_executors(
       one :class:`~contextmap.runtime.executors.SemanticFusionExecutor` actually runs
       (``baseline-evidence-accumulation-v1``); the quality-aware accumulation backend has
       no executor yet, so it is left out rather than run through the wrong policy.
-    - ``semantic_mapping`` has no catalog component and no executor of its own yet: it stays
-      absent here, and its artifact must be supplied (``provided``/``selections``) for
-      ``entity_resolution`` to consume, never computed automatically by this function.
+    - ``semantic_mapping`` is composed only when the caller supplies both ``semantic_map_id``
+      (identity of the persistent semantic map this run's entities belong to) and
+      ``code_digest`` (digest of the code that produced the run): neither is a configuration
+      value or derivable from ``effective``, and :class:`~contextmap.runtime.executors.
+      SemanticMappingExecutor`'s writer refuses an empty ``code_digest``, so this function
+      never invents one. Without both, ``semantic_mapping`` stays absent and its artifact must
+      be supplied (``provided``/``selections``) for ``entity_resolution`` to consume, exactly
+      as before this parameter existed.
     - ``entity_resolution`` always evaluates the required geometry channel; every other
       channel (``semantic``, ``temporal``, ``appearance``, ``representation``) is evaluated
       only when its own component is selected, and is ``None`` -- never a default policy --
@@ -1177,6 +1203,10 @@ def compose_executors(
     - ``spatial_relations`` always applies the required frame conventions, candidate policy
       and geometry summary; the geometric and contact predicate evaluators run only when
       their own component is selected.
+    - ``context_map`` has no variation point of its own, so composing it never fails once the
+      preset declares it. Its ``up_axis`` comes from the same ``spatial_relations``
+      ``FrameConventions`` this function already composed above, when available -- never
+      re-derived independently -- and stays unknown otherwise.
 
     Args:
         effective: The resolved configuration.
@@ -1187,6 +1217,15 @@ def compose_executors(
         on_provider_override: Called with a component identity whenever ``providers``
             overrides a ``resources.providers`` target ``effective`` also declares for it;
             see :func:`compose`.
+        semantic_map_id: Identity of the persistent semantic map ``semantic_mapping``'s
+            entities belong to. Required, together with ``code_digest``, for this function to
+            compose ``semantic_mapping``; see above.
+        code_digest: Digest of the code producing the run, exactly as the caller supplies it --
+            this function never computes one from a source tree. Required, together with
+            ``semantic_map_id``, for this function to compose ``semantic_mapping``; see above.
+        code_version: Code revision that produced the run, threaded into every composed
+            executor that records one. ``None`` leaves it unset, exactly as before this
+            parameter existed -- never fabricated from a source tree.
 
     Returns:
         One executor per stage that could genuinely be composed from ``effective``. Never
@@ -1197,15 +1236,18 @@ def compose_executors(
     """
     from contextmap.entity_resolution import MatchEvidenceBuilder
     from contextmap.runtime.executors import (
+        ContextMapExecutor,
         EntityResolutionExecutor,
         GeometricMappingExecutor,
         SemanticFusionExecutor,
+        SemanticMappingExecutor,
         SensorAssociationExecutor,
         SpatialRelationsExecutor,
         StateEstimationExecutor,
         VisualPerceptionExecutor,
     )
     from contextmap.semantic_fusion import BaselineAccumulationPolicy
+    from contextmap.semantic_mapping import EntityMaterializationPolicy
 
     def _compose_stage(stage_id: str) -> ComposedRuntime | None:
         try:
@@ -1241,7 +1283,12 @@ def compose_executors(
     state_estimation = _compose_stage("state_estimation")
     if state_estimation is not None:
         assert state_estimation.state_estimator is not None
-        executors["state_estimation"] = StateEstimationExecutor(state_estimation.state_estimator)
+        executors["state_estimation"] = StateEstimationExecutor(
+            state_estimation.state_estimator,
+            allow_ground_truth_trajectory=(
+                effective.config.policies.trajectory_mode == "allow_ground_truth"
+            ),
+        )
 
     geometric_mapping = _compose_stage("geometric_mapping")
     if geometric_mapping is not None:
@@ -1250,6 +1297,7 @@ def compose_executors(
         executors["geometric_mapping"] = GeometricMappingExecutor(
             pose_lookup=geometric_mapping.geometric_mapping_pose_lookup,
             motion_correction=geometric_mapping.motion_correction,
+            code_version=code_version,
         )
 
     sensor_association = _compose_stage("sensor_association")
@@ -1261,6 +1309,7 @@ def compose_executors(
             occlusion=sensor_association.occlusion_policy,
             tolerances=sensor_association.association_tolerances,
             pose_policy=sensor_association.association_pose_policy,
+            code_version=code_version,
         )
 
     semantic_fusion = _compose_stage("semantic_fusion")
@@ -1271,6 +1320,20 @@ def compose_executors(
             executors["semantic_fusion"] = SemanticFusionExecutor(
                 support_policy=semantic_fusion.support_policy,
                 accumulation_policy=semantic_fusion.accumulation_policy,
+                code_version=code_version,
+            )
+
+    if semantic_map_id is not None and code_digest is not None:
+        semantic_mapping = _compose_stage("semantic_mapping")
+        if semantic_mapping is not None:
+            assert semantic_mapping.semantic_mapping_geometry_summary is not None
+            executors["semantic_mapping"] = SemanticMappingExecutor(
+                policy=EntityMaterializationPolicy(
+                    geometry=semantic_mapping.semantic_mapping_geometry_summary
+                ),
+                semantic_map_id=semantic_map_id,
+                code_digest=code_digest,
+                code_version=code_version,
             )
 
     entity_resolution = _compose_stage("entity_resolution")
@@ -1282,6 +1345,7 @@ def compose_executors(
             retrieval=entity_resolution.entity_retrieval_policy,
             builder=MatchEvidenceBuilder(entity_resolution.entity_comparison_channels),
             resolution=entity_resolution.entity_resolution_policy,
+            code_version=code_version,
         )
 
     spatial_relations = _compose_stage("spatial_relations")
@@ -1289,6 +1353,20 @@ def compose_executors(
         assert spatial_relations.spatial_relations_policies is not None
         executors["spatial_relations"] = SpatialRelationsExecutor(
             policies=spatial_relations.spatial_relations_policies,
+            code_version=code_version,
         )
+
+    context_map = _compose_stage("context_map")
+    if context_map is not None:
+        # context_map has no variation point of its own, so composing it never fails once the
+        # preset declares it. Its up_axis comes from the same FrameConventions spatial_relations
+        # already composed above, when available -- never re-derived independently -- and stays
+        # None otherwise (MapFrame allows that).
+        up_axis = (
+            spatial_relations.spatial_relations_policies.frame_conventions.up_axis
+            if spatial_relations is not None and spatial_relations.spatial_relations_policies
+            else None
+        )
+        executors["context_map"] = ContextMapExecutor(up_axis=up_axis, code_version=code_version)
 
     return executors

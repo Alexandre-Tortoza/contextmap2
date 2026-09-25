@@ -560,6 +560,17 @@ def default_metric_registry() -> MetricRegistry:
             missing_data=_EXCLUDE,
         ),
         _quality(
+            "semantic.parse_failure_rate",
+            stage.SEMANTIC_INTERPRETATION,
+            "Fraction of real backend answers the parser could not turn into claims.",
+            population="requests the backend answered, parsed or rejected",
+            unit="ratio",
+            maximum=1.0,
+            direction=_LOWER,
+            aggregation="rejected responses divided by answered requests",
+            evaluator="semantic-interpretation-evaluator",
+        ),
+        _quality(
             "semantic.ambiguity_preservation_rate",
             stage.SEMANTIC_INTERPRETATION,
             "Fraction of ambiguous targets whose alternatives the interpreter kept.",

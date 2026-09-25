@@ -130,7 +130,7 @@ Pontos de variação:
 
 Para uma política, o identificador de backend é a identidade que a própria capability já versiona.
 
-Estágios de `canonical/1`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`. O preset termina aí, inalterado. `canonical/2` é a mesma topologia, estendida com `semantic_mapping`, `entity_resolution` e `spatial_relations`; `semantic_mapping` participa dela mas não tem componente nem executor automático (seu artifact precisa ser suprido). Só `context_map` (a montagem do `ContextMapArtifact`) continua fora de ambos os presets e entra em um preset versionado posterior, quando a capability existir.
+Estágios de `canonical/1`, do recorded source ao `ContextMapArtifact`: `ingestion`, `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `point_representation` (opcional, desligado por padrão), `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations`, `context_map`. Antes do v0.1.0 sair esta é a única topologia do repositório, e ela é livre para continuar crescendo até o release (ver `CANONICAL_PROFILE_ID` em `catalog.py`).
 
 ## Lacunas conhecidas
 

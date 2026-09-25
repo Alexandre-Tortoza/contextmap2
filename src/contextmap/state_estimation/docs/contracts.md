@@ -51,7 +51,7 @@ Validação em construção: identidade e frames não vazios, frames distintos, 
 | `reference_frame` / `body_frame` | Frames que **todas** as poses declaram. |
 | `poses` | `PoseEstimate` com timestamps estritamente crescentes em um único domínio de clock. |
 | `gaps` | `TrajectoryGap`: intervalos entre poses consecutivas nos quais a interpolação não é confiável. |
-| `provenance` | `TrajectoryProvenance`: backend e configuração (`EstimatorProvenance`), sequência e seleção consumidas, identidade da calibração usada e versão do código. |
+| `provenance` | `TrajectoryProvenance`: backend e configuração (`EstimatorProvenance`), sequência e seleção consumidas, identidade da calibração usada, versão do código e, quando o #555 mesclou uma pose auxiliar de fato, `auxiliary_sequence_artifact_id`/`auxiliary_selection_id`. |
 
 Derivados (não armazenados): `time_bounds` (`TimeBounds`) e `quality_summary()` (`TrajectoryQualitySummary`: contagem de poses, duração, intervalo mínimo/mediano/máximo, gaps, poses degradadas e poses com covariância).
 

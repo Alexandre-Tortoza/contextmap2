@@ -177,7 +177,7 @@ Uma capability possui o conceito que ela introduz semanticamente. O consumidor d
 | `spatial_relations` | Inferir relações entre entidades resolvidas | `Relation`, `RelationEvidence`, `RelationPredicate` (taxonomia), `FrameConventions` | entity correction, natural-language query, planning |
 | `artifact` | Compor o produto público final | `ContextMap`, metadata, final artifact schema | domain inference |
 | `runtime` | Compor e executar implementations | configuração efetiva, execution plan, selection, composition, lifecycle, API pública de aplicação (`Runtime`) | lógica científica das capabilities |
-| `evaluation` | Medir qualidade e regressões | reference set, anotações, registro de métricas, relatórios, manifestos de experimento e evidência | alterar resultados do pipeline |
+| `evaluation` | Medir qualidade e regressões | reference set, anotações, registro de métricas, relatórios, manifestos de experimento e evidência, cenário end-to-end, matriz de aceitação e invariantes entre estágios | alterar resultados do pipeline |
 
 ## Regra de ownership de contratos
 

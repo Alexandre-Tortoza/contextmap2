@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from runtime_documents import selected_document
-from runtime_fixtures import unavailable_context_map  # noqa: F401
+from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory as fake_factory
 from runtime_worlds import World
 
@@ -245,7 +245,6 @@ class TestDryRun:
         already use) silently lost the whole ``entity_resolution`` executor.
         """
         document = selected_document()
-        document["pipeline"]["preset"] = "canonical/2"
         document["components"]["entity_resolution"]["appearance"] = {
             "backend": "entity-appearance-comparison-v1",
             "entity-appearance-comparison-v1": {
@@ -302,7 +301,7 @@ class TestDryRun:
         assert code == 0, out + err
         assert log == ["ingestion", "state_estimation"]
 
-    @pytest.mark.usefixtures("unavailable_context_map")
+    @pytest.mark.usefixtures("unavailable_future_stage")
     def test_the_complete_pipeline_is_blocked_with_the_reason_per_stage(
         self, tmp_path: Path
     ) -> None:
@@ -310,7 +309,7 @@ class TestDryRun:
 
         assert code == 1
         text = out + err
-        assert "context_map" in text and "milestone" in text
+        assert "scene_graph" in text and "milestone" in text
 
     def test_a_missing_optional_module_is_explained_with_an_install_hint(
         self, tmp_path: Path
@@ -442,6 +441,10 @@ class TestInspectPlan:
             "geometric_mapping",
             "sensor_association",
             "semantic_fusion",
+            "semantic_mapping",
+            "entity_resolution",
+            "spatial_relations",
+            "context_map",
         ]
         assert document["plan_digest"].startswith("sha256:")
 

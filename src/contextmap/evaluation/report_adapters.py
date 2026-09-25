@@ -28,6 +28,7 @@ from contextmap.evaluation.report_schema import (
     assemble_evaluation_report,
 )
 from contextmap.evaluation.semantic_interpretation import (
+    SemanticAttemptAccounting,
     SemanticEvaluationReport,
     encode_semantic_evaluation_report,
 )
@@ -149,6 +150,7 @@ def semantic_interpretation_evaluation_report(
     registry: MetricRegistry,
     reference_set: ReferenceSetIdentity,
     code_version: str | None = None,
+    attempts: SemanticAttemptAccounting | None = None,
 ) -> EvaluationReport:
     """Lift a Semantic Interpretation report into the envelope.
 
@@ -162,6 +164,12 @@ def semantic_interpretation_evaluation_report(
     cost, outcomes, consistency and per-stratum quality) travels in the stage
     report through the capability's own encoder, so an ``Enum`` field it
     introduces (for example ``SemanticStratum.source``) stays JSON-safe.
+
+    ``attempts`` carries the run's attempt accounting, which is measured from the artifact
+    rather than from annotations: unlike the quality rates, it needs no reference set. Without
+    it ``semantic.parse_failure_rate`` is ``NOT_APPLICABLE``, and for a run written before the
+    failures stream existed it stays ``NOT_APPLICABLE`` too, because "never tracked" must not
+    be reported as a perfect ``0.0``.
     """
     quality = report.quality
     context = report.context
@@ -195,6 +203,14 @@ def semantic_interpretation_evaluation_report(
         if ambiguity is not None
         else _unavailable("semantic.ambiguity_preservation_rate", MetricStatus.NOT_APPLICABLE)
     )
+    if attempts is not None and attempts.parse_failure_rate is not None:
+        quality_metrics.append(
+            _value("semantic.parse_failure_rate", attempts.parse_failure_rate, attempts.attempted)
+        )
+    else:
+        quality_metrics.append(
+            _unavailable("semantic.parse_failure_rate", MetricStatus.NOT_APPLICABLE)
+        )
     cost = report.cost
     performance = [
         _value("runtime.wall_time", cost.total_latency_ms / 1000.0, cost.request_count),
@@ -224,5 +240,24 @@ def semantic_interpretation_evaluation_report(
         ),
         quality_metrics=tuple(quality_metrics),
         performance_metrics=tuple(performance),
-        stage_report=encode_semantic_evaluation_report(report),
+        stage_report=_semantic_stage_report(report, attempts),
     )
+
+
+def _semantic_stage_report(
+    report: SemanticEvaluationReport, attempts: SemanticAttemptAccounting | None
+) -> dict[str, Any]:
+    """Encode the semantic report, adding the attempt accounting when it was measured.
+
+    The three counts travel next to the quality numbers so a reader never sees the rates
+    without knowing how many answers never became claims in the first place.
+    """
+    encoded = encode_semantic_evaluation_report(report)
+    if attempts is not None:
+        encoded["attempts"] = {
+            "attempted": attempts.attempted,
+            "parsed": attempts.parsed,
+            "parse_failed": attempts.parse_failed,
+            "measurement_status": attempts.measurement_status.value,
+        }
+    return encoded

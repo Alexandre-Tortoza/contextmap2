@@ -88,7 +88,7 @@ def write_run(
         script, family=family, checkpoint=checkpoint, dimension=dimension
     )
     service = RepresentationService(source, chosen, run_id=run_id, code_version="test")
-    run_dir = workspace / "run-0001"
+    run_dir = workspace / run
     writer = PointRepresentationRunWriter(
         output_dir=run_dir,
         sequence_name="corridor-02",

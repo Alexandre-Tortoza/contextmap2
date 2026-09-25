@@ -32,7 +32,9 @@ Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl
 
 ## `manifest.json`
 
-Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `trajectory_id`, `estimator` (`backend_id`, `backend_version`, `configuration_fingerprint`), `calibration_identity`, `code_version`, frames dinâmicos (`reference_frame`, `body_frame`), `clock_id`, limites de tempo, contagens (poses, observações consumidas/rejeitadas, gaps), `diagnostic_counts` por código, `preflight_status`, `debug_level`, a semântica de `interpolation` usada por `TrajectoryLookup`, `schema_version` e `created_at`. `file_inventory` lista cada arquivo contratual com tamanho e SHA-256, sem o manifest, o README e o `debug/`.
+Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `auxiliary_sequence_artifact_id`/`auxiliary_selection_id` (issue #555: a sequência de pose auxiliar realmente incorporada na trajetória, ou `None` quando nenhuma contribuiu — inclusive quando uma foi configurada, mas descartada pela salvaguarda de ground truth), `trajectory_id`, `estimator` (`backend_id`, `backend_version`, `configuration_fingerprint`), `calibration_identity`, `code_version`, frames dinâmicos (`reference_frame`, `body_frame`), `clock_id`, limites de tempo, contagens (poses, observações consumidas/rejeitadas, gaps), `diagnostic_counts` por código, `preflight_status`, `debug_level`, a semântica de `interpolation` usada por `TrajectoryLookup`, `schema_version` e `created_at`. `file_inventory` lista cada arquivo contratual com tamanho e SHA-256, sem o manifest, o README e o `debug/`.
+
+Os dois campos de auxiliar existem para que este artifact seja autoportável: um consumidor que só tenha o `StateEstimationRunArtifact` (sem a lineage própria da runtime) ainda consegue abrir a sequência de pose auxiliar nomeada aqui e fechar a proveniência de cada pose que veio dela (ver `runtime/docs/composition.md`, seção da bridge do #555).
 
 Um run cujo preflight de geometria estava `BLOCKED` nunca é persistido: o writer recusa.
 

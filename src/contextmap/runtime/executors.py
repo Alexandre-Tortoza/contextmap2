@@ -23,13 +23,30 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from contextmap.artifact import (
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID,
+    ArtifactKind,
+    ContextMapId,
+    ContextMapMetadata,
+    DeclaredCapabilities,
+    MapCapability,
+    MapCreation,
+    ObservationWindow,
+    PolicyRef,
+    SourceSequence,
+    UpstreamArtifact,
+    artifact_digest,
+    assemble_context_map_with_metrics,
+    estimator_local_map_frame,
+    write_context_map_with_metrics,
+)
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     ConservativeResolutionPolicy,
@@ -51,16 +68,21 @@ from contextmap.geometric_mapping import (
     assemble_geometry_inputs_from_artifacts,
 )
 from contextmap.ingestion import (
+    ClockPlausibilityError,
     FullSequenceSelection,
     ImageEncoding,
     ImageObservation,
     SequenceArtifactReader,
+    SourceObservation,
     SourceObservationId,
     selection_identity,
+    validate_cross_source_clock_plausibility,
 )
 from contextmap.runtime.artifacts import ArtifactRef
 from contextmap.runtime.catalog import (
     ASSOCIATION,
+    CONTEXT_MAP,
+    ENTITIES,
     FUSION,
     GEOMETRY,
     PERCEPTION,
@@ -76,12 +98,21 @@ from contextmap.semantic_fusion import (
     FusionRunLineage,
     GeometryOverlapSupportPolicy,
     SemanticFusionRunId,
+    SemanticFusionRunReader,
     SemanticFusionRunWriter,
     accumulate_baseline_evidence,
     build_fusion_supports,
     group_by_physical_observation,
 )
-from contextmap.semantic_mapping import SemanticMappingRunReader
+from contextmap.semantic_mapping import (
+    EntityMaterializationPolicy,
+    SemanticMapId,
+    SemanticMappingRunId,
+    SemanticMappingRunReader,
+    SemanticMappingRunWriter,
+    lineage_from_fusion_manifest,
+    materialize_entities,
+)
 from contextmap.sensor_association import (
     AssociationFrameInput,
     DiagnosticTolerances,
@@ -92,10 +123,13 @@ from contextmap.sensor_association import (
     SensorAssociationRunWriter,
     SensorAssociationService,
 )
+from contextmap.shared import SourceTimestamp
 from contextmap.spatial_relations import (
+    AxisDirection,
     RelationEvidence,
     RelationsRunPolicies,
     SpatialRelationsRunId,
+    SpatialRelationsRunReader,
     SpatialRelationsRunWriter,
     decide_relations,
     evaluate_contact_candidates,
@@ -119,6 +153,7 @@ from contextmap.state_estimation import (
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
     ArtifactReference,
+    BackendProvenance,
     PerceptionRun,
     PerceptionRunId,
     PerceptionRunReader,
@@ -126,8 +161,20 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionDiscovery,
+    RegionId,
+    SceneContext,
+    SemanticClaim,
+    SemanticInterpretationExecution,
+    SemanticInterpretationFailedError,
+    SemanticInterpretationMode,
+    SemanticInterpretationRequest,
     SemanticInterpreter,
+    SemanticRequestId,
+    SemanticVisualView,
     SourceImage,
+    StageOutcome,
+    StageStatus,
+    VisualViewKind,
     assemble_perception_result,
     box_mask_shape,
     execute_stage_graph,
@@ -187,6 +234,18 @@ def _one(request: StageRequest, name: str) -> Path:
     return request.directory_of(refs[0])
 
 
+def _optional_one(request: StageRequest, name: str) -> Path | None:
+    refs = request.inputs.get(name, ())
+    if not refs:
+        return None
+    if len(refs) != 1:
+        raise ExecutorError(
+            f"stage {request.stage_id!r} consumes at most one run of input {name!r}, got "
+            f"{len(refs)}: run the runtime once per run instead of choosing one"
+        )
+    return request.directory_of(refs[0])
+
+
 def _reference(
     request: StageRequest, contract: str, artifact_id: str, inventory: Sequence[object]
 ) -> ArtifactRef:
@@ -201,20 +260,66 @@ def _reference(
     )
 
 
+_GROUND_TRUTH_POSE_ROLE = "ground_truth"
+"""issue #555: an auxiliary pose sequence tagged with this role never drives the trajectory
+without :attr:`StateEstimationExecutor._allow_ground_truth_trajectory`'s explicit opt-in."""
+
+
 class StateEstimationExecutor:
     """Estimates the trajectory of the ingested sequence with the selected estimator."""
 
     def __init__(
-        self, estimator: StateEstimator, *, downstream: Sequence[GeometryRequirements] = ()
+        self,
+        estimator: StateEstimator,
+        *,
+        downstream: Sequence[GeometryRequirements] = (),
+        allow_ground_truth_trajectory: bool = False,
     ) -> None:
-        """Bind the executor to a composed estimator and the readiness it reports downstream."""
+        """Bind the executor to a composed estimator and the readiness it reports downstream.
+
+        Args:
+            estimator: The selected state estimation backend.
+            downstream: Requirements later capabilities report as readiness, never blocking.
+            allow_ground_truth_trajectory: Explicit opt-in (issue #555) letting an optional
+                auxiliary pose sequence tagged ``pose_role="ground_truth"`` become the
+                operational trajectory. ``False`` (default) drops a ground-truth-tagged
+                auxiliary pose from the merge entirely: the run behaves exactly as if no
+                auxiliary pose sequence were configured.
+        """
         self._estimator = estimator
         self._downstream = tuple(downstream)
+        self._allow_ground_truth_trajectory = allow_ground_truth_trajectory
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Estimate, persist and reference the trajectory of the ``sequence`` input."""
+        """Estimate, persist and reference the trajectory of the ``sequence`` input.
+
+        When the optional ``pose_sequence`` input is present (issue #555's auxiliary pose
+        bridge), its observations are merged in after its clock relationship with ``sequence``
+        passes an explicit plausibility check (never accepted on a matching
+        ``timestamp_clock_id`` string alone) and its declared ``pose_role`` is checked. When the
+        merge actually contributes observations, ``StateEstimationRequest`` also names the
+        auxiliary artifact and selection explicitly (``auxiliary_sequence_artifact_id``/
+        ``auxiliary_selection_id``), so the trajectory's own persisted provenance stays
+        self-portable even when a reader only has the ``StateEstimationRunArtifact``.
+        """
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
+        observations: tuple[SourceObservation, ...] = tuple(sequence.list_observations())
+
+        auxiliary_sequence_artifact_id = None
+        auxiliary_selection_id = None
+        pose_path = _optional_one(request, "pose_sequence")
+        if pose_path is not None:
+            pose_sequence = SequenceArtifactReader(pose_path)
+            auxiliary = tuple(pose_sequence.list_observations())
+            merged = self._select_auxiliary_pose(observations, auxiliary)
+            observations = observations + merged
+            if merged:
+                auxiliary_sequence_artifact_id = pose_sequence.manifest.artifact_id
+                auxiliary_selection_id = selection_identity(
+                    pose_sequence.manifest.artifact_id, FullSequenceSelection()
+                )
+
         identity = request.identity()
         outcome = execute_state_estimation(
             self._estimator,
@@ -224,8 +329,10 @@ class StateEstimationExecutor:
                 selection_id=selection_identity(
                     sequence.manifest.artifact_id, FullSequenceSelection()
                 ),
-                observations=tuple(sequence.list_observations()),
+                observations=observations,
                 calibration=sequence.read_calibration(),
+                auxiliary_sequence_artifact_id=auxiliary_sequence_artifact_id,
+                auxiliary_selection_id=auxiliary_selection_id,
             ),
             downstream=self._downstream,
         )
@@ -236,6 +343,58 @@ class StateEstimationExecutor:
             run_index=request.run_number(),
         ).finalize(outcome)
         return _reference(request, TRAJECTORY, str(manifest.run_id), manifest.file_inventory)
+
+    def _select_auxiliary_pose(
+        self, primary: Sequence[SourceObservation], auxiliary: Sequence[SourceObservation]
+    ) -> tuple[SourceObservation, ...]:
+        """Validate an auxiliary pose sequence and decide whether it joins the merge.
+
+        Args:
+            primary: The main sequence's observations, before any merge.
+            auxiliary: The auxiliary pose sequence's observations.
+
+        Returns:
+            ``auxiliary`` unchanged, or ``()`` when its declared ``pose_role`` is
+            ``"ground_truth"`` and :attr:`_allow_ground_truth_trajectory` is not set.
+
+        Raises:
+            ExecutorError: If ``auxiliary`` does not declare one single, recognized
+                ``pose_role``, or if the two sequences' clock relationship fails the
+                plausibility check (issue #555 requires this before ever combining two
+                artifacts' observations). The ground-truth safeguard is checked *before* the
+                clock check: a ground-truth-tagged auxiliary sequence that will be dropped
+                anyway must not block the run just because its clock is implausible --
+                ``operational_only`` must behave exactly as if the auxiliary sequence were
+                never configured, including when it is malformed in a way that is irrelevant to
+                a dropped sequence.
+        """
+        pose_role = self._auxiliary_pose_role(auxiliary)
+        if pose_role == _GROUND_TRUTH_POSE_ROLE and not self._allow_ground_truth_trajectory:
+            return ()
+        try:
+            validate_cross_source_clock_plausibility(primary, auxiliary)
+        except ClockPlausibilityError as error:
+            raise ExecutorError(f"cannot merge auxiliary pose sequence: {error}") from error
+        return tuple(auxiliary)
+
+    @staticmethod
+    def _auxiliary_pose_role(auxiliary: Sequence[SourceObservation]) -> str:
+        """Return the auxiliary sequence's single, consistent ``pose_role``.
+
+        Raises:
+            ExecutorError: If ``auxiliary`` is empty, declares no ``pose_role`` on some
+                observation, or declares more than one distinct value -- inconsistent or
+                missing pose role is never silently resolved (issue #555).
+        """
+        roles = {observation.provenance.raw_metadata.get("pose_role") for observation in auxiliary}
+        if len(roles) != 1 or None in roles:
+            raise ExecutorError(
+                "auxiliary pose sequence observations must declare a single, consistent "
+                f"pose_role in their provenance; got {sorted(str(role) for role in roles)!r}"
+            )
+        (role,) = roles
+        assert isinstance(role, str)
+        return role
 
 
 class GeometricMappingExecutor:
@@ -304,15 +463,20 @@ class SensorAssociationExecutor:
         calibration = sequence.read_calibration()
         if calibration is None:
             raise ExecutorError("the sequence artifact carries no calibration")
-        images = {
-            str(item.observation_id): item
-            for item in sequence.list_observations()
-            if isinstance(item, ImageObservation)
-        }
+        # Só as imagens são decodificadas: list_observations() decodificaria também os 364 MB de
+        # pointcloud e os 20781 registros de IMU do corridor-02, que esta associação nunca usa
+        # (#511). O payload das imagens em si continua necessário — _frame() hasheia image.data.
+        images: dict[str, ImageObservation] = {}
+        for entry in sequence.iter_index():
+            if entry.modality != "image":
+                continue
+            observation = sequence.observation_at(entry.offset)
+            if isinstance(observation, ImageObservation):
+                images[str(entry.observation_id)] = observation
         perception = PerceptionRunReader(_one(request, "perception"))
         frames = tuple(
             self._frame(images[str(result.source_observation_id)], result)
-            for result in perception.list_results()
+            for result in perception.iter_results()
             if str(result.source_observation_id) in images
         )
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
@@ -393,7 +557,7 @@ class SemanticFusionExecutor:
             )
         association = SensorAssociationRunReader(_one(request, "association"))
         perception = PerceptionRunReader(_one(request, "perception"))
-        results = {result.result_id: result for result in perception.list_results()}
+        results = {result.result_id: result for result in perception.iter_results()}
         observations = list(association.observations())
         described = perception.manifest
         run = PerceptionRun(
@@ -404,10 +568,13 @@ class SemanticFusionExecutor:
             enabled_capabilities=frozenset(described.enabled_capabilities),
             backend_provenance={},
         )
+        # Pelo índice, não por list_observations(): esta fusão só precisa do timestamp de cada
+        # imagem, e decodificar a sequência inteira para isso custava os 2,6 GB de payload do
+        # corridor-02 (#514). O índice já carrega identidade, timestamp e modalidade.
         timestamps = {
-            item.observation_id: item.timestamp
-            for item in SequenceArtifactReader(_one(request, "sequence")).list_observations()
-            if isinstance(item, ImageObservation)
+            entry.observation_id: entry.timestamp
+            for entry in SequenceArtifactReader(_one(request, "sequence")).iter_index()
+            if entry.modality == "image"
         }
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
             source = geometry.geometry()
@@ -453,6 +620,57 @@ class SemanticFusionExecutor:
         return _reference(request, FUSION, str(manifest.run_id), manifest.file_inventory)
 
 
+class SemanticMappingExecutor:
+    """Materializes the fused evidence as persistent entities, without merging supports."""
+
+    def __init__(
+        self,
+        *,
+        policy: EntityMaterializationPolicy,
+        semantic_map_id: SemanticMapId,
+        code_digest: str,
+        code_version: str | None = None,
+    ) -> None:
+        """Bind the executor to the materialization policy and the semantic map it fills.
+
+        Args:
+            policy: The materialization policy.
+            semantic_map_id: The semantic map the run fills.
+            code_digest: Digest of the code producing the run; ``SemanticMappingRunWriter``
+                refuses an empty one, so unlike ``code_version`` it has no silent default.
+            code_version: Code revision that produced the run.
+        """
+        self._policy = policy
+        self._semantic_map_id = semantic_map_id
+        self._code_digest = code_digest
+        self._code_version = code_version
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        """Materialize the ``fusion`` run over its geometry and reference the entity run."""
+        output = _output(request)
+        fusion = SemanticFusionRunReader(_one(request, "fusion"))
+        with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
+            materialization = materialize_entities(
+                fusion.iter_outcomes(),
+                fusion_manifest=fusion.manifest,
+                geometry=geometry.geometry(),
+                semantic_map_id=self._semantic_map_id,
+                policy=self._policy,
+                code_version=self._code_version,
+            )
+        manifest = SemanticMappingRunWriter(
+            output_dir=output,
+            sequence_name=fusion.manifest.sequence_name,
+            run_id=SemanticMappingRunId(request.identity()),
+            run_index=request.run_number(),
+            semantic_map_id=self._semantic_map_id,
+            lineage=lineage_from_fusion_manifest(fusion.manifest),
+            code_version=self._code_version or "",
+            code_digest=self._code_digest,
+        ).write(materialization.entities, rejections=materialization.rejections)
+        return _reference(request, ENTITIES, str(manifest.run_id), manifest.file_inventory)
+
+
 class _DeferredFeaturePayloadSink:
     """Forwards feature payloads to a writer that does not exist yet.
 
@@ -486,6 +704,192 @@ class _DeferredFeaturePayloadSink:
         if self._writer is None:
             raise ExecutorError("feature payload queued before the run writer was bound")
         self._writer.add_feature_payload(feature, source_observation_id, array)  # type: ignore[arg-type]
+
+
+class _LegacySemanticInterpreterBridge:
+    """Adapts a real ``SemanticInterpreter`` (``interpret()``) to the pipeline's legacy shape.
+
+    ``CANONICAL_PRESET_V1``'s ``scene_interpretation``/``region_interpretation`` stages still
+    dispatch through the pre-request-contract shape (``interpret_scene``/``interpret_regions``),
+    but no real backend (Qwen, Gemini, Florence-2) implements it any more -- all three finished
+    migrating to :class:`~contextmap.visual_perception.SemanticInterpreter`'s ``interpret()``
+    port. This bridges the one remaining caller of the legacy shape to the real port: one
+    single-view request per call (the whole frame for a scene, one tight crop per region), the
+    minimum evidence the request contract requires. It does not implement the multi-view/prompt
+    policy work multi-view semantic requests still need (#524, #529, #547, #549) -- that is
+    real, separately-tracked capability work, not a runtime concern.
+
+    Each ``interpret()`` call answers with a real :class:`~contextmap.visual_perception.
+    SemanticInterpretationExecution` -- the rendered prompt, the raw response, diagnostics and
+    the effective configuration, not just the parsed claims/scene context the legacy shape
+    returns. A request that fails schema conformance raises before returning one, so every
+    execution this bridge collects (:meth:`evidence`) already succeeded; ``interpret_scene``/
+    ``interpret_regions`` still return the reduced value the stage graph needs, but the caller
+    (:class:`VisualPerceptionExecutor`) also registers every collected execution and its view
+    payload with the writer, so this evidence is never silently dropped.
+    """
+
+    def __init__(
+        self, *, interpreter: SemanticInterpreter, run_id: PerceptionRunId, view_root: Path
+    ) -> None:
+        """Bind the bridge to the real interpreter, this run's identity, and its view directory."""
+        self._interpreter = interpreter
+        self._run_id = run_id
+        self._view_root = view_root
+        self._views_dir = view_root / "outputs" / "semantic-views"
+        self._views_dir.mkdir(parents=True, exist_ok=True)
+        provenance = interpreter.backend_provenance()
+        self._configuration_fingerprint = provenance.configuration_fingerprint or provenance.model
+        self._writer: PerceptionRunWriter | None = None
+
+    def bind(self, writer: PerceptionRunWriter) -> None:
+        """Bind every subsequent execution to the real writer.
+
+        Same ordering cycle as :class:`_DeferredFeaturePayloadSink`: the bridge has to exist
+        before ``resolve_pipeline()`` can build the stage graph, but the writer needs that
+        graph's ``configuration_digest``. Binding happens before any image is processed, so
+        every execution is forwarded, never buffered.
+        """
+        self._writer = writer
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Pass through the wrapped interpreter's provenance unchanged."""
+        return self._interpreter.backend_provenance()
+
+    def _publish(
+        self, execution: SemanticInterpretationExecution, view: SemanticVisualView
+    ) -> None:
+        """Hand one finished execution and its view payload to the writer, retaining neither.
+
+        The payload is read back from the view file only here and dropped as soon as the
+        writer has it. Holding ``(execution, view, payload)`` until the image loop ended cost
+        O(semantic requests x image size) resident and undid the writer's own streaming.
+        """
+        if self._writer is None:
+            raise ExecutorError("semantic bridge used before bind(): no writer to publish to")
+        stage_id = (
+            "scene_interpretation"
+            if execution.request.mode is SemanticInterpretationMode.SCENE
+            else "region_interpretation"
+        )
+        self._writer.add_stage_outcomes(
+            (StageOutcome(stage_id=stage_id, status=StageStatus.SUCCEEDED, output=execution),)
+        )
+        payload = (self._view_root / view.payload_reference).read_bytes()
+        self._writer.add_semantic_view_payload(view, payload)
+
+    def _write_view(self, name: str, pil_image: object) -> tuple[str, str]:
+        target = self._views_dir / name
+        pil_image.save(target)  # type: ignore[attr-defined]
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        return f"outputs/semantic-views/{name}", digest
+
+    def _interpret_preserving_failures(
+        self, request: SemanticInterpretationRequest
+    ) -> SemanticInterpretationExecution:
+        """Run one interpretation, persisting the response even when the parser rejects it.
+
+        The stage still fails — ``execute_stage_graph()`` records the error exactly as before —
+        but the model's real answer is no longer reduced to that error string: it reaches the
+        artifact's own failures stream first, so ``attempted`` can be reconciled against
+        ``parsed`` and ``parse_failed`` instead of being inferred.
+        """
+        try:
+            return self._interpreter.interpret(request)
+        except SemanticInterpretationFailedError as failed:
+            if self._writer is None:
+                raise ExecutorError(
+                    "semantic bridge used before bind(): no writer to record the failure in"
+                ) from failed
+            # As views entram antes da failure: elas sao a evidencia visual exata que produziu
+            # a resposta rejeitada, e sem isto ficariam so no scratch, que o executor apaga --
+            # o artifact citaria um payload_reference irrecuperavel.
+            for view in failed.failure.request.visual_views:
+                self._writer.add_semantic_view_payload(
+                    view, (self._view_root / view.payload_reference).read_bytes()
+                )
+            self._writer.add_failed_semantic_interpretation(failed.failure)
+            raise
+
+    def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
+        """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
+        import importlib
+
+        image_module = importlib.import_module("PIL.Image")
+        pil_image = image_module.open(self._view_root / image.payload_reference).convert("RGB")
+        reference, digest = self._write_view(f"{image.source_observation_id}__scene.png", pil_image)
+        view = SemanticVisualView(
+            view_id=f"v-{image.source_observation_id}-scene",
+            kind=VisualViewKind.FULL_FRAME,
+            payload_reference=reference,
+            source_observation_id=image.source_observation_id,
+            sha256=digest,
+        )
+        request = SemanticInterpretationRequest(
+            request_id=SemanticRequestId(f"scene-{image.source_observation_id}"),
+            source_observation_id=image.source_observation_id,
+            perception_result_id=perception_result_id_for(
+                run_id=self._run_id, source_observation_id=image.source_observation_id
+            ),
+            mode=SemanticInterpretationMode.SCENE,
+            visual_views=(view,),
+            prompt_template_id="scene/v1",
+            requested_output_schema="semantic-response/1",
+            configuration_fingerprint=self._configuration_fingerprint,
+        )
+        execution = self._interpret_preserving_failures(request)
+        self._publish(execution, view)
+        return execution.parsed.scene_context
+
+    def interpret_regions(
+        self, image: PreparedImage, regions: Sequence[Region2D]
+    ) -> Sequence[SemanticClaim]:
+        """Build one single-view REGION request per region (tight crop) and delegate."""
+        import importlib
+
+        image_module = importlib.import_module("PIL.Image")
+        frame = image_module.open(self._view_root / image.payload_reference).convert("RGB")
+        claims: list[SemanticClaim] = []
+        for region in regions:
+            box = region.bounding_box
+            crop = frame.crop(
+                (
+                    int(box.x),
+                    int(box.y),
+                    int(box.x + box.width),
+                    int(box.y + box.height),
+                )
+            )
+            reference, digest = self._write_view(
+                f"{image.source_observation_id}__{region.region_id}__tight_crop.png", crop
+            )
+            view = SemanticVisualView(
+                view_id=f"v-{image.source_observation_id}-{region.region_id}",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference=reference,
+                source_observation_id=image.source_observation_id,
+                sha256=digest,
+                region_id=RegionId(str(region.region_id)),
+            )
+            request = SemanticInterpretationRequest(
+                request_id=SemanticRequestId(
+                    f"region-{image.source_observation_id}-{region.region_id}"
+                ),
+                source_observation_id=image.source_observation_id,
+                perception_result_id=perception_result_id_for(
+                    run_id=self._run_id, source_observation_id=image.source_observation_id
+                ),
+                mode=SemanticInterpretationMode.REGION,
+                visual_views=(view,),
+                region_id=RegionId(str(region.region_id)),
+                prompt_template_id="region/v1",
+                requested_output_schema="semantic-response/1",
+                configuration_fingerprint=self._configuration_fingerprint,
+            )
+            execution = self._interpret_preserving_failures(request)
+            self._publish(execution, view)
+            claims.extend(execution.parsed.claims)
+        return tuple(claims)
 
 
 def _materialize_prepared_image(image: ImageObservation, root: Path) -> PreparedImage:
@@ -640,9 +1044,21 @@ class VisualPerceptionExecutor:
         """Process every image observation of the ``sequence`` input and reference the run."""
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
-        images = tuple(
-            item for item in sequence.list_observations() if isinstance(item, ImageObservation)
-        )
+
+        def images() -> Iterator[ImageObservation]:
+            """Decodifica uma imagem por vez, guiado pelo índice.
+
+            O laço abaixo consome um frame de cada vez, então materializar a sequência inteira
+            custaria os 2,2 GB de RGB do corridor-02 (mais 364 MB de pointcloud e 20781
+            registros de IMU que este estágio nem usa) sem nenhum ganho (#511).
+            """
+            for entry in sequence.iter_index():
+                if entry.modality != "image":
+                    continue
+                observation = sequence.observation_at(entry.offset)
+                if isinstance(observation, ImageObservation):
+                    yield observation
+
         identity = request.identity()
         run_id = PerceptionRunId(identity)
         payload_sink = _DeferredFeaturePayloadSink()
@@ -667,6 +1083,9 @@ class VisualPerceptionExecutor:
                 feature_stage_id="region_feature_extraction",
                 mask_source=_RegionInlineMaskSource(),
             )
+            semantic_bridge = _LegacySemanticInterpreterBridge(
+                interpreter=self._semantic_interpreter, run_id=run_id, view_root=scratch
+            )
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={
@@ -677,8 +1096,8 @@ class VisualPerceptionExecutor:
                     "region_feature_extraction": (
                         lambda _parameters: self._region_features(region_scope)
                     ),
-                    "scene_interpretation": lambda _parameters: self._semantic_interpreter,
-                    "region_interpretation": lambda _parameters: self._semantic_interpreter,
+                    "scene_interpretation": lambda _parameters: semantic_bridge,
+                    "region_interpretation": lambda _parameters: semantic_bridge,
                 },
             )
             writer = PerceptionRunWriter(
@@ -699,8 +1118,9 @@ class VisualPerceptionExecutor:
                 configuration_digest=resolved.configuration_digest(),
             )
             payload_sink.bind(writer)
+            semantic_bridge.bind(writer)
 
-            for image in images:
+            for image in images():
                 prepared = _materialize_prepared_image(image, scratch)
                 result_id = perception_result_id_for(
                     run_id=run_id, source_observation_id=image.observation_id
@@ -841,3 +1261,178 @@ class SpatialRelationsExecutor:
             code_version=self._code_version or "",
         ).write(candidates=candidates, evidence=evidence, decisions=decisions)
         return _reference(request, RELATIONS, str(manifest.run_id), manifest.file_inventory)
+
+
+def _observation_window(clock_id: str, *, start_ns: int, end_ns: int) -> ObservationWindow:
+    def _timestamp(total_nanoseconds: int) -> SourceTimestamp:
+        seconds, nanoseconds = divmod(total_nanoseconds, 1_000_000_000)
+        return SourceTimestamp(seconds=seconds, nanoseconds=nanoseconds, clock_id=clock_id)
+
+    return ObservationWindow(start=_timestamp(start_ns), end=_timestamp(end_ns))
+
+
+def _context_map_configuration_fingerprint(
+    *, assembly_policy: PolicyRef, up_direction: tuple[float, float, float] | None
+) -> str:
+    """Deterministic hash of the configuration ``ContextMapExecutor`` actually assembled with.
+
+    ``ContextMapExecutor`` has no backend to select, but it does have two effective inputs of
+    its own that change what it assembles: the assembly policy's identity and the map's
+    declared up direction (``None`` is itself a distinct, meaningful configuration, not an
+    absence of one). ``runtime.provenance_identity`` requires every stage artifact to record an
+    effective configuration digest; this was previously hardcoded to ``None`` (PR #438 review).
+    """
+    payload = json.dumps(
+        {
+            "assembly_policy_id": assembly_policy.policy_id,
+            "assembly_policy_version": assembly_policy.version,
+            "up_direction": up_direction,
+        },
+        sort_keys=True,
+    )
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+class ContextMapExecutor:
+    """Assembles the repository's public product: the ``ContextMap``, by reference.
+
+    Every entity, relation and piece of evidence was already decided by Entity Resolution and
+    Spatial Relations; this only translates their real, finished runs -- and the geometric map
+    and sequence they were built over -- into what :func:`~contextmap.artifact.
+    assemble_context_map_with_metrics` needs, and never infers anything itself (that function
+    already owns the translation rule, see :data:`~contextmap.artifact.
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID`).
+    """
+
+    def __init__(
+        self,
+        *,
+        up_axis: AxisDirection | None = None,
+        assembly_policy: PolicyRef | None = None,
+        code_version: str | None = None,
+    ) -> None:
+        """Bind the executor to the map frame's declared up axis and the assembly policy.
+
+        Args:
+            up_axis: Spatial Relations' own composed ``FrameConventions.up_axis``, when
+                declared -- the same value that already shaped this run's relations, never
+                re-derived independently here. ``None`` when no run declared one.
+            assembly_policy: Identity of the assembly rule; defaults to
+                :data:`~contextmap.artifact.CONTEXT_MAP_ASSEMBLY_POLICY_ID` version ``"1"``, the
+                one :func:`~contextmap.artifact.assemble_context_map_with_metrics` actually
+                implements.
+            code_version: Code revision that produced the run.
+        """
+        self._up_direction = up_axis.vector if up_axis is not None else None
+        self._assembly_policy = assembly_policy or PolicyRef(
+            policy_id=CONTEXT_MAP_ASSEMBLY_POLICY_ID, version="1"
+        )
+        self._code_version = code_version
+        self._configuration_fingerprint = _context_map_configuration_fingerprint(
+            assembly_policy=self._assembly_policy, up_direction=self._up_direction
+        )
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        """Assemble and write the final ``ContextMap`` from this run's real upstream artifacts.
+
+        Raises:
+            ExecutorError: If the ``sequence`` input is not the artifact the ``geometry`` input
+                was actually built over. ``ArtifactKind.SEQUENCE`` is not a structural
+                dependency (:attr:`~contextmap.artifact.ArtifactKind.is_structural`), so
+                :class:`~contextmap.artifact.ContextMapArtifactWriter` never opens or verifies
+                it; without this check, a caller wiring the wrong ``sequence`` run could publish
+                a lineage entry whose ``artifact_id`` (taken from the geometry manifest) and
+                ``content_identity`` (the digest of whatever directory was actually passed)
+                silently name two different artifacts.
+        """
+        output = _output(request)
+        sequence_dir = _one(request, "sequence")
+        geometry_dir = _one(request, "geometry")
+        resolution_dir = _one(request, "entities")
+        relations_dir = _one(request, "relations")
+
+        sequence = SequenceArtifactReader(sequence_dir)
+        with GeometricMapArtifactReader(geometry_dir) as geometry_reader:
+            geometry_manifest = geometry_reader.manifest
+            bounds = geometry_reader.geometry().geometric_map.bounds
+        if sequence.manifest.artifact_id != geometry_manifest.sequence_artifact_id:
+            raise ExecutorError(
+                f"stage {request.stage_id!r} was given sequence "
+                f"{sequence.manifest.artifact_id!r}, but the geometric map it was also given "
+                f"was built over sequence {geometry_manifest.sequence_artifact_id!r}"
+            )
+        expected_selection_id = selection_identity(
+            sequence.manifest.artifact_id, FullSequenceSelection()
+        )
+        if geometry_manifest.selection_id != expected_selection_id:
+            raise ExecutorError(
+                f"stage {request.stage_id!r} was given a sequence selection "
+                f"{expected_selection_id!r} that does not match the geometric map's own "
+                f"selection {geometry_manifest.selection_id!r}"
+            )
+        relations_reader = SpatialRelationsRunReader(relations_dir)
+        predicates = sorted(
+            {relation.predicate for relation in relations_reader.iter_relations()},
+            key=lambda predicate: predicate.value,
+        )
+
+        metadata = ContextMapMetadata(
+            creation=MapCreation(
+                assembly_policy=self._assembly_policy,
+                code_version=self._code_version,
+                configuration_fingerprint=self._configuration_fingerprint,
+            ),
+            source_sequences=(
+                SourceSequence(
+                    sequence_artifact_id=str(geometry_manifest.sequence_artifact_id),
+                    selection_id=geometry_manifest.selection_id,
+                ),
+            ),
+            frame=estimator_local_map_frame(
+                frame_id=str(geometry_manifest.map_frame), up_direction=self._up_direction
+            ),
+            bounds=bounds,
+            time_bounds=_observation_window(
+                geometry_manifest.clock_id,
+                start_ns=geometry_manifest.start_time_ns,
+                end_ns=geometry_manifest.end_time_ns,
+            ),
+            capabilities=DeclaredCapabilities(
+                content=(MapCapability.ENTITIES, MapCapability.GEOMETRY, MapCapability.RELATIONS),
+                relation_predicates=tuple(predicates),
+            ),
+        )
+        sequence_lineage = (
+            UpstreamArtifact(
+                artifact_id=str(geometry_manifest.sequence_artifact_id),
+                kind=ArtifactKind.SEQUENCE,
+                content_identity=artifact_digest(sequence_dir),
+                configuration_fingerprint=None,
+                code_version=None,
+                model_identities=(),
+            ),
+        )
+        result = assemble_context_map_with_metrics(
+            context_map_id=ContextMapId(request.identity()),
+            metadata=metadata,
+            geometric_map_location=geometry_dir,
+            entity_resolution_location=resolution_dir,
+            spatial_relations_location=relations_dir,
+            additional_lineage=sequence_lineage,
+        )
+        location_by_kind = {
+            ArtifactKind.GEOMETRIC_MAP: geometry_dir,
+            ArtifactKind.ENTITY_RESOLUTION_RUN: resolution_dir,
+            ArtifactKind.SPATIAL_RELATIONS_RUN: relations_dir,
+        }
+        upstream_locations = {
+            item.artifact_id: location_by_kind[item.kind]
+            for item in result.context_map.lineage
+            if item.kind.is_structural
+        }
+        manifest, _write_metrics = write_context_map_with_metrics(
+            result.context_map, output_dir=output, upstream_locations=upstream_locations
+        )
+        return _reference(
+            request, CONTEXT_MAP, str(manifest.context_map_id), manifest.file_inventory
+        )

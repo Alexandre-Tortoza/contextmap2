@@ -17,7 +17,15 @@ from contextmap.artifact.composition import (
     ContextSemanticState,
     LabelHypothesis,
 )
-from contextmap.artifact.frame import AnchorKind, Handedness, LengthUnit, MapAnchor, MapFrame
+from contextmap.artifact.frame import (
+    CANONICAL_MAP_FRAME_DECLARATION_ID,
+    AnchorKind,
+    Handedness,
+    LengthUnit,
+    MapAnchor,
+    MapFrame,
+    estimator_local_map_frame,
+)
 from contextmap.artifact.metadata import (
     ContextMapMetadata,
     DeclaredCapabilities,
@@ -52,6 +60,7 @@ from contextmap.artifact.references import (
 )
 from contextmap.artifact.schema_identity import describe_schema, schema_fingerprint
 from contextmap.artifact.serialization.assembly import (
+    CONTEXT_MAP_ASSEMBLY_POLICY_ID,
     AssemblyMetrics,
     AssemblyResult,
     WriteMetrics,
@@ -111,6 +120,8 @@ from contextmap.artifact.versioning import (
 
 __all__ = [
     "ARTIFACT_TYPE",
+    "CANONICAL_MAP_FRAME_DECLARATION_ID",
+    "CONTEXT_MAP_ASSEMBLY_POLICY_ID",
     "CONTEXT_MAP_SCHEMA_VERSION",
     "FORMAT_VERSION",
     "VALIDATOR_VERSION",
@@ -187,6 +198,7 @@ __all__ = [
     "context_map_from_record",
     "context_map_to_record",
     "describe_schema",
+    "estimator_local_map_frame",
     "export_bundle",
     "require_supported_schema_version",
     "schema_fingerprint",

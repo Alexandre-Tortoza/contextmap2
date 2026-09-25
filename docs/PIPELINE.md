@@ -382,16 +382,14 @@ A capability de domínio existe para todos os blocos de Ingestion até Spatial R
 | Sensor Association | sim | sim | O executor global atual monta a associação geométrica e não injeta mapas densos de feature. |
 | Point Representation | sim | não | Descritor determinístico e PTv3 existem, mas o estágio precisa de artifact fornecido/injetado no runtime global. |
 | Semantic Fusion | sim | sim, baseline | O executor global atual suporta a acumulação baseline e recusa o canal de Point Representation. A política quality-aware existe na capability, mas não é executada por esse executor. |
-| Semantic Mapping | sim | não | O runtime `canonical/2` contém o edge estrutural, mas o artifact precisa ser fornecido. |
+| Semantic Mapping | sim | sim, condicional | Compõe quando o chamador também fornece `semantic_map_id` e `code_digest`, que não são valor de configuração. |
 | Entity Resolution | sim | sim | Aparência e representação exigem vector sources fornecidos pelo runtime/provider quando ativadas. |
 | Spatial Relations | sim | sim | Avaliadores geométrico e de contato são opcionais por configuração. |
-| ContextMapArtifact | sim | não é stage de preset | `assemble_context_map()` e `ContextMapArtifactWriter` existem como capability standalone. |
+| ContextMapArtifact | sim | sim | `ContextMapExecutor` monta o artifact por referência aos runs de Entity Resolution e Spatial Relations; `assemble_context_map_with_metrics()` e `ContextMapArtifactWriter` continuam existindo como capability standalone, sem lógica nova no executor. |
 
-Os presets globais são:
+O preset global é:
 
-- `canonical/1`: Ingestion → Visual Perception + State Estimation → Geometric Mapping → Sensor Association → Point Representation opcional → Semantic Fusion.
-- `canonical/2`: a topologia de `canonical/1`, sem alteração, estendida com Semantic Mapping → Entity Resolution → Spatial Relations.
-- `context_map` ainda não pertence a nenhum preset global. A montagem final é chamada separadamente.
+- `canonical/1`: Ingestion → Visual Perception + State Estimation → Geometric Mapping → Sensor Association → Point Representation opcional → Semantic Fusion → Semantic Mapping → Entity Resolution → Spatial Relations → `context_map`. Antes do v0.1.0 sair esta é a única topologia do repositório e continua livre para evoluir até o release; a partir daí, uma mudança de topologia abre uma identidade nova (`canonical/2`, ...) em vez de mudar esta.
 
 ## 0. Runtime & Configuration
 
@@ -694,7 +692,7 @@ Detalhes: [Semantic Fusion](../src/contextmap/semantic_fusion/docs/README.md), [
 
 **Fronteira central.** Dois `FusionSupport` diferentes continuam duas `Entity`, mesmo que tenham o mesmo label e estejam adjacentes. Decidir se são o mesmo objeto pertence exclusivamente a Entity Resolution.
 
-**Estado do runtime.** A capability está implementada, mas não há executor automático. Em `canonical/2`, o artifact de Semantic Mapping precisa ser fornecido para o stage seguinte.
+**Estado do runtime.** `SemanticMappingExecutor` compõe automaticamente quando o chamador também fornece `semantic_map_id` e `code_digest`, que não são valor de configuração; sem os dois, o artifact continua precisando ser fornecido para o stage seguinte.
 
 **Onde procurar.** `semantic_mapping/materialization.py`, `geometry.py`, `semantic_state.py`, `evidence.py`, `temporal.py`.
 
@@ -782,7 +780,7 @@ Detalhes: [Spatial Relations](../src/contextmap/spatial_relations/docs/README.md
 8. `validate_context_map_artifact()` verifica integridade e dependências.
 9. `export_bundle()` pode fechar dependências num bundle portátil.
 
-**Estado do runtime.** Tudo acima está implementado como capability, mas `context_map` ainda não é stage de `canonical/1` ou `canonical/2`.
+**Estado do runtime.** `context_map` é um estágio real de `canonical/1`, com `ContextMapExecutor` composto automaticamente pelo `compose_executors()`; nenhuma orquestração manual fora do DAG é necessária.
 
 **Onde procurar.** `artifact/serialization/assembly.py`, `writer.py`, `reader.py`, `validation.py`, `bundle.py`.
 

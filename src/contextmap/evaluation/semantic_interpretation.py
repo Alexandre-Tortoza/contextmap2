@@ -507,6 +507,153 @@ class EvidenceVariantComparison:
     entries: tuple[EvidenceVariantEntry, ...]
 
 
+class SemanticMeasurementStatus(Enum):
+    """Whether a run's attempt counts can support an exact rate.
+
+    Attributes:
+        COMPLETE: The run recorded both streams, so every attempt has a known outcome.
+        LEGACY_LOWER_BOUND: The run predates the failures stream. ``parse_failed`` is a floor,
+            not a measurement, and no rate can be derived from it.
+    """
+
+    COMPLETE = "complete"
+    LEGACY_LOWER_BOUND = "legacy_lower_bound"
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticAttemptAccounting:
+    """How many real backend calls a run made, and how many became canonical claims.
+
+    Counting only materialized executions overstates the stage: a run where a third of the
+    responses were rejected by the parser looked as good as one where none were. These three
+    numbers come from the two contractual streams of the artifact, reconciled by
+    ``request_id`` — never from ``StageOutcome``, never inferred.
+
+    Attributes:
+        attempted: Distinct requests the backend actually answered, parsed or not.
+        parsed: Requests whose response became a ``ParsedSemanticResponse``.
+        parse_failed: Requests whose response was observed but rejected by the parser.
+        measurement_status: Whether these counts can support an exact rate.
+    """
+
+    attempted: int
+    parsed: int
+    parse_failed: int
+    measurement_status: SemanticMeasurementStatus = SemanticMeasurementStatus.COMPLETE
+
+    def __post_init__(self) -> None:
+        """Reject counts that cannot describe one reconciled run."""
+        for name, value in (
+            ("attempted", self.attempted),
+            ("parsed", self.parsed),
+            ("parse_failed", self.parse_failed),
+        ):
+            if value < 0:
+                raise SemanticEvaluationError(f"semantic attempt {name} must be non-negative")
+        if self.attempted != self.parsed + self.parse_failed:
+            raise SemanticEvaluationError(
+                "semantic attempts do not reconcile: "
+                f"attempted={self.attempted} != parsed={self.parsed} + "
+                f"parse_failed={self.parse_failed}"
+            )
+
+    @property
+    def parse_failure_rate(self) -> float | None:
+        """Share of attempts the parser rejected, or ``None`` when nothing was attempted.
+
+        ``0/0`` is undefined, not zero: a run that issued no semantic request has no failure
+        rate to report, and returning ``0.0`` would read as a perfect stage. The same holds
+        for ``LEGACY_LOWER_BOUND``, where the failures were never tracked in the first place.
+        """
+        if self.measurement_status is SemanticMeasurementStatus.LEGACY_LOWER_BOUND:
+            return None
+        if self.attempted == 0:
+            return None
+        return self.parse_failed / self.attempted
+
+    @classmethod
+    def from_request_ids(
+        cls,
+        *,
+        parsed_ids: frozenset[str],
+        failed_ids: frozenset[str],
+        measurement_status: SemanticMeasurementStatus = SemanticMeasurementStatus.COMPLETE,
+    ) -> SemanticAttemptAccounting:
+        """Build the accounting of one run from the request ids of both streams.
+
+        Raises:
+            SemanticEvaluationError: If a request id appears in both streams, which would make
+                ``attempted`` ambiguous — one attempt has exactly one outcome.
+        """
+        both = parsed_ids & failed_ids
+        if both:
+            raise SemanticEvaluationError(
+                f"semantic request ids appear in both streams of one run: {sorted(both)!r}"
+            )
+        return cls(
+            attempted=len(parsed_ids | failed_ids),
+            parsed=len(parsed_ids),
+            parse_failed=len(failed_ids),
+            measurement_status=measurement_status,
+        )
+
+
+def account_semantic_attempts(reader: Any) -> SemanticAttemptAccounting:
+    """Count one run's semantic attempts from its two contractual streams.
+
+    Args:
+        reader: An open ``PerceptionRunReader``. A run written before the failures stream
+            existed simply has none, which is not an error.
+
+    Returns:
+        The reconciled accounting of that single run.
+
+    Raises:
+        SemanticEvaluationError: If a request id appears in both streams.
+    """
+    parsed_ids = frozenset(
+        str(execution.request.request_id) for execution in reader.iter_semantic_executions()
+    )
+    failed_ids = frozenset(
+        str(failed.request.request_id) for failed in reader.iter_failed_semantic_interpretations()
+    )
+    return SemanticAttemptAccounting.from_request_ids(
+        parsed_ids=parsed_ids,
+        failed_ids=failed_ids,
+        # Sem tracking so e "legado" quando houve execucao: um run que nunca chamou o
+        # backend semantico nao tem nada a rastrear, e sua contagem e exata (zero de zero).
+        measurement_status=(
+            SemanticMeasurementStatus.COMPLETE
+            if reader.tracks_semantic_failures() or not parsed_ids
+            else SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+        ),
+    )
+
+
+def aggregate_semantic_attempts(
+    accountings: Iterable[SemanticAttemptAccounting],
+) -> SemanticAttemptAccounting:
+    """Sum per-run accountings that were each already reconciled.
+
+    Reconciliation is per run on purpose: two runs may legitimately issue the same
+    ``request_id``, and unioning ids across runs would report that reuse as a collision.
+    """
+    totals = list(accountings)
+    # Uma run sem tracking contamina o agregado: a campanha nao pode declarar taxa exata
+    # quando parte da evidencia nunca registrou suas falhas.
+    status = (
+        SemanticMeasurementStatus.COMPLETE
+        if all(item.measurement_status is SemanticMeasurementStatus.COMPLETE for item in totals)
+        else SemanticMeasurementStatus.LEGACY_LOWER_BOUND
+    )
+    return SemanticAttemptAccounting(
+        attempted=sum(item.attempted for item in totals),
+        parsed=sum(item.parsed for item in totals),
+        parse_failed=sum(item.parse_failed for item in totals),
+        measurement_status=status,
+    )
+
+
 def evaluate_semantic_interpretation(
     *,
     context: SemanticEvaluationContext,

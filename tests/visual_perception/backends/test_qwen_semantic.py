@@ -181,7 +181,11 @@ def test_qwen_rejects_model_reported_confidence() -> None:
         runtime=_FakeQwenRuntime(confidence=0.93),
     )
 
-    with pytest.raises(ValueError, match="confidence must be null"):
+    from contextmap.visual_perception import SemanticInterpretationFailedError
+
+    # Still a rejection, but the drifting response is now preserved instead of discarded:
+    # a model reporting its own confidence is exactly the drift you need the raw text for.
+    with pytest.raises(SemanticInterpretationFailedError, match="confidence must be null"):
         adapter.interpret(_request(adapter))
 
 
@@ -259,3 +263,70 @@ def test_qwen_stage_materializes_and_persists_canonical_result(tmp_path: Path) -
     assert reader.list_results()[0].claims[0].hypothesis == "wooden pallet"
     assert reader.list_semantic_executions()[0].request == _request(adapter)
     assert reader.verify_integrity() == []
+
+
+class _OmitsConfidenceQwenRuntime:
+    """Reproduces the dominant real failure: the model obeys "never invent confidence".
+
+    The prompt tells it not to invent confidence, the schema marks the key required, and the
+    parser rejects the claim when it is absent. 232 of 284 failed requests in the real
+    150-frame corridor-02 run failed exactly this way.
+    """
+
+    def generate(
+        self,
+        *,
+        visual_views: tuple[SemanticVisualView, ...],
+        prompt: str,
+        config: QwenSemanticConfig,
+    ) -> QwenGenerationResponse:
+        return QwenGenerationResponse(
+            text=json.dumps(
+                {
+                    "abstained": False,
+                    "claims": [
+                        {
+                            "hypothesis": "wooden pallet",
+                            "role": "primary",
+                            "category": None,
+                            "region_kind": "thing",
+                            "attributes": {},
+                        }
+                    ],
+                    "scene_context": None,
+                }
+            ),
+            input_tokens=120,
+            output_tokens=24,
+            peak_memory_bytes=1024,
+            warnings=(),
+        )
+
+
+def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_string() -> None:
+    """PR #438 review: the real raw_response must survive a parse failure."""
+    from contextmap.visual_perception import SemanticInterpretationFailedError
+
+    config = QwenSemanticConfig(
+        model="Qwen/Qwen2.5-VL-3B-Instruct",
+        device="cuda:0",
+        precision="bfloat16",
+        quantization="4bit",
+        max_new_tokens=128,
+        temperature=0.0,
+    )
+    adapter = QwenSemanticInterpreter(config=config, runtime=_OmitsConfidenceQwenRuntime())
+    request = _request(adapter)
+
+    with pytest.raises(SemanticInterpretationFailedError) as raised:
+        adapter.interpret(request)
+
+    failed = raised.value.failure
+    assert "wooden pallet" in failed.raw_response, "the observed response must not be lost"
+    assert failed.raw_response_sha256
+    assert failed.failure.kind == "SemanticResponseParseError"
+    assert "confidence" in failed.failure.message
+    assert failed.request.request_id == request.request_id, "shares the attempt identity"
+    assert failed.provenance.backend.model == config.model
+    assert failed.diagnostics.input_tokens == 120
+    assert failed.rendered_prompt.text, "the exact prompt sent must be preserved"
