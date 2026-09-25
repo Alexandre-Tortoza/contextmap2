@@ -72,7 +72,7 @@ O leitor decodifica esses arquivos com a biblioteca padrão (`array`, `json`).
 
 ## `manifest.json`
 
-Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `geometric_map_id`, `trajectory_id`, `state_estimation_run_id`, `perception_run_ids`, `calibration_identity`, a política de visibilidade (com o fingerprint), a política de pertencimento, as versões das definições, a política de pose, as tolerâncias, `configuration_fingerprint`, `code_version`, contagens (frames, rejeitados, com falha, observações), `finding_counts`, `debug_level`, `schema_version`, `created_at` e o `file_inventory` (tamanho e SHA-256 de cada arquivo contratual, sem o manifest, o README e o `debug/`).
+Identifica o run, o que ele consumiu e quem o produziu: `run_id`, `run_index`, `sequence_name`, `sequence_artifact_id`, `selection_id`, `geometric_map_id`, `trajectory_id`, `state_estimation_run_id`, `perception_run_ids`, `calibration_identity`, a política de candidatos e a de visibilidade (cada uma com o seu fingerprint), a política de pertencimento, as versões das definições, a política de pose, as tolerâncias, `configuration_fingerprint`, `code_version`, contagens (frames, rejeitados, com falha, observações), `finding_counts`, `debug_level`, `schema_version`, `created_at` e o `file_inventory` (tamanho e SHA-256 de cada arquivo contratual, sem o manifest, o README e o `debug/`).
 
 `dense_channels` lista cada canal com sua interpolação e as **fontes de features** exatas que consumiu: artefato de origem, espaço de embedding, transformação e fingerprint da geometria de amostragem, extrator e, se houver, a melhoria de resolução (backend, espaços de entrada e saída e grades), com o número de frames de cada fonte. A proveniência de features nunca é inferida do nome de um arquivo.
 
@@ -106,6 +106,8 @@ Arquivos de debug são escritos mas nunca entram no inventário, então removê-
 - o writer confere que a geometria de cada observação coincide com o seu pertencimento antes de persistir; uma observação inconsistente nunca é gravada;
 - um run interrompido no meio de um frame não publica nada, e `finalize()` recusa um `outcome` que conte outros frames que os que chegaram à transação;
 - `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest, `IncompleteRunArtifactError`.
+
+O `schema_version` corrente é **`0.2.0`**, o schema de seleção de candidatos (#562): o manifest ganhou `candidate_policy` (obrigatório), cada registro de projeção ganhou `candidates` e `stage_counts`, `point_count` passou a significar a população **avaliada** em vez do tamanho do mapa, e `geometry-support.u32` e os `eligible_indices` densos guardam índices globais de geometria explicitamente, não linhas de candidatos que por acaso coincidiam com eles. Um artifact `0.1.0` é **recusado** com erro claro, não migrado: em `v0.x` um run é reexecutado, nunca reescrito.
 
 `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.
 

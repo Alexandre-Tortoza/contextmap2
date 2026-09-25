@@ -151,7 +151,7 @@ def test_the_manifest_names_the_upstream_artifacts_and_the_configuration(tmp_pat
     assert manifest.code_version == "test"
     assert (manifest.frame_count, manifest.rejected_frame_count) == (2, 0)
     assert manifest.observation_count == 4
-    assert manifest.schema_version == "0.1.0"
+    assert manifest.schema_version == "0.2.0"
     assert manifest.debug_level == "none"
 
 

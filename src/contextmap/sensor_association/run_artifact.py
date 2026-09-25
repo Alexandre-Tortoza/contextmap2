@@ -59,8 +59,17 @@ from contextmap.shared import (
 )
 from contextmap.visual_perception import RegionId
 
-SCHEMA_VERSION = "0.1.0"
-"""Sensor Association run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Sensor Association run artifact schema version written and understood by this module.
+
+``0.2.0`` is the candidate-selection schema (#562): the manifest gained the required
+``candidate_policy``, every projection record gained ``candidates`` and ``stage_counts``, and
+``point_count`` changed meaning from the map's size to the number of elements the frame
+actually evaluated. ``geometry-support.u32`` and the dense ``eligible_indices`` now hold global
+geometry indices explicitly rather than candidate rows that happened to coincide with them.
+A ``0.1.0`` artifact is refused with a clear error instead of being migrated: during ``v0.x``
+a run is re-executed, never rewritten.
+"""
 
 SensorAssociationRunId = NewType("SensorAssociationRunId", str)
 """Identity of one Sensor Association run, local to its capability and sequence."""
@@ -119,6 +128,8 @@ class SensorAssociationRunManifest:
         state_estimation_run_id: The state-estimation run it came from, when there is one.
         perception_run_ids: The perception runs the evidence came from.
         calibration_identity: Hash of the calibration used.
+        candidate_policy: The candidate policy record, with its fingerprint: which map
+            geometry each frame evaluated before projection.
         visibility_policy: The occlusion policy record, with its fingerprint.
         membership_policy_id: The mask-membership rule.
         definitions: Versions of the coverage, quality, diagnostics and sampling definitions.
@@ -149,6 +160,7 @@ class SensorAssociationRunManifest:
     state_estimation_run_id: str | None
     perception_run_ids: tuple[str, ...]
     calibration_identity: str
+    candidate_policy: Mapping[str, Any]
     visibility_policy: Mapping[str, Any]
     membership_policy_id: str
     definitions: Mapping[str, str]
@@ -866,6 +878,7 @@ def _load_manifest(run_dir: Path) -> SensorAssociationRunManifest:
         state_estimation_run_id=raw["state_estimation_run_id"],
         perception_run_ids=tuple(raw["perception_run_ids"]),
         calibration_identity=raw["calibration_identity"],
+        candidate_policy=dict(raw["candidate_policy"]),
         visibility_policy=dict(raw["visibility_policy"]),
         membership_policy_id=raw["membership_policy_id"],
         definitions=dict(raw["definitions"]),
