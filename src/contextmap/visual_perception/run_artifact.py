@@ -914,10 +914,12 @@ class PerceptionRunWriter:
                     _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
                 )
 
-        if self._semantic_failures or self._semantic_executions:
-            # Escrito sempre que houve tentativa semantica, mesmo vazio: a ausencia do arquivo
-            # precisa significar "run anterior a este stream", nunca "zero falhas". Sem isso,
-            # um run que nunca rastreou falhas reporta 0% de parse failure e parece perfeito.
+        if True:
+            # Escrito SEMPRE, mesmo vazio e mesmo sem nenhuma tentativa semantica: assim a
+            # ausencia do arquivo significa inequivocamente "artifact anterior ao tracking",
+            # sem heuristica. Emiti-lo so quando havia tentativa deixava um buraco: um artifact
+            # legado em que toda tentativa falhou tambem tem zero execucoes e nenhuma stream,
+            # e passaria por completo.
             #
             # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
             # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
@@ -1094,12 +1096,27 @@ class PerceptionRunReader:
     def tracks_semantic_failures(self) -> bool:
         """Whether this run recorded its rejected interpretations at all.
 
-        ``False`` only for a run written before the failures stream existed: the writer emits
-        the file whenever a run attempted interpretation, empty included. A consumer needs
-        this to tell "zero failures, fully tracked" from "never tracked", which otherwise
-        both read as zero.
+        Decided by the manifest, not by what happens to be on disk. The writer always
+        inventories the stream, so its absence from ``file_inventory`` can only mean the
+        artifact predates tracking. A consumer needs that to tell "zero failures, fully
+        tracked" from "never tracked", which otherwise both read as zero.
+
+        Raises:
+            RunArtifactError: If the manifest inventories the stream but the file is gone.
+                That is a corrupted artifact, and silently reporting it as a legacy one would
+                turn corruption into backward compatibility.
         """
-        return (self._root / _SEMANTIC_FAILURES_FILENAME).is_file()
+        inventoried = any(
+            entry.path == _SEMANTIC_FAILURES_FILENAME for entry in self._manifest.file_inventory
+        )
+        if not inventoried:
+            return False
+        if not (self._root / _SEMANTIC_FAILURES_FILENAME).is_file():
+            raise RunArtifactError(
+                "run inventoried its semantic failures stream but the file is missing: "
+                f"{_SEMANTIC_FAILURES_FILENAME}"
+            )
+        return True
 
     def iter_failed_semantic_interpretations(self) -> Iterator[FailedSemanticInterpretation]:
         """Yield each real backend call whose response was observed but never materialized.

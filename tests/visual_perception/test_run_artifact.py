@@ -1325,10 +1325,30 @@ def test_a_run_with_semantic_attempts_always_writes_the_failures_stream(tmp_path
     assert PerceptionRunReader(run_dir).list_failed_semantic_interpretations() == []
 
 
-def test_a_run_without_any_semantic_attempt_writes_no_failures_stream(tmp_path: Path) -> None:
-    """A run that never called a semantic backend has nothing to declare."""
+def test_every_run_declares_its_failure_tracking_even_with_no_attempt(tmp_path: Path) -> None:
+    """Absence of the stream must mean exactly one thing: the artifact predates tracking.
+
+    Emitting it only for runs that attempted interpretation left a hole: a legacy artifact
+    whose every attempt failed also has zero executions and no stream, so it looked complete.
+    """
     writer = _write_run(tmp_path)
     writer.add_result(_result("frame-0001", "run-0001"))
     writer.finalize()
 
-    assert not (_run_dir(tmp_path) / "outputs" / "semantic-interpretation-failures.jsonl").exists()
+    run_dir = _run_dir(tmp_path)
+    assert (run_dir / "outputs" / "semantic-interpretation-failures.jsonl").is_file()
+    assert PerceptionRunReader(run_dir).tracks_semantic_failures() is True
+
+
+def test_tracking_is_decided_by_the_manifest_not_by_the_file_on_disk(tmp_path: Path) -> None:
+    """A corrupted new artifact must not be silently reclassified as a legacy one."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    (run_dir / "outputs" / "semantic-interpretation-failures.jsonl").unlink()
+
+    reader = PerceptionRunReader(run_dir)
+    with pytest.raises(RunArtifactError, match="inventoried"):
+        reader.tracks_semantic_failures()
