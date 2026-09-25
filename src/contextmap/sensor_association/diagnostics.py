@@ -167,7 +167,10 @@ class ReprojectionAttempt:
 
         Raises:
             ValueError: If a count is negative, they do not narrow from declared through
-                evaluated to invalid, or they contradict ``outcome``.
+                evaluated to invalid, or they contradict ``outcome``. Every state the enum
+                declares is checked, including the two that only a wrong producer could
+                build: counts on a frame that had no reference, and a supplied reference with
+                no correspondences in it.
         """
         if min(self.correspondence_count, self.evaluated_count, self.invalid_count) < 0:
             raise ValueError("reprojection counts must not be negative")
@@ -178,6 +181,18 @@ class ReprojectionAttempt:
             )
         if (self.outcome is ReprojectionOutcome.NO_REFERENCE) != (self.reference_id is None):
             raise ValueError("a reference_id exists exactly when a reference was supplied")
+        if self.outcome is ReprojectionOutcome.NO_REFERENCE:
+            # A narrowing acima faz evaluated e invalid seguirem de correspondence_count.
+            if self.correspondence_count:
+                raise ValueError(
+                    f"{self.outcome.value} means no reference existed, so it can count no "
+                    f"correspondences, got {self.correspondence_count}"
+                )
+        elif self.correspondence_count == 0:
+            raise ValueError(
+                f"{self.outcome.value} names a supplied reference, which always declares at "
+                "least one correspondence"
+            )
         if self.outcome is ReprojectionOutcome.NOT_EVALUATED and self.evaluated_count:
             raise ValueError(
                 f"{self.outcome.value} means nothing was evaluated, got {self.evaluated_count}"

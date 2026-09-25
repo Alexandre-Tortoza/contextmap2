@@ -36,6 +36,7 @@ from contextmap.sensor_association.diagnostics import (
     DiagnosticTolerances,
     FindingCode,
     FindingSeverity,
+    ReprojectionAttempt,
     ReprojectionOutcome,
     TrustedCorrespondences,
     _reprojection_findings,
@@ -590,3 +591,76 @@ def test_the_evaluated_count_is_defined_once_and_shared() -> None:
     assert statistics is not None
     assert statistics.evaluated_count == 1
     assert statistics.unevaluated_count == 1
+
+
+# --- The attempt contract closes its own declared states ------------------------------------
+
+
+def _attempt(**overrides: object) -> ReprojectionAttempt:
+    fields: dict[str, object] = {
+        "outcome": ReprojectionOutcome.MEASURED,
+        "reference_id": "trusted-0001",
+        "correspondence_count": 4,
+        "evaluated_count": 4,
+        "invalid_count": 1,
+    }
+    fields.update(overrides)
+    return ReprojectionAttempt(**fields)  # type: ignore[arg-type]
+
+
+def test_a_frame_with_no_reference_cannot_count_correspondences() -> None:
+    with pytest.raises(ValueError, match="no reference existed"):
+        _attempt(
+            outcome=ReprojectionOutcome.NO_REFERENCE,
+            reference_id=None,
+            correspondence_count=4,
+            evaluated_count=0,
+            invalid_count=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ReprojectionOutcome.NOT_EVALUATED,
+        ReprojectionOutcome.NONE_PROJECTABLE,
+        ReprojectionOutcome.MEASURED,
+    ],
+)
+def test_a_supplied_reference_always_declares_at_least_one_correspondence(
+    outcome: ReprojectionOutcome,
+) -> None:
+    with pytest.raises(ValueError, match="at least one correspondence"):
+        _attempt(outcome=outcome, correspondence_count=0, evaluated_count=0, invalid_count=0)
+
+
+def test_the_empty_attempt_of_a_frame_without_a_reference_is_valid() -> None:
+    attempt = _attempt(
+        outcome=ReprojectionOutcome.NO_REFERENCE,
+        reference_id=None,
+        correspondence_count=0,
+        evaluated_count=0,
+        invalid_count=0,
+    )
+
+    assert attempt.unevaluated_count == 0
+    assert attempt.invalid_rate is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"invalid_count": 5}, "must narrow"),
+        ({"evaluated_count": 5}, "must narrow"),
+        ({"correspondence_count": -1}, "not be negative"),
+        ({"outcome": ReprojectionOutcome.NOT_EVALUATED}, "nothing was evaluated"),
+        ({"outcome": ReprojectionOutcome.NONE_PROJECTABLE}, "every evaluated"),
+        ({"invalid_count": 4, "outcome": ReprojectionOutcome.MEASURED}, "that projects"),
+        ({"reference_id": None}, "exactly when"),
+    ],
+)
+def test_an_attempt_that_contradicts_its_own_counts_is_rejected(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _attempt(**overrides)

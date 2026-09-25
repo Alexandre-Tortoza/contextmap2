@@ -28,7 +28,12 @@ from contextmap.sensor_association.candidate_geometry import (
     select_candidate_geometry,
 )
 from contextmap.sensor_association.dense_sampling import InterpolationPolicy
-from contextmap.sensor_association.diagnostics import DiagnosticTolerances, TrustedCorrespondences
+from contextmap.sensor_association.diagnostics import (
+    DiagnosticTolerances,
+    ReprojectionAttempt,
+    ReprojectionOutcome,
+    TrustedCorrespondences,
+)
 from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.models import (
     AssociationProvenance,
@@ -100,6 +105,8 @@ __all__ = [
     "PoseRef",
     "ProjectionSummary",
     "QualityComponent",
+    "ReprojectionAttempt",
+    "ReprojectionOutcome",
     "ReprojectionStatistics",
     "RunArtifactError",
     "SemanticClaimRef",
