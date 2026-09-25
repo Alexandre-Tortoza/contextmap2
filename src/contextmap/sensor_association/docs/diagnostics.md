@@ -1,6 +1,8 @@
 # Diagnósticos de calibração, reprojeção e alinhamento temporal
 
-Este documento descreve `src/contextmap/sensor_association/diagnostics.py`, versão `association-diagnostics-v1`.
+Este documento descreve `src/contextmap/sensor_association/diagnostics.py`, versão `association-diagnostics-v2`.
+
+A `v2` (#562) muda três definições: a referência confiável de um frame passa a carregar um `ReprojectionAttempt` com um `ReprojectionOutcome` explícito (`no_reference`, `not_evaluated`, `none_projectable`, `measured`), de modo que a **ausência** de residual é um dos três fatos contados em vez de um `None` único; o aviso `REFERENCE_NOT_EVALUATED` separa uma política de candidatos que não avaliou a geometria da referência de uma câmera que não consegue projetá-la; e a taxa de inválidos passa a ser medida sobre a população **avaliada**, não sobre a declarada. A identidade muda porque as definições mudaram: dois runs cujos diagnósticos significam coisas diferentes nunca podem compartilhá-la.
 
 A associação só é tão confiável quanto a calibração, o alinhamento temporal da pose e o mapa que ela projeta. Estes diagnósticos tornam essas condições **observáveis**, por frame, sem virar confiança semântica: guardam as medidas brutas para que uma política a jusante decida se e como usá-las, nunca convertem uma medida em probabilidade e nunca alteram uma claim.
 

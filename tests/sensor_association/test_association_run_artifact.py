@@ -313,7 +313,7 @@ def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_pa
     assert projection[0]["calibration_ref"]["camera_model_kind"] == "pinhole"
     assert visibility[0]["state_counts"]["occluded"] == 1
     assert visibility[0]["membership"]["associated_count"] == 3
-    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v1"
+    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v2"
     assert diagnostics[0]["findings"] == []
 
 

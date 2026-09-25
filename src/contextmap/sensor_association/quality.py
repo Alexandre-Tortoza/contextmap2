@@ -32,8 +32,16 @@ from contextmap.sensor_association.models import (
     SpatialObservationId,
 )
 
-QUALITY_DEFINITIONS_VERSION = "observation-quality-v1"
-"""Versioned identity of the component definitions in :class:`ObservationQuality`."""
+QUALITY_DEFINITIONS_VERSION = "observation-quality-v2"
+"""Versioned identity of the component definitions in :class:`ObservationQuality`.
+
+``v2`` (#562): :class:`ReprojectionStatistics` gained ``unevaluated_count`` and now defines its
+rates over the **evaluated** population through :attr:`ReprojectionStatistics.evaluated_count`
+and :attr:`ReprojectionStatistics.invalid_rate`, and it refuses to exist without an evaluated
+correspondence that projects. A residual measured over a population the candidate policy
+narrowed is not the same quantity as one measured over the whole map, so it does not keep the
+same identity.
+"""
 
 
 class QualityComponent(Enum):

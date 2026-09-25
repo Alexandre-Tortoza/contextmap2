@@ -36,6 +36,7 @@ from contextmap.sensor_association.diagnostics import (
     DiagnosticTolerances,
     FindingCode,
     FindingSeverity,
+    ReprojectionOutcome,
     TrustedCorrespondences,
     _reprojection_findings,
     diagnose_frame,
@@ -200,8 +201,9 @@ def test_the_diagnostics_never_fabricate_a_reprojection_without_a_trusted_refere
     diagnostics = _diagnose(scene_frame(*PIXELS))
 
     assert diagnostics.reprojection is None
-    assert diagnostics.reprojection_unavailable_reason is not None
-    assert "trusted" in diagnostics.reprojection_unavailable_reason
+    assert diagnostics.reprojection_attempt.outcome is ReprojectionOutcome.NO_REFERENCE
+    assert diagnostics.reprojection_attempt.reference_id is None
+    assert diagnostics.reprojection_attempt.correspondence_count == 0
     assert diagnostics.findings == ()
 
 
@@ -511,8 +513,11 @@ def test_a_reference_the_candidate_policy_excluded_is_a_warning_not_a_failure() 
     codes = {finding.code: finding.severity for finding in report.findings}
     assert codes[FindingCode.REFERENCE_NOT_EVALUATED] is FindingSeverity.WARNING
     assert FindingCode.NO_REFERENCE_CORRESPONDENCE_PROJECTS not in codes
-    assert report.reprojection_unavailable_reason is not None
-    assert "evaluated none" in report.reprojection_unavailable_reason
+    attempt = report.reprojection_attempt
+    assert attempt.outcome is ReprojectionOutcome.NOT_EVALUATED
+    assert (attempt.correspondence_count, attempt.evaluated_count) == (1, 0)
+    assert attempt.unevaluated_count == 1
+    assert attempt.invalid_rate is None
 
 
 def test_a_reference_the_frame_evaluated_but_cannot_project_is_still_a_failure() -> None:

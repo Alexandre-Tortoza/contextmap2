@@ -186,10 +186,21 @@ class TimingReport:
 class ReprojectionReport:
     """Reprojection residuals, only where a trusted reference existed.
 
+    A missing residual is not one fact but three, and they are counted apart: a frame may have
+    had no reference at all, a reference whose geometry its candidate policy never evaluated,
+    or a reference it evaluated and could not project. Collapsing them lost both the
+    distinction and the correspondence counts.
+
     Attributes:
-        frames_with_reference: Frames evaluated against a trusted reference.
-        frames_without_reference: Frames with none; no residual is invented for them.
-        correspondence_count: Reference correspondences declared, summed.
+        frames_measured: Frames whose residual was actually measured.
+        frames_without_reference: Frames with no trusted reference; none is invented for them.
+        frames_with_reference_not_evaluated: Frames whose candidate policy evaluated none of
+            the reference geometry. A run whose reference lies outside its candidate range
+            lands here instead of looking well-calibrated.
+        frames_without_projectable_reference: Frames that evaluated the reference geometry and
+            could project none of it. This one is a camera or calibration problem.
+        correspondence_count: Reference correspondences declared, summed over every frame that
+            had a reference, measured or not.
         invalid_correspondence_count: Of the evaluated ones, those the camera model could not
             project.
         unevaluated_correspondence_count: Correspondences whose geometry the frames' candidate
@@ -200,13 +211,24 @@ class ReprojectionReport:
         frame_p95_px: Distribution, over frames, of each frame's 95th percentile residual.
     """
 
-    frames_with_reference: int
+    frames_measured: int
     frames_without_reference: int
+    frames_with_reference_not_evaluated: int
+    frames_without_projectable_reference: int
     correspondence_count: int
     invalid_correspondence_count: int
     unevaluated_correspondence_count: int
     frame_median_px: ValueSummary | None
     frame_p95_px: ValueSummary | None
+
+    @property
+    def frames_with_reference(self) -> int:
+        """Frames a trusted reference was supplied for, whatever came of it."""
+        return (
+            self.frames_measured
+            + self.frames_with_reference_not_evaluated
+            + self.frames_without_projectable_reference
+        )
 
     @property
     def evaluated_correspondence_count(self) -> int:
@@ -505,8 +527,15 @@ def encode_sensor_association_report(report: SensorAssociationEvaluationReport) 
             "lookup_outcomes": dict(report.timing.lookup_outcomes),
         },
         "reprojection": {
+            "frames_measured": report.reprojection.frames_measured,
             "frames_with_reference": report.reprojection.frames_with_reference,
             "frames_without_reference": report.reprojection.frames_without_reference,
+            "frames_with_reference_not_evaluated": (
+                report.reprojection.frames_with_reference_not_evaluated
+            ),
+            "frames_without_projectable_reference": (
+                report.reprojection.frames_without_projectable_reference
+            ),
             "correspondence_count": report.reprojection.correspondence_count,
             "invalid_correspondence_count": report.reprojection.invalid_correspondence_count,
             "unevaluated_correspondence_count": (
@@ -649,18 +678,32 @@ def _reprojection(diagnostics: Sequence[Mapping[str, Any]]) -> ReprojectionRepor
     medians: list[float] = []
     p95s: list[float] = []
     correspondences = invalid = unevaluated = 0
+    without_reference = not_evaluated = none_projectable = 0
     for record in diagnostics:
-        reprojection = record["reprojection"]
-        if reprojection is None:
+        # A tentativa está sempre no registro; o residual, só quando algo projetou. Ler o
+        # residual e seguir em frente descartava as contagens dos frames sem residual.
+        attempt = record["reprojection_attempt"]
+        outcome = attempt["outcome"]
+        if outcome == "no_reference":
+            without_reference += 1
             continue
+        correspondences += attempt["correspondence_count"]
+        invalid += attempt["invalid_count"]
+        unevaluated += attempt["unevaluated_count"]
+        if outcome == "not_evaluated":
+            not_evaluated += 1
+            continue
+        if outcome == "none_projectable":
+            none_projectable += 1
+            continue
+        reprojection = record["reprojection"]
         medians.append(reprojection["median_px"])
         p95s.append(reprojection["p95_px"])
-        correspondences += reprojection["correspondence_count"]
-        invalid += reprojection["invalid_count"]
-        unevaluated += reprojection["unevaluated_count"]
     return ReprojectionReport(
-        frames_with_reference=len(medians),
-        frames_without_reference=len(diagnostics) - len(medians),
+        frames_measured=len(medians),
+        frames_without_reference=without_reference,
+        frames_with_reference_not_evaluated=not_evaluated,
+        frames_without_projectable_reference=none_projectable,
         correspondence_count=correspondences,
         invalid_correspondence_count=invalid,
         unevaluated_correspondence_count=unevaluated,

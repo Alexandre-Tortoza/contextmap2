@@ -38,7 +38,7 @@ A queda nos braços longos casa com o payload medido (2.192,9 MB) **dentro de 3%
 de janela quase não se movem porque só carregavam 15 imagens. A atribuição fica fechada por
 medição, não por aritmética.
 
-## A memória não escala com o número de frames
+## O pico não escala com o número de frames
 
 | | frames | máx. candidatos em um frame | Peak RSS |
 |---|---|---|---|
@@ -58,6 +58,13 @@ pico  =  páginas do mapa residentes (mmap, ~1,7 GB, recuperáveis)
 
 A decomposição dos ~2,6 GB restantes em ~206 B por candidato é **aritmética sobre tamanhos de
 array**, não medição por componente: nenhum contador de page fault foi coletado.
+
+O total **não** é estritamente constante no número de frames, e não se deve afirmar `O(1)`: a
+transação acumula um registro de tempo por frame (quatro primitivos, ~567 B) porque o #562 pede
+os tempos por frame e `metrics/runtime.json` é um documento único, e o serviço guarda o conjunto
+de observações já vistas (~66 B por frame) para recusar um frame repetido em um único passe. São
+**~1,9 MB em 3.096 frames**, escalares e não estado perceptual ou geométrico — quatro ordens de
+magnitude abaixo do pico. O termo linear existe, é pequeno e está nomeado.
 
 ## Um resultado que corrige a manchete da janela
 

@@ -1,12 +1,19 @@
 import dataclasses
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+from projection_builders import (
+    ArrayGeometrySource,
+    map_point_for_camera_point,
+    map_point_for_pixel,
+)
 from run_builders import (
     ENHANCED,
     NATIVE,
     OCCLUSION,
+    STRATA_PIXELS,
     frame_input,
     make_request,
     make_strata_request,
@@ -30,6 +37,7 @@ from contextmap.sensor_association import (
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
     SensorAssociationService,
+    TrustedCorrespondences,
 )
 
 PROFILE = StratificationProfile(
@@ -60,6 +68,12 @@ def _run(
 def _report(root: Path, *channels: object) -> SensorAssociationEvaluationReport:
     reader = _run(root, make_strata_request(channels=list(channels)))  # type: ignore[arg-type]
     return evaluate_sensor_association(reader, profile=PROFILE)
+
+
+def report_diagnostics(root: Path, *, index: int = 1) -> list[dict[str, Any]]:
+    """The persisted per-frame diagnostics of a run written by :func:`_run`."""
+    reader = SensorAssociationRunReader(root / f"run-{index:04d}")
+    return reader.read_records("metrics/frame-diagnostics.jsonl")
 
 
 def _counts(
@@ -233,13 +247,13 @@ def test_the_reprojection_is_reported_only_where_a_trusted_reference_exists(tmp_
     request = make_request(frames=[frame_input(0, with_reference=True), frame_input(1)])
     with_reference = evaluate_sensor_association(_run(tmp_path, request, index=2), profile=PROFILE)
 
-    assert (without.reprojection.frames_with_reference, without.reprojection.frame_median_px) == (
+    assert (without.reprojection.frames_measured, without.reprojection.frame_median_px) == (
         0,
         None,
     )
     assert without.reprojection.frames_without_reference == 2
     residual = with_reference.reprojection
-    assert (residual.frames_with_reference, residual.frames_without_reference) == (1, 1)
+    assert (residual.frames_measured, residual.frames_without_reference) == (1, 1)
     assert residual.correspondence_count == 4 and residual.invalid_correspondence_count == 0
     assert residual.frame_median_px is not None
     assert residual.frame_median_px.median == pytest.approx(1.0)
@@ -428,8 +442,10 @@ def test_the_reprojection_report_keeps_the_unevaluated_correspondences_apart(
 
 def test_the_invalid_rate_of_the_report_is_none_when_nothing_was_evaluated() -> None:
     empty = ReprojectionReport(
-        frames_with_reference=0,
-        frames_without_reference=3,
+        frames_measured=0,
+        frames_without_reference=0,
+        frames_with_reference_not_evaluated=3,
+        frames_without_projectable_reference=0,
         correspondence_count=10,
         invalid_correspondence_count=0,
         unevaluated_correspondence_count=10,
@@ -440,3 +456,110 @@ def test_the_invalid_rate_of_the_report_is_none_when_nothing_was_evaluated() -> 
     assert empty.evaluated_correspondence_count == 0
     # Nada avaliado não é taxa zero: é ausência de medição.
     assert empty.invalid_rate is None
+    assert empty.frames_with_reference == 3
+
+
+# A cena de strata não tem geometria atrás da câmera, e o caso "avaliado mas não projetável"
+# precisa de uma. O ponto extra entra no fim, então o seu índice global é o último.
+BEHIND_INDEX = len(STRATA_PIXELS)
+
+
+def _reference_request(
+    *, geometry_indices: tuple[int, ...], culled: bool
+) -> SensorAssociationRequest:
+    """One frame with a trusted reference naming ``geometry_indices`` of the scene.
+
+    The scene is the strata one plus a point behind the camera, so a reference can name
+    geometry the frame evaluates and the camera model still cannot project.
+    """
+    import numpy as np
+
+    base = make_strata_request()
+    scene = [map_point_for_pixel(u, v, z) for u, v, z in STRATA_PIXELS]
+    scene.append(map_point_for_camera_point((0.0, 0.0, -5.0)))
+    source = ArrayGeometrySource(scene, calibration=base.calibration)
+    frame = base.frames[0]  # type: ignore[index]
+    reference = TrustedCorrespondences(
+        reference_id="trusted-eval",
+        geometry_indices=np.array(geometry_indices),
+        observed_pixels=np.full((len(geometry_indices), 2), 100.0),
+    )
+    return dataclasses.replace(
+        base,
+        geometry=source,
+        frames=(dataclasses.replace(frame, correspondences=reference),),
+        candidate_policy=CandidateGeometryPolicy(max_range_m=1.0 if culled else None),
+    )
+
+
+def test_a_reference_entirely_outside_the_candidate_population_reaches_the_report(
+    tmp_path: Path,
+) -> None:
+    """The all-unevaluated case must survive the artifact and the evaluator, with its counts.
+
+    `_reprojection()` used to read the residual and `continue` when it was `None`, which threw
+    away the counts of every frame without a residual -- so a run whose reference lay wholly
+    outside its candidate range reported nothing at all instead of `unevaluated=N`. This goes
+    through the persisted diagnostics, not a hand-built dataclass.
+    """
+    request = _reference_request(geometry_indices=(0, 1, 2), culled=True)
+
+    report = evaluate_sensor_association(_run(tmp_path, request), profile=PROFILE)
+
+    reprojection = report.reprojection
+    assert reprojection.frames_measured == 0
+    assert reprojection.frames_with_reference_not_evaluated == 1
+    assert reprojection.frames_without_projectable_reference == 0
+    assert reprojection.frames_without_reference == 0
+    assert reprojection.correspondence_count == 3
+    assert reprojection.unevaluated_correspondence_count == 3
+    assert reprojection.evaluated_correspondence_count == 0
+    assert reprojection.invalid_rate is None
+    # E o diagnóstico do frame diz qual dos três estados foi, não só que faltou residual.
+    (record,) = report_diagnostics(tmp_path)
+    assert record["reprojection_attempt"]["outcome"] == "not_evaluated"
+    assert record["reprojection_attempt"]["unevaluated_count"] == 3
+
+
+def test_a_reference_the_frames_evaluated_but_cannot_project_reaches_the_report(
+    tmp_path: Path,
+) -> None:
+    """And the other missing-residual state is counted apart, through the artifact too."""
+    # A cena de strata tem geometria atrás da câmera no fim da lista; a referência nomeia só ela.
+    request = _reference_request(geometry_indices=(BEHIND_INDEX,), culled=False)
+
+    report = evaluate_sensor_association(_run(tmp_path, request), profile=PROFILE)
+
+    reprojection = report.reprojection
+    assert reprojection.frames_measured == 0
+    assert reprojection.frames_without_projectable_reference == 1
+    assert reprojection.frames_with_reference_not_evaluated == 0
+    assert reprojection.correspondence_count == 1
+    assert reprojection.unevaluated_correspondence_count == 0
+    assert reprojection.invalid_correspondence_count == 1
+    assert reprojection.invalid_rate == pytest.approx(1.0)
+    (record,) = report_diagnostics(tmp_path)
+    assert record["reprojection_attempt"]["outcome"] == "none_projectable"
+
+
+def test_the_three_missing_residual_states_are_never_merged(tmp_path: Path) -> None:
+    """A frame with no reference, one unevaluated and one unprojectable count separately."""
+    no_reference = evaluate_sensor_association(
+        _run(tmp_path, make_strata_request(), index=1), profile=PROFILE
+    ).reprojection
+    unevaluated = evaluate_sensor_association(
+        _run(tmp_path, _reference_request(geometry_indices=(0,), culled=True), index=2),
+        profile=PROFILE,
+    ).reprojection
+    unprojectable = evaluate_sensor_association(
+        _run(tmp_path, _reference_request(geometry_indices=(BEHIND_INDEX,), culled=False), index=3),
+        profile=PROFILE,
+    ).reprojection
+
+    assert no_reference.frames_without_reference == 2
+    assert no_reference.frames_with_reference == 0
+    assert unevaluated.frames_with_reference_not_evaluated == 1
+    assert unprojectable.frames_without_projectable_reference == 1
+    # Nenhum dos três é confundido com "sem referência".
+    assert unevaluated.frames_without_reference == 0
+    assert unprojectable.frames_without_reference == 0

@@ -37,8 +37,10 @@ occlusion rule compares:
     to sit at a larger field angle. When the two fall in one cell window, culling removes
     a support the full map would have used. The direction is fixed: removing elements can
     only *raise* a window's minimum, so this can only make a retained element **less**
-    occluded. It never drops geometry the full map associated, but it does mean the range
-    policy redefines the *support* population, not only the evaluated one.
+    occluded. Among the **retained** candidates it therefore never drops geometry the full map
+    associated -- geometry the policy excluded is of course no longer associated, which is the
+    declared change to the evaluated population -- but it does mean the range policy redefines
+    the *support* population, not only the evaluated one.
 
     The regime is reachable only with a coarse grid. A measured probe put the smallest
     window reach that made it fire at about 24 px, against the 12 px of the corridor-02

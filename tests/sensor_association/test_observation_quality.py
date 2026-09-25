@@ -253,7 +253,7 @@ def test_the_components_keep_their_own_units_and_are_not_collapsed() -> None:
 def test_every_quality_is_tied_to_its_observation_and_the_exact_inputs() -> None:
     observation, quality, _ = _quality()
 
-    assert quality.definitions_version == QUALITY_DEFINITIONS_VERSION == "observation-quality-v1"
+    assert quality.definitions_version == QUALITY_DEFINITIONS_VERSION == "observation-quality-v2"
     assert quality.spatial_observation_id == observation.spatial_observation_id
     assert quality.source_observation_id == observation.source_observation_id
     assert quality.geometric_map_id == observation.provenance.geometric_map_id

@@ -373,9 +373,10 @@ def test_a_pinhole_camera_can_lose_the_support_that_came_from_a_neighbouring_cel
     full map called it occluded.
 
     The direction matters: removing elements can only raise a window's minimum, so this
-    mechanism can only make a retained element **less** occluded. It never drops geometry the
-    baseline associated -- what #562 had to guarantee -- but it does mean the range policy
-    redefines the support population for a camera whose depth metric is the optical axis.
+    mechanism can only make a retained element **less** occluded. Among the retained candidates
+    it never drops geometry the baseline associated -- what #562 had to guarantee -- but it does
+    mean the range policy redefines the support population, and not only the evaluated one, for a
+    camera whose depth metric is the optical axis.
     """
     pinhole = make_calibration()
 

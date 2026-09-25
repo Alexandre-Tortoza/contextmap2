@@ -10,7 +10,7 @@ selects is projected, never necessarily the whole map, so the arrays are indexed
 *candidate row* and every row carries the global geometry index it came from. A
 reference is therefore always the persistent identity of a map element and never a
 position in an array; see
-``src/contextmap/sensor_association/candidate_selection.py`` for why the step cannot
+``src/contextmap/sensor_association/candidate_geometry.py`` for why the step cannot
 change the outcome of a retained element.
 
 The 3D half resolves ``T_map_body(t_rgb)`` from the selected trajectory, the static
