@@ -48,6 +48,12 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
   mesmas observações, regiões, modos e variants (falhas incluídas, com identidade
   física completa) e o mesmo reference-set, seleção, run de percepção, versão do
   evaluator e matching policy, para Qwen, Gemini e Florence-2.
+- `evaluate_region_semantic_hints()`, `RegionSemanticHintInput`,
+  `RegionSemanticHintReport`/`RegionSemanticHintSample` e
+  `encode_region_semantic_hint_report()` — pontuam o texto nativo que uma task
+  de Region Discovery (Florence-2 `<OD>`, `<DENSE_REGION_CAPTION>`, ...) devolveu
+  com cada proposta, com o mesmo `casefold-exact/1`, sem transformá-lo em claim e
+  com uma configuração nativa por report.
 
 ### State Estimation
 

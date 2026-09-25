@@ -17,6 +17,7 @@ from .discovery import BackendDiagnostics, DiscoveryRunResult
 from .models import BoundingBox2D, PreparedImage, Region2D
 from .normalization import NormalizationResult
 from .region_models import BoundingBox, InlineMask, JsonScalar, RegionCandidate
+from .region_semantic_hints import derive_region_semantic_hints
 
 
 class DebugLevel(StrEnum):
@@ -108,6 +109,17 @@ class RegionDiscoveryEvidenceWriter:
             outputs / "regions.jsonl",
             [region.to_dict() for region in record.normalization.regions],
         )
+        # Sempre escrito, mesmo vazio: a ausência de texto nativo é um resultado, não um
+        # arquivo faltando. Derivado da mesma inferência, sem rodar o modelo de novo.
+        _write_jsonl(
+            outputs / "region-semantic-hints.jsonl",
+            [
+                hint.to_dict()
+                for hint in derive_region_semantic_hints(
+                    record.discovery.candidates, record.normalization
+                )
+            ],
+        )
         _write_json(outputs / "metrics.json", _metrics(record))
 
         if debug_level is not DebugLevel.NONE:
@@ -124,7 +136,7 @@ class RegionDiscoveryEvidenceWriter:
         _write_json(
             root / "manifest.json",
             {
-                "schema": "contextmap.region-discovery-stage/v1",
+                "schema": "contextmap.region-discovery-stage/v2",
                 "source_observation_id": record.prepared_image.source_observation_id,
                 "backend_id": record.backend_id,
                 "normalization_config_digest": record.normalization.config_digest,

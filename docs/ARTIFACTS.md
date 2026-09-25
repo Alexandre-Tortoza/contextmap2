@@ -416,7 +416,7 @@ flowchart LR
     RD --> REG["Region2D[]"]
     REG --> PRA["PerceptionResult / PerceptionRunArtifact"]
     RD --> W["RegionDiscoveryEvidenceWriter"]
-    W --> O["outputs/<br/>regions.jsonl + metrics.json"]
+    W --> O["outputs/<br/>regions.jsonl + region-semantic-hints.jsonl + metrics.json"]
     W --> M["manifest.json + hashes"]
     W -. standard/full .-> D["debug/<br/>candidates, passes, overlays, masks"]
 ```

@@ -61,6 +61,7 @@ temporariamente os estágios legados de cena/região até a construção de
 - `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext` — evidência visual canônica.
 - `SemanticInterpretationRequest`, `SemanticVisualView`, `SemanticFeatureReference` e `SemanticInterpreterCapabilities` — entrada auditável e validação de capacidade para inferência semântica.
 - `SemanticInterpretationExecution`, `RenderedSemanticPrompt`, `ParsedSemanticResponse` e `SemanticConfidencePolicy` — separação explícita entre request, prompt efetivo, resposta bruta, parsing, métricas e política de score.
+- `NativeRegionText`, `RegionSemanticHint`/`HintContribution` e `derive_region_semantic_hints()` — texto que a própria task de descoberta (Florence-2 `<OD>`, `<DENSE_REGION_CAPTION>`, `<OPEN_VOCABULARY_DETECTION>`) devolveu com uma proposta, vinculado à região canônica pela linhagem do merge; evidência que um consumidor pode pontuar ou ignorar, nunca `SemanticClaim` nem parte de `Region2D` (ver [`region-discovery.md`](region-discovery.md)).
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 

@@ -260,8 +260,59 @@ class RegionProvenance:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeRegionText:
+    """Text a region-producing task emitted natively together with one proposal.
+
+    This is evidence of what one backend inference returned next to one geometry, for
+    example a Florence-2 ``<OD>`` category or a ``<DENSE_REGION_CAPTION>`` description. It
+    is never a label, a ``SemanticClaim`` or a belief, carries no confidence, and does not
+    enter ``Region2D``. A proposal whose parser returned no text carries no instance.
+
+    Attributes:
+        task: Backend task identity that produced both the geometry and the text.
+        text: Verbatim text the backend parser attached to this proposal.
+        prompt: Task input that conditioned the output (for example an open-vocabulary
+            query), or ``None`` when the task takes no input.
+    """
+
+    task: str
+    text: str
+    prompt: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require a task identity and text that actually says something."""
+        if not self.task.strip():
+            raise ValueError("native region text task must not be empty")
+        if not self.text.strip():
+            raise ValueError(
+                "native region text must contain non-whitespace text; a proposal without "
+                "text carries no NativeRegionText"
+            )
+        if self.prompt is not None and not self.prompt.strip():
+            raise ValueError("native region text prompt must be None or non-empty")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {"task": self.task, "text": self.text, "prompt": self.prompt}
+
+    @classmethod
+    def from_dict(cls, value: object) -> NativeRegionText:
+        """Restore native proposal text from serialized data."""
+        data = _mapping(value, "native region text")
+        prompt = data.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            raise TypeError("native region text prompt must be a string or null")
+        return cls(task=_string(data, "task"), text=_string(data, "text"), prompt=prompt)
+
+
+@dataclass(frozen=True, slots=True)
 class RegionCandidate:
-    """A backend proposal before canonical filtering, merge, and geometry freeze."""
+    """A backend proposal before canonical filtering, merge, and geometry freeze.
+
+    ``native_text`` is the text the backend task emitted with this exact proposal, kept
+    typed so it follows the candidate through pass remapping; normalization never copies
+    it into ``Region2D``.
+    """
 
     candidate_id: str
     source_observation_id: str
@@ -275,6 +326,7 @@ class RegionCandidate:
     mask_reference: ArtifactReference | None = None
     score: BackendScore | None = None
     native_metadata: tuple[tuple[str, JsonScalar], ...] = ()
+    native_text: NativeRegionText | None = None
     coordinate_convention: CoordinateConvention = CoordinateConvention.PIXEL_XY_TOP_LEFT
 
     def __post_init__(self) -> None:
@@ -327,6 +379,7 @@ class RegionCandidate:
             "native_metadata": [
                 {"name": name, "value": value} for name, value in self.native_metadata
             ],
+            "native_text": None if self.native_text is None else self.native_text.to_dict(),
         }
 
     @classmethod
@@ -346,6 +399,7 @@ class RegionCandidate:
         raw_box = data.get("bounding_box")
         raw_score = data.get("score")
         raw_mask_reference = data.get("mask_reference")
+        raw_native_text = data.get("native_text")
         return cls(
             candidate_id=_string(data, "candidate_id"),
             source_observation_id=_string(data, "source_observation_id"),
@@ -364,6 +418,9 @@ class RegionCandidate:
             score=BackendScore.from_dict(raw_score) if raw_score is not None else None,
             provenance=RegionProvenance.from_dict(data.get("provenance")),
             native_metadata=tuple(metadata),
+            native_text=(
+                None if raw_native_text is None else NativeRegionText.from_dict(raw_native_text)
+            ),
         )
 
 
