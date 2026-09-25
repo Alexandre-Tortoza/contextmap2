@@ -91,3 +91,29 @@ def claim_id_for(*, result_id: PerceptionResultId, index: int) -> ClaimId:
         The deterministic claim identity.
     """
     return ClaimId(f"{result_id}--claim-{index:04d}")
+
+
+def grounding_region_id_for(
+    *, result_id: PerceptionResultId, request_id: str, index: int
+) -> RegionId:
+    """Compute the identity of a region grounded by one request within a result.
+
+    The grounding request identity is a content digest of the request's inference
+    inputs (image, query, policy, geometry, configuration), so it namespaces the
+    region: a grounded region never collides with a discovered region
+    (:func:`region_id_for`) or with another request's output, and changing only the
+    query changes only the identities that depend on it. Including ``result_id``
+    keeps the evidence local: the same request answered in another run produces
+    distinct regions.
+
+    Args:
+        result_id: The owning result.
+        request_id: Identity of the grounding request that produced the region.
+        index: Position of the output in the parsed backend response.
+
+    Returns:
+        The deterministic region identity.
+    """
+    if not request_id:
+        raise ValueError("request_id must not be empty")
+    return RegionId(f"{result_id}--{request_id}-region-{index:04d}")

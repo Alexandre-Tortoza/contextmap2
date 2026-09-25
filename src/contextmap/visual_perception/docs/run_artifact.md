@@ -16,6 +16,8 @@ O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele 
 │   ├── semantic-interpretation-failures.jsonl           # resposta observada que não parseou
 │   ├── semantic-views/                                  # pixels exatos enviados ao backend
 │   │   └── <view-payloads>
+│   ├── region-grounding.jsonl                           # execuções de grounding (quando houver)
+│   ├── region-grounding-raw/<request_id>.txt            # resposta bruta de cada execução
 │   ├── features/                                       # quando payloads são persistidos
 │   │   ├── feature-index.jsonl
 │   │   └── <observation-scope>/*.npy
@@ -78,6 +80,7 @@ flowchart LR
   schema, junto com uma política para artifacts anteriores. `occurred_at` é auditoria, não
   identidade de conteúdo: comparação entre runs precisa excluí-lo.
 
+- **Grounding é um stream contratual próprio, aditivo.** `add_region_grounding()` enfileira uma `RegionGroundingExecution`; `finalize()` exige que ela resolva para exatamente um resultado e que suas regiões box estejam materializadas nele. O registro em `outputs/region-grounding.jsonl` carrega o request (com a query verbatim), provenance, prompt renderizado, outputs, rejeições, diagnostics, configuração efetiva e `raw_response_sha256`; a resposta bruta fica em `outputs/region-grounding-raw/<request_id>.txt`, separada do parsing, e o reader verifica o hash ao reabrir. Um run sem grounding não tem o stream; como é aditivo, `schema_version` continua `0.5.0`. Ver [`region-grounding.md`](region-grounding.md).
 - **Views semânticas são outputs contratuais.** Cada `SemanticVisualView` possui SHA-256 obrigatório e referencia um arquivo abaixo de `outputs/semantic-views/`. `add_semantic_view_payload()` valida o hash antes de enfileirar os bytes (na persistência; a inferência já verifica o mesmo hash em cada runtime, ver [Integridade das views](semantic-interpretation.md#integridade-das-views-na-inferência)); `finalize()` exige que toda view de toda execução possua payload inventariado e rejeita payloads sem request correspondente.
 - **`debug/` só existe quando há conteúdo real.** Feature Extraction
   materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava

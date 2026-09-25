@@ -1,6 +1,6 @@
 # Capability ports
 
-Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `Protocol`s que backends concretos de percepção visual podem implementar.
+Este documento descreve `src/contextmap/visual_perception/ports.py`: os seis `Protocol`s que backends concretos de percepção visual podem implementar.
 
 ## Mapeamento capability/backend
 
@@ -8,6 +8,7 @@ Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `P
 flowchart LR
     subgraph PORTS[Capability ports]
         RD["RegionDiscovery"]
+        RG["RegionGrounding"]
         FE["FeatureExtractor"]
         FRE["FeatureResolutionEnhancement"]
         SI["SemanticInterpreter"]
@@ -53,6 +54,10 @@ O port público permanece `discover(PreparedImage) -> Sequence[Region2D]`. SAM2,
 
 Os tipos adapter-facing são exportados para configuração, diagnóstico e avaliação, mas não alteram a fronteira consumida pelas capabilities downstream. O fluxo completo está em [`region-discovery.md`](region-discovery.md).
 
+## `RegionGrounding`
+
+`capabilities() -> RegionGroundingCapabilities` e `ground(RegionGroundingRequest) -> RegionGroundingExecution`. É um port separado de `RegionDiscovery` porque a entrada é outra: além da imagem, uma query explícita (texto livre ou categorias ordenadas, política versionada e geometria pedida) que entra na identidade do request e é validada antes da inferência. Um adapter de grounding nunca recebe a query pela configuração. Só saídas box viram `Region2D`; pontos permanecem evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md).
+
 ## `FeatureExtractor.required_scope()`
 
 Em vez de multiplicar tipos de port por escopo (dense/global/region), um único `FeatureExtractor` declara seu escopo via `required_scope()`. Um extrator dense/global só recebe `image`; um extrator region-scoped também recebe `regions`. Isso evita forçar uma assinatura mandatória `PreparedImage + Region2D[]` em extratores que não precisam de regiões (ex.: DINOv3 dense).
@@ -97,7 +102,7 @@ Qualquer classe que implemente os métodos de um port satisfaz esse port (`Proto
 
 ## Estado no pipeline canônico
 
-Os cinco ports acima são contratos públicos implementados em `ports.py`, mas
+Os seis ports acima são contratos públicos implementados em `ports.py`, mas
 isso não significa que todos pertençam ao preset canônico. Os adapters de
 capability `semantic_interpreter` e `semantic_scorer` podem ser selecionados por
 `StageSpec`; o scorer recebe os inputs nomeados `claims` e `features`.
