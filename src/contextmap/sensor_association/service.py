@@ -10,6 +10,12 @@ Dense feature maps are declared as **channels**. A native map and an enhanced ma
 distinct evidence channels of a run and are never merged; a channel is identified by the
 caller, and every frame must provide the dense map of every declared channel.
 
+Execution is **streaming**: each completed frame is handed to a :class:`FrameSink` and then
+released, so memory is bounded by one frame's candidate, projection and visibility state plus
+the sink's own buffers, never by the number of frames. The result,
+:class:`SensorAssociationOutcome`, is the run's identity, policies and aggregates; the frames
+themselves live wherever the sink put them.
+
 The service owns no scientific rule of its own: projection, visibility, membership, quality,
 sampling and diagnostics live in their modules, and the runtime supplies the concrete inputs.
 """
@@ -20,7 +26,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from contextmap.geometric_mapping import GeometricMap, GeometryBlockSource
 from contextmap.ingestion import (
@@ -182,6 +188,23 @@ class FrameAssociation:
     dense_samples: Mapping[str, DenseFeatureSamples]
 
 
+class FrameSink(Protocol):
+    """Capability port: consume each frame the service completes, one at a time.
+
+    The sink is what makes bounded-memory execution possible: the service hands a frame
+    over and then drops its own reference, so whatever the sink does not keep is
+    collectable before the next frame is projected. A sink that accumulates every frame is
+    a valid choice for a small run, and the choice is the caller's, not the service's.
+    """
+
+    def accept(self, frame: FrameAssociation) -> None:
+        """Take one completed frame.
+
+        Raising aborts the run; a sink that persists must leave nothing publishable behind.
+        """
+        ...
+
+
 @dataclass(frozen=True, kw_only=True, eq=False)
 class SensorAssociationOutcome:
     """The result of an association run, ready to be persisted.
@@ -201,7 +224,8 @@ class SensorAssociationOutcome:
         dense_channels: The declared dense-feature channels.
         configuration_fingerprint: Hash of the effective configuration of the run.
         code_version: Code revision that produced the run, when known.
-        frames: The associated frames, in the order given.
+        frame_count: Frames that were associated and handed to the sink, in request order.
+            The frames themselves are not here: they were released as they completed.
         rejected: The frames whose pose the lookup policy rejected.
     """
 
@@ -219,21 +243,28 @@ class SensorAssociationOutcome:
     dense_channels: tuple[DenseChannel, ...]
     configuration_fingerprint: str
     code_version: str | None
-    frames: tuple[FrameAssociation, ...]
+    frame_count: int
     rejected: tuple[RejectedProjection, ...]
 
 
 class SensorAssociationService:
     """Runs Sensor Association over the frames of a sequence selection."""
 
-    def run(self, request: SensorAssociationRequest) -> SensorAssociationOutcome:
-        """Associate every frame of a request.
+    def run(
+        self, request: SensorAssociationRequest, *, sink: FrameSink
+    ) -> SensorAssociationOutcome:
+        """Associate every frame of a request, streaming each one to the sink.
+
+        A frame is projected, resolved, associated, measured, diagnosed, sampled, handed to
+        the sink and then dropped, so no frame's arrays outlive the frame after it.
 
         Args:
             request: The inputs of the run.
+            sink: Where each completed frame goes. Whatever it does not keep is released.
 
         Returns:
-            The per-frame associations and the frames whose pose was rejected.
+            The run's identity, policies, aggregates and the frames whose pose was
+            rejected. The frames are not returned; the sink received them.
 
         Raises:
             AssociationInputError: If the map cannot be read in blocks, channel or frame
@@ -253,7 +284,7 @@ class SensorAssociationService:
             calibration=request.calibration,
             state_estimation_run_id=request.state_estimation_run_id,
         )
-        frames: list[FrameAssociation] = []
+        frame_count = 0
         rejected: list[RejectedProjection] = []
         for frame_input in request.frames:
             projection = projector.project(frame_input.observation, frame_input.prepared_image)
@@ -283,7 +314,7 @@ class SensorAssociationService:
                 )
                 for channel in request.dense_channels
             }
-            frames.append(
+            sink.accept(
                 FrameAssociation(
                     source_observation_id=projection.source_observation_id,
                     resolution=resolution,
@@ -302,6 +333,10 @@ class SensorAssociationService:
                     dense_samples=dense_samples,
                 )
             )
+            frame_count += 1
+            # Solta as referências locais antes do próximo frame: o que o sink não guardou
+            # é coletável agora, e é isso que mantém o pico de memória por frame (#563).
+            del projection, resolution, membership, observations, dense_samples, statistics
         geometric_map = request.geometry.geometric_map
         return SensorAssociationOutcome(
             geometric_map=geometric_map,
@@ -318,7 +353,7 @@ class SensorAssociationService:
             dense_channels=request.dense_channels,
             configuration_fingerprint=fingerprint,
             code_version=request.code_version,
-            frames=tuple(frames),
+            frame_count=frame_count,
             rejected=tuple(rejected),
         )
 

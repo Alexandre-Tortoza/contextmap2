@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest
 from projection_builders import SEQUENCE_ID
-from run_builders import ENHANCED, NATIVE, OCCLUSION, frame_id, frame_input, make_request
+from run_builders import (
+    ENHANCED,
+    NATIVE,
+    OCCLUSION,
+    CollectingSink,
+    frame_id,
+    frame_input,
+    make_request,
+)
 
 import contextmap.sensor_association as sensor_association
 from contextmap.geometric_mapping import MapId, geometry_id_for
@@ -20,10 +28,13 @@ from contextmap.sensor_association import (
     SensorAssociationRunId,
     SensorAssociationRunReader,
     SensorAssociationRunWriter,
+    SpatialObservation,
     VisibilityDiagnostics,
 )
 from contextmap.sensor_association.service import (
+    FrameAssociation,
     SensorAssociationOutcome,
+    SensorAssociationRequest,
     SensorAssociationService,
 )
 from contextmap.visual_perception import RegionId
@@ -32,40 +43,67 @@ SEQUENCE_NAME = "corridor-fixture"
 A, B = RegionId("region-A"), RegionId("region-B")
 
 
-def _outcome(*channels: object) -> SensorAssociationOutcome:
-    return SensorAssociationService().run(make_request(channels=list(channels)))  # type: ignore[arg-type]
+def _request(*channels: object) -> SensorAssociationRequest:
+    return make_request(channels=list(channels))  # type: ignore[arg-type]
 
 
-def _write(
+@dataclasses.dataclass(frozen=True)
+class _Written:
+    """One persisted run, plus the frames the sink saw while it was written."""
+
+    reader: SensorAssociationRunReader
+    run_dir: Path
+    outcome: SensorAssociationOutcome
+    frames: tuple[FrameAssociation, ...]
+
+    @property
+    def observations(self) -> list[SpatialObservation]:
+        return [o for frame in self.frames for o in frame.observations]
+
+
+def _writer(
     root: Path,
-    outcome: SensorAssociationOutcome,
     *,
     run_index: int = 1,
     debug_level: SensorAssociationDebugLevel = SensorAssociationDebugLevel.NONE,
-    runtime_s: float | None = None,
-) -> tuple[SensorAssociationRunReader, Path]:
-    """Grava em ``root/run-NNNN``: o chamador decide o diretório final, o writer não calcula."""
-    run_dir = root / f"run-{run_index:04d}"
-    writer = SensorAssociationRunWriter(
-        output_dir=run_dir,
+) -> SensorAssociationRunWriter:
+    return SensorAssociationRunWriter(
+        output_dir=root / f"run-{run_index:04d}",
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId(f"assoc-run-{run_index:04d}"),
         run_index=run_index,
         debug_level=debug_level,
     )
-    writer.finalize(outcome, runtime_s=runtime_s)
-    return SensorAssociationRunReader(run_dir), run_dir
 
 
-def _all_observations(outcome: SensorAssociationOutcome):  # type: ignore[no-untyped-def]
-    return [o for frame in outcome.frames for o in frame.observations]
+def _write(
+    root: Path,
+    request: SensorAssociationRequest,
+    *,
+    run_index: int = 1,
+    debug_level: SensorAssociationDebugLevel = SensorAssociationDebugLevel.NONE,
+    runtime_s: float | None = None,
+) -> _Written:
+    """Grava em ``root/run-NNNN``: o chamador decide o diretório final, o writer não calcula."""
+    run_dir = root / f"run-{run_index:04d}"
+    sink = CollectingSink()
+    with _writer(root, run_index=run_index, debug_level=debug_level).transaction() as run:
+        sink = CollectingSink(run)
+        outcome = SensorAssociationService().run(request, sink=sink)
+        run.finalize(outcome, runtime_s=runtime_s)
+    return _Written(
+        reader=SensorAssociationRunReader(run_dir),
+        run_dir=run_dir,
+        outcome=outcome,
+        frames=tuple(sink.frames),
+    )
 
 
 # --- Layout and lineage -----------------------------------------------------
 
 
 def test_the_run_has_the_documented_layout(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome(NATIVE, ENHANCED), runtime_s=1.5)
+    run_dir = _write(tmp_path, _request(NATIVE, ENHANCED), runtime_s=1.5).run_dir
 
     for relative in (
         "README.md",
@@ -87,7 +125,7 @@ def test_the_run_has_the_documented_layout(tmp_path: Path) -> None:
 
 
 def test_a_run_without_dense_channels_writes_no_dense_files(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome())
+    run_dir = _write(tmp_path, _request()).run_dir
 
     assert not (run_dir / "outputs/dense-feature-associations.jsonl").exists()
     assert not (run_dir / "outputs/dense-feature-cells.bin").exists()
@@ -95,9 +133,9 @@ def test_a_run_without_dense_channels_writes_no_dense_files(tmp_path: Path) -> N
 
 
 def test_the_manifest_names_the_upstream_artifacts_and_the_configuration(tmp_path: Path) -> None:
-    outcome = _outcome(NATIVE, ENHANCED)
-    reader, _ = _write(tmp_path, outcome)
-    manifest = reader.manifest
+    written = _write(tmp_path, _request(NATIVE, ENHANCED))
+    manifest = written.reader.manifest
+    outcome = written.outcome
 
     assert manifest.run_id == "assoc-run-0001"
     assert manifest.sequence_artifact_id == SEQUENCE_ID
@@ -118,7 +156,7 @@ def test_the_manifest_names_the_upstream_artifacts_and_the_configuration(tmp_pat
 
 
 def test_the_manifest_reveals_exactly_which_feature_maps_the_run_consumed(tmp_path: Path) -> None:
-    reader, _ = _write(tmp_path, _outcome(NATIVE, ENHANCED))
+    reader = _write(tmp_path, _request(NATIVE, ENHANCED)).reader
 
     channels = {channel["channel_id"]: channel for channel in reader.manifest.dense_channels}
     native, enhanced = channels["dino-native"], channels["dino-enhanced"]
@@ -137,8 +175,8 @@ def test_the_manifest_reveals_exactly_which_feature_maps_the_run_consumed(tmp_pa
 def test_native_and_enhanced_runs_share_upstream_artifacts_yet_stay_identifiable(
     tmp_path: Path,
 ) -> None:
-    native, _ = _write(tmp_path, _outcome(NATIVE), run_index=1)
-    enhanced, _ = _write(tmp_path, _outcome(ENHANCED), run_index=2)
+    native = _write(tmp_path, _request(NATIVE), run_index=1).reader
+    enhanced = _write(tmp_path, _request(ENHANCED), run_index=2).reader
 
     assert native.manifest.run_id != enhanced.manifest.run_id
     assert native.manifest.configuration_fingerprint != enhanced.manifest.configuration_fingerprint
@@ -157,30 +195,29 @@ def test_native_and_enhanced_runs_share_upstream_artifacts_yet_stay_identifiable
 
 
 def test_the_spatial_observations_round_trip_with_their_geometry_support(tmp_path: Path) -> None:
-    outcome = _outcome(NATIVE)
-    reader, _ = _write(tmp_path, outcome)
+    written = _write(tmp_path, _request(NATIVE))
 
-    assert list(reader.observations()) == _all_observations(outcome)
+    assert list(written.reader.observations()) == written.observations
 
 
 def test_one_observation_is_read_by_identity_without_loading_the_others(tmp_path: Path) -> None:
-    outcome = _outcome()
-    reader, _ = _write(tmp_path, outcome)
-    wanted = outcome.frames[1].observations[1]
+    written = _write(tmp_path, _request())
+    reader = written.reader
+    wanted = written.frames[1].observations[1]
 
     assert reader.observation(wanted.spatial_observation_id) == wanted
-    assert reader.observations_of_frame(frame_id(0)) == outcome.frames[0].observations
+    assert reader.observations_of_frame(frame_id(0)) == written.frames[0].observations
     with pytest.raises(RunArtifactError, match="unknown"):
         reader.observation(wanted.spatial_observation_id + "-missing")  # type: ignore[operator]
 
 
 def test_the_region_geometry_index_is_a_compact_columnar_table(tmp_path: Path) -> None:
-    outcome = _outcome()
-    reader, run_dir = _write(tmp_path, outcome)
-    total = sum(len(o.geometry_support) for o in _all_observations(outcome))
+    written = _write(tmp_path, _request())
+    reader, run_dir = written.reader, written.run_dir
+    total = sum(len(o.geometry_support) for o in written.observations)
 
     assert (run_dir / "outputs/geometry-support.u32").stat().st_size == 4 * total
-    observation = outcome.frames[0].observations[0]
+    observation = written.frames[0].observations[0]
     assert (
         reader.geometry_support(observation.spatial_observation_id) == observation.geometry_support
     )
@@ -191,32 +228,37 @@ def test_the_region_geometry_index_is_a_compact_columnar_table(tmp_path: Path) -
 def test_an_observation_that_disagrees_with_its_membership_is_never_persisted(
     tmp_path: Path,
 ) -> None:
-    outcome = _outcome()
-    first = outcome.frames[0]
-    tampered = dataclasses.replace(
-        first.observations[0],
-        geometry_support=(),
-        visibility=VisibilityDiagnostics(counts={}),
-    )
-    forged_frame = dataclasses.replace(first, observations=(tampered, *first.observations[1:]))
-    forged = dataclasses.replace(outcome, frames=(forged_frame, *outcome.frames[1:]))
-    writer = SensorAssociationRunWriter(
-        output_dir=tmp_path / "run-0001",
-        sequence_name=SEQUENCE_NAME,
-        run_id=SensorAssociationRunId("assoc-run-0001"),
-        run_index=1,
-    )
+    class _Forging:
+        """Hands the run a first frame whose observation contradicts its membership."""
 
-    with pytest.raises(RunArtifactError, match="geometry support"):
-        writer.finalize(forged)
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+            self._first = True
+
+        def accept(self, frame: FrameAssociation) -> None:
+            if self._first:
+                self._first = False
+                tampered = dataclasses.replace(
+                    frame.observations[0],
+                    geometry_support=(),
+                    visibility=VisibilityDiagnostics(counts={}),
+                )
+                frame = dataclasses.replace(frame, observations=(tampered, *frame.observations[1:]))
+            self._inner.accept(frame)  # type: ignore[attr-defined]
+
+    with (
+        pytest.raises(RunArtifactError, match="geometry support"),
+        _writer(tmp_path).transaction() as run,
+    ):
+        SensorAssociationService().run(_request(), sink=_Forging(run))
 
     assert list(tmp_path.iterdir()) == []
 
 
 def test_the_geometry_to_region_index_keeps_every_overlapping_region(tmp_path: Path) -> None:
-    outcome = _outcome()
-    reader, _ = _write(tmp_path, outcome)
-    frame = outcome.frames[0]
+    written = _write(tmp_path, _request())
+    reader = written.reader
+    frame = written.frames[0]
 
     assert reader.regions_of(frame_id(0), frame.resolution.frame.map_reference(1)) == (A, B)
     assert reader.regions_of(frame_id(0), frame.resolution.frame.map_reference(0)) == (A,)
@@ -224,22 +266,24 @@ def test_the_geometry_to_region_index_keeps_every_overlapping_region(tmp_path: P
 
 
 def test_the_quality_is_read_back_by_observation(tmp_path: Path) -> None:
-    outcome = _outcome()
-    reader, _ = _write(tmp_path, outcome)
-    first = outcome.frames[0]
+    written = _write(tmp_path, _request())
+    first = written.frames[0]
 
-    assert reader.quality(first.observations[0].spatial_observation_id) == first.qualities[0]
+    quality = written.reader.quality(first.observations[0].spatial_observation_id)
+
+    assert quality == first.qualities[0]
 
 
 def test_the_dense_associations_round_trip_as_indices_and_weights(tmp_path: Path) -> None:
-    outcome = _outcome(NATIVE, ENHANCED)
-    reader, run_dir = _write(tmp_path, outcome)
+    written = _write(tmp_path, _request(NATIVE, ENHANCED))
+    reader, run_dir = written.reader, written.run_dir
+    global_indices = written.frames[0].resolution.frame.global_indices
 
     for channel_id in ("dino-native", "dino-enhanced"):
-        samples = outcome.frames[0].dense_samples[channel_id]
+        samples = written.frames[0].dense_samples[channel_id]
         record = reader.dense_association(frame_id(0), channel_id)
         assert record.channel_id == channel_id
-        assert list(record.eligible_indices) == samples.eligible_indices.tolist()
+        assert list(record.eligible_indices) == global_indices[samples.eligible_indices].tolist()
         assert list(record.sampled) == samples.sampled.tolist()
         assert list(record.cell_rows) == samples.cell_rows.ravel().tolist()
         assert list(record.cell_cols) == samples.cell_cols.ravel().tolist()
@@ -256,8 +300,8 @@ def test_the_dense_associations_round_trip_as_indices_and_weights(tmp_path: Path
 
 
 def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_path: Path) -> None:
-    outcome = _outcome(NATIVE)
-    reader, _ = _write(tmp_path, outcome)
+    outcome = _request(NATIVE)
+    reader = _write(tmp_path, outcome).reader
 
     projection = reader.read_records("outputs/projection-records.jsonl")
     visibility = reader.read_records("outputs/visibility-records.jsonl")
@@ -275,8 +319,7 @@ def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_pa
 
 def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: Path) -> None:
     request = make_request(frames=[frame_input(0), frame_input(1, time_ns=10_000_000_000)])
-    outcome = SensorAssociationService().run(request)
-    reader, _ = _write(tmp_path, outcome)
+    reader = _write(tmp_path, request).reader
 
     summary = reader.read_record("metrics/summary.json")
     assert summary["frame_count"] == 1
@@ -292,26 +335,15 @@ def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: 
 
 
 def test_a_finalized_run_is_never_overwritten(tmp_path: Path) -> None:
-    outcome = _outcome()
-    writer = SensorAssociationRunWriter(
-        output_dir=tmp_path / "run-0001",
-        sequence_name=SEQUENCE_NAME,
-        run_id=SensorAssociationRunId("assoc-run-0001"),
-        run_index=1,
-    )
-    writer.finalize(outcome)
+    writer = _writer(tmp_path)
+    with writer.transaction() as run:
+        run.finalize(SensorAssociationService().run(_request(), sink=run))
     before = (tmp_path / "run-0001" / "manifest.json").read_bytes()
 
-    with pytest.raises(RunArtifactError, match="finalized"):
-        writer.finalize(outcome)
-    again = SensorAssociationRunWriter(
-        output_dir=tmp_path / "run-0001",
-        sequence_name=SEQUENCE_NAME,
-        run_id=SensorAssociationRunId("assoc-run-0001"),
-        run_index=1,
-    )
-    with pytest.raises(RunArtifactError, match="exists"):
-        again.finalize(outcome)
+    with pytest.raises(RunArtifactError, match="finalized"), writer.transaction():
+        pass
+    with pytest.raises(RunArtifactError, match="exists"), _writer(tmp_path).transaction():
+        pass
 
     assert (tmp_path / "run-0001" / "manifest.json").read_bytes() == before
 
@@ -321,12 +353,14 @@ def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_cr
 ) -> None:
     target = tmp_path / "ws" / "corridor-02" / "run-0001" / "sensor_association"
 
-    SensorAssociationRunWriter(
+    writer = SensorAssociationRunWriter(
         output_dir=target,
         sequence_name=SEQUENCE_NAME,
         run_id=SensorAssociationRunId("association-run"),
         run_index=1,
-    ).finalize(_outcome())
+    )
+    with writer.transaction() as run:
+        run.finalize(SensorAssociationService().run(_request(), sink=run))
 
     manifest = SensorAssociationRunReader(target).manifest
     assert manifest.run_id == SensorAssociationRunId("association-run")
@@ -338,7 +372,7 @@ def test_the_run_is_written_exactly_where_the_caller_says_and_nothing_else_is_cr
 def test_the_run_id_and_index_are_recorded_as_supplied_and_never_allocated(
     tmp_path: Path,
 ) -> None:
-    reader, _ = _write(tmp_path, _outcome(), run_index=7)
+    reader = _write(tmp_path, _request(), run_index=7).reader
 
     manifest = reader.manifest
     assert (manifest.run_id, manifest.run_index) == (SensorAssociationRunId("assoc-run-0007"), 7)
@@ -354,21 +388,15 @@ def test_an_interrupted_write_never_looks_like_a_run(
     monkeypatch.setattr(
         "contextmap.sensor_association.run_artifact.encode_observation_quality", explode
     )
-    writer = SensorAssociationRunWriter(
-        output_dir=tmp_path / "run-0001",
-        sequence_name=SEQUENCE_NAME,
-        run_id=SensorAssociationRunId("assoc-run-0001"),
-        run_index=1,
-    )
-
-    with pytest.raises(RuntimeError, match="disk full"):
-        writer.finalize(_outcome())
+    with pytest.raises(RuntimeError, match="disk full"), _writer(tmp_path).transaction() as run:
+        SensorAssociationService().run(_request(), sink=run)
 
     assert list(tmp_path.iterdir()) == []
 
 
 def test_integrity_detects_a_missing_a_resized_and_a_corrupted_file(tmp_path: Path) -> None:
-    reader, run_dir = _write(tmp_path, _outcome(NATIVE))
+    written = _write(tmp_path, _request(NATIVE))
+    reader, run_dir = written.reader, written.run_dir
     assert reader.verify_integrity() == []
 
     support = run_dir / "outputs/geometry-support.u32"
@@ -382,7 +410,7 @@ def test_integrity_detects_a_missing_a_resized_and_a_corrupted_file(tmp_path: Pa
 
 
 def test_an_unknown_schema_or_a_missing_manifest_is_refused(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome())
+    run_dir = _write(tmp_path, _request()).run_dir
     manifest_path = run_dir / "manifest.json"
     record = json.loads(manifest_path.read_text())
     record["schema_version"] = "9.9.9"
@@ -396,7 +424,7 @@ def test_an_unknown_schema_or_a_missing_manifest_is_refused(tmp_path: Path) -> N
 
 
 def test_a_downstream_stage_can_only_read_contractual_records(tmp_path: Path) -> None:
-    reader, _ = _write(tmp_path, _outcome(), debug_level=SensorAssociationDebugLevel.STANDARD)
+    reader = _write(tmp_path, _request(), debug_level=SensorAssociationDebugLevel.STANDARD).reader
 
     with pytest.raises(RunArtifactError, match="contractual"):
         reader.read_record("debug/frames/frame-0000/distributions.json")
@@ -410,7 +438,8 @@ def test_a_downstream_stage_can_only_read_contractual_records(tmp_path: Path) ->
 
 
 def test_standard_debug_explains_the_samples_and_their_distributions(tmp_path: Path) -> None:
-    reader, run_dir = _write(tmp_path, _outcome(), debug_level=SensorAssociationDebugLevel.STANDARD)
+    written = _write(tmp_path, _request(), debug_level=SensorAssociationDebugLevel.STANDARD)
+    reader, run_dir = written.reader, written.run_dir
     frame_dir = run_dir / "debug" / "frames" / frame_id(0)
 
     lines = (frame_dir / "samples.csv").read_text().splitlines()
@@ -435,9 +464,9 @@ def test_standard_debug_explains_the_samples_and_their_distributions(tmp_path: P
 def test_full_debug_adds_the_overlay_the_sampling_coordinates_and_the_feature_sources(
     tmp_path: Path,
 ) -> None:
-    _, run_dir = _write(
-        tmp_path, _outcome(NATIVE, ENHANCED), debug_level=SensorAssociationDebugLevel.FULL
-    )
+    run_dir = _write(
+        tmp_path, _request(NATIVE, ENHANCED), debug_level=SensorAssociationDebugLevel.FULL
+    ).run_dir
     frame_dir = run_dir / "debug" / "frames" / frame_id(0)
 
     width, height, pixels = _decode_png((frame_dir / "overlay.png").read_bytes())
@@ -456,9 +485,8 @@ def test_full_debug_adds_the_overlay_the_sampling_coordinates_and_the_feature_so
 def test_debug_files_are_never_inventoried_so_removing_them_keeps_the_run_valid(
     tmp_path: Path,
 ) -> None:
-    reader, run_dir = _write(
-        tmp_path, _outcome(NATIVE), debug_level=SensorAssociationDebugLevel.FULL
-    )
+    written = _write(tmp_path, _request(NATIVE), debug_level=SensorAssociationDebugLevel.FULL)
+    reader, run_dir = written.reader, written.run_dir
 
     assert all(not entry.path.startswith("debug/") for entry in reader.manifest.file_inventory)
     assert all(
@@ -470,7 +498,7 @@ def test_debug_files_are_never_inventoried_so_removing_them_keeps_the_run_valid(
 
 
 def test_no_debug_writes_nothing_beyond_the_contractual_files(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome(NATIVE))
+    run_dir = _write(tmp_path, _request(NATIVE)).run_dir
 
     assert not (run_dir / "debug").exists()
 
@@ -479,7 +507,7 @@ def test_no_debug_writes_nothing_beyond_the_contractual_files(tmp_path: Path) ->
 
 
 def test_the_artifact_opens_without_numpy_ros_or_model_libraries(tmp_path: Path) -> None:
-    _, run_dir = _write(tmp_path, _outcome(NATIVE, ENHANCED))
+    run_dir = _write(tmp_path, _request(NATIVE, ENHANCED)).run_dir
     code = (
         "import sys;"
         "from contextmap.sensor_association import SensorAssociationRunReader;"

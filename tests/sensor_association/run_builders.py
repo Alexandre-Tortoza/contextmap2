@@ -28,7 +28,11 @@ from contextmap.sensor_association.diagnostics import DiagnosticTolerances, Trus
 from contextmap.sensor_association.service import (
     AssociationFrameInput,
     DenseChannel,
+    FrameAssociation,
+    FrameSink,
+    SensorAssociationOutcome,
     SensorAssociationRequest,
+    SensorAssociationService,
 )
 from contextmap.sensor_association.visibility import OcclusionPolicy
 from contextmap.state_estimation import LookupPolicy
@@ -220,3 +224,30 @@ def make_strata_request(*, channels: Sequence[DenseChannel] = ()) -> SensorAssoc
         geometry=source,
         frames=tuple(strata_frame_input(i, channels=channels) for i in range(2)),
     )
+
+
+class CollectingSink:
+    """A ``FrameSink`` that keeps every frame, and optionally passes it on.
+
+    The service releases each frame after handing it over, so a test that needs to assert on
+    all of them has to hold them itself. Wrapping a writer transaction lets a test persist a
+    run *and* keep the frames it persisted.
+    """
+
+    def __init__(self, downstream: FrameSink | None = None) -> None:
+        self.frames: list[FrameAssociation] = []
+        self._downstream = downstream
+
+    def accept(self, frame: FrameAssociation) -> None:
+        if self._downstream is not None:
+            self._downstream.accept(frame)
+        self.frames.append(frame)
+
+
+def run_collecting(
+    request: SensorAssociationRequest,
+) -> tuple[SensorAssociationOutcome, tuple[FrameAssociation, ...]]:
+    """Run the service, keeping every frame it produced."""
+    sink = CollectingSink()
+    outcome = SensorAssociationService().run(request, sink=sink)
+    return outcome, tuple(sink.frames)

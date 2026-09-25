@@ -168,7 +168,7 @@ flowchart TD
         SA_OBS["build_spatial_observations()<br/>SpatialObservation por região"]
         SA_QUAL["derive_observation_quality()<br/>medidas separadas"]
         SA_DIAG["diagnostics<br/>calibração + tempo + reprojeção"]
-        SA_SERVICE["SensorAssociationService"]
+        SA_SERVICE["SensorAssociationService<br/>streaming: um frame por vez"]
         SA_WRITE["SensorAssociationRunWriter"]
         ASSOC["SensorAssociationRunArtifact"]
 
@@ -602,7 +602,8 @@ Detalhes: [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md
 9. Quando mapas densos são fornecidos, `sample_dense_features()` calcula índices/pesos nearest ou bilinear sem duplicar vetores por ponto.
 10. `derive_observation_quality()` mede profundidade, ângulo, borda, visibilidade, densidade, offset temporal e reprojeção quando existe referência confiável.
 11. Diagnostics de calibração, tempo e reprojeção permanecem separados da evidência semântica.
-12. O run é persistido em `SensorAssociationRunArtifact`.
+12. Cada frame concluído é entregue ao `FrameSink` da transação de escrita, persistido e **liberado**; o `SensorAssociationOutcome` carrega identidade, políticas, rejeições e `frame_count`, nunca os frames. O pico de memória é `estado estático do mapa + um frame + buffers do writer`, não `frames x estado por frame`.
+13. O run é publicado atomicamente como `SensorAssociationRunArtifact`; sair da transação sem `finalize()` não deixa artifact algum.
 
 **Estado do executor global.** `SensorAssociationExecutor` atualmente cria `dense_maps={}`, portanto o stage automático usa o caminho de associação geométrica/máscara, apesar de a capability já possuir dense sampling completo.
 

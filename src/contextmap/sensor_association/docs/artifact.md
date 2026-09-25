@@ -20,6 +20,22 @@ Quando uma associação sai errada, é preciso descobrir se a causa está no alc
 
 ## Layout
 
+## Escrita em streaming
+
+O run é persistido **frame a frame**, não a partir de um resultado inteiro em memória. `SensorAssociationRunWriter.transaction()` abre a transação, que é um `FrameSink`:
+
+```python
+with writer.transaction() as run:
+    outcome = SensorAssociationService().run(request, sink=run)
+    manifest = run.finalize(outcome)
+```
+
+O serviço projeta um frame, resolve, associa, mede, diagnostica, entrega ao sink e **solta** suas referências; a transação acrescenta o payload do frame a streams já abertos (`AtomicRunDirectory.open_binary`, que hasheia enquanto escreve) e guarda apenas agregados pequenos — contagens, offsets de byte e os tempos do frame. Nem o serviço nem o writer crescem com o número de frames: o pico é `estado estático do mapa + um frame de candidatos/projeção/visibilidade + buffers do writer`. Antes, a associação retinha ~1,17 GB por frame até o fim do run (#563).
+
+`SensorAssociationOutcome` é, por isso, a identidade, as políticas, os fingerprints, os frames rejeitados e `frame_count` do run — não os frames. Um consumidor lê os frames do artifact, que é onde eles estão.
+
+Sair do `with` sem um `finalize()` bem-sucedido — normalmente ou por exceção — descarta tudo o que foi escrito: um run interrompido nunca deixa artifact publicável. `finalize()` recusa um `outcome` cujo `frame_count` não seja o número de frames que a transação de fato persistiu.
+
 O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega; ele não calcula caminho, não aloca índice e não mantém registro. No runtime, `output_dir` é `<workspace>/<dataset>/<run>/sensor_association/` ([`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)).
 
 ```text
@@ -88,6 +104,7 @@ Arquivos de debug são escritos mas nunca entram no inventário, então removê-
 - a escrita acontece em um diretório temporário e o run só aparece no caminho final depois de a checagem de inventário passar; uma escrita interrompida não pode parecer um run válido;
 - um run finalizado nunca é sobrescrito: o writer recusa um `output_dir` que já exista, e reexecutar grava em outro diretório;
 - o writer confere que a geometria de cada observação coincide com o seu pertencimento antes de persistir; uma observação inconsistente nunca é gravada;
+- um run interrompido no meio de um frame não publica nada, e `finalize()` recusa um `outcome` que conte outros frames que os que chegaram à transação;
 - `verify_integrity()` detecta arquivo ausente, tamanho diferente e hash diferente; um schema desconhecido levanta `RunArtifactError` e um diretório sem manifest, `IncompleteRunArtifactError`.
 
 `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos; o writer nunca os aloca. O `run_index` é um ordinal legível, mas não substitui identidade nem hash.

@@ -43,14 +43,15 @@ def _run(
     root: Path, request: SensorAssociationRequest, *, index: int = 1
 ) -> SensorAssociationRunReader:
     """Grava em ``root/run-NNNN``: o chamador decide o diretório final, o writer não calcula."""
-    outcome = SensorAssociationService().run(request)
     run_dir = root / f"run-{index:04d}"
-    SensorAssociationRunWriter(
+    writer = SensorAssociationRunWriter(
         output_dir=run_dir,
         sequence_name="fixture",
         run_id=SensorAssociationRunId(f"assoc-run-{index:04d}"),
         run_index=index,
-    ).finalize(outcome)
+    )
+    with writer.transaction() as run:
+        run.finalize(SensorAssociationService().run(request, sink=run))
     return SensorAssociationRunReader(run_dir)
 
 

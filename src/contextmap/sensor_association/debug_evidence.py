@@ -17,7 +17,7 @@ import struct
 import zlib
 from typing import TYPE_CHECKING, Any
 
-from contextmap.sensor_association.service import FrameAssociation, SensorAssociationOutcome
+from contextmap.sensor_association.service import FrameAssociation
 from contextmap.shared import AtomicRunDirectory
 
 if TYPE_CHECKING:
@@ -37,46 +37,48 @@ _HISTOGRAM_BINS = 10
 _IMAGE_REGION_GRID = 3
 
 
-def write_standard_debug(run: AtomicRunDirectory, outcome: SensorAssociationOutcome) -> None:
-    """Write per-point samples and the distributions of every frame."""
-    for frame in outcome.frames:
-        directory = f"debug/frames/{frame.source_observation_id}"
-        states = _point_states(frame)
-        run.write_text(f"{directory}/samples.csv", _samples_csv(frame, states), contractual=False)
-        run.write_text(
-            f"{directory}/distributions.json",
-            json.dumps(_distributions(frame, states), indent=2, sort_keys=True) + "\n",
-            contractual=False,
-        )
+def write_standard_debug(run: AtomicRunDirectory, frame: FrameAssociation) -> None:
+    """Write one frame's per-point samples and distributions.
+
+    Called as the frame completes, so the evidence is derived from arrays that are about to
+    be released instead of from a retained run (#563).
+    """
+    directory = f"debug/frames/{frame.source_observation_id}"
+    states = _point_states(frame)
+    run.write_text(f"{directory}/samples.csv", _samples_csv(frame, states), contractual=False)
+    run.write_text(
+        f"{directory}/distributions.json",
+        json.dumps(_distributions(frame, states), indent=2, sort_keys=True) + "\n",
+        contractual=False,
+    )
 
 
-def write_full_debug(run: AtomicRunDirectory, outcome: SensorAssociationOutcome) -> None:
-    """Write the overlays, the dense sampling coordinates and the feature sources."""
+def write_full_debug(run: AtomicRunDirectory, frame: FrameAssociation) -> list[dict[str, Any]]:
+    """Write one frame's overlay and dense sampling coordinates.
+
+    Returns:
+        The frame's dense feature sources, for the caller to collect into the run-level
+        ``debug/feature-sources.json`` once every frame has been written.
+    """
+    directory = f"debug/frames/{frame.source_observation_id}"
+    run.write_bytes(
+        f"{directory}/overlay.png", _overlay_png(frame, _point_states(frame)), contractual=False
+    )
     sources: list[dict[str, Any]] = []
-    for frame in outcome.frames:
-        directory = f"debug/frames/{frame.source_observation_id}"
-        run.write_bytes(
-            f"{directory}/overlay.png", _overlay_png(frame, _point_states(frame)), contractual=False
-        )
-        for channel_id, samples in frame.dense_samples.items():
-            run.write_text(
-                f"{directory}/dense-sampling-{channel_id}.csv",
-                _dense_csv(samples, frame.resolution.frame.global_indices),
-                contractual=False,
-            )
-            sources.append(
-                {
-                    "source_observation_id": str(frame.source_observation_id),
-                    "channel_id": channel_id,
-                    **samples.provenance.to_record(),
-                }
-            )
-    if sources:
+    for channel_id, samples in frame.dense_samples.items():
         run.write_text(
-            "debug/feature-sources.json",
-            json.dumps(sources, indent=2, sort_keys=True) + "\n",
+            f"{directory}/dense-sampling-{channel_id}.csv",
+            _dense_csv(samples, frame.resolution.frame.global_indices),
             contractual=False,
         )
+        sources.append(
+            {
+                "source_observation_id": str(frame.source_observation_id),
+                "channel_id": channel_id,
+                **samples.provenance.to_record(),
+            }
+        )
+    return sources
 
 
 def _point_states(frame: FrameAssociation) -> dict[int, str]:

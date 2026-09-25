@@ -482,7 +482,18 @@ class SensorAssociationExecutor:
             for result in perception.iter_results()
             if str(result.source_observation_id) in images
         )
-        with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
+        writer = SensorAssociationRunWriter(
+            output_dir=output,
+            sequence_name=sequence.manifest.sequence_name,
+            run_id=SensorAssociationRunId(request.identity()),
+            run_index=request.run_number(),
+        )
+        # Cada frame é persistido e liberado dentro da transação: o executor nunca retém o
+        # resultado completo do run em memória (#563).
+        with (
+            GeometricMapArtifactReader(_one(request, "geometry")) as geometry,
+            writer.transaction() as run,
+        ):
             outcome = SensorAssociationService().run(
                 SensorAssociationRequest(
                     sequence_artifact_id=sequence.manifest.artifact_id,
@@ -502,14 +513,10 @@ class SensorAssociationExecutor:
                     # A reopened perception run never inlines mask pixels (#378); this
                     # is how association resolves a region's mask_reference on demand.
                     mask_loader=perception.mask_store(),
-                )
+                ),
+                sink=run,
             )
-        manifest = SensorAssociationRunWriter(
-            output_dir=output,
-            sequence_name=sequence.manifest.sequence_name,
-            run_id=SensorAssociationRunId(request.identity()),
-            run_index=request.run_number(),
-        ).finalize(outcome)
+            manifest = run.finalize(outcome)
         return _reference(request, ASSOCIATION, str(manifest.run_id), manifest.file_inventory)
 
     @staticmethod
