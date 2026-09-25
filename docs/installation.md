@@ -1,6 +1,6 @@
 # Instalação
 
-Este documento descreve como instalar o ContextMap2, o que cada extra opcional traz e o que **não** vem de nenhum extra. O estado descrito é o de `origin/dev` em 2026-09-21; capabilities e backends que outras milestones ainda vão integrar (runtime real, entity resolution, `artifact`) não aparecem aqui como instaláveis.
+Este documento descreve como instalar o ContextMap2, o que cada extra opcional traz e o que **não** vem de nenhum extra. O estado descrito é o do escopo congelado do v0.1.0 em 2026-09-25 ([release-v0.1.0.md](release-v0.1.0.md)). Todas as capabilities da Solution 1 estão integradas, e a instalação base abre e valida o `ContextMapArtifact` final.
 
 ## Requisitos
 
@@ -31,7 +31,10 @@ Duas verificações protegem essa promessa: `tests/packaging/test_dependencies.p
 | `ros1` | `rosbags>=0.9,<1` | `Ros1BagSourceAdapter`, `Ros2BagSourceAdapter` (leem os dois formatos sem instalar o ROS) e o bag de entrada do wrapper do FAST-LIO | venv novo com a wheel e o extra, mais os 52 testes que dependem do `rosbags` |
 | `ros2` | `rosbags>=0.9,<1` | o mesmo que `ros1`; existe para nomear a fonte | idem, com `ros2` |
 | `vision` | `torch>=2.5`, `torchvision`, `transformers>=5.17,<6`, `Pillow>=10.0.1` | adapters DINOv2, DINOv3 e CLIP; autocast do SAM 3 | resolução de dependências (`pip install --dry-run`) em 2026-09-21; inferência real de DINOv2 e CLIP em 2026-09-20 com torch 2.14, transformers 5.17 e Pillow 12.3 |
-| `dev` | ferramentas de qualidade (`ruff`, `mypy`, `pytest`, `pytest-cov`, `build`, `pre-commit`) e `rosbags` | `make check` | `make check` |
+| `gemini` | `google-genai>=2,<3`, `httpx>=0.28,<1` | `GoogleGenAIGeminiClient`, o cliente real do `GeminiSemanticInterpreter` | venv novo com a wheel e o extra (`google-genai` 2.25.0, `httpx` 0.28.1), mais os 42 testes de contrato do SDK contra transporte simulado |
+| `dev` | ferramentas de qualidade (`ruff`, `mypy`, `pytest`, `pytest-cov`, `build`, `pre-commit`), `rosbags` e o extra `gemini` | `make check` | `make check` |
+
+Nota sobre `gemini`: o `GeminiSemanticInterpreter` aceita qualquer cliente pelo seu `Protocol`, e nesse caminho não há dependência alguma. O cliente **empacotado** `GoogleGenAIGeminiClient`, porém, importa `google.genai` e `httpx` de forma lazy e levanta `GeminiDependencyError` sem eles — por isso o extra existe. Instalá-lo não envia nada: enviar frames a um serviço externo é uma transferência de dados que exige decisão explícita do dono do dado, e a CI nunca chama a API.
 
 Notas sobre `vision`:
 
@@ -47,7 +50,8 @@ Estes runtimes são importados ou injetados pelo código, mas o PyPI não os dis
 | --- | --- | --- |
 | SAM 2 (`Sam2AutomaticMaskRuntime.from_model`) | módulo `sam2` | instalação a partir do repositório `facebookresearch/sam2` (não há `sam2`/`SAM-2` no PyPI) |
 | AlphaCLIP | módulo `alpha_clip` e checkpoint | repositório `SunzeY/AlphaCLIP`; a origem e a licença dos checkpoints não foram verificadas |
-| SAM 3, Qwen, Florence-2, Gemini, PTv3 | runtime ou cliente **injetado** por quem constrói o adapter | o código empacotado não importa o SDK; o runtime de PTv3 exige Pointcept, spconv e torch-scatter, que também não estão no PyPI como um pacote único |
+| SAM 3, Qwen, Florence-2, PTv3 | runtime ou cliente **injetado** por quem constrói o adapter | o código empacotado não importa o SDK; o runtime de PTv3 exige Pointcept, spconv e torch-scatter, que também não estão no PyPI como um pacote único |
+| ROS 1 `rospy` e `nav_msgs` (wrapper do FAST-LIO) | módulos do ROS Noetic | vêm da distribuição do ROS dentro do container do FAST-LIO, não do PyPI; o wrapper é deliberadamente independente e nem importa `contextmap` |
 | FAST-LIO | binário externo (ROS 1, normalmente em container) | fora do Python; o wrapper só escreve o bag de entrada e lê a trajetória |
 
 ## Verificando uma instalação
