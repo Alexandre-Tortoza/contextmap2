@@ -776,6 +776,27 @@ def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
     )
 
 
+def _eagle2_5(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception import SemanticPromptPolicy
+    from contextmap.visual_perception.backends.eagle2_5 import (
+        EagleSemanticConfig,
+        EagleSemanticInterpreter,
+    )
+
+    config, extras = context.build(
+        component_id,
+        EagleSemanticConfig,
+        extras={"prompt_policy": SemanticPromptPolicy},
+        required=("prompt_policy",),
+    )
+    context.ensure_available(component_id)
+    runtime = context.runtime(component_id, config, "EagleRuntime")
+    return _SemanticInterpretation(
+        interpreter=EagleSemanticInterpreter(config=config, runtime=runtime),
+        prompts=_instruction_prompts(extras["prompt_policy"]),
+    )
+
+
 def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterpretation:
     from contextmap.visual_perception.backends.florence2_semantic import (
         TASK_PROMPT_POLICY,
@@ -1082,6 +1103,7 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "qwen": _qwen,
         "gemini": _gemini,
         "florence2": _florence2_semantic,
+        "eagle2_5": _eagle2_5,
     },
     "state_estimation.estimator": {"external_pose": _external_pose, "fast_lio": _fast_lio},
     "geometric_mapping.pose_lookup": {"lookup-policy-v1": _lookup_policy},
