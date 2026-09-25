@@ -1,6 +1,6 @@
 # Capability ports
 
-Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `Protocol`s que backends concretos de percepção visual podem implementar.
+Este documento descreve `src/contextmap/visual_perception/ports.py`: os seis `Protocol`s que backends concretos de percepção visual podem implementar.
 
 ## Mapeamento capability/backend
 
@@ -8,6 +8,7 @@ Este documento descreve `src/contextmap/visual_perception/ports.py`: os cinco `P
 flowchart LR
     subgraph PORTS[Capability ports]
         RD["RegionDiscovery"]
+        RG["RegionGrounding"]
         FE["FeatureExtractor"]
         FRE["FeatureResolutionEnhancement"]
         SI["SemanticInterpreter"]
@@ -18,6 +19,7 @@ flowchart LR
     SAM3["SAM3"] -->|implementado| RD
     F2["Florence-2"] -->|implementado| RD
     F2 -->|implementado| SI
+    LA["LocateAnything"] -->|implementado| RG
     D2["DINOv2"] -->|implementado| FE
     D3["DINOv3"] -->|implementado| FE
     SIG2["SigLIP2"] -->|implementado| FE
@@ -54,6 +56,10 @@ Contrato canônico de "imagem pronta para os backends consumirem" (`contextmap.v
 O port público permanece `discover(PreparedImage) -> Sequence[Region2D]`. SAM2, SAM3 e Florence-2 implementam essa assinatura e devolvem o mesmo `Region2D` canônico consumido por Feature Extraction e pelo `PerceptionResult`. A execução por pass usa o boundary interno `RegionCandidateDiscovery.discover_candidates(DiscoveryInput)`; passes, diagnostics e `RegionCandidate` não vazam para o orchestrator do Core.
 
 Os tipos adapter-facing são exportados para configuração, diagnóstico e avaliação, mas não alteram a fronteira consumida pelas capabilities downstream. O fluxo completo está em [`region-discovery.md`](region-discovery.md).
+
+## `RegionGrounding`
+
+`capabilities() -> RegionGroundingCapabilities` e `ground(RegionGroundingRequest) -> RegionGroundingExecution`. É um port separado de `RegionDiscovery` porque a entrada é outra: além da imagem, uma query explícita (texto livre ou categorias ordenadas, política versionada e geometria pedida) que entra na identidade do request e é validada antes da inferência. Um adapter de grounding nunca recebe a query pela configuração. Só saídas box viram `Region2D`; pontos permanecem evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md). O LocateAnything implementa `RegionGrounding` com runtime injetável; ver [`locateanything.md`](locateanything.md).
 
 ## `FeatureExtractor.required_scope()`
 
@@ -99,7 +105,7 @@ Qualquer classe que implemente os métodos de um port satisfaz esse port (`Proto
 
 ## Estado no pipeline canônico
 
-Os cinco ports acima são contratos públicos implementados em `ports.py`, mas
+Os seis ports acima são contratos públicos implementados em `ports.py`, mas
 isso não significa que todos pertençam ao preset canônico. Os adapters de
 capability `semantic_interpreter` e `semantic_scorer` podem ser selecionados por
 `StageSpec`; o scorer recebe os inputs nomeados `claims` e `features`.

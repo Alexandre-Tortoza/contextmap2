@@ -24,7 +24,7 @@ flowchart LR
 ## API
 
 - `compose(effective, providers=..., stages=..., environ=..., module_available=..., on_provider_override=...)` devolve um `ComposedRuntime`.
-- `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `dense_features`, `region_features`, `semantic_interpreter`, `semantic_prompts` (a política de prompt por modo, ver "Política de prompt semântico"), `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances`, `association_pose_policy`, `entity_retrieval_policy`, `entity_comparison_channels`, `entity_resolution_policy` e `spatial_relations_policies` (que já inclui a política de geometry summary — `SpatialRelationsExecutor` a lê só dali, nunca de um segundo parâmetro, revisão do PR #540). Um campo é `None` quando seu estágio não foi composto.
+- `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `region_grounding` (`RegionGroundingPlan`: queries + factory run-scoped, `None` quando não selecionado), `dense_features`, `region_features`, `semantic_interpreter`, `semantic_prompts` (a política de prompt por modo, ver "Política de prompt semântico"), `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances`, `association_pose_policy`, `entity_retrieval_policy`, `entity_comparison_channels`, `entity_resolution_policy` e `spatial_relations_policies` (que já inclui a política de geometry summary — `SpatialRelationsExecutor` a lê só dali, nunca de um segundo parâmetro, revisão do PR #540). Um campo é `None` quando seu estágio não foi composto.
 - `compose_executors(effective, providers=..., environ=..., module_available=..., on_provider_override=...)` devolve um `dict[str, StageExecutor]`: é a contraparte automática de `compose()` para o DAG (ver seção própria abaixo).
 - `RuntimeProvider` é `Callable[[config, ResolvedSecrets], runtime]`: recebe a configuração da capability, já validada, e **somente** os segredos que aquele backend declara.
 - `resolve_provider(component_id, target)` resolve um alvo `"module:attribute"` declarado em `resources.providers` (configuração) no `RuntimeProvider` que ele nomeia — ver a seção própria abaixo. `on_provider_override(component_id)` é chamado quando um `providers=` explícito vence um alvo declarado para o **mesmo** componente (nunca em uma execução comum pelo `contextmap` instalado, que nunca passa `providers=`).
@@ -36,6 +36,7 @@ flowchart LR
 |---|---|---|
 | `ingestion.source_adapter` | `ros1_bag`, `ros2_bag` | adapter construído a cada pedido (`SourceAdapterConfig`); exige `rosbags`; um pedido de outra família de source é recusado |
 | `visual_perception.region_discovery` | `sam2`, `sam3`, `florence2` | **provider** (`Sam2Runtime`, `Sam3Runtime`, `Florence2Runtime`) |
+| `visual_perception.region_grounding` (**opcional**) | `locateanything` | loader empacotado `TransformersLocateAnythingRuntime` (lazy; `torch`, `transformers`, `Pillow`, código remoto do modelo na revisão fixada) ou provider (`LocateAnythingRuntime`); é uma factory run-scoped (`RegionGroundingPlan.factory(prepared_image_root)`), então o modelo carrega uma vez por run; `None` quando não selecionado |
 | `visual_perception.dense_features` | `dinov2`, `dinov3`, `siglip2` | loader Hugging Face empacotado (lazy; `torch`, `transformers`, `Pillow`) ou provider; `siglip2` tem escopo `dense` **fixado** pelo slot |
 | `visual_perception.region_features` | `clip`, `alphaclip` | loader empacotado (HF / oficial) ou provider; `clip` tem escopo `region` **fixado** pelo slot; `alphaclip` exige `mask_source` no escopo |
 | `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2` | **provider** (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime`); `gemini` declara o segredo `GEMINI_API_KEY` |
@@ -56,7 +57,28 @@ Um provider fornecido para um backend que também empacota um loader **substitui
 
 ## Grupos de parâmetros reservados
 
-Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `prompt_policy` nos interpretadores semânticos Qwen e Gemini (obrigatório, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
+Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `query_set` no LocateAnything (obrigatório); `prompt_policy` nos interpretadores semânticos Qwen e Gemini (obrigatório, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
+
+`query_set` (`GroundingQuerySet`) é a lista ordenada de queries de grounding que o run faz a **toda** imagem. Ela nunca chega à configuração do backend nem ao fingerprint dele: o executor transforma cada par (imagem, query) em um `RegionGroundingRequest` explícito, cuja identidade inclui a query. Por estar no bloco do componente, a query ainda entra no digest do estágio, então mudar uma query gera outro run de percepção em vez de reutilizar um run com outra pergunta. Cada query é validada contra as políticas declaradas pelo LocateAnything **na composição**, antes de qualquer modelo:
+
+```toml
+[components.visual_perception.region_grounding]
+backend = "locateanything"
+[components.visual_perception.region_grounding.locateanything]
+model = "nvidia/LocateAnything-3B"
+revision = "<commit SHA de 40 caracteres>"
+dtype = "bfloat16"
+generation_mode = "hybrid"
+max_new_tokens = 8192
+temperature = 0.0
+text_attention = "sdpa"
+vision_attention = "flash_attention_2"
+[[components.visual_perception.region_grounding.locateanything.query_set.queries]]
+task = "category_detection"
+policy_id = "locateanything.category-detection/1"
+geometry = "box"
+categories = ["chair", "table", "door"]
+```
 
 ### Política de prompt semântico (#542)
 

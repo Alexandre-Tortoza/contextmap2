@@ -106,6 +106,9 @@ class TestCatalogAgainstCapabilities:
         optional = {component_id for component_id, spec in COMPONENTS.items() if spec.optional}
 
         assert optional == {
+            # Grounding por prompt é evidência adicional de Visual Perception (#569): sem ele,
+            # o estágio roda exatamente como antes.
+            "visual_perception.region_grounding",
             "entity_resolution.semantic_compatibility",
             "entity_resolution.temporal_compatibility",
             "entity_resolution.appearance",
