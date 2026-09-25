@@ -77,7 +77,8 @@ class SemanticPromptTemplate:
                 output_schema_version="semantic-response/1",
                 instructions=(
                     "Describe only visible scene-level evidence. Preserve ambiguity, "
-                    "abstain when unsupported, and never invent confidence."
+                    "abstain when unsupported, and never invent confidence: omit it or "
+                    "set it to null."
                 ),
             )
         return cls(
@@ -86,7 +87,8 @@ class SemanticPromptTemplate:
             output_schema_version="semantic-response/1",
             instructions=(
                 "Describe only the referenced region. Return one primary hypothesis, "
-                "preserve plausible alternatives, and never invent confidence."
+                "preserve plausible alternatives, and never invent confidence: omit it "
+                "or set it to null."
             ),
         )
 
@@ -159,17 +161,15 @@ def render_semantic_prompt(
             {"name": item.name, "value": item.value} for item in request.supporting_metadata
         ],
     }
+    # Sob UNSCORED_ONLY confidence so pode ser null, entao ela sai de "required": o schema
+    # passa a dizer o mesmo que a instrucao "never invent confidence" e o que o parser aceita.
+    claim_required = ["hypothesis", "role", "category", "region_kind", "attributes"]
+    if confidence_policy is not SemanticConfidencePolicy.UNSCORED_ONLY:
+        claim_required.append("confidence")
     claim_schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "hypothesis",
-            "role",
-            "category",
-            "region_kind",
-            "attributes",
-            "confidence",
-        ],
+        "required": claim_required,
         "properties": {
             "hypothesis": {"type": "string", "minLength": 1},
             "role": {"enum": ["primary", "alternative"]},
@@ -481,7 +481,15 @@ def _parse_claim(
 ) -> SemanticClaim:
     data = _mapping(value, f"claim[{index}]")
     allowed = {"hypothesis", "role", "category", "region_kind", "attributes", "confidence"}
-    _require_exact_keys(data, allowed, f"claim[{index}]")
+    if confidence_policy is SemanticConfidencePolicy.UNSCORED_ONLY:
+        # Sob esta politica o unico valor legal de confidence e null, entao exigir a chave
+        # presente nao acrescenta informacao -- so contradiz a instrucao "never invent
+        # confidence" do proprio prompt. Um modelo que obedece e omite a chave perdia a claim
+        # inteira: 246 das 457 respostas rejeitadas num run real de 360 frames do corridor-02.
+        required = allowed - {"confidence"}
+        _require_keys(data, required=required, allowed=allowed, name=f"claim[{index}]")
+    else:
+        _require_exact_keys(data, allowed, f"claim[{index}]")
     hypothesis = data.get("hypothesis")
     if not isinstance(hypothesis, str) or not hypothesis.strip():
         raise SemanticResponseParseError(f"claim[{index}].hypothesis must be a non-empty string")
