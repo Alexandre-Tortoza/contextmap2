@@ -11,10 +11,14 @@ distinct evidence channels of a run and are never merged; a channel is identifie
 caller, and every frame must provide the dense map of every declared channel.
 
 Execution is **streaming**: each completed frame is handed to a :class:`FrameSink` and then
-released, so memory is bounded by one frame's candidate, projection and visibility state plus
-the sink's own buffers, never by the number of frames. The result,
-:class:`SensorAssociationOutcome`, is the run's identity, policies and aggregates; the frames
-themselves live wherever the sink put them.
+released, so no frame's candidate, projection, visibility or observation arrays outlive it and
+the heavy state resident at any moment is one frame's, whatever the run's length. Total memory
+is not independent of the frame count, and this does not claim ``O(1)``: the run still keeps a
+few **scalar** terms per frame — the identities already seen, to refuse a repeated frame in a
+single pass; the frames the pose policy rejected; and, in the sink, one timing record per frame
+because ``metrics/runtime.json`` is a single document. They are kilobytes where the per-frame
+arrays are gigabytes. The result, :class:`SensorAssociationOutcome`, is the run's identity,
+policies and aggregates; the frames themselves live wherever the sink put them.
 
 The service owns no scientific rule of its own: projection, visibility, membership, quality,
 sampling and diagnostics live in their modules, and the runtime supplies the concrete inputs.

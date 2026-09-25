@@ -246,6 +246,33 @@ def test_the_reference_must_be_well_formed() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "indices",
+    [
+        pytest.param(np.array([0.5]), id="fractional"),
+        pytest.param(np.array([float("nan")]), id="nan"),
+        pytest.param(np.array([0.0, 1.0]), id="integral-valued-float"),
+        pytest.param(np.array([0, float("nan")]), id="one-nan-among-integers"),
+    ],
+)
+def test_a_reference_index_that_is_not_an_integer_is_rejected(indices: NDArray[Any]) -> None:
+    """A malformed index must not be mistaken for geometry the candidate policy skipped.
+
+    The lookup matches by equality, so ``0.5`` and ``NaN`` equal no candidate index and used
+    to be counted as unevaluated. ``NaN`` also slips past the bounds guard, because every
+    comparison with it is false. Both turned a malformed trusted reference into an apparent
+    effect of the candidate policy, in the very metric that measures that policy. An
+    integral-valued float is rejected too: it only matches by accident, and the contract is
+    the integer identity of :func:`~contextmap.geometric_mapping.geometry_id_for`.
+    """
+    with pytest.raises(ValueError, match="integer"):
+        TrustedCorrespondences(
+            reference_id="r",
+            geometry_indices=indices,
+            observed_pixels=np.zeros((indices.shape[0], 2)),
+        )
+
+
 def test_a_reference_to_geometry_outside_the_map_is_rejected() -> None:
     frame = scene_frame((100, 100, 3.0))
     correspondences = TrustedCorrespondences(

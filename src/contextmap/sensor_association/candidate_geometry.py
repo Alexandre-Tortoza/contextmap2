@@ -136,6 +136,43 @@ class CandidateGeometryPolicy:
         return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def locate_global_indices(
+    global_indices: NDArray[Any], wanted: NDArray[Any]
+) -> tuple[NDArray[Any], NDArray[Any]]:
+    """Locate map elements in a strictly increasing index array by their global index.
+
+    This is the one implementation of the lookup: both :meth:`CandidateGeometryCloud.rows_for`
+    and the projection's own read it, so the identity rule cannot drift between them.
+
+    Args:
+        global_indices: ``(N,)`` strictly increasing global indices held, integer dtype.
+        wanted: ``(K,)`` global indices to look up, in any order.
+
+    Returns:
+        ``(rows, found)``: the row of each requested element and whether the array holds it.
+        A row is meaningless where ``found`` is ``False``.
+
+    Raises:
+        ValueError: If ``wanted`` is not an integer array. The lookup matches by equality, so
+            a float or ``NaN`` index would match nothing and be reported as geometry the
+            candidate policy excluded, which is a different fact from a malformed request.
+            ``NaN`` also defeats every bounds comparison upstream.
+    """
+    import numpy as np
+
+    requested = np.asarray(wanted)
+    if not np.issubdtype(requested.dtype, np.integer):
+        raise ValueError(
+            f"global indices to look up must be an integer array, got dtype {requested.dtype}: "
+            "a non-integer index names no map element and must not be read as excluded geometry"
+        )
+    count = global_indices.shape[0]
+    if count == 0:
+        return np.zeros(requested.shape, dtype=np.int64), np.zeros(requested.shape, dtype=bool)
+    rows = np.clip(np.searchsorted(global_indices, requested), 0, count - 1)
+    return rows, global_indices[rows] == requested
+
+
 @dataclass(frozen=True, kw_only=True, eq=False)
 class CandidateGeometryCloud:
     """The geometry one frame evaluates, ready for vectorized projection.
@@ -221,15 +258,11 @@ class CandidateGeometryCloud:
             holds it at all. A row is meaningless where ``found`` is ``False``; an
             element the candidate policy excluded is reported, never silently mapped
             onto a neighbour.
-        """
-        import numpy as np
 
-        wanted = np.asarray(global_indices)
-        count = self.global_indices.shape[0]
-        if count == 0:
-            return np.zeros(wanted.shape, dtype=np.int64), np.zeros(wanted.shape, dtype=bool)
-        rows = np.clip(np.searchsorted(self.global_indices, wanted), 0, count - 1)
-        return rows, self.global_indices[rows] == wanted
+        Raises:
+            ValueError: If ``global_indices`` is not an integer array.
+        """
+        return locate_global_indices(self.global_indices, global_indices)
 
 
 @dataclass(frozen=True, kw_only=True)

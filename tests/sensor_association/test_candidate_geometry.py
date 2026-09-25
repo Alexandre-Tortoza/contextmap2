@@ -180,6 +180,21 @@ def test_rows_are_resolved_from_global_indices_and_missing_geometry_is_reported(
     np.testing.assert_array_equal(cloud.global_indices[rows[found]], np.array([9, 11, 8]))
 
 
+def test_a_lookup_by_a_non_integer_index_is_refused_instead_of_reported_as_missing() -> None:
+    """The lookup matches by equality, so a malformed index would silently be "not found".
+
+    Reporting it as geometry the candidate policy excluded is the wrong answer: the caller
+    asked about an element that cannot exist. The dtype is checked once per call, not per
+    element, so the guard costs nothing at frame scale.
+    """
+    cloud = select_candidate_geometry(
+        _source(), camera_center_m=(10.0, 0.0, 0.0), policy=CandidateGeometryPolicy(max_range_m=2.0)
+    ).cloud
+
+    with pytest.raises(ValueError, match="integer"):
+        cloud.rows_for(np.array([9.5, float("nan")]))
+
+
 # --- The cloud's own contract ---------------------------------------------------------------
 
 

@@ -61,6 +61,7 @@ from contextmap.sensor_association.camera_models import (
 from contextmap.sensor_association.candidate_geometry import (
     CandidateGeometryPolicy,
     CandidateGeometryReport,
+    locate_global_indices,
     select_candidate_geometry,
 )
 from contextmap.sensor_association.errors import AssociationInputError
@@ -303,15 +304,11 @@ class FrameProjection:
             ``(rows, found)``: the row of each requested element and whether this frame
             evaluated it at all. An element the candidate policy excluded is reported as
             not found, never mapped onto a neighbouring row.
-        """
-        import numpy as np
 
-        wanted = np.asarray(global_indices)
-        count = self.global_indices.shape[0]
-        if count == 0:
-            return np.zeros(wanted.shape, dtype=np.int64), np.zeros(wanted.shape, dtype=bool)
-        rows = np.clip(np.searchsorted(self.global_indices, wanted), 0, count - 1)
-        return rows, self.global_indices[rows] == wanted
+        Raises:
+            ValueError: If ``global_indices`` is not an integer array.
+        """
+        return locate_global_indices(self.global_indices, global_indices)
 
     def stage_counts(self) -> dict[ProjectionStage, int]:
         """Count the points that ended at each stage; every stage is present."""

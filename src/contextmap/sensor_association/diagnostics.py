@@ -307,8 +307,9 @@ class TrustedCorrespondences:
 
     Attributes:
         reference_id: Identity of the trusted correspondence set.
-        geometry_indices: ``(K,)`` global indices of the map geometry elements, the same
-            identity :func:`~contextmap.geometric_mapping.geometry_id_for` uses.
+        geometry_indices: ``(K,)`` global indices of the map geometry elements, integer
+            dtype, the same identity :func:`~contextmap.geometric_mapping.geometry_id_for`
+            uses.
         observed_pixels: ``(K, 2)`` raw-image pixels where each element was observed.
     """
 
@@ -320,13 +321,24 @@ class TrustedCorrespondences:
         """Validate the reference.
 
         Raises:
-            ValueError: If the reference is unnamed or empty, the arrays disagree in shape, or
-                a pixel is not finite.
+            ValueError: If the reference is unnamed or empty, the arrays disagree in shape, a
+                pixel is not finite, or the indices are not an integer array. A float index
+                names no map element, and because the lookup matches by equality it would be
+                counted as geometry the candidate policy did not evaluate: a malformed
+                reference would read as an effect of the candidate policy, in the one metric
+                that measures that policy. ``NaN`` is worse, since it also defeats the bounds
+                check in :func:`reprojection_statistics`.
         """
         import numpy as np
 
         if not self.reference_id:
             raise ValueError("reference_id must not be empty")
+        if not np.issubdtype(self.geometry_indices.dtype, np.integer):
+            raise ValueError(
+                f"geometry_indices must be an integer array, got dtype "
+                f"{self.geometry_indices.dtype}: a trusted reference names map geometry by its "
+                "global index, never by a value that no element can have"
+            )
         count = self.geometry_indices.shape[0] if self.geometry_indices.ndim == 1 else -1
         if count != self.observed_pixels.shape[0] or self.observed_pixels.shape[1:] != (2,):
             raise ValueError(
