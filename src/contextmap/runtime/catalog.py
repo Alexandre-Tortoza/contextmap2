@@ -230,6 +230,16 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
     ),
     _component(
         "visual_perception",
+        "region_grounding",
+        BackendSpec(
+            backend_id="locateanything",
+            requires=("torch", "transformers", "PIL"),
+            device_parameter="device",
+        ),
+        optional=True,
+    ),
+    _component(
+        "visual_perception",
         "dense_features",
         BackendSpec(
             backend_id="dinov2",
@@ -419,6 +429,7 @@ CANONICAL_PRESET = RuntimePreset(
             capability="visual_perception",
             components=(
                 "visual_perception.region_discovery",
+                "visual_perception.region_grounding",
                 "visual_perception.dense_features",
                 "visual_perception.region_features",
                 "visual_perception.semantic_interpretation",

@@ -62,6 +62,8 @@ def _config(**overrides: Any) -> LocateAnythingConfig:
         "generation_mode": LocateAnythingGenerationMode.HYBRID,
         "max_new_tokens": 2048,
         "temperature": 0.0,
+        "text_attention": "sdpa",
+        "vision_attention": "sdpa",
     }
     values.update(overrides)
     return LocateAnythingConfig(**values)

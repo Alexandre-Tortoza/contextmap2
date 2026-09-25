@@ -58,6 +58,10 @@ flowchart LR
 Categorias vazias ou repetidas, texto em branco e combinações que não correspondem à task
 são rejeitados na construção.
 
+`GroundingQuerySet` é a lista ordenada e sem repetição de queries que um run faz a toda
+imagem; o runtime a lê do grupo reservado `query_set` do backend de grounding e cria um
+request por par (imagem, query).
+
 ### `GroundingQueryPolicy` e `RegionGroundingCapabilities`
 
 Um backend declara as políticas que implementa, cada uma com sua task e sua geometria.

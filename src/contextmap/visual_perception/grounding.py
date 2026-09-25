@@ -138,6 +138,24 @@ class GroundingQuery:
 
 
 @dataclass(frozen=True, kw_only=True)
+class GroundingQuerySet:
+    """The ordered queries a run asks about every image it grounds.
+
+    Each (image, query) pair becomes one request, so a repeated query would ask the same
+    thing twice and produce two requests with one identity; it is refused instead.
+    """
+
+    queries: tuple[GroundingQuery, ...]
+
+    def __post_init__(self) -> None:
+        """Require at least one query and no repeated query."""
+        if not self.queries:
+            raise ValueError("a grounding query set needs at least one query")
+        if len(set(self.queries)) != len(self.queries):
+            raise ValueError("grounding queries must be unique within a query set")
+
+
+@dataclass(frozen=True, kw_only=True)
 class GroundingQueryPolicy:
     """One query policy a grounding backend implements: which task, which geometry."""
 

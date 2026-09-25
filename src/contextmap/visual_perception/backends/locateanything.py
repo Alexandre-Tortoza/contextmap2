@@ -16,20 +16,32 @@ is total: every span of the answer ends up as an output, an explicit no-match, o
 explicitly rejected span with its reason; nothing is silently dropped or repaired. The
 upstream worker exposes no calibrated per-box score, so no output carries a confidence;
 decoder statistics are kept verbatim as native diagnostics.
+
+:class:`TransformersLocateAnythingRuntime` is the bundled implementation of the seam. It
+imports torch, transformers, Pillow and the model's remote code lazily, loads the pinned
+revision once per runtime (one per resolved run), validates device and attention paths
+before loading, refuses any silent upstream fallback, and reports library versions.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import importlib
+import io
 import json
+import os
+import platform
 import re
-from collections.abc import Mapping
+import sys
+from collections.abc import Mapping, MutableMapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from math import isfinite
+from pathlib import Path, PurePosixPath
 from time import perf_counter
 from types import MappingProxyType
-from typing import Protocol
+from typing import Any, Protocol
 
 from contextmap.visual_perception.backends._huggingface import (
     validate_huggingface_commit_revision,
@@ -117,6 +129,16 @@ _COORDINATE = re.compile(r"<(\d+)>")
 _STATISTIC = re.compile(r"([A-Za-z_][\w()]*)=([^;\s]+)")
 _DEVICE = re.compile(r"cpu|cuda(?::\d+)?")
 _DTYPES = frozenset({"bfloat16", "float16", "float32"})
+# Caminhos de atenção aceitos por runtime: "auto" nunca é aceito, porque o upstream o resolve
+# com fallback silencioso para SDPA quando a biblioteca pedida não está instalada.
+_STANDARD_TEXT_ATTENTION = frozenset({"sdpa", "eager", "magi"})
+_BATCH_TEXT_ATTENTION = frozenset({"sdpa", "eager", "magi", "la_flash"})
+_VISION_ATTENTION = frozenset({"sdpa", "eager", "flash_attention_2"})
+_CUDA_ONLY_ATTENTION = frozenset({"magi", "la_flash", "flash_attention_2"})
+_FLASH_ATTENTION = frozenset({"la_flash", "flash_attention_2"})
+_BATCH_SCHEDULERS = frozenset({"eager", "hold_ar", "ar_first", "pipeline", "adaptive"})
+_MAGI_MIN_COMPUTE_CAPABILITY = 9
+"""MagiAttention runs only on Hopper (sm90) or Blackwell GPUs, per the upstream README."""
 
 
 class LocateAnythingGenerationMode(StrEnum):
@@ -125,6 +147,17 @@ class LocateAnythingGenerationMode(StrEnum):
     FAST = "fast"
     SLOW = "slow"
     HYBRID = "hybrid"
+
+
+class LocateAnythingRuntimeMode(StrEnum):
+    """Which upstream inference path executes the model.
+
+    ``STANDARD`` is the worker's ``AutoModel`` + remote-code ``generate()`` path;
+    ``BATCH`` is the Hugging Face release's ``batch_utils`` hybrid scheduler.
+    """
+
+    STANDARD = "standard"
+    BATCH = "batch"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -145,6 +178,18 @@ class LocateAnythingConfig:
         top_p: Nucleus sampling mass, in ``(0, 1]``.
         top_k: Top-k cutoff; ``0`` disables it, as upstream.
         repetition_penalty: Upstream sampler repetition penalty; ``1.0`` disables it.
+        text_attention: Language-decoder attention: ``"sdpa"``, ``"eager"`` or ``"magi"``
+            (Hopper/Blackwell only), plus ``"la_flash"`` for the batch runtime. Explicit
+            because the upstream default silently falls back to SDPA.
+        vision_attention: MoonViT attention: ``"sdpa"``, ``"eager"`` or
+            ``"flash_attention_2"``. Explicit for the same reason.
+        runtime: Standard worker path or the release batch runtime.
+        scheduler: Batch hybrid scheduler (batch runtime only, required there).
+        group_size: Batch scheduler group size (batch runtime only, required there);
+            ``0`` lets the upstream runtime choose, as upstream documents.
+        local_files_only: Refuse downloads and load only from the local Hugging Face cache
+            (the default, for reproducible offline runs). An asset policy, not an inference
+            setting, so it is recorded but not part of the fingerprint.
     """
 
     model: str
@@ -154,9 +199,15 @@ class LocateAnythingConfig:
     generation_mode: LocateAnythingGenerationMode
     max_new_tokens: int
     temperature: float
+    text_attention: str
+    vision_attention: str
     top_p: float = 0.9
     top_k: int = 0
     repetition_penalty: float = 1.1
+    runtime: LocateAnythingRuntimeMode = LocateAnythingRuntimeMode.STANDARD
+    scheduler: str | None = None
+    group_size: int | None = None
+    local_files_only: bool = True
 
     def __post_init__(self) -> None:
         """Validate identity and generation settings before any runtime exists."""
@@ -179,17 +230,71 @@ class LocateAnythingConfig:
             raise ValueError("LocateAnything top_k must be non-negative (0 disables it)")
         if not isfinite(self.repetition_penalty) or self.repetition_penalty <= 0:
             raise ValueError("LocateAnything repetition_penalty must be positive")
+        if self.model.startswith("/") and PurePosixPath(self.model).name != self.revision:
+            raise ValueError(
+                "a local LocateAnything model directory must be the Hugging Face snapshot of "
+                "the pinned revision (.../snapshots/<revision>)"
+            )
+        self._validate_runtime_paths()
+
+    def _validate_runtime_paths(self) -> None:
+        """Refuse attention/runtime/device combinations the upstream code cannot honor."""
+        batch = self.runtime is LocateAnythingRuntimeMode.BATCH
+        text_choices = _BATCH_TEXT_ATTENTION if batch else _STANDARD_TEXT_ATTENTION
+        if self.text_attention not in text_choices:
+            raise ValueError(
+                f"text_attention {self.text_attention!r} is not supported by the "
+                f"{self.runtime.value} runtime; choose one of {sorted(text_choices)}"
+            )
+        if self.vision_attention not in _VISION_ATTENTION:
+            raise ValueError(
+                f"vision_attention {self.vision_attention!r} is not supported; choose one of "
+                f"{sorted(_VISION_ATTENTION)}"
+            )
+        cuda_only = {self.text_attention, self.vision_attention} & _CUDA_ONLY_ATTENTION
+        if self.device == "cpu" and cuda_only:
+            raise ValueError(f"attention {sorted(cuda_only)} requires a CUDA device")
+        if not batch:
+            if self.scheduler is not None:
+                raise ValueError("scheduler applies only to the batch runtime")
+            if self.group_size is not None:
+                raise ValueError("group_size applies only to the batch runtime")
+            return
+        if self.device == "cpu":
+            raise ValueError("the LocateAnything batch runtime requires a CUDA device")
+        if self.generation_mode is not LocateAnythingGenerationMode.HYBRID:
+            raise ValueError("the LocateAnything batch runtime supports only hybrid generation")
+        if self.dtype != "bfloat16":
+            raise ValueError(
+                "the LocateAnything batch runtime loads the release weights in bfloat16 and "
+                "exposes no dtype control"
+            )
+        if self.scheduler not in _BATCH_SCHEDULERS:
+            raise ValueError(f"batch runtime scheduler must be one of {sorted(_BATCH_SCHEDULERS)}")
+        if self.group_size is None or self.group_size < 0:
+            raise ValueError(
+                "batch runtime group_size must be set and non-negative (0 lets the upstream "
+                "runtime choose)"
+            )
 
     def to_dict(self) -> dict[str, JsonScalar]:
         """Return the JSON-compatible effective configuration."""
         values = asdict(self)
         values["generation_mode"] = self.generation_mode.value
+        values["runtime"] = self.runtime.value
         return values
 
     @property
     def fingerprint(self) -> str:
-        """Return the digest of every setting that can change the evidence produced."""
-        document = {**self.to_dict(), "parser_version": PARSER_VERSION}
+        """Return the digest of every setting that can change the evidence produced.
+
+        ``local_files_only`` is left out: with a pinned revision it decides where the
+        assets come from, never which assets or how they run.
+        """
+        document = {
+            **{key: value for key, value in self.to_dict().items() if key != "local_files_only"},
+            "parser_version": PARSER_VERSION,
+        }
         canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
         return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -206,6 +311,8 @@ class LocateAnythingGeneration:
         statistics: Upstream statistics text, verbatim, when exposed.
         peak_memory_bytes: Peak accelerator memory of the call, when measured.
         runtime_identity: Library/device identity of the runtime that generated the text.
+        native_diagnostics: Runtime measurements of this call with native names, e.g.
+            ``runtime.cold_load_ms`` on the call that loaded the model.
         warnings: Runtime warnings.
     """
 
@@ -214,6 +321,7 @@ class LocateAnythingGeneration:
     statistics: str | None = None
     peak_memory_bytes: int | None = None
     runtime_identity: tuple[tuple[str, JsonScalar], ...] = ()
+    native_diagnostics: tuple[tuple[str, JsonScalar], ...] = ()
     warnings: tuple[str, ...] = ()
 
 
@@ -244,6 +352,17 @@ class LocateAnythingParse:
     no_match_labels: tuple[str | None, ...]
     terminated: bool
     warnings: tuple[str, ...] = ()
+
+
+def validate_locateanything_query(query: GroundingQuery) -> None:
+    """Check, without any model, that LocateAnything can serve a query as written.
+
+    Raises:
+        GroundingRequestError: If the policy, task or geometry is not declared, or the
+            query cannot be rendered with the upstream template.
+    """
+    validate_grounding_query(query, _CAPABILITIES)
+    render_locateanything_prompt(query)
 
 
 def render_locateanything_prompt(query: GroundingQuery) -> str:
@@ -452,7 +571,10 @@ class LocateAnythingRegionGrounding:
                 latency_ms=latency_ms,
                 peak_memory_bytes=generation.peak_memory_bytes,
                 warnings=tuple(warnings),
-                native=_statistics_diagnostics(generation.statistics),
+                native=(
+                    *generation.native_diagnostics,
+                    *_statistics_diagnostics(generation.statistics),
+                ),
             ),
             effective_configuration=MappingProxyType(
                 {**self._config.to_dict(), "parser_version": PARSER_VERSION}
@@ -578,3 +700,393 @@ def _geometry_mismatch_warnings(
         f"{len(mismatched)} {family} output(s) answered a {requested.value} request; "
         "kept as returned, never converted"
     ]
+
+
+class LocateAnythingBackendError(RuntimeError):
+    """Base class for explicit LocateAnything runtime failures."""
+
+
+class LocateAnythingDependencyError(LocateAnythingBackendError):
+    """Raised when a package the configured runtime path needs is not installed."""
+
+
+class LocateAnythingDeviceError(LocateAnythingBackendError):
+    """Raised when the configured device cannot run the configured attention path."""
+
+
+class LocateAnythingModelLoadError(LocateAnythingBackendError):
+    """Raised when the pinned checkpoint cannot load exactly as configured."""
+
+
+class LocateAnythingInferenceError(LocateAnythingBackendError):
+    """Raised for image loading or generation failures."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class _LoadedModel:
+    """Everything one loaded runtime keeps; SDK objects never leave this module."""
+
+    torch: Any
+    image_module: Any
+    tokenizer: Any
+    processor: Any
+    model: Any
+    identity: tuple[tuple[str, JsonScalar], ...]
+    load_ms: float
+    batch: Any = None
+
+
+class TransformersLocateAnythingRuntime:
+    """Lazy torch/transformers implementation of :class:`LocateAnythingRuntime`.
+
+    Bound to one configuration and one prepared-image root. Nothing is imported or loaded
+    at construction; the first :meth:`generate` (or an explicit :meth:`load`) imports the
+    SDKs, checks the device and attention packages, loads the pinned revision once, and
+    verifies that the loaded model uses exactly the configured attention paths, dtype and
+    commit. The upstream remote code runs with ``trust_remote_code=True`` at the pinned
+    revision, from the local cache unless ``local_files_only`` is disabled.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: LocateAnythingConfig,
+        prepared_image_root: Path,
+        environ: MutableMapping[str, str] | None = None,
+    ) -> None:
+        """Bind the runtime without importing any SDK.
+
+        Args:
+            config: Effective configuration; revision and paths are already validated.
+            prepared_image_root: Directory that resolves ``PreparedImage.payload_reference``.
+            environ: Process environment the batch runtime is configured through (its
+                upstream knobs are environment variables); defaults to ``os.environ``.
+        """
+        self._config = config
+        self._root = prepared_image_root
+        self._environ = os.environ if environ is None else environ
+        self._loaded: _LoadedModel | None = None
+
+    def load(self) -> None:
+        """Import, validate and load the pinned model once.
+
+        :meth:`generate` calls this lazily; a caller that measures latency calls it first
+        so the one-time load is not attributed to the first request.
+
+        Raises:
+            LocateAnythingBackendError: For a missing package, an unusable device, or a
+                checkpoint that does not load exactly as configured.
+        """
+        if self._loaded is not None:
+            return
+        started = perf_counter()
+        config = self._config
+        torch = _import("torch", "PyTorch")
+        transformers = _import("transformers", "Transformers")
+        image_module = _import("PIL.Image", "Pillow")
+        identity: list[tuple[str, JsonScalar]] = [
+            ("runtime", config.runtime.value),
+            ("python", platform.python_version()),
+            ("torch", _version(torch)),
+            ("torch.cuda", getattr(getattr(torch, "version", None), "cuda", None)),
+            ("transformers", _version(transformers)),
+            *self._check_device_and_attention(torch),
+        ]
+        commit: str | None
+        if config.runtime is LocateAnythingRuntimeMode.BATCH:
+            tokenizer, processor, model, batch, commit = self._load_batch(identity)
+        else:
+            tokenizer, processor, model, commit = self._load_standard(transformers, torch)
+            batch = None
+        expected_dtype = getattr(torch, config.dtype)
+        loaded_dtype = getattr(model, "dtype", expected_dtype)
+        if loaded_dtype != expected_dtype:
+            raise LocateAnythingModelLoadError(
+                f"LocateAnything was configured with dtype {config.dtype} but loaded as "
+                f"{loaded_dtype}"
+            )
+        on_cuda = config.device.startswith("cuda")
+        identity.append(
+            ("device_name", torch.cuda.get_device_name(config.device) if on_cuda else "cpu")
+        )
+        identity.append(("model_commit", commit))
+        self._loaded = _LoadedModel(
+            torch=torch,
+            image_module=image_module,
+            tokenizer=tokenizer,
+            processor=processor,
+            model=model,
+            batch=batch,
+            identity=tuple(identity),
+            load_ms=(perf_counter() - started) * 1000,
+        )
+
+    def generate(
+        self, *, image: PreparedImage, prompt: str, config: LocateAnythingConfig
+    ) -> LocateAnythingGeneration:
+        """Generate one answer for the exact prepared image and rendered prompt.
+
+        Raises:
+            ValueError: If ``config`` is not the configuration this runtime was built for.
+            LocateAnythingBackendError: For load, image or generation failures, including an
+                image whose bytes no longer match its recorded SHA-256.
+        """
+        if config != self._config:
+            raise ValueError("LocateAnything runtime was built for another configuration")
+        cold = self._loaded is None
+        self.load()
+        loaded = self._loaded
+        assert loaded is not None  # load() acabou de preencher ou falhou com erro explícito.
+        pil_image = self._open_image(loaded, image)
+        torch = loaded.torch
+        on_cuda = config.device.startswith("cuda")
+        if on_cuda:
+            torch.cuda.reset_peak_memory_stats(config.device)
+        try:
+            if loaded.batch is None:
+                text, steps, statistics = self._generate_standard(loaded, pil_image, prompt)
+            else:
+                text, steps, statistics = self._generate_batch(loaded, pil_image, prompt)
+        except LocateAnythingBackendError:
+            raise
+        except Exception as error:
+            raise LocateAnythingInferenceError(
+                f"LocateAnything generation failed: {error}"
+            ) from error
+        peak = int(torch.cuda.max_memory_allocated(config.device)) if on_cuda else None
+        return LocateAnythingGeneration(
+            text=text,
+            decode_steps=steps,
+            statistics=statistics,
+            peak_memory_bytes=peak,
+            runtime_identity=loaded.identity,
+            native_diagnostics=(("runtime.cold_load_ms", loaded.load_ms),) if cold else (),
+        )
+
+    def _check_device_and_attention(self, torch: Any) -> list[tuple[str, JsonScalar]]:
+        """Fail before loading when the device or an attention package cannot serve the path."""
+        config = self._config
+        if config.device.startswith("cuda") and not torch.cuda.is_available():
+            raise LocateAnythingDeviceError(
+                f"configured CUDA device {config.device} is unavailable"
+            )
+        attentions = {config.text_attention, config.vision_attention}
+        versions: list[tuple[str, JsonScalar]] = []
+        if attentions & _FLASH_ATTENTION:
+            flash = _import(
+                "flash_attn", f"FlashAttention for {sorted(attentions & _FLASH_ATTENTION)}"
+            )
+            versions.append(("flash_attn", _version(flash)))
+        if "magi" in attentions:
+            magi = _import("magi_attention", "MagiAttention for text_attention='magi'")
+            versions.append(("magi_attention", _version(magi)))
+            major, _minor = torch.cuda.get_device_capability(config.device)
+            if major < _MAGI_MIN_COMPUTE_CAPABILITY:
+                raise LocateAnythingDeviceError(
+                    "MagiAttention runs only on Hopper or Blackwell GPUs (compute capability "
+                    f">= {_MAGI_MIN_COMPUTE_CAPABILITY}.0); {config.device} is {major}.{_minor}"
+                )
+        return versions
+
+    def _load_standard(self, transformers: Any, torch: Any) -> tuple[Any, Any, Any, str | None]:
+        """Load the upstream worker path with the configured attention and verify it."""
+        config = self._config
+        options = {
+            "revision": config.revision,
+            "local_files_only": config.local_files_only,
+            "trust_remote_code": True,
+        }
+        try:
+            model_config = transformers.AutoConfig.from_pretrained(config.model, **options)
+            # O upstream lê a atenção destas três chaves; defini-las explicitamente impede o
+            # default "magi"/"flash_attention_2" com fallback silencioso para SDPA.
+            model_config._attn_implementation = config.text_attention
+            model_config.text_config._attn_implementation = config.text_attention
+            model_config.vision_config._attn_implementation = config.vision_attention
+            tokenizer = transformers.AutoTokenizer.from_pretrained(config.model, **options)
+            processor = transformers.AutoProcessor.from_pretrained(config.model, **options)
+            model = transformers.AutoModel.from_pretrained(
+                config.model, config=model_config, dtype=getattr(torch, config.dtype), **options
+            )
+            model = model.to(config.device).eval()
+        except ImportError as error:
+            raise LocateAnythingDependencyError(
+                f"the LocateAnything remote code needs a missing package: {error}"
+            ) from error
+        except Exception as error:
+            source = "local cache" if config.local_files_only else "configured model source"
+            raise LocateAnythingModelLoadError(
+                f"could not load {config.model}@{config.revision} from {source}: {error}"
+            ) from error
+        for part, requested in (
+            ("text_config", config.text_attention),
+            ("vision_config", config.vision_attention),
+        ):
+            loaded = getattr(getattr(model.config, part, None), "_attn_implementation", None)
+            if loaded != requested:
+                raise LocateAnythingModelLoadError(
+                    f"{part} attention {requested!r} was requested but the loaded model uses "
+                    f"{loaded!r}; refusing the upstream fallback"
+                )
+        commit = getattr(model.config, "_commit_hash", None)
+        if commit is not None and commit != config.revision:
+            raise LocateAnythingModelLoadError(
+                f"loaded commit {commit} differs from the pinned revision {config.revision}"
+            )
+        return tokenizer, processor, model, commit
+
+    def _load_batch(self, identity: list[tuple[str, JsonScalar]]) -> tuple[Any, Any, Any, Any, str]:
+        """Load the release batch runtime from the pinned snapshot, strictly."""
+        config = self._config
+        if config.model.startswith("/"):
+            snapshot = Path(config.model)
+        else:
+            hub = _import("huggingface_hub", "to resolve the pinned snapshot")
+            identity.append(("huggingface_hub", _version(hub)))
+            try:
+                snapshot = Path(
+                    hub.snapshot_download(
+                        repo_id=config.model,
+                        revision=config.revision,
+                        local_files_only=config.local_files_only,
+                    )
+                )
+            except Exception as error:
+                raise LocateAnythingModelLoadError(
+                    f"could not resolve {config.model}@{config.revision}: {error}"
+                ) from error
+        if snapshot.name != config.revision:
+            raise LocateAnythingModelLoadError(
+                f"snapshot {snapshot} does not belong to the pinned revision {config.revision}"
+            )
+        # O runtime batch vem com o repositório do modelo (batch_utils/, kernel_utils/) e é
+        # configurado só por variáveis de ambiente; STRICT=1 faz ele falhar em vez de cair
+        # para SDPA quando o caminho de atenção pedido não está disponível.
+        if str(snapshot) not in sys.path:
+            sys.path.insert(0, str(snapshot))
+        self._environ.update(
+            {
+                "LA_FLASH_MODEL": str(snapshot),
+                "LA_FLASH_ATTN": config.text_attention,
+                "LA_FLASH_VISION_ATTN": config.vision_attention,
+                "LA_FLASH_HYBRID_SCHEDULER": str(config.scheduler),
+                "LA_FLASH_HYBRID_GROUP_SIZE": str(config.group_size),
+                "LA_FLASH_STRICT_ATTN": "1",
+            }
+        )
+        batch = _import("batch_utils", "the batch runtime of the Hugging Face model release")
+        try:
+            tokenizer, processor, model = batch.load()
+        except Exception as error:
+            raise LocateAnythingModelLoadError(
+                f"the LocateAnything batch runtime could not load {snapshot}: {error}"
+            ) from error
+        return tokenizer, processor, model, batch, config.revision
+
+    def _open_image(self, loaded: _LoadedModel, image: PreparedImage) -> Any:
+        """Read the prepared image, verify its SHA-256 and decode it as RGB."""
+        artifact = image.payload_artifact
+        if artifact is None:
+            raise LocateAnythingInferenceError(
+                "prepared image has no recorded sha256 to verify before inference"
+            )
+        reference = PurePosixPath(image.payload_reference)
+        if reference.is_absolute() or ".." in reference.parts:
+            raise LocateAnythingInferenceError(
+                f"prepared image {image.payload_reference!r} points outside the prepared-image root"
+            )
+        path = self._root / reference
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise LocateAnythingInferenceError(
+                f"could not read prepared image {path}: {error}"
+            ) from error
+        if hashlib.sha256(payload).hexdigest() != artifact.sha256:
+            raise LocateAnythingInferenceError(
+                f"prepared image {image.payload_reference!r} does not match its recorded sha256"
+            )
+        return loaded.image_module.open(io.BytesIO(payload)).convert("RGB")
+
+    def _generate_standard(
+        self, loaded: _LoadedModel, image: Any, prompt: str
+    ) -> tuple[str, tuple[tuple[str, str], ...], str | None]:
+        """Run the upstream worker ``_predict_standard`` call with the configured settings."""
+        config = self._config
+        processor = loaded.processor
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}],
+            }
+        ]
+        text = processor.py_apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        images, videos = processor.process_vision_info(messages)
+        inputs = processor(text=[text], images=images, videos=videos, return_tensors="pt").to(
+            config.device
+        )
+        # O generate() oficial imprime as estatísticas com verbose=True; elas já voltam no
+        # retorno, então a saída padrão é descartada em vez de poluir o log do run.
+        with loaded.torch.no_grad(), contextlib.redirect_stdout(io.StringIO()):
+            response = loaded.model.generate(
+                pixel_values=inputs["pixel_values"].to(getattr(loaded.torch, config.dtype)),
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                image_grid_hws=inputs.get("image_grid_hws"),
+                tokenizer=loaded.tokenizer,
+                max_new_tokens=config.max_new_tokens,
+                use_cache=True,
+                generation_mode=config.generation_mode.value,
+                temperature=config.temperature,
+                do_sample=config.temperature > 0,
+                top_p=config.top_p,
+                top_k=None if config.top_k == 0 else config.top_k,
+                repetition_penalty=config.repetition_penalty,
+                verbose=True,
+            )
+        answer = response[0] if isinstance(response, tuple) else response
+        if not isinstance(answer, str):
+            raise LocateAnythingInferenceError("LocateAnything generate() returned no text answer")
+        if isinstance(response, tuple) and len(response) >= 3:
+            steps = tuple((str(decoder), str(piece)) for decoder, piece in response[1])
+            return answer, steps, None if response[2] is None else str(response[2])
+        return answer, (), None
+
+    def _generate_batch(
+        self, loaded: _LoadedModel, image: Any, prompt: str
+    ) -> tuple[str, tuple[tuple[str, str], ...], str | None]:
+        """Run one request through the release batch hybrid scheduler."""
+        config = self._config
+        with loaded.torch.no_grad():
+            answers = loaded.batch.generate_batch_hybrid(
+                [(image, prompt)],
+                temperature=config.temperature,
+                top_p=config.top_p,
+                top_k=None if config.top_k == 0 else config.top_k,
+                repetition_penalty=config.repetition_penalty,
+                max_new_tokens=config.max_new_tokens,
+                scheduler=config.scheduler,
+                group_size=config.group_size,
+            )
+        if len(answers) != 1 or not isinstance(answers[0], str):
+            raise LocateAnythingInferenceError("batch runtime did not return one text answer")
+        stats = loaded.batch.get_last_hybrid_stats()
+        statistics = None if stats is None else json.dumps(stats, sort_keys=True, default=str)
+        return answers[0], (), statistics
+
+
+def _import(name: str, purpose: str) -> Any:
+    """Import one optional module, turning its absence into an explicit dependency error."""
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as error:
+        raise LocateAnythingDependencyError(
+            f"LocateAnything needs {name!r} ({purpose}) in the runtime environment"
+        ) from error
+
+
+def _version(module: Any) -> JsonScalar:
+    version = getattr(module, "__version__", None)
+    return None if version is None else str(version)

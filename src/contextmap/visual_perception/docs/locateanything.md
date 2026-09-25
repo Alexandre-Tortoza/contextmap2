@@ -83,14 +83,106 @@ O adapter ainda registra warnings, sem mudar a evidência:
 - Nenhum desses valores é confiança, e nenhum é inventado quando ausente. O worker público
   não expõe probabilidade por caixa; calibração é trabalho separado (#573).
 
-## Runtime
+## Runtime e configuração reproduzível (#569)
 
 O adapter só conhece o seam `LocateAnythingRuntime.generate(image, prompt, config) ->
 LocateAnythingGeneration`. Torch, Transformers e o código remoto do modelo ficam atrás dele,
 então a CI usa runtimes fake determinísticos e nunca baixa pesos.
 
+### `LocateAnythingConfig`
+
+| Parâmetro | Regra |
+|---|---|
+| `model` | id Hugging Face (`nvidia/LocateAnything-3B`) ou diretório local **absoluto** que seja o snapshot da revisão (`.../snapshots/<revision>`) |
+| `revision` | **obrigatório**, commit SHA completo (40 hex); branch/tag são recusados — não existe perfil sem revisão fixada |
+| `device` | `cpu`, `cuda` ou `cuda:<n>` |
+| `dtype` | `bfloat16` (dtype da release), `float16` (não em CPU) ou `float32` |
+| `generation_mode` | **obrigatório**: `fast`, `slow` ou `hybrid` |
+| `max_new_tokens`, `temperature` | **obrigatórios**; o model card sugere 8192 tokens; `temperature=0` decodifica de forma gulosa |
+| `top_p`, `top_k`, `repetition_penalty` | padrões do worker upstream (0,9; 0 = desligado; 1,1) |
+| `text_attention` | **obrigatório**: `sdpa`, `eager`, `magi` (Hopper/Blackwell) e, só no runtime batch, `la_flash` |
+| `vision_attention` | **obrigatório**: `sdpa`, `eager` ou `flash_attention_2` |
+| `runtime` | `standard` (caminho do worker: `AutoModel` + `generate()` remoto) ou `batch` (`batch_utils` da release) |
+| `scheduler`, `group_size` | só no runtime batch, e obrigatórios nele (`eager`, `hold_ar`, `ar_first`, `pipeline`, `adaptive`; `group_size >= 0`, 0 = o upstream escolhe) |
+| `local_files_only` | `true` por padrão: só o cache local, sem download implícito |
+
+Combinações recusadas na construção, antes de qualquer import: atenção desconhecida ou
+`auto`; `la_flash` fora do runtime batch; atenção só-CUDA (`flash_attention_2`, `la_flash`,
+`magi`) em CPU; `scheduler`/`group_size` fora do runtime batch; runtime batch sem CUDA, fora
+do modo `hybrid` (o upstream só suporta esse) ou fora de `bfloat16` (o runtime batch não
+expõe controle de dtype). O upstream resolveria as duas atenções com fallback silencioso
+para SDPA; aqui elas são sempre explícitas.
+
+O `fingerprint` cobre todos os parâmetros e `PARSER_VERSION`, exceto `local_files_only`:
+com a revisão fixada, ele decide de onde vêm os arquivos, não quais nem como rodam. A
+configuração efetiva completa, inclusive `local_files_only`, vai para cada execução.
+
+### `TransformersLocateAnythingRuntime`
+
+Runtime empacotado, lazy e ligado a uma configuração e à raiz das imagens preparadas:
+
+- construir não importa nada; o primeiro `generate()` (ou `load()` explícito) importa `torch`,
+  `transformers` e `Pillow`, e carrega o modelo **uma vez** — a composition root cria um
+  runtime por run, então o modelo carrega uma vez por run resolvido;
+- antes de carregar: device CUDA disponível; `flash_attn` instalado para
+  `flash_attention_2`/`la_flash`; `magi_attention` instalado e GPU com compute capability
+  ≥ 9.0 para `magi`;
+- runtime `standard`: `AutoConfig`/`AutoTokenizer`/`AutoProcessor`/`AutoModel` com
+  `revision`, `local_files_only` e `trust_remote_code=True` (o código do modelo vem do próprio
+  repositório, na revisão fixada); a atenção configurada é escrita em `text_config` e
+  `vision_config` e **conferida depois do load** — se o código remoto trocou de atenção, o
+  load falha em vez de seguir com outra; commit carregado (`_commit_hash`) diferente da
+  revisão e dtype diferente do pedido também falham;
+- runtime `batch`: resolve o snapshot da revisão (`huggingface_hub.snapshot_download`, local
+  por padrão), exige que o diretório seja o daquela revisão, põe o snapshot no `sys.path`,
+  configura as variáveis `LA_FLASH_*` (efeito de processo, documentado) sempre com
+  `LA_FLASH_STRICT_ATTN=1` (falhar em vez de cair para SDPA) e chama `batch_utils.load()`.
+  Cada request é uma chamada de lote unitário; agrupar requests em lote fica para quando o
+  harness de avaliação medir o ganho;
+- cada imagem é lida da raiz das imagens preparadas e tem o SHA-256 conferido contra o
+  `payload_artifact` do request antes de ser decodificada;
+- `runtime_identity`: runtime, Python, `torch` (e CUDA), `transformers`, `flash_attn`/
+  `magi_attention` quando usados, `huggingface_hub` no batch, nome do device e commit do
+  modelo; `runtime.cold_load_ms` aparece nos diagnósticos nativos da chamada que carregou o
+  modelo, e o pico de memória CUDA vai em `peak_memory_bytes`.
+
+Falhas são explícitas e tipadas (`LocateAnythingDependencyError`,
+`LocateAnythingDeviceError`, `LocateAnythingModelLoadError`,
+`LocateAnythingInferenceError`) e nunca trocam de modelo, atenção ou runtime.
+
+### Seleção pelo runtime
+
+`visual_perception.region_grounding` é um ponto de variação **opcional** do estágio
+`visual_perception`, com o backend `locateanything` e o grupo reservado `query_set`
+(obrigatório). Ver [`composition.md`](../../runtime/docs/composition.md) e
+[`executors.md`](../../runtime/docs/executors.md): as queries são validadas na composição,
+antes de qualquer modelo, e o executor faz cada query a cada imagem como um request próprio.
+
+## Licenças: código vs. pesos
+
+São licenças **diferentes** e não podem ser confundidas:
+
+| Artefato | Licença | Consequência |
+|---|---|---|
+| repositório `NVlabs/Eagle` (código do GitHub) | Apache-2.0 (`LICENSE` do repositório) | uso e redistribuição do código conforme Apache-2.0; note que alguns arquivos de `Embodied/` (ex.: `locateanything_worker.py`) trazem um cabeçalho proprietário da NVIDIA, então a licença de cada arquivo precisa ser conferida antes de copiá-lo |
+| pesos `nvidia/LocateAnything-3B` e o código remoto publicado no repositório do modelo (`modeling_*.py`, `generate_utils.py`, `batch_utils/`, `kernel_utils/`) | NVIDIA License (`LICENSE` do repositório do modelo; `LICENSE_MODEL` no GitHub) | **somente uso não comercial**: pesquisa ou avaliação; uso comercial não é permitido (exceto pela NVIDIA e afiliadas); redistribuição precisa manter a licença e os avisos |
+| componentes de terceiros do modelo | Qwen2.5-3B-Instruct (Qwen Research License); MoonViT-SO-400M (MIT) | as restrições de cada componente se somam às da NVIDIA License |
+
+O ContextMap2 não vendoriza código nem pesos do LocateAnything: o adapter reimplementa o
+parsing e reutiliza apenas os textos curtos dos prompts upstream, necessários para
+interoperar com o modelo, e o runtime carrega pesos e código remoto do cache local do
+usuário na revisão fixada. Todo experimento que execute o LocateAnything herda a restrição
+não comercial dos pesos e deve registrá-la na metadata do experimento; a execução continua
+sendo uma decisão de quem implanta.
+
 ## Limites atuais
 
+- O runtime real nunca foi executado aqui (sem GPU e sem pesos): o mapeamento para a API
+  upstream segue o worker, o `generate()` remoto e o `batch_infer.py` publicados, e é
+  verificado só com SDKs fake. Tempo de carga a frio, VRAM de pico/estável, RAM, latência por
+  request, throughput, escala do lote, falhas/OOM e contagem de fallback híbrido têm onde ser
+  registrados (`runtime.cold_load_ms`, `peak_memory_bytes`, `latency_ms`, `stats.*`), mas
+  ainda não foram medidos.
 - Não há avaliação real: recall/cobertura de localização, IoU, falsos positivos,
   fragmentação, taxa de falha do parser, taxa de no-match, latência p50/p95, boxes/s,
   contagem de fallback híbrido e pico de memória exigem o slice de referência anotado e GPU

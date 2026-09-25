@@ -26,6 +26,7 @@ from contextmap.visual_perception import (
     GroundingPoint,
     GroundingQuery,
     GroundingQueryPolicy,
+    GroundingQuerySet,
     GroundingRejectionReason,
     GroundingRequestError,
     GroundingTask,
@@ -248,6 +249,16 @@ def test_every_inference_input_takes_part_in_request_identity(
 def test_query_shape_must_match_its_task(values: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         GroundingQuery(policy_id=BOX_POLICY, geometry=GroundingGeometry.BOX, **values)  # type: ignore[arg-type]
+
+
+def test_a_query_set_is_ordered_non_empty_and_free_of_repeated_queries() -> None:
+    queries = (_categories("table", "chair"), _phrase())
+
+    assert GroundingQuerySet(queries=queries).queries == queries
+    with pytest.raises(ValueError, match="at least one"):
+        GroundingQuerySet(queries=())
+    with pytest.raises(ValueError, match="unique"):
+        GroundingQuerySet(queries=(_phrase(), _phrase()))
 
 
 def test_query_requires_a_versioned_policy_identity() -> None:

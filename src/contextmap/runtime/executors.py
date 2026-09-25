@@ -90,7 +90,11 @@ from contextmap.runtime.catalog import (
     RESOLUTION,
     TRAJECTORY,
 )
-from contextmap.runtime.composition import FeatureBuildScope, FeatureFactory
+from contextmap.runtime.composition import (
+    FeatureBuildScope,
+    FeatureFactory,
+    RegionGroundingPlan,
+)
 from contextmap.runtime.pipeline import StageRequest
 from contextmap.semantic_fusion import (
     BaselineAccumulationPolicy,
@@ -155,6 +159,7 @@ from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
     ArtifactReference,
     BackendProvenance,
+    PerceptionResultId,
     PerceptionRun,
     PerceptionRunId,
     PerceptionRunReader,
@@ -162,6 +167,9 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionDiscovery,
+    RegionGrounding,
+    RegionGroundingExecution,
+    RegionGroundingRequest,
     RegionId,
     SceneContext,
     SemanticClaim,
@@ -182,6 +190,7 @@ from contextmap.visual_perception import (
     perception_result_id_for,
     prepare_image,
     resolve_pipeline,
+    with_grounded_regions,
 )
 
 __all__ = [
@@ -1050,12 +1059,20 @@ class VisualPerceptionExecutor:
         dense_features: FeatureFactory,
         region_features: FeatureFactory,
         semantic_interpreter: SemanticInterpreter,
+        region_grounding: RegionGroundingPlan | None = None,
     ) -> None:
-        """Bind the executor to the composed backends of the canonical preset."""
+        """Bind the executor to the composed backends of the canonical preset.
+
+        ``region_grounding``, when composed, adds prompt-conditioned grounding next to the
+        preset: every image is asked every configured query as its own explicit request,
+        the box evidence joins the image's result and each execution is persisted in the
+        run's grounding stream.
+        """
         self._region_discovery = region_discovery
         self._dense_features = dense_features
         self._region_features = region_features
         self._semantic_interpreter = semantic_interpreter
+        self._region_grounding = region_grounding
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Process every image observation of the ``sequence`` input and reference the run."""
@@ -1103,6 +1120,11 @@ class VisualPerceptionExecutor:
             semantic_bridge = _LegacySemanticInterpreterBridge(
                 interpreter=self._semantic_interpreter, run_id=run_id, view_root=scratch
             )
+            # Um backend de grounding por run: o runtime empacotado carrega o modelo uma vez,
+            # na primeira pergunta, e resolve as imagens preparadas no diretório de rascunho.
+            grounding = (
+                None if self._region_grounding is None else self._region_grounding.factory(scratch)
+            )
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={
@@ -1130,7 +1152,8 @@ class VisualPerceptionExecutor:
                     stage.capability
                     for stage in CANONICAL_PRESET_V1.stages
                     if stage.backend_id is not None
-                ),
+                )
+                | (frozenset() if grounding is None else frozenset({"region_grounding"})),
                 pipeline_preset=CANONICAL_PRESET_V1,
                 configuration_digest=resolved.configuration_digest(),
             )
@@ -1157,13 +1180,45 @@ class VisualPerceptionExecutor:
                     claim_stage_ids=("region_interpretation",),
                     scene_context_stage_id="scene_interpretation",
                 )
+                groundings: tuple[RegionGroundingExecution, ...] = ()
+                if grounding is not None:
+                    groundings = self._ground(grounding, prepared, result.result_id)
+                    result = with_grounded_regions(result, groundings)
                 writer.add_result(result)
                 writer.add_stage_outcomes(outcomes)
+                for execution in groundings:
+                    writer.add_region_grounding(execution)
 
             manifest = writer.finalize()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         return _reference(request, PERCEPTION, str(manifest.run_id), manifest.file_inventory)
+
+    def _ground(
+        self,
+        grounding: RegionGrounding,
+        prepared: PreparedImage,
+        result_id: PerceptionResultId,
+    ) -> tuple[RegionGroundingExecution, ...]:
+        """Ask one image every configured query, each as its own explicit request."""
+        assert self._region_grounding is not None  # só chamado quando o grounding foi composto.
+        fingerprint = grounding.backend_provenance().configuration_fingerprint
+        if not fingerprint:
+            raise ExecutorError(
+                "the region grounding backend reports no configuration fingerprint; its "
+                "requests could not be tied to the configuration that served them"
+            )
+        return tuple(
+            grounding.ground(
+                RegionGroundingRequest(
+                    perception_result_id=result_id,
+                    image=prepared,
+                    query=query,
+                    configuration_fingerprint=fingerprint,
+                )
+            )
+            for query in self._region_grounding.queries
+        )
 
 
 class EntityResolutionExecutor:

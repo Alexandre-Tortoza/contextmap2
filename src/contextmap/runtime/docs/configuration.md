@@ -116,6 +116,7 @@ Pontos de variação:
 |---|---|
 | `ingestion.source_adapter` | `ros1_bag`, `ros2_bag` |
 | `visual_perception.region_discovery` | `sam2`, `sam3`, `florence2` |
+| `visual_perception.region_grounding` | `locateanything`, **opcional**: sem backend selecionado, o estágio roda sem grounding; selecionado, exige o grupo reservado `query_set` |
 | `visual_perception.dense_features` | `dinov2`, `dinov3` |
 | `visual_perception.region_features` | `clip`, `alphaclip` |
 | `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2` |

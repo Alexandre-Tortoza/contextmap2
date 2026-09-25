@@ -66,7 +66,7 @@ temporariamente os estágios legados de cena/região até a construção de
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 
-- `RegionGroundingRequest`, `GroundingQuery`, `GroundingQueryPolicy`, `RegionGroundingCapabilities`, `RegionGroundingExecution`, `GroundingOutput`, `GroundingPoint`, `RejectedGroundingOutput`, `GroundingDiagnostics` — grounding condicionado por prompt: request com identidade de conteúdo, validação de capacidade antes da inferência (`validate_grounding_query()`, `GroundingRequestError`), resposta bruta separada do parsing e `with_grounded_regions()` para anexar as regiões box ao resultado dono.
+- `RegionGroundingRequest`, `GroundingQuery`, `GroundingQuerySet`, `GroundingQueryPolicy`, `RegionGroundingCapabilities`, `RegionGroundingExecution`, `GroundingOutput`, `GroundingPoint`, `RejectedGroundingOutput`, `GroundingDiagnostics` — grounding condicionado por prompt: request com identidade de conteúdo, validação de capacidade antes da inferência (`validate_grounding_query()`, `GroundingRequestError`), resposta bruta separada do parsing e `with_grounded_regions()` para anexar as regiões box ao resultado dono.
 
 - `RegionDiscovery`, `RegionGrounding`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticScore`.
 
