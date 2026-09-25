@@ -96,6 +96,10 @@ class ReprojectionStatistics:
         correspondence_count: Number of reference correspondences evaluated.
         invalid_count: Of those, the ones that could not be projected (behind the camera or
             outside the image), which contribute no residual.
+        unevaluated_count: Correspondences whose geometry the frame's candidate policy did
+            not evaluate at all, so the frame says nothing about them. They are reported
+            rather than counted as invalid: not projected and not selected are different
+            facts, and a residual over a shrinking population must say so.
         mean_px: Mean residual over the valid correspondences, in pixels.
         median_px: Median residual, in pixels.
         p95_px: 95th percentile residual, in pixels.
@@ -105,6 +109,7 @@ class ReprojectionStatistics:
     reference_id: str
     correspondence_count: int
     invalid_count: int
+    unevaluated_count: int
     mean_px: float
     median_px: float
     p95_px: float
@@ -125,6 +130,17 @@ class ReprojectionStatistics:
             raise ValueError(
                 f"invalid_count {self.invalid_count} must be between 0 and the "
                 f"correspondence_count {self.correspondence_count}"
+            )
+        if not 0 <= self.unevaluated_count <= self.correspondence_count:
+            raise ValueError(
+                f"unevaluated_count {self.unevaluated_count} must be between 0 and the "
+                f"correspondence_count {self.correspondence_count}"
+            )
+        if self.invalid_count + self.unevaluated_count > self.correspondence_count:
+            raise ValueError(
+                f"invalid_count {self.invalid_count} and unevaluated_count "
+                f"{self.unevaluated_count} cannot together exceed the correspondence_count "
+                f"{self.correspondence_count}"
             )
         values = (self.mean_px, self.median_px, self.p95_px, self.max_px)
         if not all(math.isfinite(value) and value >= 0 for value in values):

@@ -46,6 +46,7 @@ REFERENCE = ReprojectionStatistics(
     reference_id="trusted-correspondences-0001",
     correspondence_count=50,
     invalid_count=2,
+    unevaluated_count=0,
     mean_px=1.2,
     median_px=0.9,
     p95_px=3.4,

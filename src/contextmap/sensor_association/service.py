@@ -22,13 +22,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from contextmap.geometric_mapping import GeometricMap, GeometrySource
+from contextmap.geometric_mapping import GeometricMap, GeometryBlockSource
 from contextmap.ingestion import (
     CalibrationSet,
     ImageObservation,
     SequenceArtifactId,
     SourceObservationId,
 )
+from contextmap.sensor_association.candidate_geometry import CandidateGeometryPolicy
 from contextmap.sensor_association.dense_sampling import (
     SAMPLING_POLICY_ID,
     DenseFeatureSamples,
@@ -45,7 +46,6 @@ from contextmap.sensor_association.diagnostics import (
 )
 from contextmap.sensor_association.errors import AssociationInputError
 from contextmap.sensor_association.frame_projection import FrameProjector, RejectedProjection
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.sensor_association.membership import (
     COVERAGE_DEFINITIONS_VERSION,
     MEMBERSHIP_POLICY_ID,
@@ -126,10 +126,11 @@ class SensorAssociationRequest:
     Attributes:
         sequence_artifact_id: The canonical sequence the run belongs to.
         selection_id: Deterministic identity of the sequence selection.
-        geometry: The read boundary of the persistent map.
+        geometry: The block read boundary of the persistent map.
         trajectory: The pose lookup of the selected state-estimation trajectory.
         pose_policy: Which pose lookups are acceptable for an image timestamp.
         calibration: The canonical calibration, the one the map and the trajectory used.
+        candidate_policy: Which map geometry each frame evaluates, before projection.
         occlusion_policy: The visibility parameters.
         tolerances: The diagnostic tolerances.
         frames: The camera frames to associate.
@@ -144,10 +145,11 @@ class SensorAssociationRequest:
 
     sequence_artifact_id: SequenceArtifactId
     selection_id: str
-    geometry: GeometrySource
+    geometry: GeometryBlockSource
     trajectory: TrajectoryLookup
     pose_policy: LookupPolicy
     calibration: CalibrationSet
+    candidate_policy: CandidateGeometryPolicy
     occlusion_policy: OcclusionPolicy
     tolerances: DiagnosticTolerances
     frames: tuple[AssociationFrameInput, ...]
@@ -192,6 +194,7 @@ class SensorAssociationOutcome:
         state_estimation_run_id: The state-estimation run it came from, when there is one.
         calibration_identity: Hash of the calibration used.
         perception_run_ids: The perception runs the frames' evidence came from, sorted.
+        candidate_policy: The candidate rule applied to every frame.
         occlusion_policy: The visibility parameters applied.
         pose_policy: The pose lookup policy applied.
         tolerances: The diagnostic tolerances applied.
@@ -209,6 +212,7 @@ class SensorAssociationOutcome:
     state_estimation_run_id: StateEstimationRunId | None
     calibration_identity: str
     perception_run_ids: tuple[PerceptionRunId, ...]
+    candidate_policy: CandidateGeometryPolicy
     occlusion_policy: OcclusionPolicy
     pose_policy: LookupPolicy
     tolerances: DiagnosticTolerances
@@ -232,8 +236,9 @@ class SensorAssociationService:
             The per-frame associations and the frames whose pose was rejected.
 
         Raises:
-            AssociationInputError: If channel or frame identities repeat, a frame lacks the
-                dense map of a declared channel, or any step finds the inputs incompatible.
+            AssociationInputError: If the map cannot be read in blocks, channel or frame
+                identities repeat, a frame lacks the dense map of a declared channel, or any
+                step finds the inputs incompatible.
         """
         _validate_request(request)
         identity = calibration_identity(request.calibration)
@@ -241,7 +246,8 @@ class SensorAssociationService:
             raise AssociationInputError("the calibration set has no identity")
         fingerprint = _configuration_fingerprint(request)
         projector = FrameProjector(
-            cloud=GeometryCloud.from_source(request.geometry),
+            geometry=request.geometry,
+            candidate_policy=request.candidate_policy,
             trajectory=request.trajectory,
             pose_policy=request.pose_policy,
             calibration=request.calibration,
@@ -305,6 +311,7 @@ class SensorAssociationService:
             state_estimation_run_id=request.state_estimation_run_id,
             calibration_identity=identity,
             perception_run_ids=tuple(sorted({f.perception_result.run_id for f in request.frames})),
+            candidate_policy=request.candidate_policy,
             occlusion_policy=request.occlusion_policy,
             pose_policy=request.pose_policy,
             tolerances=request.tolerances,
@@ -317,6 +324,11 @@ class SensorAssociationService:
 
 
 def _validate_request(request: SensorAssociationRequest) -> None:
+    if not isinstance(request.geometry, GeometryBlockSource):
+        raise AssociationInputError(
+            "sensor association reads the map in vectorized blocks: "
+            f"{type(request.geometry).__name__} does not implement GeometryBlockSource"
+        )
     channel_ids = [channel.channel_id for channel in request.dense_channels]
     if len(set(channel_ids)) != len(channel_ids):
         raise AssociationInputError(f"dense channel identities must be unique, got {channel_ids}")
@@ -336,6 +348,7 @@ def _configuration_fingerprint(request: SensorAssociationRequest) -> str:
     pose = request.pose_policy
     tolerances = request.tolerances
     payload: dict[str, Any] = {
+        "candidates": request.candidate_policy.to_record(),
         "occlusion": request.occlusion_policy.to_record(),
         "pose_policy": {
             "mode": pose.mode.value,

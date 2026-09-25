@@ -115,6 +115,7 @@ from contextmap.semantic_mapping import (
 )
 from contextmap.sensor_association import (
     AssociationFrameInput,
+    CandidateGeometryPolicy,
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationRequest,
@@ -440,16 +441,18 @@ class SensorAssociationExecutor:
     def __init__(
         self,
         *,
+        candidates: CandidateGeometryPolicy,
         occlusion: OcclusionPolicy,
         tolerances: DiagnosticTolerances,
         pose_policy: LookupPolicy,
         code_version: str | None = None,
     ) -> None:
-        """Bind the executor to the visibility policy, the diagnostic tolerances and the pose rule.
+        """Bind the executor to the candidate, visibility, tolerance and pose rules.
 
         The dense-feature channels are not used: this executor produces the geometry-only
         association, the one evidence channel a run can derive without a feature payload.
         """
+        self._candidates = candidates
         self._occlusion = occlusion
         self._tolerances = tolerances
         self._pose_policy = pose_policy
@@ -490,6 +493,7 @@ class SensorAssociationExecutor:
                     trajectory=TrajectoryLookup(trajectory.trajectory()),
                     pose_policy=self._pose_policy,
                     calibration=calibration,
+                    candidate_policy=self._candidates,
                     occlusion_policy=self._occlusion,
                     tolerances=self._tolerances,
                     frames=frames,

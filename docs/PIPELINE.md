@@ -154,8 +154,8 @@ flowchart TD
 
     subgraph SA["5. Sensor Association"]
         SA_FRAME["AssociationFrameInput<br/>ImageObservation + PreparedImage + PerceptionResult"]
-        SA_CLOUD["GeometryCloud.from_source()<br/>carrega coordenadas autoritativas"]
         SA_POSE["TrajectoryLookup no timestamp RGB"]
+        SA_CAND["select_candidate_geometry()<br/>esfera max_range_m no centro óptico<br/>coordenadas + índices globais"]
         SA_EXT["StaticFrameGraph<br/>T_body_camera"]
         SA_CAM["CameraProjection<br/>pinhole / fisheye / MEI"]
         SA_RAWPX["pixel na imagem crua"]
@@ -174,12 +174,12 @@ flowchart TD
 
         SEQ --> SA_FRAME
         PERC --> SA_FRAME
-        GEO --> SA_CLOUD
+        GEO --> SA_CAND
         TRAJ --> SA_POSE
         ING_CAL --> SA_EXT
         ING_CAL --> SA_CAM
 
-        SA_CLOUD --> SA_POSE --> SA_EXT --> SA_CAM --> SA_RAWPX --> SA_XFORM --> SA_SUPPORT --> SA_VIS --> SA_MASK --> SA_MEM
+        SA_POSE --> SA_EXT --> SA_CAND --> SA_CAM --> SA_RAWPX --> SA_XFORM --> SA_SUPPORT --> SA_VIS --> SA_MASK --> SA_MEM
         SA_FRAME --> SA_XFORM
         SA_FRAME --> SA_MASK
         SA_MEM --> SA_OBS
@@ -584,15 +584,15 @@ Detalhes: [Geometric Mapping](../src/contextmap/geometric_mapping/docs/README.md
 
 **Recebe de.**
 
-- Geometric Mapping: `GeometrySource` / `GeometricMapArtifact`.
+- Geometric Mapping: `GeometryBlockSource` / `GeometricMapArtifact`.
 - State Estimation: trajetória e política de lookup.
 - Ingestion: calibração, modelo de câmera e imagem original.
 - Visual Perception: `PreparedImage`, `Region2D`, claims e features.
 
 **Fluxo interno.**
 
-1. `GeometryCloud.from_source()` carrega a geometria autoritativa.
-2. `FrameProjector` resolve `T_map_body(t_rgb)` e `T_body_camera`.
+1. `FrameProjector` resolve `T_map_body(t_rgb)` e `T_body_camera`; a translação composta é o centro óptico no frame do mapa.
+2. `select_candidate_geometry()` escolhe, por `GeometryBlockSource.iter_blocks()`, a geometria dentro da esfera `max_range_m` em torno desse centro, carregando coordenadas autoritativas **e** o índice global de cada linha. Com `max_range_m = None` o candidato é o mapa inteiro, o baseline. Como todo excluído está mais longe que todo retido, nenhum retido muda de resultado; só a população avaliada muda, e as contagens por frame registram isso.
 3. O modelo de câmera projeta 3D para pixel na imagem crua.
 4. `raw_to_prepared_transform()` reproduz crop/resize da percepção para levar o pixel ao mesmo espaço em que as máscaras vivem.
 5. Pontos são classificados como behind-camera, outside-image, outside-valid-support ou in-support.

@@ -209,10 +209,17 @@ class PoliciesConfig:
             declared ``pose_role="ground_truth"``, may become the operational trajectory; the
             default keeps a ground-truth-tagged auxiliary pose from affecting the run at all,
             exactly as if it were absent.
+        association_max_range_m: Largest distance, in meters, from the camera optical centre
+            at which ``sensor_association`` still evaluates a map element (issue #562).
+            ``None`` (default) evaluates the whole map, exactly as if the policy were absent,
+            so enabling culling is always a deliberate, recorded decision. A value bounds
+            per-frame work and memory by local geometry instead of map size, and narrows the
+            evaluated population: it is a scientific choice, which is why it has no default.
     """
 
     debug_level: str
     trajectory_mode: str = "operational_only"
+    association_max_range_m: float | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -274,6 +281,7 @@ class RuntimeConfig:
             "policies": {
                 "debug_level": self.policies.debug_level,
                 "trajectory_mode": self.policies.trajectory_mode,
+                "association_max_range_m": self.policies.association_max_range_m,
             },
         }
 
@@ -1121,7 +1129,12 @@ def _parse_providers(value: object, problems: list[ConfigProblem]) -> Mapping[st
 
 def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesConfig:
     section = _mapping(value, "policies", problems)
-    _reject_unknown(section, {"debug_level", "trajectory_mode"}, "policies", problems)
+    _reject_unknown(
+        section,
+        {"debug_level", "trajectory_mode", "association_max_range_m"},
+        "policies",
+        problems,
+    )
     level = section.get("debug_level", "none")
     if level not in DEBUG_LEVELS:
         problems.append(
@@ -1140,7 +1153,38 @@ def _parse_policies(value: object, problems: list[ConfigProblem]) -> PoliciesCon
             )
         )
         trajectory_mode = "operational_only"
-    return PoliciesConfig(debug_level=str(level), trajectory_mode=str(trajectory_mode))
+    return PoliciesConfig(
+        debug_level=str(level),
+        trajectory_mode=str(trajectory_mode),
+        association_max_range_m=_association_range(section, problems),
+    )
+
+
+def _association_range(
+    section: Mapping[str, ConfigValue], problems: list[ConfigProblem]
+) -> float | None:
+    """Read the optional candidate range; anything but a positive finite number is a problem."""
+    declared = section.get("association_max_range_m")
+    if declared is None:
+        return None
+    if isinstance(declared, bool) or not isinstance(declared, int | float):
+        problems.append(
+            ConfigProblem(
+                path="policies.association_max_range_m",
+                message=f"is {declared!r}; expected a distance in meters or no value at all",
+            )
+        )
+        return None
+    value = float(declared)
+    if not math.isfinite(value) or value <= 0:
+        problems.append(
+            ConfigProblem(
+                path="policies.association_max_range_m",
+                message=f"is {value!r}; expected a positive finite distance in meters",
+            )
+        )
+        return None
+    return value
 
 
 def _declared_channels(parameters: Mapping[str, ConfigValue]) -> tuple[ConfigValue, ...]:

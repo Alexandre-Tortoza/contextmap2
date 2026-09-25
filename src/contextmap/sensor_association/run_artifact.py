@@ -176,7 +176,8 @@ class DenseAssociationRecord:
         channel_id: The evidence channel.
         provenance: The full lineage of the association, as JSON primitives.
         terms: Cells read per point: ``1`` for nearest and ``4`` for bilinear.
-        eligible_indices: Frame positions of the eligible points.
+        eligible_indices: Global geometry indices of the eligible points, the identity
+            :func:`~contextmap.geometric_mapping.geometry_id_for` uses.
         sampled: Whether the grid served each eligible point.
         cell_rows: Row of each cell read, ``terms`` per point, ``-1`` where out of support.
         cell_cols: Column of each cell read.
@@ -277,8 +278,11 @@ class SensorAssociationRunWriter:
             for region, observation, quality in zip(
                 frame.membership.regions, frame.observations, frame.qualities, strict=True
             ):
-                positions = np.asarray(region.associated_indices, dtype="<u4")
-                expected = tuple(projection.map_reference(int(i)) for i in positions)
+                # As posições são linhas de candidatos; o que se persiste é a identidade
+                # global de cada uma, que é o que o leitor reconstrói (#562).
+                rows = np.asarray(region.associated_indices)
+                positions = np.asarray(projection.global_indices[rows], dtype="<u4")
+                expected = projection.map_references(rows)
                 if expected != observation.geometry_support:
                     raise RunArtifactError(
                         f"the geometry support of {observation.spatial_observation_id!r} "
@@ -331,10 +335,11 @@ class SensorAssociationRunWriter:
         records: list[str] = []
         offset = 0
         for frame in outcome.frames:
+            global_indices = frame.resolution.frame.global_indices
             for channel in outcome.dense_channels:
                 samples = frame.dense_samples[channel.channel_id]
                 sections = (
-                    np.asarray(samples.eligible_indices, dtype="<u4").tobytes(),
+                    np.asarray(global_indices[samples.eligible_indices], dtype="<u4").tobytes(),
                     np.asarray(samples.sampled, dtype="u1").tobytes(),
                     np.asarray(samples.cell_rows, dtype="<i4").tobytes(),
                     np.asarray(samples.cell_cols, dtype="<i4").tobytes(),
@@ -370,7 +375,9 @@ class SensorAssociationRunWriter:
         )
         run.write_text(_SUMMARY, _json(_summary(outcome)))
         if runtime_s is not None:
-            run.write_text(_RUNTIME, _json({"runtime_s": runtime_s}))
+            # Tempo de parede nunca entra em outputs/: um rerun não o reproduz. Aqui ele só
+            # existe quando o chamador realmente mediu, o que mantém o artefato reprodutível.
+            run.write_text(_RUNTIME, _json({"runtime_s": runtime_s, **_timings(outcome)}))
 
     def _manifest_record(self, outcome: SensorAssociationOutcome) -> dict[str, Any]:
         findings: dict[str, int] = {}
@@ -394,6 +401,10 @@ class SensorAssociationRunWriter:
             else str(outcome.state_estimation_run_id),
             "perception_run_ids": [str(run_id) for run_id in outcome.perception_run_ids],
             "calibration_identity": outcome.calibration_identity,
+            "candidate_policy": {
+                **outcome.candidate_policy.to_record(),
+                "fingerprint": outcome.candidate_policy.fingerprint(),
+            },
             "visibility_policy": {
                 **outcome.occlusion_policy.to_record(),
                 "fingerprint": outcome.occlusion_policy.fingerprint(),
@@ -731,7 +742,9 @@ def _projection_record(frame: FrameAssociation) -> dict[str, Any]:
         "source_observation_id": str(projection.source_observation_id),
         "image_timestamp": projection.image_timestamp.to_record(),
         "map_id": str(projection.map_id),
-        "point_count": len(projection.projectable),
+        "point_count": projection.candidate_count,
+        "candidates": projection.candidates.to_record(),
+        "stage_counts": {stage.value: count for stage, count in projection.stage_counts().items()},
         "calibration_ref": encode_calibration_ref(projection.calibration_ref),
         "camera": {
             "calibration_id": str(projection.camera.calibration_id),
@@ -802,6 +815,24 @@ def _visibility_record(frame: FrameAssociation) -> dict[str, Any]:
         "skipped_regions": [
             {"region_id": str(s.region_id), "reason": s.reason.value} for s in membership.skipped
         ],
+    }
+
+
+def _timings(outcome: SensorAssociationOutcome) -> dict[str, Any]:
+    """Per-frame candidate-query and projection wall times, and their totals (#562)."""
+    frames = [
+        {
+            "source_observation_id": str(frame.source_observation_id),
+            "candidate_query_seconds": frame.resolution.frame.candidates.query_seconds,
+            "projection_seconds": frame.resolution.frame.projection_seconds,
+            "candidate_count": frame.resolution.frame.candidate_count,
+        }
+        for frame in outcome.frames
+    ]
+    return {
+        "candidate_query_seconds": sum(f["candidate_query_seconds"] for f in frames),  # type: ignore[misc]
+        "projection_seconds": sum(f["projection_seconds"] for f in frames),  # type: ignore[misc]
+        "frames": frames,
     }
 
 

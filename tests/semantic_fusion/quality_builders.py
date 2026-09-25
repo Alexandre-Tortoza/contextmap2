@@ -48,6 +48,7 @@ def make_quality(
             reference_id="trusted-correspondences-0001",
             correspondence_count=10,
             invalid_count=0,
+            unevaluated_count=0,
             mean_px=reprojection_median_px,
             median_px=reprojection_median_px,
             p95_px=reprojection_median_px,

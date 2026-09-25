@@ -98,6 +98,7 @@ from contextmap.semantic_mapping import (
     materialize_entities,
 )
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     DiagnosticTolerances,
     OcclusionPolicy,
     SensorAssociationOutcome,
@@ -421,6 +422,7 @@ def _associate(
         trajectory=TrajectoryLookup(trajectory.trajectory()),
         pose_policy=LookupPolicy.exact(),
         calibration=calibration,
+        candidate_policy=CandidateGeometryPolicy(max_range_m=None),
         occlusion_policy=OcclusionPolicy(
             cell_size_px=4, neighborhood_radius_cells=0, depth_margin_m=0.1, depth_margin_ratio=0.02
         ),

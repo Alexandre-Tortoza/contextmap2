@@ -2,7 +2,16 @@
 
 For one RGB observation the projector runs the whole chain::
 
-    P_map -> P_camera at the RGB timestamp -> raw camera pixel -> prepared-image pixel
+    candidate selection -> P_map -> P_camera at the RGB timestamp -> raw camera pixel
+        -> prepared-image pixel
+
+Only the geometry the frame's :class:`~contextmap.sensor_association.CandidateGeometryPolicy`
+selects is projected, never necessarily the whole map, so the arrays are indexed by
+*candidate row* and every row carries the global geometry index it came from. A
+reference is therefore always the persistent identity of a map element and never a
+position in an array; see
+``src/contextmap/sensor_association/candidate_selection.py`` for why the step cannot
+change the outcome of a retained element.
 
 The 3D half resolves ``T_map_body(t_rgb)`` from the selected trajectory, the static
 ``T_body_camera`` from the canonical calibration, composes
@@ -24,12 +33,17 @@ else that does not fit together (frames, lineage, calibration, image chain) rais
 
 from __future__ import annotations
 
-import dataclasses
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
+from contextmap.geometric_mapping import (
+    GeometryBlockSource,
+    GeometryReference,
+    MapId,
+    geometry_id_for,
+)
 from contextmap.ingestion import (
     CalibrationEntry,
     CalibrationReferenceId,
@@ -44,8 +58,12 @@ from contextmap.sensor_association.camera_models import (
     CameraProjection,
     camera_projection_for,
 )
+from contextmap.sensor_association.candidate_geometry import (
+    CandidateGeometryPolicy,
+    CandidateGeometryReport,
+    select_candidate_geometry,
+)
 from contextmap.sensor_association.errors import AssociationInputError
-from contextmap.sensor_association.geometry_cloud import GeometryCloud
 from contextmap.sensor_association.image_transform import (
     RawToPreparedTransform,
     raw_to_prepared_transform,
@@ -151,9 +169,11 @@ class AuditedProjection:
 
 @dataclass(frozen=True, kw_only=True, eq=False)
 class FrameProjection:
-    """The projection of every map element for one camera frame.
+    """The projection of one camera frame's candidate map geometry.
 
-    Arrays are indexed like the :class:`GeometryCloud` they were computed from.
+    Arrays are indexed by candidate row. Row ``i`` is the map element
+    ``global_indices[i]``, never element ``i``: use :meth:`map_reference` to name a row
+    and :meth:`rows_for` to find a known map element.
 
     Attributes:
         source_observation_id: The camera frame.
@@ -173,6 +193,10 @@ class FrameProjection:
         in_prepared_image: ``(N,)`` it projects inside the prepared image.
         in_valid_support: ``(N,)`` it also lies on supported pixels (valid region,
             outside every exclusion region).
+        global_indices: ``(N,)`` global index in the map of each row, strictly
+            increasing; the persistent identity culling must never lose.
+        candidates: What the candidate step selected for this frame, and its cost.
+        projection_seconds: Wall-clock time the exact projection of the candidates took.
     """
 
     source_observation_id: SourceObservationId
@@ -191,14 +215,18 @@ class FrameProjection:
     projectable: NDArray[Any]
     in_prepared_image: NDArray[Any]
     in_valid_support: NDArray[Any]
+    global_indices: NDArray[Any]
+    candidates: CandidateGeometryReport
+    projection_seconds: float
 
     def __post_init__(self) -> None:
         """Validate that the arrays describe the same points, stage by stage.
 
         Raises:
-            ValueError: If the shapes disagree, or a later stage holds a point an
-                earlier stage did not (a supported point must be in the image, and an
-                in-image point must be projectable).
+            ValueError: If the shapes disagree, the candidate report does not count these
+                rows, or a later stage holds a point an earlier stage did not (a
+                supported point must be in the image, and an in-image point must be
+                projectable).
         """
         if self.projectable.ndim != 1:
             raise ValueError(f"projectable must have shape (N,), got {self.projectable.shape}")
@@ -214,6 +242,16 @@ class FrameProjection:
             raise ValueError(f"per-point arrays must have shape {vector_shape}")
         if self.raw_pixels.shape != pixel_shape or self.prepared_pixels.shape != pixel_shape:
             raise ValueError(f"pixel arrays must have shape {pixel_shape}")
+        if self.global_indices.shape != vector_shape:
+            raise ValueError(
+                f"there must be one global index per row: {self.global_indices.shape} for "
+                f"{vector_shape}"
+            )
+        if self.candidates.candidate_count != count:
+            raise ValueError(
+                f"the candidate report counts {self.candidates.candidate_count} candidates "
+                f"but {count} rows were projected"
+            )
         if (self.in_prepared_image & ~self.projectable).any():
             raise ValueError("in_prepared_image must imply projectable")
         if (self.in_valid_support & ~self.in_prepared_image).any():
@@ -221,17 +259,59 @@ class FrameProjection:
 
     @property
     def support_indices(self) -> NDArray[Any]:
-        """Positions of the points that landed on supported prepared-image pixels."""
+        """Rows of the points that landed on supported prepared-image pixels."""
         import numpy as np
 
         indices: NDArray[Any] = np.flatnonzero(self.in_valid_support)
         return indices
 
-    def map_reference(self, index: int) -> GeometryReference:
-        """Return the stable reference of the ``index``-th map element."""
+    @property
+    def candidate_count(self) -> int:
+        """Rows this frame evaluated."""
+        return int(self.projectable.shape[0])
+
+    @property
+    def map_point_count(self) -> int:
+        """Elements the whole map holds, of which only the candidates were evaluated."""
+        return self.candidates.map_point_count
+
+    def map_reference(self, row: int) -> GeometryReference:
+        """Return the persistent reference of the map element one row came from.
+
+        Args:
+            row: Position in this projection's arrays, which is **not** a geometry index.
+        """
+        index = int(self.global_indices[row])
         return GeometryReference(
             map_id=self.map_id, geometry_id=geometry_id_for(map_id=self.map_id, index=index)
         )
+
+    def map_references(self, rows: NDArray[Any]) -> tuple[GeometryReference, ...]:
+        """Return the references of the given rows, in the given order."""
+        map_id = self.map_id
+        return tuple(
+            GeometryReference(
+                map_id=map_id, geometry_id=geometry_id_for(map_id=map_id, index=int(index))
+            )
+            for index in self.global_indices[rows]
+        )
+
+    def rows_for(self, global_indices: NDArray[Any]) -> tuple[NDArray[Any], NDArray[Any]]:
+        """Locate map elements in this projection by their global index.
+
+        Returns:
+            ``(rows, found)``: the row of each requested element and whether this frame
+            evaluated it at all. An element the candidate policy excluded is reported as
+            not found, never mapped onto a neighbouring row.
+        """
+        import numpy as np
+
+        wanted = np.asarray(global_indices)
+        count = self.global_indices.shape[0]
+        if count == 0:
+            return np.zeros(wanted.shape, dtype=np.int64), np.zeros(wanted.shape, dtype=bool)
+        rows = np.clip(np.searchsorted(self.global_indices, wanted), 0, count - 1)
+        return rows, self.global_indices[rows] == wanted
 
     def stage_counts(self) -> dict[ProjectionStage, int]:
         """Count the points that ended at each stage; every stage is present."""
@@ -246,7 +326,7 @@ class FrameProjection:
         }
 
     def audit(self, index: int) -> AuditedProjection:
-        """Reconstruct one point's whole chain, for diagnostics and audits."""
+        """Reconstruct one row's whole chain, for diagnostics and audits."""
         if self.in_valid_support[index]:
             stage = ProjectionStage.IN_SUPPORT
         elif self.in_prepared_image[index]:
@@ -278,17 +358,19 @@ def _pixel_or_none(pixel: NDArray[Any]) -> PixelCoordinate | None:
 
 
 class FrameProjector:
-    """Projects the geometry of one map into the camera frames of one sequence.
+    """Projects the candidate geometry of one map into the camera frames of one sequence.
 
-    The constructor fixes what is shared by every frame (map, trajectory, calibration)
-    and rejects a combination whose lineage does not fit; :meth:`project` then handles
-    one observation at a time.
+    The constructor fixes what is shared by every frame (map, candidate policy,
+    trajectory, calibration) and rejects a combination whose lineage does not fit;
+    :meth:`project` then handles one observation at a time, selecting that frame's
+    candidates from the pose it resolved before projecting them.
     """
 
     def __init__(
         self,
         *,
-        cloud: GeometryCloud,
+        geometry: GeometryBlockSource,
+        candidate_policy: CandidateGeometryPolicy,
         trajectory: TrajectoryLookup,
         pose_policy: LookupPolicy,
         calibration: CalibrationSet,
@@ -297,7 +379,8 @@ class FrameProjector:
         """Bind a map, a trajectory and a calibration, validating that they belong together.
 
         Args:
-            cloud: The map geometry.
+            geometry: The block read boundary of the persistent map.
+            candidate_policy: Which geometry each frame evaluates, before projection.
             trajectory: The pose lookup of the selected state-estimation trajectory.
             pose_policy: Which pose lookups are acceptable for an image timestamp.
             calibration: The canonical calibration; it must be the one the map and the
@@ -310,7 +393,7 @@ class FrameProjector:
                 the map, trajectory and calibration do not share the same trajectory,
                 sequence and calibration identity.
         """
-        geometric_map = cloud.geometric_map
+        geometric_map = geometry.geometric_map
         source = trajectory.trajectory
         if source.reference_frame != geometric_map.frame_id:
             raise AssociationInputError(
@@ -339,7 +422,9 @@ class FrameProjector:
                     f"the calibration differs from the one the {owner} used: {recorded} recorded, "
                     f"{identity} given"
                 )
-        self._cloud = cloud
+        self._geometry = geometry
+        self._geometric_map = geometric_map
+        self._candidate_policy = candidate_policy
         self._trajectory = trajectory
         self._policy = pose_policy
         self._calibration = calibration
@@ -348,32 +433,19 @@ class FrameProjector:
         self._graph = StaticFrameGraph.from_calibration(calibration)
         self._cameras: dict[CalibrationReferenceId, CameraProjection] = {}
 
-    def restricted_to(self, indices: NDArray[Any]) -> FrameProjector:
-        """Return a projector over a subset of the map, for pixel-only diagnostics.
-
-        Positions in the result follow ``indices``, not the map, so the geometry references
-        of its projections do not identify map elements; use it only where the pixels matter.
-
-        Args:
-            indices: Positions of the map elements to keep, in the order to keep them.
-
-        Returns:
-            A projector with the same trajectory, policy and calibration.
-        """
-        return FrameProjector(
-            cloud=dataclasses.replace(
-                self._cloud, coordinates_m=self._cloud.coordinates_m[indices]
-            ),
-            trajectory=self._trajectory,
-            pose_policy=self._policy,
-            calibration=self._calibration,
-            state_estimation_run_id=self._run_id,
-        )
+    @property
+    def candidate_policy(self) -> CandidateGeometryPolicy:
+        """Which geometry each frame evaluates."""
+        return self._candidate_policy
 
     def project(
         self, observation: ImageObservation, prepared_image: PreparedImage
     ) -> FrameProjection | RejectedProjection:
-        """Project the whole map into one camera frame.
+        """Select and project one camera frame's candidate map geometry.
+
+        The pose is resolved first, because the camera optical centre it yields is what
+        the candidate policy measures range from; only the selected candidates are then
+        transformed and projected.
 
         Args:
             observation: The RGB observation; its timestamp selects the pose.
@@ -423,8 +495,15 @@ class FrameProjector:
             inner_translation=body_to_camera.translation,
             inner_rotation=body_to_camera.rotation,
         )
+        # A translação composta é o centro óptico no frame do mapa: é dele que a
+        # seleção de candidatos mede o alcance, antes de qualquer projeção exata.
+        selection = select_candidate_geometry(
+            self._geometry, camera_center_m=translation, policy=self._candidate_policy
+        )
+        cloud = selection.cloud
+        started = time.perf_counter()
         # P_camera = R_map_camera^T (P_map - t_map_camera); em linhas, (P - t) @ R.
-        points_camera = (self._cloud.coordinates_m - np.array(translation)) @ np.array(
+        points_camera = (cloud.coordinates_m - np.array(translation)) @ np.array(
             quaternion_to_rotation_matrix(rotation)
         )
         camera = self._camera(entry)
@@ -435,8 +514,8 @@ class FrameProjector:
         return FrameProjection(
             source_observation_id=observation.observation_id,
             image_timestamp=observation.timestamp,
-            map_id=self._cloud.geometric_map.map_id,
-            map_time_bounds=self._cloud.geometric_map.time_bounds,
+            map_id=self._geometric_map.map_id,
+            map_time_bounds=self._geometric_map.time_bounds,
             camera=camera.identity,
             calibration_ref=CalibrationRef(
                 calibration_identity=self._calibration_identity,
@@ -465,6 +544,9 @@ class FrameProjector:
             projectable=projected.projectable,
             in_prepared_image=in_image,
             in_valid_support=in_support,
+            global_indices=cloud.global_indices,
+            candidates=selection.report,
+            projection_seconds=time.perf_counter() - started,
         )
 
     def _camera_entry(self, observation: ImageObservation) -> tuple[CalibrationEntry, CameraModel]:

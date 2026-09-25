@@ -1,16 +1,19 @@
 # Cadeia de projeção mapa → câmera → imagem preparada
 
-Este documento descreve `geometry_cloud.py`, `image_transform.py` e `frame_projection.py`.
+Este documento descreve `candidate_geometry.py`, `image_transform.py` e `frame_projection.py`.
 
 Para cada observação RGB, o `FrameProjector` executa o caminho determinístico completo:
 
 ```mermaid
 flowchart LR
-    P["P_map<br/>(GeometryCloud)"] --> C["P_camera<br/>em t_rgb"]
+    SRC["GeometryBlockSource<br/>(mapa persistente)"] --> SEL["seleção de candidatos<br/>(CandidateGeometryPolicy)"]
+    SEL --> P["P_map<br/>(CandidateGeometryCloud)"]
+    P --> C["P_camera<br/>em t_rgb"]
     C --> R["pixel cru<br/>(modelo de câmera)"]
     R --> Q["pixel preparado<br/>(cadeia recortar/redimensionar)"]
     Q --> S["suporte<br/>(região válida, exclusões)"]
     POSE["T_map_body(t_rgb)<br/>(TrajectoryLookup)"] --> C
+    POSE --> SEL
     EXT["T_body_camera<br/>(calibração estática)"] --> C
     REC["PreparedImage.transformations<br/>(Visual Perception)"] --> Q
 ```
@@ -24,7 +27,23 @@ Esta etapa **só posiciona** os pontos. Ela não decide oclusão, não escolhe r
 3. Compõe-se `T_map_camera = T_map_body · T_body_camera` e leva-se cada coordenada autoritativa do mapa ao frame óptico: `P_camera = R_map_cameraᵀ (P_map − t_map_camera)`, vetorizado sobre todos os pontos.
 4. O `CameraProjection` declarado pela calibração projeta (ver [`camera_models.md`](camera_models.md)).
 
-`GeometryCloud.from_source(source)` lê o mapa **uma vez**, pela porta `GeometrySource`, para um array de coordenadas no frame do mapa. Só a coordenada autoritativa é guardada: a referência de cada ponto é recalculada da posição (`geometry_id_for(map_id, index)`), o que é correto porque a identidade do mapa é posicional e o carregador **verifica** isso; uma fonte com identidades não posicionais, com outro número de pontos que o declarado, ou com pontos de outro mapa ou frame, é recusada.
+## Seleção de candidatos
+
+Projetar o mapa inteiro em cada frame é correto, mas não escala: no mapa real de corridor-02 (26,63 M pontos) custava ~1,17 GB de arrays retidos e ~12 s por frame, e **nenhuma** geometria que virou evidência estava a mais de 5,5 m da câmera — indoor, a oclusão descarta tudo além da primeira superfície muito antes do alcance.
+
+Por isso, antes de qualquer projeção exata, `select_candidate_geometry()` escolhe o que o frame avalia:
+
+1. a translação de `T_map_camera` é o **centro óptico** no frame do mapa;
+2. a `CandidateGeometryPolicy` declara `max_range_m`, e a caixa alinhada aos eixos que envolve a esfera de raio `max_range_m` vai à porta `GeometryBlockSource.iter_blocks(bounds=)` de Geometric Mapping (ver [`spatial-access.md`](../../geometric_mapping/docs/spatial-access.md));
+3. cada bloco é reduzido pelo teste **exato** `‖P − C‖ ≤ max_range_m`.
+
+A região de candidatos é a **esfera**, nunca a caixa com que a consulta é expressa. É isso que torna o passo seguro para oclusão: todo elemento excluído está estritamente **mais longe** da câmera que todo elemento retido, então um excluído nunca poderia ter sido o suporte de profundidade mais próximo de um retido. Para todo elemento retido, portanto, projeção, pixel, suporte, decisão de oclusão, pertencimento e suporte geométrico são exatamente o que a projeção do mapa inteiro produziria. A única diferença **declarada** é a população avaliada: elementos além de `max_range_m` não são avaliados, e as contagens por frame dizem isso. Uma caixa alinhada aos eixos não teria essa propriedade — um ponto logo fora de uma face está mais perto que um dentro de um canto —, e é por isso que a caixa só decide o que é **lido**.
+
+`max_range_m = None` seleciona o mapa inteiro e é exatamente o comportamento anterior; é o braço de baseline com que a equivalência é comparada, e é o padrão do runtime (`policies.association_max_range_m`), de modo que habilitar o corte é sempre uma decisão deliberada e registrada.
+
+### Identidade é global, nunca a linha
+
+Um `CandidateGeometryCloud` carrega `coordinates_m[N,3]` **e** `global_indices[N]`: a linha `i` é o elemento `global_indices[i]`, nunca o elemento `i`. `FrameProjection.map_reference(row)` resolve a identidade persistente pelo índice global, e `rows_for(global_indices)` faz o caminho inverso, reportando explicitamente a geometria que a política não avaliou em vez de mapeá-la para uma linha vizinha. Os três lugares que persistiam a posição local como se fosse identidade global — `outputs/geometry-support.u32`, os `eligible_indices` das amostras densas e a coluna `geometry_index` do CSV de debug — gravam o índice global.
 
 ## Cadeia 2D
 

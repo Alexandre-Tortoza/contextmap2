@@ -58,7 +58,7 @@ tempo, reprojeção e caminhos de features. Está implementada em
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
 
-A cadeia de projeção e os passos intermediários (`GeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`, `FrameDiagnostics`) são internos à capability: os consumidores externos usam o serviço de associação e leem o artifact, não os passos.
+A cadeia de projeção e os passos intermediários (`CandidateGeometryCloud`, `RawToPreparedTransform`, `FrameProjector`, `FrameProjection`, `VisibilityResolution`, `FrameMembership`, `DenseFeatureSamples`, `FrameDiagnostics`) são internos à capability: os consumidores externos usam o serviço de associação e leem o artifact, não os passos.
 
 ## Módulos consumidos
 

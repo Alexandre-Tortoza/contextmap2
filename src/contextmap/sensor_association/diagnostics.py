@@ -170,7 +170,8 @@ class TrustedCorrespondences:
 
     Attributes:
         reference_id: Identity of the trusted correspondence set.
-        geometry_indices: ``(K,)`` positions of the map geometry elements.
+        geometry_indices: ``(K,)`` global indices of the map geometry elements, the same
+            identity :func:`~contextmap.geometric_mapping.geometry_id_for` uses.
         observed_pixels: ``(K, 2)`` raw-image pixels where each element was observed.
     """
 
@@ -211,33 +212,41 @@ def reprojection_statistics(
     cannot project is counted as invalid and contributes no residual. The 95th percentile uses
     linear interpolation between order statistics.
 
+    A correspondence names geometry by its **global** map index, so it is looked up in the
+    frame's candidate rows rather than used as one: geometry the frame's candidate policy
+    did not select is reported as unevaluated and contributes no residual.
+
     Args:
-        frame: The projection of the map for one camera frame.
+        frame: The projection of one camera frame's candidate geometry.
         correspondences: The trusted reference.
 
     Returns:
         The statistics, or ``None`` when no correspondence could be projected.
 
     Raises:
-        ValueError: If a correspondence names geometry outside the projected map.
+        ValueError: If a correspondence names geometry outside the map.
     """
     import numpy as np
 
     indices = correspondences.geometry_indices
-    if indices.min() < 0 or indices.max() >= len(frame.projectable):
+    if indices.min() < 0 or indices.max() >= frame.map_point_count:
         raise ValueError(
-            f"geometry_indices must lie within the {len(frame.projectable)} projected elements"
+            f"geometry_indices must lie within the map's {frame.map_point_count} elements"
         )
-    valid = frame.projectable[indices]
+    count = int(indices.shape[0])
+    rows, evaluated = frame.rows_for(indices)
+    valid = np.zeros(count, dtype=bool)
+    valid[evaluated] = frame.projectable[rows[evaluated]]
     valid_count = int(valid.sum())
     if valid_count == 0:
         return None
-    projected = frame.raw_pixels[indices][valid]
+    projected = frame.raw_pixels[rows[valid]]
     residuals = np.hypot(*(projected - correspondences.observed_pixels[valid]).T)
     return ReprojectionStatistics(
         reference_id=correspondences.reference_id,
-        correspondence_count=int(indices.shape[0]),
-        invalid_count=int(indices.shape[0]) - valid_count,
+        correspondence_count=count,
+        invalid_count=int((evaluated & ~valid).sum()),
+        unevaluated_count=count - int(evaluated.sum()),
         mean_px=float(residuals.mean()),
         median_px=float(np.median(residuals)),
         p95_px=float(np.percentile(residuals, 95)),
@@ -623,9 +632,12 @@ def time_offset_sweep(
 ) -> tuple[TimeOffsetOutcome, ...]:
     """Measure the reprojection residual as the frame timestamp is shifted, for diagnosis only.
 
-    Each offset re-projects the reference geometry with the pose looked up at the shifted
-    timestamp. The observation, the calibration and every timestamp are left untouched; the
-    sweep only reports, and choosing to act on it is a separate, explicit decision.
+    Each offset re-projects the frame with the pose looked up at the shifted timestamp and
+    measures the residual of the reference against it. The observation, the calibration and
+    every timestamp are left untouched; the sweep only reports, and choosing to act on it is
+    a separate, explicit decision. Each offset selects its own candidates, because a shifted
+    pose moves the camera, so a reference whose geometry falls outside the candidate policy
+    at some offset is reported as unevaluated there.
 
     Args:
         projector: The projector of the map, trajectory and calibration.
@@ -637,20 +649,12 @@ def time_offset_sweep(
     Returns:
         One outcome per offset, in the given order.
     """
-    import numpy as np
-
-    restricted = projector.restricted_to(correspondences.geometry_indices)
-    local = TrustedCorrespondences(
-        reference_id=correspondences.reference_id,
-        geometry_indices=np.arange(correspondences.geometry_indices.shape[0]),
-        observed_pixels=correspondences.observed_pixels,
-    )
     outcomes: list[TimeOffsetOutcome] = []
     for offset in offsets_ns:
         shifted = dataclasses.replace(
             observation, timestamp=_shifted(observation.timestamp, offset)
         )
-        result = restricted.project(shifted, prepared_image)
+        result = projector.project(shifted, prepared_image)
         if isinstance(result, RejectedProjection):
             outcomes.append(
                 TimeOffsetOutcome(offset_ns=offset, statistics=None, rejection=result.rejection)
@@ -659,7 +663,7 @@ def time_offset_sweep(
             outcomes.append(
                 TimeOffsetOutcome(
                     offset_ns=offset,
-                    statistics=reprojection_statistics(result, local),
+                    statistics=reprojection_statistics(result, correspondences),
                     rejection=None,
                 )
             )

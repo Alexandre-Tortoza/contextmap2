@@ -11,6 +11,7 @@ from perception_builders import make_claim, make_feature, make_region, make_resu
 from projection_builders import (
     IDENTITY,
     SEQUENCE_ID,
+    UNBOUNDED_CANDIDATES,
     ArrayGeometrySource,
     make_calibration,
     make_camera_observation,
@@ -21,6 +22,7 @@ from projection_builders import (
 )
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.sensor_association.candidate_geometry import CandidateGeometryPolicy
 from contextmap.sensor_association.dense_sampling import InterpolationPolicy
 from contextmap.sensor_association.diagnostics import DiagnosticTolerances, TrustedCorrespondences
 from contextmap.sensor_association.service import (
@@ -135,6 +137,7 @@ def make_request(
     channels: Sequence[DenseChannel] = (),
     occlusion: OcclusionPolicy = OCCLUSION,
     pose_policy: LookupPolicy | None = None,
+    candidates: CandidateGeometryPolicy = UNBOUNDED_CANDIDATES,
 ) -> SensorAssociationRequest:
     calibration = make_calibration()
     source = ArrayGeometrySource(
@@ -151,6 +154,7 @@ def make_request(
         trajectory=make_lookup(trajectory),
         pose_policy=pose_policy if pose_policy is not None else LookupPolicy.exact(),
         calibration=calibration,
+        candidate_policy=candidates,
         occlusion_policy=occlusion,
         tolerances=TOLERANCES,
         dense_channels=tuple(channels),

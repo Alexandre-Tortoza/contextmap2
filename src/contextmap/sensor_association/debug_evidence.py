@@ -61,7 +61,7 @@ def write_full_debug(run: AtomicRunDirectory, outcome: SensorAssociationOutcome)
         for channel_id, samples in frame.dense_samples.items():
             run.write_text(
                 f"{directory}/dense-sampling-{channel_id}.csv",
-                _dense_csv(samples),
+                _dense_csv(samples, frame.resolution.frame.global_indices),
                 contractual=False,
             )
             sources.append(
@@ -80,7 +80,7 @@ def write_full_debug(run: AtomicRunDirectory, outcome: SensorAssociationOutcome)
 
 
 def _point_states(frame: FrameAssociation) -> dict[int, str]:
-    """State name of every point that reached the prepared image."""
+    """State name of every candidate row that reached the prepared image."""
     import numpy as np
 
     projection = frame.resolution.frame
@@ -102,12 +102,14 @@ def _samples_csv(frame: FrameAssociation, states: dict[int, str]) -> str:
     projection = frame.resolution.frame
     resolution = frame.resolution
     lines = ["geometry_index,state,prepared_u,prepared_v,depth_m,support_depth_m,regions"]
-    for index, state in states.items():
-        u, v = projection.prepared_pixels[index]
-        regions = ";".join(str(region) for region in frame.membership.regions_of(index))
+    for row, state in states.items():
+        u, v = projection.prepared_pixels[row]
+        regions = ";".join(str(region) for region in frame.membership.regions_of(row))
+        # A coluna nomeia a geometria persistente, não a linha do array de candidatos.
+        index = int(projection.global_indices[row])
         lines.append(
-            f"{index},{state},{float(u)!r},{float(v)!r},{float(resolution.depth_m[index])!r},"
-            f"{float(resolution.support_depth_m[index])!r},{regions}"
+            f"{index},{state},{float(u)!r},{float(v)!r},{float(resolution.depth_m[row])!r},"
+            f"{float(resolution.support_depth_m[row])!r},{regions}"
         )
     return "\n".join(lines) + "\n"
 
@@ -177,13 +179,13 @@ def _overlay_png(frame: FrameAssociation, states: dict[int, str]) -> bytes:
     return _encode_png(canvas)
 
 
-def _dense_csv(samples: Any) -> str:
+def _dense_csv(samples: Any, global_indices: NDArray[Any]) -> str:
     terms = samples.cell_rows.shape[1]
     header = "geometry_index,sampled," + ",".join(
         f"cell{t}_row,cell{t}_col,cell{t}_weight" for t in range(terms)
     )
     lines = [header]
-    for slot, index in enumerate(samples.eligible_indices.tolist()):
+    for slot, index in enumerate(global_indices[samples.eligible_indices].tolist()):
         cells = ",".join(
             f"{int(samples.cell_rows[slot, t])},{int(samples.cell_cols[slot, t])},"
             f"{float(samples.weights[slot, t])!r}"
