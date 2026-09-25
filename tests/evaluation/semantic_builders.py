@@ -8,6 +8,7 @@ from typing import Any
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     PerceptionResultId,
     RegionId,
@@ -78,7 +79,7 @@ def execution(
     is_scene = mode is SemanticInterpretationMode.SCENE
     kind = view_kind or (VisualViewKind.FULL_FRAME if is_scene else VisualViewKind.TIGHT_CROP)
     region_id = None if is_scene else RegionId(region or "region-1")
-    default_template = SemanticPromptTemplate.default_for(mode)
+    default_template = SEMANTIC_PROMPT_TEMPLATES[f"{mode.value}/v1"]
     request = SemanticInterpretationRequest(
         request_id=SemanticRequestId(request_id),
         source_observation_id=SourceObservationId(frame),

@@ -203,10 +203,12 @@ from contextmap.visual_perception.semantic_backend import (
     semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
+    SEMANTIC_PROMPT_TEMPLATES,
     ParsedSemanticResponse,
     RenderedSemanticPrompt,
     SemanticConfidencePolicy,
     SemanticParseDiagnostic,
+    SemanticPromptPolicy,
     SemanticPromptTemplate,
     SemanticResponseParseError,
     parse_semantic_response,
@@ -250,6 +252,7 @@ __all__ = [
     "MASK_INDEX_SCHEMA_VERSION",
     "POOLING_POLICY",
     "SEMANTIC_DEBUG_ROOT",
+    "SEMANTIC_PROMPT_TEMPLATES",
     "ArtifactReference",
     "BackendDiagnostics",
     "BackendProvenance",
@@ -358,6 +361,7 @@ __all__ = [
     "SemanticInterpreterCapabilities",
     "SemanticParseDiagnostic",
     "SemanticParseFailure",
+    "SemanticPromptPolicy",
     "SemanticPromptTemplate",
     "SemanticRegionKind",
     "SemanticRequestId",

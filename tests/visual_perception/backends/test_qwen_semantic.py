@@ -2,12 +2,14 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     BoundingBox2D,
     PerceptionResultId,
@@ -17,6 +19,7 @@ from contextmap.visual_perception import (
     PipelinePreset,
     Region2D,
     RegionId,
+    SemanticConfidencePolicy,
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -27,6 +30,7 @@ from contextmap.visual_perception import (
     VisualViewKind,
     assemble_perception_result,
     execute_stage_graph,
+    render_semantic_prompt,
     resolve_pipeline,
 )
 from contextmap.visual_perception.backends.qwen import (
@@ -126,6 +130,57 @@ def test_qwen_maps_request_and_returns_canonical_unscored_claim() -> None:
     assert (
         adapter.backend_provenance().configuration_fingerprint == adapter.configuration_fingerprint
     )
+
+
+def _cpu_adapter(runtime: _FakeQwenRuntime) -> QwenSemanticInterpreter:
+    return QwenSemanticInterpreter(
+        config=QwenSemanticConfig(
+            model="Qwen/Qwen2.5-VL-3B-Instruct",
+            device="cpu",
+            precision="float32",
+            max_new_tokens=32,
+            temperature=0.0,
+        ),
+        runtime=runtime,
+    )
+
+
+def test_qwen_consumes_exactly_the_prompt_policy_the_request_selects() -> None:
+    """#542: a non-canonical policy reaches the model; nothing falls back to ``region/v1``."""
+    runtime = _FakeQwenRuntime()
+    adapter = _cpu_adapter(runtime)
+    request = replace(_request(adapter), prompt_template_id="region-abstention/v1")
+
+    execution = adapter.interpret(request)
+
+    expected = render_semantic_prompt(
+        request,
+        SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"],
+        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+    )
+    assert runtime.calls[0][1] == expected.text
+    assert execution.rendered_prompt == expected
+    assert execution.parsed.claims[0].provenance.prompt_template_id == "region-abstention/v1"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"prompt_template_id": "region/v9"}, "unknown semantic prompt template 'region/v9'"),
+        ({"prompt_template_id": "scene/v1"}, "mode must match"),
+        ({"requested_output_schema": "semantic-response/2"}, "schema must match"),
+    ],
+)
+def test_qwen_refuses_a_prompt_policy_it_cannot_render_before_inference(
+    changes: dict[str, str], message: str
+) -> None:
+    runtime = _FakeQwenRuntime()
+    adapter = _cpu_adapter(runtime)
+
+    with pytest.raises(ValueError, match=message):
+        adapter.interpret(replace(_request(adapter), **changes))  # type: ignore[arg-type]
+
+    assert runtime.calls == []
 
 
 def test_qwen_configuration_rejects_ambiguous_generation_settings() -> None:

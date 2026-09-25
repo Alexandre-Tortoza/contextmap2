@@ -118,10 +118,60 @@ apenas torna explícita a entrada que eles recebem.
 ## Prompt e parsing versionados
 
 `SemanticPromptTemplate` identifica de forma inseparável o texto de instrução,
-o modo (`SCENE`/`REGION`) e o schema de saída. Os defaults `scene/v1` e
-`region/v1` produzem um `RenderedSemanticPrompt` determinístico, incluindo um
+o modo (`SCENE`/`REGION`) e o schema de saída. As políticas canônicas `scene/v1`
+e `region/v1` produzem um `RenderedSemanticPrompt` determinístico, incluindo um
 fingerprint SHA-256 do texto efetivo. Template, modo e schema devem coincidir
 com o request antes da renderização.
+
+### Política de prompt explícita (#542)
+
+A política de prompt é uma entrada da execução, selecionada antes da inferência;
+nenhum backend escolhe o prompt. Isso permite uma ablação controlada (mesma
+observação, região, views, modelo e configuração; só a política muda) sem editar
+código nem criar comportamento específico de backend.
+
+- **Catálogo versionado.** `SEMANTIC_PROMPT_TEMPLATES` é o catálogo fechado e
+  imutável de templates de instrução, indexado pela identidade de cada um.
+  `scene/v1` e `region/v1` são as políticas canônicas. `region-abstention/v1` é
+  uma alternativa **não canônica e não avaliada**: varia só a instrução de
+  abstenção em relação a `region/v1` e existe para que a seleção seja exercitável
+  ponta a ponta; as famílias reais de prompt são avaliadas em #525. Uma identidade
+  nomeia exatamente um texto de instrução e um schema de saída: uma política nova
+  é uma entrada nova, nunca a edição de uma existente.
+- **O request seleciona.** `SemanticInterpretationRequest.prompt_template_id` é a
+  seleção. Qwen e Gemini renderizam exatamente o template do catálogo com essa
+  identidade e entregam ao modelo exatamente esse texto. Não existe mais
+  `SemanticPromptTemplate.default_for()` nem padrão interno de backend.
+  Identidade desconhecida, modo divergente ou `requested_output_schema` diferente
+  do schema do template falham com `ValueError` antes de qualquer chamada ao
+  modelo ou provider.
+- **Schema explícito.** `SemanticPromptTemplate` só aceita
+  `output_schema_version="semantic-response/1"`, o único schema que o renderer e
+  o parser implementam: um template não pode prometer ao modelo um contrato que
+  ninguém analisa. Prompt e parser continuam separados; o parser não conhece a
+  política que produziu a resposta.
+- **Evidência coerente.** `RenderedSemanticPrompt` recusa um `fingerprint` que não
+  seja o SHA-256 do próprio `text`, e `SemanticInterpretationExecution`/
+  `FailedSemanticInterpretation` recusam um prompt renderizado cujo `template_id`
+  ou `output_schema_version` difira do que o request selecionou. Nenhum adapter,
+  atual ou futuro, consegue publicar evidência que afirme a política pedida tendo
+  renderizado outra, e o prompt consumido é reconstruível do próprio registro da
+  execução (`rendered_prompt.text`, também quando o parser rejeita a resposta).
+- **Seleção por configuração.** `SemanticPromptPolicy(scene=..., region=...)` é a
+  seleção declarativa por modo que uma execução configura para um interpretador
+  que segue instruções; cada identidade é validada contra o catálogo e o modo. O
+  runtime a lê do grupo reservado obrigatório `prompt_policy` da configuração do
+  backend (ver [composição do runtime](../../runtime/docs/composition.md#política-de-prompt-semântico-542)),
+  então ela entra na configuração efetiva, no seu digest e na identidade do
+  estágio `visual_perception`, independentemente do backend, das configurações de
+  geração e das views.
+- **Florence-2 é nativo da task.** Ele não consome templates livres; sua política
+  é o prompt da task ([abaixo](#decisão-de-design-task-token-versus-json-canônico)).
+
+Renderizar a mesma política para o mesmo request é determinístico (JSON com
+chaves ordenadas), e `region/v1`/`scene/v1` continuam produzindo exatamente os
+mesmos bytes de antes de se tornarem políticas explícitas: um teste fixa os
+fingerprints renderizados.
 
 `parse_semantic_response()` aceita somente o objeto JSON do schema
 `semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
@@ -237,8 +287,9 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
   pela revisão).
 - **Evidência e prompt.** As views chegam como imagens, na ordem do request,
-  seguidas do prompt canônico renderizado (`region/v1` ou `scene/v1`). O runtime
-  não acrescenta instrução própria. As referências são resolvidas dentro de
+  seguidas do prompt renderizado da política que o request seleciona
+  (`region/v1`, `scene/v1` ou outra entrada do catálogo). O runtime não acrescenta
+  instrução própria. As referências são resolvidas dentro de
   `view_root` e não podem escapar dele, e cada imagem é decodificada dos bytes
   cujo SHA-256 foi verificado contra `SemanticVisualView.sha256`
   ([Integridade das views](#integridade-das-views-na-inferência)).
@@ -255,8 +306,8 @@ parsing.
 
 ## Adapter Gemini
 
-`GeminiSemanticInterpreter` usa o mesmo request, template e parser do adapter
-local. `GeminiSemanticConfig` contém somente model, timeout, retries e settings
+`GeminiSemanticInterpreter` usa o mesmo request, a mesma política de prompt
+selecionada pelo request e o mesmo parser do adapter local. `GeminiSemanticConfig` contém somente model, timeout, retries e settings
 de geração/raciocínio; credenciais pertencem ao `GeminiClient` injetado e nunca
 entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
 limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
@@ -264,8 +315,8 @@ erro explícito, sem substituição por outro backend. Usage, latência, warning
 identidade do provider permanecem auditáveis.
 
 `GeminiSemanticConfig` também registra `structured_output` (pede
-`response_mime_type=application/json`; o schema continua no prompt canônico
-versionado, porque a API aceita só um subconjunto de JSON Schema e não há como
+`response_mime_type=application/json`; o schema continua no prompt renderizado
+da política versionada, porque a API aceita só um subconjunto de JSON Schema e não há como
 validá-lo sem chamada real) e `retry_backoff_s`, a base do backoff exponencial
 entre tentativas (tentativa `n` espera `retry_backoff_s * 2**(n-1)`, limitada a
 60 s). Sem `retry_wait` injetado, o adapter dorme esse tempo, para que um 429
@@ -287,7 +338,7 @@ podem sair da máquina.
   poderia ecoar a chave. Nada da credencial entra no fingerprint, na
   configuração efetiva, nos outputs nem no debug.
 - **Requisição.** As views seguem em ordem como partes inline (`png`, `jpeg` ou
-  `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
+  `webp`, pelo sufixo do payload), depois o prompt renderizado. `temperature`,
   `thinking_budget`, `structured_output` e o timeout por tentativa
   (`timeout_s`, em milissegundos no SDK) vêm da configuração.
 - **Views verificadas antes do envio.** O cliente lê e confere o SHA-256 de todas
@@ -321,7 +372,9 @@ quando ambos compartilham lifecycle/modelo no composition root. Sua
 `Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
 suportados, device, precision e geração. A task e o mode entram em
 `task_identity`; checkpoint, revisão e configuração entram na provenance e no
-fingerprint. A saída passa pelo mesmo parser canônico com `UNSCORED_ONLY`.
+fingerprint. A task também é a política de prompt (`prompt_template_id`
+`florence2-task-prompt/1:<task>`). A saída passa pelo mesmo parser canônico com
+`UNSCORED_ONLY`.
 
 ### Decisão de design: task token versus JSON canônico
 
@@ -348,11 +401,20 @@ algo que o modelo entenda. A decisão foi:
    `raw_response_sha256` referem-se ao texto nativo da task; o envelope é
    reconstruível pela política e sua aplicação fica registrada no diagnostic
    `wrapped_task_text` do parsing.
-4. **O prompt canônico não é input do modelo.** Ele continua renderizado no
-   `SemanticInterpretationExecution` (o request o exige), mas o modelo recebe só
-   o task token e a imagem. Um warning constante em cada execução registra isso,
-   para que o fingerprint do prompt não sugira uma instrução que o Florence-2
-   nunca viu.
+4. **O prompt registrado é o prompt consumido (#542).** A política de prompt do
+   Florence-2 é nativa da task (`florence2-task-prompt/1`): o input do modelo é o
+   task token configurado, mais a caixa da view inteira nas tasks de região. O
+   adapter expõe essa identidade em `prompt_template_id`
+   (`florence2-task-prompt/1:<task>`, por exemplo
+   `florence2-task-prompt/1:<REGION_TO_CATEGORY>`); todo request precisa nomeá-la,
+   e o `RenderedSemanticPrompt` da execução registra exatamente o texto entregue ao
+   runtime, com o fingerprint desse texto. Um request que nomeie um template livre
+   (`region/v1`, `region-abstention/v1`, ...) é recusado antes da inferência, em
+   vez de o template ser registrado como se o Florence-2 o tivesse visto; o
+   runtime também recusa `prompt_policy` na configuração do Florence-2. Antes de
+   #542 o adapter renderizava `region/v1`/`scene/v1` só como contrato de resposta,
+   com um warning constante dizendo que aquilo não era input do modelo: numa
+   ablação de prompt, o Florence-2 pareceria variar um input que nunca recebe.
 5. **Tasks declaradas.** `FLORENCE2_SEMANTIC_TASKS` lista as tasks de texto:
    `<CAPTION>`, `<DETAILED_CAPTION>` e `<MORE_DETAILED_CAPTION>` (modo `scene`,
    view `FULL_FRAME`) e `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>` (modo

@@ -1,12 +1,16 @@
 """Contract tests for the Gemini semantic interpreter adapter (fake client, no provider)."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     PerceptionResultId,
+    RegionId,
+    SemanticConfidencePolicy,
     SemanticInterpretationFailedError,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -14,6 +18,7 @@ from contextmap.visual_perception import (
     SemanticRequestId,
     SemanticVisualView,
     VisualViewKind,
+    render_semantic_prompt,
 )
 from contextmap.visual_perception.backends import gemini
 from contextmap.visual_perception.backends.gemini import (
@@ -63,10 +68,12 @@ class _Client:
         self.text = text
         self.calls = 0
         self.received_views: list[object] = []
+        self.prompts: list[object] = []
 
     def generate(self, **kwargs: object) -> GeminiProviderResponse:
         self.calls += 1
         self.received_views.append(kwargs["visual_views"])
+        self.prompts.append(kwargs["prompt"])
         if self.terminal is not None:
             raise self.terminal
         if self.calls <= self.failures:
@@ -118,6 +125,64 @@ def _request(adapter: GeminiSemanticInterpreter) -> SemanticInterpretationReques
         requested_output_schema="semantic-response/1",
         configuration_fingerprint=adapter.configuration_fingerprint,
     )
+
+
+def _region_request(adapter: GeminiSemanticInterpreter) -> SemanticInterpretationRequest:
+    region = RegionId("region-0003")
+    return replace(
+        _request(adapter),
+        request_id=SemanticRequestId("region-0003"),
+        mode=SemanticInterpretationMode.REGION,
+        region_id=region,
+        visual_views=(
+            SemanticVisualView(
+                view_id="tight",
+                kind=VisualViewKind.TIGHT_CROP,
+                payload_reference="outputs/semantic-views/tight.jpg",
+                source_observation_id=SourceObservationId("frame-0001"),
+                region_id=region,
+                sha256="0" * 64,
+            ),
+        ),
+        prompt_template_id="region-abstention/v1",
+    )
+
+
+def test_gemini_consumes_exactly_the_prompt_policy_the_request_selects() -> None:
+    """#542: the same backend-neutral policy Qwen renders, never an internal default."""
+    client = _Client(text=json.dumps({"abstained": True, "claims": [], "scene_context": None}))
+    adapter = _adapter(client)
+    request = _region_request(adapter)
+
+    execution = adapter.interpret(request)
+
+    expected = render_semantic_prompt(
+        request,
+        SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"],
+        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+    )
+    assert client.prompts == [expected.text]
+    assert execution.rendered_prompt == expected
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"prompt_template_id": "scene/v9"}, "unknown semantic prompt template 'scene/v9'"),
+        ({"prompt_template_id": "region/v1"}, "mode must match"),
+        ({"requested_output_schema": "semantic-response/2"}, "schema must match"),
+    ],
+)
+def test_gemini_refuses_a_prompt_policy_it_cannot_render_before_calling_the_provider(
+    changes: dict[str, str], message: str
+) -> None:
+    client = _Client()
+    adapter = _adapter(client)
+
+    with pytest.raises(ValueError, match=message):
+        adapter.interpret(replace(_request(adapter), **changes))  # type: ignore[arg-type]
+
+    assert client.calls == 0
 
 
 def test_gemini_retries_transient_failure_and_preserves_usage() -> None:

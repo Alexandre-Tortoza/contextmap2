@@ -1,11 +1,14 @@
 """Tests for versioned semantic prompts and strict structured parsing."""
 
+import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     HypothesisRole,
     ParsedSemanticResponse,
@@ -16,6 +19,7 @@ from contextmap.visual_perception import (
     SemanticInferenceProvenance,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
+    SemanticPromptPolicy,
     SemanticPromptTemplate,
     SemanticRequestId,
     SemanticRequestMetadata,
@@ -95,35 +99,134 @@ def _parse(
 
 def test_prompt_rendering_is_deterministic_and_version_distinguishable() -> None:
     request = _request(SemanticInterpretationMode.REGION)
-    v1 = SemanticPromptTemplate.default_for(request.mode)
-    v2 = SemanticPromptTemplate(
-        template_id="region/v2",
-        mode=SemanticInterpretationMode.REGION,
-        output_schema_version="semantic-response/1",
-        instructions="Describe only the visible region.",
-    )
+    v1 = SEMANTIC_PROMPT_TEMPLATES["region/v1"]
+    alternative = SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"]
 
     first = _render(request, v1)
     second = _render(request, v1)
-    changed = _render(
-        SemanticInterpretationRequest(**{**request.__dict__, "prompt_template_id": "region/v2"}),
-        v2,
-    )
+    changed = _render(replace(request, prompt_template_id="region-abstention/v1"), alternative)
 
     assert first == second
     assert first.fingerprint != changed.fingerprint
+    assert changed.template_id == "region-abstention/v1"
+    assert changed.output_schema_version == first.output_schema_version
     assert request.request_id in first.text
     assert "semantic-response/1" in first.text
 
 
-def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
-    region_request = SemanticInterpretationRequest(
-        **{
-            **_request(SemanticInterpretationMode.REGION).__dict__,
-            "supporting_metadata": (SemanticRequestMetadata(name="camera_height_m", value=1.2),),
-        }
+def test_canonical_policies_render_byte_for_byte_as_before_they_became_explicit() -> None:
+    """#542: ``region/v1``/``scene/v1`` left a hidden default for the explicit catalog.
+
+    The fingerprints were rendered by the pre-#542 ``SemanticPromptTemplate.default_for()``;
+    moving the canonical policies into the catalog must not change a single byte of them.
+    """
+    region = _render(
+        _request(SemanticInterpretationMode.REGION), SEMANTIC_PROMPT_TEMPLATES["region/v1"]
     )
-    region_prompt = _render(region_request, SemanticPromptTemplate.default_for(region_request.mode))
+    scene = _render(
+        _request(SemanticInterpretationMode.SCENE), SEMANTIC_PROMPT_TEMPLATES["scene/v1"]
+    )
+
+    assert region.fingerprint == (
+        "sha256:47703b45c13d8fd3f5a7e4edb85a8fc470e9c75ad96a527dfeda6c1c89a0766d"
+    )
+    assert scene.fingerprint == (
+        "sha256:920a9c590207b8c3e7877e360f5097bbaf3f9f7fb0d5a9971bc6cb3f4df52644"
+    )
+
+
+def test_a_published_policy_identity_keeps_its_content() -> None:
+    """An edited instruction is a new policy with a new identity, never the same one."""
+    request = replace(
+        _request(SemanticInterpretationMode.REGION), prompt_template_id="region-abstention/v1"
+    )
+
+    rendered = _render(request, SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"])
+
+    assert rendered.fingerprint == (
+        "sha256:55ebbed97b77f2d89f4e8243ce885cc902f2cd8ece736f25f525d636fbca7766"
+    )
+
+
+def test_the_catalog_keys_every_template_by_its_own_versioned_identity() -> None:
+    assert {"scene/v1", "region/v1", "region-abstention/v1"} <= set(SEMANTIC_PROMPT_TEMPLATES)
+    for template_id, template in SEMANTIC_PROMPT_TEMPLATES.items():
+        assert template.template_id == template_id
+        assert template.output_schema_version == "semantic-response/1"
+
+
+def test_a_prompt_policy_selects_one_catalog_template_per_mode() -> None:
+    policy = SemanticPromptPolicy(scene="scene/v1", region="region-abstention/v1")
+
+    assert (
+        policy.template_for(SemanticInterpretationMode.SCENE)
+        is SEMANTIC_PROMPT_TEMPLATES["scene/v1"]
+    )
+    assert (
+        policy.template_for(SemanticInterpretationMode.REGION)
+        is SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("scene", "region", "message"),
+    [
+        ("scene/v9", "region/v1", "unknown semantic prompt template 'scene/v9'"),
+        ("scene/v1", "region/v9", "unknown semantic prompt template 'region/v9'"),
+        ("region/v1", "region/v1", "scene prompt policy 'region/v1' is a region template"),
+        ("scene/v1", "scene/v1", "region prompt policy 'scene/v1' is a scene template"),
+    ],
+)
+def test_a_prompt_policy_refuses_an_unknown_or_cross_mode_template(
+    scene: str, region: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SemanticPromptPolicy(scene=scene, region=region)
+
+
+def test_a_template_must_declare_the_output_schema_the_renderer_and_parser_implement() -> None:
+    with pytest.raises(ValueError, match="semantic-response/1"):
+        SemanticPromptTemplate(
+            template_id="region/schema-2",
+            mode=SemanticInterpretationMode.REGION,
+            output_schema_version="semantic-response/2",
+            instructions="Describe only the referenced region.",
+        )
+
+
+def test_rendering_refuses_a_template_the_request_did_not_select() -> None:
+    region = _request(SemanticInterpretationMode.REGION)
+    scene = _request(SemanticInterpretationMode.SCENE)
+
+    with pytest.raises(ValueError, match="identity must match"):
+        _render(region, SEMANTIC_PROMPT_TEMPLATES["region-abstention/v1"])
+    with pytest.raises(ValueError, match="mode must match"):
+        _render(scene, SEMANTIC_PROMPT_TEMPLATES["region/v1"])
+    with pytest.raises(ValueError, match="schema must match"):
+        _render(
+            replace(region, requested_output_schema="semantic-response/2"),
+            SEMANTIC_PROMPT_TEMPLATES["region/v1"],
+        )
+
+
+def test_a_rendered_prompt_cannot_carry_the_fingerprint_of_other_text() -> None:
+    rendered = _render(
+        _request(SemanticInterpretationMode.REGION), SEMANTIC_PROMPT_TEMPLATES["region/v1"]
+    )
+
+    assert rendered.fingerprint == (
+        "sha256:" + hashlib.sha256(rendered.text.encode("utf-8")).hexdigest()
+    )
+    with pytest.raises(ValueError, match="fingerprint"):
+        replace(rendered, text=rendered.text + " ")
+
+
+def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
+    region_request = replace(
+        _request(SemanticInterpretationMode.REGION),
+        supporting_metadata=(SemanticRequestMetadata(name="camera_height_m", value=1.2),),
+    )
+    region_prompt = _render(region_request, SEMANTIC_PROMPT_TEMPLATES["region/v1"])
 
     assert '"supporting_metadata":[{"name":"camera_height_m","value":1.2}]' in region_prompt.text
     assert '"scene_context":{"type":"null"}' in region_prompt.text
@@ -131,7 +234,7 @@ def test_prompt_includes_supporting_metadata_and_mode_specific_schema() -> None:
     assert '"confidence":{"type":"null"}' in region_prompt.text
 
     scene_request = _request(SemanticInterpretationMode.SCENE)
-    scene_prompt = _render(scene_request, SemanticPromptTemplate.default_for(scene_request.mode))
+    scene_prompt = _render(scene_request, SEMANTIC_PROMPT_TEMPLATES["scene/v1"])
 
     assert '"scene_context":{"additionalProperties":false' in scene_prompt.text
     assert '"minItems":0' in scene_prompt.text
