@@ -440,7 +440,7 @@ def test_a_view_whose_bytes_diverge_from_the_request_sha256_is_never_inferred(
                 sha256=hashlib.sha256(b"the bytes the request identifies").hexdigest(),
             ),
         ),
-        prompt_template_id="region/v1",
+        prompt_template_id=adapter.prompt_template_id,
         requested_output_schema="semantic-response/1",
         configuration_fingerprint=adapter.configuration_fingerprint,
     )

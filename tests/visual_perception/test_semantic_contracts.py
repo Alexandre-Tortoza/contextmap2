@@ -4,6 +4,7 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     ClaimId,
     HypothesisRole,
@@ -148,7 +149,6 @@ def _failed_interpretation() -> object:
         SemanticInterpretationMode,
         SemanticInterpretationRequest,
         SemanticParseFailure,
-        SemanticPromptTemplate,
         SemanticRequestId,
         SemanticVisualView,
         VisualViewKind,
@@ -175,7 +175,7 @@ def _failed_interpretation() -> object:
     )
     rendered = render_semantic_prompt(
         request,
-        SemanticPromptTemplate.default_for(SemanticInterpretationMode.SCENE),
+        SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id],
         confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
     )
     # A real Qwen failure from the campaign: the model omitted the required key.
@@ -290,3 +290,29 @@ def test_a_rejected_response_raises_with_the_evidence_attached() -> None:
     # The parser's own message is kept verbatim; no failure taxonomy is invented here.
     assert error.failure.failure.message == str(rejected.value)
     assert json.loads(error.failure.raw_response)  # the observed response is still readable
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("template_id", "scene/other"), ("output_schema_version", "semantic-response/2")],
+)
+def test_attempt_evidence_records_only_the_prompt_policy_its_request_selected(
+    field: str, value: str
+) -> None:
+    """#542: no backend can record a prompt other than the one the request names.
+
+    Both outcomes of a backend call are held to it, so an adapter that rendered a hidden
+    default (or anything else) cannot publish evidence claiming the requested policy.
+    """
+    from dataclasses import replace
+
+    from fakes import FakeSemanticInterpreter
+
+    failed = _failed_interpretation()
+    substituted = replace(failed.rendered_prompt, **{field: value})  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="prompt"):
+        replace(failed, rendered_prompt=substituted)  # type: ignore[type-var]
+
+    execution = FakeSemanticInterpreter(result_id=RESULT_ID).interpret(failed.request)  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="prompt"):
+        replace(execution, rendered_prompt=replace(execution.rendered_prompt, **{field: value}))

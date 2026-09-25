@@ -9,6 +9,7 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     BoundingBox2D,
     ClaimId,
@@ -35,7 +36,6 @@ from contextmap.visual_perception import (
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
-    SemanticPromptTemplate,
     SemanticRequestId,
     SemanticVisualView,
     StageDefinition,
@@ -273,7 +273,7 @@ def _semantic_execution() -> SemanticInterpretationExecution:
         request=request,
         rendered_prompt=render_semantic_prompt(
             request,
-            SemanticPromptTemplate.default_for(request.mode),
+            SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id],
             confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
         ),
         raw_response=raw_response,
@@ -331,7 +331,7 @@ def _abstained_semantic_execution() -> tuple[
             request=request,
             rendered_prompt=render_semantic_prompt(
                 request,
-                SemanticPromptTemplate.default_for(request.mode),
+                SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id],
                 confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
             ),
             raw_response=raw_response,

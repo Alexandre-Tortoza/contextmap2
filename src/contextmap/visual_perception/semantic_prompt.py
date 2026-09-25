@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
+from types import MappingProxyType
 from typing import Any, cast
 
 from contextmap.visual_perception.models import (
@@ -48,9 +49,19 @@ class SemanticConfidencePolicy(Enum):
     MEASURED = "measured"
 
 
+SEMANTIC_RESPONSE_SCHEMA = "semantic-response/1"
+"""The one output schema :func:`render_semantic_prompt` renders and the parser implements."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class SemanticPromptTemplate:
-    """One immutable semantic instruction policy with a versioned identity."""
+    """One immutable semantic instruction policy with a versioned identity.
+
+    A template is selected by its ``template_id``, never by a backend: the request names it
+    (``SemanticInterpretationRequest.prompt_template_id``) and every instruction-following
+    interpreter renders exactly the catalog template of that identity
+    (:data:`SEMANTIC_PROMPT_TEMPLATES`) or refuses the request before inference.
+    """
 
     template_id: str
     mode: SemanticInterpretationMode
@@ -58,7 +69,7 @@ class SemanticPromptTemplate:
     instructions: str
 
     def __post_init__(self) -> None:
-        """Reject unnamed or empty prompt policy fields."""
+        """Reject unnamed or empty policy fields and an output schema nothing implements."""
         for field_name, value in (
             ("template_id", self.template_id),
             ("output_schema_version", self.output_schema_version),
@@ -66,41 +77,139 @@ class SemanticPromptTemplate:
         ):
             if not value.strip():
                 raise ValueError(f"{field_name} must not be empty")
-
-    @classmethod
-    def default_for(cls, mode: SemanticInterpretationMode) -> SemanticPromptTemplate:
-        """Return the canonical v1 template for one interpretation mode."""
-        if mode is SemanticInterpretationMode.SCENE:
-            return cls(
-                template_id="scene/v1",
-                mode=mode,
-                output_schema_version="semantic-response/1",
-                instructions=(
-                    "Describe only visible scene-level evidence. Preserve ambiguity, "
-                    "abstain when unsupported, and never invent confidence: omit it or "
-                    "set it to null."
-                ),
+        if self.output_schema_version != SEMANTIC_RESPONSE_SCHEMA:
+            # O schema renderizado e o parser só conhecem semantic-response/1: um template que
+            # declarasse outra versão prometeria ao modelo um contrato que ninguém implementa.
+            raise ValueError(
+                f"prompt template {self.template_id!r} declares output schema "
+                f"{self.output_schema_version!r}; the renderer and parser implement only "
+                f"{SEMANTIC_RESPONSE_SCHEMA!r}"
             )
-        return cls(
-            template_id="region/v1",
-            mode=mode,
-            output_schema_version="semantic-response/1",
-            instructions=(
-                "Describe only the referenced region. Return one primary hypothesis, "
-                "preserve plausible alternatives, and never invent confidence: omit it "
-                "or set it to null."
-            ),
+
+
+_TEMPLATES = (
+    SemanticPromptTemplate(
+        template_id="scene/v1",
+        mode=SemanticInterpretationMode.SCENE,
+        output_schema_version=SEMANTIC_RESPONSE_SCHEMA,
+        instructions=(
+            "Describe only visible scene-level evidence. Preserve ambiguity, "
+            "abstain when unsupported, and never invent confidence: omit it or "
+            "set it to null."
+        ),
+    ),
+    SemanticPromptTemplate(
+        template_id="region/v1",
+        mode=SemanticInterpretationMode.REGION,
+        output_schema_version=SEMANTIC_RESPONSE_SCHEMA,
+        instructions=(
+            "Describe only the referenced region. Return one primary hypothesis, "
+            "preserve plausible alternatives, and never invent confidence: omit it "
+            "or set it to null."
+        ),
+    ),
+    # Alternativa não canônica e não avaliada (#542): existe para que a seleção de prompt seja
+    # exercitável ponta a ponta. Varia só a instrução de abstenção em relação a region/v1; as
+    # famílias de prompt reais são avaliadas em #525.
+    SemanticPromptTemplate(
+        template_id="region-abstention/v1",
+        mode=SemanticInterpretationMode.REGION,
+        output_schema_version=SEMANTIC_RESPONSE_SCHEMA,
+        instructions=(
+            "Describe only the referenced region. Abstain instead of guessing when the "
+            "visible evidence does not support a hypothesis; otherwise return one primary "
+            "hypothesis and preserve plausible alternatives. Never invent confidence: omit "
+            "it or set it to null."
+        ),
+    ),
+)
+
+SEMANTIC_PROMPT_TEMPLATES: Mapping[str, SemanticPromptTemplate] = MappingProxyType(
+    {template.template_id: template for template in _TEMPLATES}
+)
+"""Every versioned instruction template, keyed by its identity; closed and immutable.
+
+``scene/v1`` and ``region/v1`` are the canonical policies. ``region-abstention/v1`` is a
+non-canonical, unevaluated alternative. A new prompt policy is a new entry with a new
+identity, never an edit of an existing one: an identity names exactly one instruction text
+and output schema.
+"""
+
+
+def semantic_prompt_template(template_id: str) -> SemanticPromptTemplate:
+    """Return the catalog template a request or configuration names.
+
+    Raises:
+        ValueError: If no template has that identity. Nothing substitutes another one.
+    """
+    template = SEMANTIC_PROMPT_TEMPLATES.get(template_id)
+    if template is None:
+        raise ValueError(
+            f"unknown semantic prompt template {template_id!r}; "
+            f"known: {sorted(SEMANTIC_PROMPT_TEMPLATES)}"
         )
+    return template
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticPromptPolicy:
+    """The instruction template each interpretation mode renders, selected before inference.
+
+    This is the declarative, serializable selection a run configures for an
+    instruction-following interpreter (Qwen, Gemini). It changes the prompt actually rendered
+    and consumed, independently of the backend, its generation settings and the visual views.
+    A task-native interpreter (Florence-2) consumes its task prompt instead and does not take
+    this policy.
+
+    Attributes:
+        scene: Identity of the :data:`SEMANTIC_PROMPT_TEMPLATES` entry scene requests name.
+        region: Identity of the entry region requests name.
+    """
+
+    scene: str
+    region: str
+
+    def __post_init__(self) -> None:
+        """Require each identity to name a catalog template of its own mode."""
+        for mode, template_id in (
+            (SemanticInterpretationMode.SCENE, self.scene),
+            (SemanticInterpretationMode.REGION, self.region),
+        ):
+            template = semantic_prompt_template(template_id)
+            if template.mode is not mode:
+                raise ValueError(
+                    f"{mode.value} prompt policy {template_id!r} is a "
+                    f"{template.mode.value} template"
+                )
+
+    def template_for(self, mode: SemanticInterpretationMode) -> SemanticPromptTemplate:
+        """Return the selected template of one mode."""
+        template_id = self.scene if mode is SemanticInterpretationMode.SCENE else self.region
+        return SEMANTIC_PROMPT_TEMPLATES[template_id]
 
 
 @dataclass(frozen=True, kw_only=True)
 class RenderedSemanticPrompt:
-    """Auditable deterministic rendering of one template and canonical request."""
+    """Auditable deterministic rendering of one prompt policy for one canonical request.
+
+    Attributes:
+        template_id: Identity of the policy rendered; equal to the request's
+            ``prompt_template_id``.
+        output_schema_version: Schema the response is held to.
+        text: The exact text the interpreter consumes.
+        fingerprint: ``"sha256:<hex>"`` of ``text`` encoded as UTF-8.
+    """
 
     template_id: str
     output_schema_version: str
     text: str
     fingerprint: str
+
+    def __post_init__(self) -> None:
+        """Refuse a fingerprint that does not describe ``text``."""
+        expected = "sha256:" + hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+        if self.fingerprint != expected:
+            raise ValueError("rendered prompt fingerprint does not match its text")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -128,7 +237,12 @@ def render_semantic_prompt(
     *,
     confidence_policy: SemanticConfidencePolicy,
 ) -> RenderedSemanticPrompt:
-    """Render a deterministic prompt after checking template/request identity."""
+    """Render a deterministic prompt after checking template/request identity.
+
+    Raises:
+        ValueError: If the template's mode, identity or output schema differs from what the
+            request selected; a template the request did not name is never rendered.
+    """
     if template.mode is not request.mode:
         raise ValueError("prompt template mode must match semantic request mode")
     if template.template_id != request.prompt_template_id:

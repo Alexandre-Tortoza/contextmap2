@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,7 +90,11 @@ from contextmap.runtime.catalog import (
     RESOLUTION,
     TRAJECTORY,
 )
-from contextmap.runtime.composition import FeatureBuildScope, FeatureFactory
+from contextmap.runtime.composition import (
+    FeatureBuildScope,
+    FeatureFactory,
+    SemanticRequestPrompt,
+)
 from contextmap.runtime.pipeline import StageRequest
 from contextmap.semantic_fusion import (
     BaselineAccumulationPolicy,
@@ -732,9 +736,11 @@ class _LegacySemanticInterpreterBridge:
     migrating to :class:`~contextmap.visual_perception.SemanticInterpreter`'s ``interpret()``
     port. This bridges the one remaining caller of the legacy shape to the real port: one
     single-view request per call (the whole frame for a scene, one tight crop per region), the
-    minimum evidence the request contract requires. It does not implement the multi-view/prompt
-    policy work multi-view semantic requests still need (#524, #529, #547, #549) -- that is
-    real, separately-tracked capability work, not a runtime concern.
+    minimum evidence the request contract requires. Each request names the prompt policy
+    composed for its mode (#542), never a fixed identity, so the interpreter renders exactly
+    the configured policy or refuses the request. It does not implement the multi-view policy
+    work multi-view semantic requests still need (#524, #529, #547, #549) -- that is real,
+    separately-tracked capability work, not a runtime concern.
 
     Each ``interpret()`` call answers with a real :class:`~contextmap.visual_perception.
     SemanticInterpretationExecution` -- the rendered prompt, the raw response, diagnostics and
@@ -747,10 +753,16 @@ class _LegacySemanticInterpreterBridge:
     """
 
     def __init__(
-        self, *, interpreter: SemanticInterpreter, run_id: PerceptionRunId, view_root: Path
+        self,
+        *,
+        interpreter: SemanticInterpreter,
+        run_id: PerceptionRunId,
+        view_root: Path,
+        prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt],
     ) -> None:
-        """Bind the bridge to the real interpreter, this run's identity, and its view directory."""
+        """Bind the bridge to the interpreter, the run, its view directory and prompt policy."""
         self._interpreter = interpreter
+        self._prompts = prompts
         self._run_id = run_id
         self._view_root = view_root
         self._views_dir = view_root / "outputs" / "semantic-views"
@@ -801,6 +813,21 @@ class _LegacySemanticInterpreterBridge:
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
         return f"outputs/semantic-views/{name}", digest
 
+    def _prompt(self, mode: SemanticInterpretationMode) -> SemanticRequestPrompt:
+        """Return the prompt policy composed for ``mode``; a missing one is never defaulted.
+
+        Raises:
+            ExecutorError: If no prompt policy was composed for ``mode`` (Florence-2 serves
+                exactly one mode, for example).
+        """
+        prompt = self._prompts.get(mode)
+        if prompt is None:
+            raise ExecutorError(
+                f"no semantic prompt policy was composed for {mode.value} requests; the "
+                "configured semantic interpreter cannot interpret this mode"
+            )
+        return prompt
+
     def _interpret_preserving_failures(
         self, request: SemanticInterpretationRequest
     ) -> SemanticInterpretationExecution:
@@ -832,6 +859,7 @@ class _LegacySemanticInterpreterBridge:
         """Build one single-view SCENE request from the whole frame and delegate to interpret()."""
         import importlib
 
+        prompt = self._prompt(SemanticInterpretationMode.SCENE)
         image_module = importlib.import_module("PIL.Image")
         pil_image = image_module.open(self._view_root / image.payload_reference).convert("RGB")
         reference, digest = self._write_view(f"{image.source_observation_id}__scene.png", pil_image)
@@ -850,8 +878,8 @@ class _LegacySemanticInterpreterBridge:
             ),
             mode=SemanticInterpretationMode.SCENE,
             visual_views=(view,),
-            prompt_template_id="scene/v1",
-            requested_output_schema="semantic-response/1",
+            prompt_template_id=prompt.template_id,
+            requested_output_schema=prompt.output_schema,
             configuration_fingerprint=self._configuration_fingerprint,
         )
         execution = self._interpret_preserving_failures(request)
@@ -868,6 +896,8 @@ class _LegacySemanticInterpreterBridge:
         frame = image_module.open(self._view_root / image.payload_reference).convert("RGB")
         claims: list[SemanticClaim] = []
         for region in regions:
+            # Consultado por região, como antes: um frame sem regiões não exige política.
+            prompt = self._prompt(SemanticInterpretationMode.REGION)
             box = region.bounding_box
             crop = frame.crop(
                 (
@@ -899,8 +929,8 @@ class _LegacySemanticInterpreterBridge:
                 mode=SemanticInterpretationMode.REGION,
                 visual_views=(view,),
                 region_id=RegionId(str(region.region_id)),
-                prompt_template_id="region/v1",
-                requested_output_schema="semantic-response/1",
+                prompt_template_id=prompt.template_id,
+                requested_output_schema=prompt.output_schema,
                 configuration_fingerprint=self._configuration_fingerprint,
             )
             execution = self._interpret_preserving_failures(request)
@@ -1050,12 +1080,22 @@ class VisualPerceptionExecutor:
         dense_features: FeatureFactory,
         region_features: FeatureFactory,
         semantic_interpreter: SemanticInterpreter,
+        semantic_prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt],
     ) -> None:
-        """Bind the executor to the composed backends of the canonical preset."""
+        """Bind the executor to the composed backends of the canonical preset.
+
+        Args:
+            region_discovery: Region discovery backend.
+            dense_features: Builds the dense feature extractor for one run.
+            region_features: Builds the region feature extractor for one run.
+            semantic_interpreter: Semantic interpretation backend.
+            semantic_prompts: Prompt policy every semantic request of each mode names (#542).
+        """
         self._region_discovery = region_discovery
         self._dense_features = dense_features
         self._region_features = region_features
         self._semantic_interpreter = semantic_interpreter
+        self._semantic_prompts = semantic_prompts
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Process every image observation of the ``sequence`` input and reference the run."""
@@ -1101,7 +1141,10 @@ class VisualPerceptionExecutor:
                 mask_source=_RegionInlineMaskSource(),
             )
             semantic_bridge = _LegacySemanticInterpreterBridge(
-                interpreter=self._semantic_interpreter, run_id=run_id, view_root=scratch
+                interpreter=self._semantic_interpreter,
+                run_id=run_id,
+                view_root=scratch,
+                prompts=self._semantic_prompts,
             )
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,

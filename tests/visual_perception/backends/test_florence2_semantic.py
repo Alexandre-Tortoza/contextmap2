@@ -101,7 +101,7 @@ def _region_request(
                 sha256="0" * 64,
             ),
         ),
-        prompt_template_id="region/v1",
+        prompt_template_id=adapter.prompt_template_id,
         requested_output_schema="semantic-response/1",
         configuration_fingerprint=adapter.configuration_fingerprint,
     )
@@ -122,7 +122,7 @@ def _scene_request(adapter: Florence2SemanticInterpreter) -> SemanticInterpretat
                 sha256="1" * 64,
             ),
         ),
-        prompt_template_id="scene/v1",
+        prompt_template_id=adapter.prompt_template_id,
         requested_output_schema="semantic-response/1",
         configuration_fingerprint=adapter.configuration_fingerprint,
     )
@@ -164,14 +164,64 @@ def test_raw_response_is_the_native_task_text_and_its_hash_is_recorded() -> None
     assert execution.diagnostics.peak_memory_bytes == 2048
 
 
-def test_the_canonical_prompt_is_recorded_but_the_diagnostics_say_it_was_not_model_input() -> None:
-    adapter, _ = _adapter()
+def test_the_recorded_prompt_is_the_task_native_prompt_the_model_consumed() -> None:
+    """#542: Florence-2's prompt policy is its task prompt, not a free-form template.
+
+    The rendered prompt the execution records is exactly the text the runtime received, so
+    its fingerprint describes model input instead of a Qwen/Gemini prompt Florence-2 never saw.
+    """
+    adapter, runtime = _adapter("<REGION_TO_CATEGORY>")
 
     execution = adapter.interpret(_region_request(adapter))
 
-    assert execution.rendered_prompt.template_id == "region/v1"
-    assert "fake runtime" in execution.diagnostics.warnings
-    assert any("task token" in warning for warning in execution.diagnostics.warnings)
+    assert adapter.prompt_template_id == "florence2-task-prompt/1:<REGION_TO_CATEGORY>"
+    assert execution.rendered_prompt.template_id == adapter.prompt_template_id
+    assert execution.rendered_prompt.output_schema_version == "semantic-response/1"
+    assert execution.rendered_prompt.text == runtime.calls[0][1]
+    assert execution.rendered_prompt.fingerprint == (
+        "sha256:" + hashlib.sha256(runtime.calls[0][1].encode("utf-8")).hexdigest()
+    )
+    assert execution.parsed.claims[0].provenance.prompt_template_id == adapter.prompt_template_id
+    assert execution.diagnostics.warnings == ("fake runtime",)
+
+
+def test_each_task_is_its_own_task_native_prompt_policy() -> None:
+    category, _ = _adapter("<REGION_TO_CATEGORY>")
+    description, _ = _adapter("<REGION_TO_DESCRIPTION>")
+    caption, _ = _adapter("<CAPTION>")
+
+    assert (
+        len(
+            {
+                category.prompt_template_id,
+                description.prompt_template_id,
+                caption.prompt_template_id,
+            }
+        )
+        == 3
+    )
+
+
+@pytest.mark.parametrize("free_form", ["region/v1", "region-abstention/v1"])
+def test_a_free_form_prompt_policy_is_refused_instead_of_silently_ignored(free_form: str) -> None:
+    """A free-form policy would be recorded as if consumed while the model saw a task token."""
+    adapter, runtime = _adapter("<REGION_TO_CATEGORY>")
+
+    with pytest.raises(ValueError, match="task-native prompt policy"):
+        adapter.interpret(replace(_region_request(adapter), prompt_template_id=free_form))
+
+    assert runtime.calls == []
+
+
+def test_an_output_schema_the_task_envelope_does_not_produce_is_refused_before_inference() -> None:
+    adapter, runtime = _adapter("<REGION_TO_CATEGORY>")
+
+    with pytest.raises(ValueError, match="semantic-response/1"):
+        adapter.interpret(
+            replace(_region_request(adapter), requested_output_schema="semantic-response/2")
+        )
+
+    assert runtime.calls == []
 
 
 def test_scene_task_text_becomes_one_claim_in_a_scene_context_without_inferred_fields() -> None:

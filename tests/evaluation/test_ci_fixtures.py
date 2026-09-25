@@ -61,6 +61,7 @@ from contextmap.state_estimation.backends.external_pose import (
     ExternalPoseEstimator,
 )
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     PerceptionResultId,
     RegionId,
@@ -70,7 +71,6 @@ from contextmap.visual_perception import (
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
-    SemanticPromptTemplate,
     SemanticRequestId,
     SemanticVisualView,
     VisualViewKind,
@@ -374,7 +374,7 @@ def _provenance() -> SemanticInferenceProvenance:
 def _execute(raw: dict[str, Any], observation_id: str, policy: SemanticConfidencePolicy) -> Any:
     request = _request(observation_id)
     rendered = render_semantic_prompt(
-        request, SemanticPromptTemplate.default_for(request.mode), confidence_policy=policy
+        request, SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id], confidence_policy=policy
     )
     text = json.dumps(raw)
     return SemanticInterpretationExecution(

@@ -243,6 +243,12 @@ Features opcionais preservam `feature_id`,
 rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
 descartada silenciosamente.
 
+`prompt_template_id` é a política de prompt selecionada antes da inferência, não
+um rótulo: o interpretador renderiza exatamente essa política (um template do
+catálogo versionado `SEMANTIC_PROMPT_TEMPLATES` em Qwen/Gemini, ou o prompt nativo
+da task no Florence-2) ou recusa o request antes de chamar o modelo. Nenhum
+backend a substitui por um padrão interno.
+
 ## 8.2. `SemanticInterpretationExecution`
 
 Registro de uma inferência semântica individual, mantendo camadas que não devem
@@ -256,6 +262,10 @@ parsed claims / scene_context / abstention
 diagnostics
 effective_configuration
 ```
+
+`rendered_prompt` é sempre a política que o request selecionou (mesmo
+`template_id` e schema de saída), com fingerprint SHA-256 do texto efetivamente
+consumido; a execução recusa qualquer outro.
 
 O run artifact persiste o request e a execution, materializa as views exatas,
 exige payload de qualquer feature efetivamente consumida, resolve contexto de

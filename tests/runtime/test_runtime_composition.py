@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 import runtime_provider_fixtures
-from runtime_documents import SUPPORT_POLICY, effective_from, selected_document
+from runtime_documents import (
+    CANONICAL_PROMPT_POLICY,
+    SHA_A,
+    SUPPORT_POLICY,
+    effective_from,
+    selected_document,
+)
 from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
@@ -18,6 +24,7 @@ from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
     RuntimeProvider,
+    SemanticRequestPrompt,
     composable_backends,
     compose,
     compose_executors,
@@ -39,7 +46,7 @@ from contextmap.semantic_fusion import (
 )
 from contextmap.state_estimation.backends.external_pose import ExternalPoseEstimator
 from contextmap.state_estimation.backends.fast_lio import FastLioEstimator
-from contextmap.visual_perception import PerceptionRunId
+from contextmap.visual_perception import PerceptionRunId, SemanticInterpretationMode
 from contextmap.visual_perception.backends.clip import ClipVisualFeatureBackend
 from contextmap.visual_perception.backends.dinov3 import DinoV3DenseFeatureBackend
 from contextmap.visual_perception.backends.florence2 import Florence2RegionDiscovery
@@ -308,7 +315,13 @@ class TestCanonicalComposition:
         document = selected_document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
-            "gemini": {"model": "gemini-x", "timeout_s": 30, "max_retries": 2, "temperature": 0.0},
+            "gemini": {
+                "model": "gemini-x",
+                "timeout_s": 30,
+                "max_retries": 2,
+                "temperature": 0.0,
+                "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+            },
         }
 
         composed = _compose(
@@ -322,6 +335,182 @@ class TestCanonicalComposition:
         interpreter_call = recorder.calls[1]
         assert interpreter_call[1] == ("GEMINI_API_KEY",)
         assert recorder.calls[0][1] == ()
+
+
+SCENE = SemanticInterpretationMode.SCENE
+REGION_MODE = SemanticInterpretationMode.REGION
+_CANONICAL_PROMPTS = {
+    SCENE: SemanticRequestPrompt(template_id="scene/v1", output_schema="semantic-response/1"),
+    REGION_MODE: SemanticRequestPrompt(
+        template_id="region/v1", output_schema="semantic-response/1"
+    ),
+}
+
+
+def _gemini_document(prompt_policy: dict[str, str]) -> dict[str, Any]:
+    document = selected_document()
+    document["components"]["visual_perception"]["semantic_interpretation"] = {
+        "backend": "gemini",
+        "gemini": {
+            "model": "gemini-x",
+            "timeout_s": 30,
+            "max_retries": 2,
+            "temperature": 0.0,
+            "prompt_policy": prompt_policy,
+        },
+    }
+    return document
+
+
+def _florence2_document(**extra: object) -> dict[str, Any]:
+    document = selected_document()
+    document["components"]["visual_perception"]["semantic_interpretation"] = {
+        "backend": "florence2",
+        "florence2": {
+            "checkpoint": "florence-community/Florence-2-large",
+            "revision": SHA_A,
+            "task": "<REGION_TO_CATEGORY>",
+            "supported_modes": ["region"],
+            "precision": "float32",
+            "max_new_tokens": 64,
+            "temperature": 0.0,
+            **extra,
+        },
+    }
+    return document
+
+
+class TestSemanticPromptPolicy:
+    """#542: the prompt policy is a configured input of Semantic Interpretation.
+
+    Configuration selects it before any inference; the composed runtime hands it to the
+    request builder, so ``prompt_template_id`` names the policy the backend actually renders.
+    """
+
+    def test_every_request_of_each_mode_names_the_configured_policy(self, tmp_path: Path) -> None:
+        document = selected_document()
+        document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = {"scene": "scene/v1", "region": "region-abstention/v1"}
+
+        composed = _compose(tmp_path, document=document)
+
+        assert composed.semantic_prompts == {
+            SCENE: SemanticRequestPrompt(
+                template_id="scene/v1", output_schema="semantic-response/1"
+            ),
+            REGION_MODE: SemanticRequestPrompt(
+                template_id="region-abstention/v1", output_schema="semantic-response/1"
+            ),
+        }
+
+    def test_qwen_and_gemini_consume_the_same_backend_neutral_policy(self, tmp_path: Path) -> None:
+        policy = {"scene": "scene/v1", "region": "region-abstention/v1"}
+        qwen = selected_document()
+        qwen["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = policy
+
+        from_qwen = _compose(tmp_path, document=qwen)
+        from_gemini = _compose(
+            tmp_path, document=_gemini_document(policy), environ={"GEMINI_API_KEY": "k"}
+        )
+
+        assert from_qwen.semantic_prompts == from_gemini.semantic_prompts
+
+    def test_the_prompt_policy_varies_without_touching_the_backend_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """A prompt ablation keeps model, checkpoint and generation settings matched."""
+        canonical = _compose(tmp_path, document=selected_document())
+        document = selected_document()
+        document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = {"scene": "scene/v1", "region": "region-abstention/v1"}
+        alternative = _compose(tmp_path, document=document)
+
+        assert canonical.semantic_prompts != alternative.semantic_prompts
+        assert canonical.semantic_interpreter is not None
+        assert alternative.semantic_interpreter is not None
+        assert (
+            canonical.semantic_interpreter.backend_provenance()
+            == alternative.semantic_interpreter.backend_provenance()
+        )
+
+    def test_an_instruction_following_backend_is_never_given_a_default_policy(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        del document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ]
+
+        with pytest.raises(BackendConfigurationError, match="prompt_policy"):
+            _compose(tmp_path, document=document, recorder=recorder)
+
+        assert len(recorder.calls) == 1  # só o runtime de region discovery foi pedido
+
+    @pytest.mark.parametrize(
+        ("policy", "message"),
+        [
+            ({"scene": "scene/v1", "region": "region/v9"}, "unknown semantic prompt template"),
+            ({"scene": "region/v1", "region": "region/v1"}, "is a region template"),
+            ({"scene": "scene/v1"}, "region"),
+        ],
+    )
+    def test_an_unrenderable_policy_is_refused_before_any_runtime_is_requested(
+        self, tmp_path: Path, policy: dict[str, str], message: str
+    ) -> None:
+        recorder = _Recorder()
+
+        with pytest.raises(BackendConfigurationError, match=message):
+            _compose(
+                tmp_path,
+                document=_gemini_document(policy),
+                recorder=recorder,
+                environ={"GEMINI_API_KEY": "k"},
+            )
+
+        assert len(recorder.calls) == 1  # só o runtime de region discovery foi pedido
+
+    def test_florence2_names_its_task_native_policy_only_for_the_mode_its_task_serves(
+        self, tmp_path: Path
+    ) -> None:
+        composed = _compose(tmp_path, document=_florence2_document())
+
+        assert composed.semantic_prompts == {
+            REGION_MODE: SemanticRequestPrompt(
+                template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
+                output_schema="semantic-response/1",
+            )
+        }
+
+    def test_florence2_reports_that_it_cannot_consume_a_free_form_policy(
+        self, tmp_path: Path
+    ) -> None:
+        document = _florence2_document(prompt_policy=dict(CANONICAL_PROMPT_POLICY))
+
+        with pytest.raises(BackendConfigurationError, match="task-native"):
+            _compose(tmp_path, document=document)
+
+    def test_the_composed_executor_carries_the_selected_policy(self, tmp_path: Path) -> None:
+        recorder = _Recorder()
+        document = selected_document()
+        document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = {"scene": "scene/v1", "region": "region-abstention/v1"}
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(recorder),
+            module_available=lambda _name: True,
+            environ={},
+        )
+
+        prompts = executors["visual_perception"]._semantic_prompts  # type: ignore[attr-defined]
+        assert prompts[REGION_MODE].template_id == "region-abstention/v1"
+        assert prompts[SCENE].template_id == "scene/v1"
 
 
 class TestFeatureBackendsAreRunScoped:
@@ -567,7 +756,13 @@ class TestExplicitFailures:
         document = selected_document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
-            "gemini": {"model": "gemini-x", "timeout_s": 30, "max_retries": 2, "temperature": 0.0},
+            "gemini": {
+                "model": "gemini-x",
+                "timeout_s": 30,
+                "max_retries": 2,
+                "temperature": 0.0,
+                "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+            },
         }
 
         with pytest.raises(BackendUnavailableError, match="GEMINI_API_KEY"):
@@ -1751,16 +1946,16 @@ class TestComposeVisualPerceptionExecutor:
                 import json
 
                 from contextmap.visual_perception import (
+                    SEMANTIC_PROMPT_TEMPLATES,
                     SemanticBackendDiagnostics,
                     SemanticConfidencePolicy,
                     SemanticInferenceProvenance,
                     SemanticInterpretationExecution,
-                    SemanticPromptTemplate,
                     parse_semantic_response,
                     render_semantic_prompt,
                 )
 
-                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]  # type: ignore[attr-defined]
                 rendered = render_semantic_prompt(
                     request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
                 )
@@ -1790,6 +1985,7 @@ class TestComposeVisualPerceptionExecutor:
             dense_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.DENSE),  # type: ignore[arg-type]
             region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+            semantic_prompts=_CANONICAL_PROMPTS,
         )
 
         workspace = tmp_path / "ws"
@@ -1993,16 +2189,16 @@ class TestComposeVisualPerceptionExecutor:
                 import json
 
                 from contextmap.visual_perception import (
+                    SEMANTIC_PROMPT_TEMPLATES,
                     SemanticBackendDiagnostics,
                     SemanticConfidencePolicy,
                     SemanticInferenceProvenance,
                     SemanticInterpretationExecution,
-                    SemanticPromptTemplate,
                     parse_semantic_response,
                     render_semantic_prompt,
                 )
 
-                template = SemanticPromptTemplate.default_for(request.mode)  # type: ignore[attr-defined]
+                template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]  # type: ignore[attr-defined]
                 rendered = render_semantic_prompt(
                     request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
                 )
@@ -2065,6 +2261,7 @@ class TestComposeVisualPerceptionExecutor:
             dense_features=lambda _scope: _FakeDenseFeatureExtractor(),  # type: ignore[arg-type]
             region_features=composed.region_features,
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
+            semantic_prompts=_CANONICAL_PROMPTS,
         )
 
         workspace = tmp_path / "ws"
@@ -2151,16 +2348,16 @@ class TestSemanticBridgeStreamsItsEvidence:
                 import json
 
                 from contextmap.visual_perception import (
+                    SEMANTIC_PROMPT_TEMPLATES,
                     SemanticBackendDiagnostics,
                     SemanticConfidencePolicy,
                     SemanticInferenceProvenance,
                     SemanticInterpretationExecution,
-                    SemanticPromptTemplate,
                     parse_semantic_response,
                     render_semantic_prompt,
                 )
 
-                template = SemanticPromptTemplate.default_for(request.mode)
+                template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]
                 rendered = render_semantic_prompt(
                     request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
                 )
@@ -2229,6 +2426,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             interpreter=self._fake_interpreter(),
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
+            prompts=_CANONICAL_PROMPTS,
         )
         bridge.bind(writer)  # type: ignore[arg-type]
 
@@ -2242,10 +2440,10 @@ class TestSemanticBridgeStreamsItsEvidence:
         """The stage still fails, but the model's real answer reaches the failures stream."""
         from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
         from contextmap.visual_perception import (
+            SEMANTIC_PROMPT_TEMPLATES,
             SemanticBackendDiagnostics,
             SemanticConfidencePolicy,
             SemanticInferenceProvenance,
-            SemanticPromptTemplate,
             render_semantic_prompt,
             semantic_failure_from_parse_error,
         )
@@ -2266,7 +2464,7 @@ class TestSemanticBridgeStreamsItsEvidence:
                 )
 
             def interpret(self, request: Any) -> object:
-                template = SemanticPromptTemplate.default_for(request.mode)
+                template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]
                 rendered = render_semantic_prompt(
                     request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
                 )
@@ -2303,6 +2501,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             interpreter=_RejectingInterpreter(),  # type: ignore[arg-type]
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
+            prompts=_CANONICAL_PROMPTS,
         )
         bridge.bind(_RecordingWriter())  # type: ignore[arg-type]
 
@@ -2318,3 +2517,142 @@ class TestSemanticBridgeStreamsItsEvidence:
             view.payload_reference for view in recorded[0].request.visual_views
         ]
         assert all(size > 0 for _, size in recorded_views)
+
+
+class TestSemanticBridgeNamesTheSelectedPromptPolicy:
+    """#542: the bridge names the configured policy in each request instead of a fixed id.
+
+    Pillow is replaced by a minimal stand-in: what is under test is which prompt policy each
+    request names, not image decoding.
+    """
+
+    @staticmethod
+    def _without_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+        import types
+
+        class _Image:
+            def convert(self, _mode: str) -> _Image:
+                return self
+
+            def crop(self, _box: object) -> _Image:
+                return self
+
+            def save(self, target: Path) -> None:
+                Path(target).write_bytes(b"view bytes")
+
+        image_module = types.ModuleType("PIL.Image")
+        image_module.open = lambda _path: _Image()  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "PIL", types.ModuleType("PIL"))
+        monkeypatch.setitem(sys.modules, "PIL.Image", image_module)
+
+    @staticmethod
+    def _bridge(
+        tmp_path: Path, prompts: dict[SemanticInterpretationMode, SemanticRequestPrompt]
+    ) -> tuple[Any, list[Any]]:
+        from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
+
+        fake = TestSemanticBridgeStreamsItsEvidence._fake_interpreter()
+        requests: list[Any] = []
+
+        class _Recording:
+            def backend_provenance(self) -> Any:
+                return fake.backend_provenance()
+
+            def interpret(self, request: Any) -> object:
+                requests.append(request)
+                return fake.interpret(request)
+
+        class _Writer:
+            def add_stage_outcomes(self, outcomes: Any) -> None: ...
+
+            def add_semantic_view_payload(self, view: Any, payload: bytes) -> None: ...
+
+        bridge = _LegacySemanticInterpreterBridge(
+            interpreter=_Recording(),  # type: ignore[arg-type]
+            run_id=PerceptionRunId("run-0001"),
+            view_root=tmp_path,
+            prompts=prompts,
+        )
+        bridge.bind(_Writer())  # type: ignore[arg-type]
+        return bridge, requests
+
+    @staticmethod
+    def _image_and_region() -> tuple[Any, Any]:
+        from contextmap.ingestion import SourceObservationId
+        from contextmap.visual_perception import (
+            BackendProvenance,
+            BoundingBox2D,
+            PreparedImage,
+            Region2D,
+            RegionId,
+        )
+
+        image = PreparedImage(
+            source_observation_id=SourceObservationId("frame-0000"),
+            payload_reference="prepared/frame-0000.png",
+            width=16,
+            height=12,
+        )
+        region = Region2D(
+            region_id=RegionId("region-0000"),
+            bounding_box=BoundingBox2D(x=0, y=0, width=4, height=4),
+            provenance=BackendProvenance(
+                backend_id="fake",
+                capability="region_discovery",
+                provider="fake",
+                model="fake",
+                version="0.1",
+            ),
+        )
+        return image, region
+
+    def test_each_request_names_the_policy_selected_for_its_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._without_pillow(monkeypatch)
+        bridge, requests = self._bridge(
+            tmp_path,
+            {
+                SCENE: SemanticRequestPrompt(
+                    template_id="scene/v1", output_schema="semantic-response/1"
+                ),
+                REGION_MODE: SemanticRequestPrompt(
+                    template_id="region-abstention/v1", output_schema="semantic-response/1"
+                ),
+            },
+        )
+        image, region = self._image_and_region()
+
+        bridge.interpret_scene(image)
+        bridge.interpret_regions(image, [region])
+
+        assert [
+            (request.mode, request.prompt_template_id, request.requested_output_schema)
+            for request in requests
+        ] == [
+            (SCENE, "scene/v1", "semantic-response/1"),
+            (REGION_MODE, "region-abstention/v1", "semantic-response/1"),
+        ]
+
+    def test_a_mode_without_a_composed_policy_fails_before_any_interpretation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from contextmap.runtime.executors import ExecutorError
+
+        self._without_pillow(monkeypatch)
+        bridge, requests = self._bridge(
+            tmp_path,
+            {
+                REGION_MODE: SemanticRequestPrompt(
+                    template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
+                    output_schema="semantic-response/1",
+                )
+            },
+        )
+        image, _ = self._image_and_region()
+
+        with pytest.raises(ExecutorError, match="scene"):
+            bridge.interpret_scene(image)
+
+        assert requests == []

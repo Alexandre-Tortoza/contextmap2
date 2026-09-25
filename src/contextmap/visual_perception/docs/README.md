@@ -61,6 +61,7 @@ temporariamente os estágios legados de cena/região até a construção de
 - `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext` — evidência visual canônica.
 - `SemanticInterpretationRequest`, `SemanticVisualView`, `SemanticFeatureReference` e `SemanticInterpreterCapabilities` — entrada auditável e validação de capacidade para inferência semântica.
 - `SemanticInterpretationExecution`, `RenderedSemanticPrompt`, `ParsedSemanticResponse` e `SemanticConfidencePolicy` — separação explícita entre request, prompt efetivo, resposta bruta, parsing, métricas e política de score.
+- `SemanticPromptTemplate`, `SEMANTIC_PROMPT_TEMPLATES` e `SemanticPromptPolicy` — políticas de prompt versionadas, o catálogo fechado que as identifica e a seleção explícita por modo que uma execução configura ([Política de prompt explícita](semantic-interpretation.md#política-de-prompt-explícita-542)).
 - `BackendProvenance` — rastreabilidade até o backend que produziu uma evidência.
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 

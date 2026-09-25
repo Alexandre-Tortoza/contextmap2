@@ -54,6 +54,26 @@ class SemanticBackendDiagnostics:
                 raise ValueError(f"semantic backend {name} must be non-negative")
 
 
+def _require_selected_prompt(
+    request: SemanticInterpretationRequest, rendered_prompt: RenderedSemanticPrompt
+) -> None:
+    """Refuse attempt evidence whose rendered prompt is not the policy the request selected.
+
+    Raises:
+        ValueError: If the template identity or the output schema differs from the request's.
+    """
+    if rendered_prompt.template_id != request.prompt_template_id:
+        raise ValueError(
+            f"rendered prompt {rendered_prompt.template_id!r} is not the prompt template the "
+            f"request selected ({request.prompt_template_id!r})"
+        )
+    if rendered_prompt.output_schema_version != request.requested_output_schema:
+        raise ValueError(
+            f"rendered prompt output schema {rendered_prompt.output_schema_version!r} is not "
+            f"the one the request selected ({request.requested_output_schema!r})"
+        )
+
+
 @dataclass(frozen=True, kw_only=True)
 class SemanticParseFailure:
     """Why a real, observed backend response could not become canonical semantic evidence.
@@ -114,10 +134,11 @@ class FailedSemanticInterpretation:
     occurred_at: str
 
     def __post_init__(self) -> None:
-        """Require the recorded hash to match the response it describes."""
+        """Require the recorded hash and prompt to match what they describe."""
         expected = hashlib.sha256(self.raw_response.encode("utf-8")).hexdigest()
         if self.raw_response_sha256 != expected:
             raise ValueError("raw_response_sha256 does not match raw_response")
+        _require_selected_prompt(self.request, self.rendered_prompt)
 
 
 def encode_failed_semantic_interpretation(
@@ -277,7 +298,12 @@ def semantic_failure_from_parse_error(
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticInterpretationExecution:
-    """Transient result separating request, raw response, parsing, and metrics."""
+    """Transient result separating request, raw response, parsing, and metrics.
+
+    ``rendered_prompt`` is always the policy ``request`` selected (its
+    ``prompt_template_id`` and ``requested_output_schema``): the request identifies the prompt
+    the interpreter actually consumed.
+    """
 
     request: SemanticInterpretationRequest
     rendered_prompt: RenderedSemanticPrompt
@@ -285,6 +311,10 @@ class SemanticInterpretationExecution:
     parsed: ParsedSemanticResponse
     diagnostics: SemanticBackendDiagnostics
     effective_configuration: Mapping[str, JsonScalar]
+
+    def __post_init__(self) -> None:
+        """Refuse a rendered prompt other than the one the request selected."""
+        _require_selected_prompt(self.request, self.rendered_prompt)
 
 
 def encode_semantic_execution(
