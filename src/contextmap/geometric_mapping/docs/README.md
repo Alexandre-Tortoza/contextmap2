@@ -32,9 +32,11 @@ geometria** (ver [`inputs.md`](inputs.md)), a **transformação fonte→mapa** c
 traces auditáveis (ver [`transformation.md`](transformation.md)), a
 **acumulação do mapa** com referências estáveis e índice de origem (ver
 [`accumulation.md`](accumulation.md)), o **acesso espacial** com índice derivado
-e verificável (ver [`spatial-access.md`](spatial-access.md)) e o
+e verificável (ver [`spatial-access.md`](spatial-access.md)), o
 **`GeometricMapArtifact`** persistido, imutável e com linhagem (ver
-[`artifact.md`](artifact.md)). A **validação** do mapa (numérica, concordância
+[`artifact.md`](artifact.md)) e, como representação **derivada e experimental** que
+nenhum estágio canônico consome, a **agregação voxel inter-scan** com lineage para o
+mapa bruto (ver [`inter-scan-aggregation.md`](inter-scan-aggregation.md)). A **validação** do mapa (numérica, concordância
 entre scans, referência declarada e reprodutibilidade) vive em `evaluation` e
 está documentada em
 [`evaluation/docs/geometric_mapping.md`](../../evaluation/docs/geometric_mapping.md).
@@ -51,6 +53,8 @@ está documentada em
 - `TransformedScan`, `TracedTransform`, `TransformTrace`, `transform_scan()`, `transform_scans()`, `verify_transform_trace()`, `GeometryTransformError` — os pontos de um scan no frame do mapa junto das coordenadas originais, a cadeia aplicada e o trace de auditoria de um ponto.
 - `MapAccumulator`, `accumulate_plan()`, `AccumulatedMap`, `ScanVoxelPolicy`, `ScanRecord`, `PackedGeometry`, `geometry_index_of()`, `AccumulationError` — acumulação em fluxo dos scans transformados em um mapa, com agregação opcional explícita, índice de origem e a leitura do payload por referência.
 - `GeometricMapArtifactWriter`, `GeometricMapArtifactReader`, `GeometricMapArtifactManifest`, `GeometricMapRunId`, `MapDebugLevel`, `MapArtifactError`, `IncompleteMapArtifactError`, `mapping_configuration_fingerprint()` — o artefato de mapa persistido, com linhagem, métricas e evidência de debug.
+- `VoxelGridSpec`, `InterScanVoxelPolicy`, `InterScanVoxelAggregator`, `aggregate_geometry()`, `VoxelAggregation`, `VoxelAggregate`, `VoxelContribution`, `centroid_tolerance_m()`, `AggregatedGeometry`, `VoxelAggregationError` — agregação voxel **entre scans**, derivada de um mapa bruto sem modificá-lo: grade como identidade, contagens de pontos, scans e observações separadas, lineage por scan recuperável e invariância a ordem e chunking; os centróides são lidos como `GeometryBlockSource`.
+- `VoxelAggregationArtifactWriter`, `VoxelAggregationArtifactReader`, `VoxelAggregationManifest`, `VoxelAggregationRunId` — o artifact derivado e separado dessa agregação, com a identidade exata do artifact bruto.
 - `GeometrySource` — fronteira de leitura (`get`, `iter_geometry`, `query_bounds`) que Sensor Association e demais consumidores usam sem depender de como o mapa é armazenado ou indexado.
 
 Ver [`contracts.md`](contracts.md) para a referência de campos, as convenções e as invariantes.
@@ -78,6 +82,7 @@ forem materializados.
 - [`transformation.md`](transformation.md) — cadeia `T_map_body · T_body_source`, linhagem, validação, precisão e traces.
 - [`accumulation.md`](accumulation.md) — acumulação, formato do payload, referências estáveis, índice de origem e agregação.
 - [`spatial-access.md`](spatial-access.md) — `GeometrySource`, semântica dos limites, índice `scan_bounds`, reconstrução e linha de base de desempenho.
+- [`inter-scan-aggregation.md`](inter-scan-aggregation.md) — agregação voxel inter-scan derivada: baseline, distinção de `ScanVoxelPolicy`, contrato, lineage, invariância, artifact derivado e a decisão da #623.
 - [`artifact.md`](artifact.md) — layout, manifesto, linhagem, configuração, métricas, debug, leitura e integridade do `GeometricMapArtifact`.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/CONTRACTS.md`](../../../../docs/CONTRACTS.md) — `GeometryPoint`, `GeometryReference` e `GeometricMap` no contexto global de contratos.

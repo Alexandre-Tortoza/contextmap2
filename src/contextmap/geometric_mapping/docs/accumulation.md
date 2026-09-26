@@ -59,7 +59,7 @@ Por padrão **cada ponto transformado é persistido como uma medição crua**. A
 - a ordem dos pontos agregados é determinística (por voxel);
 - `GeometricMap.aggregation_rule` registra a regra, e `AccumulatedMap.source_point_count` junto de `point_count` dá a razão de redução.
 
-Não há agregação entre scans: a redundância entre scans sobrepostos permanece. Isso é uma limitação assumida, não um descuido; uma política entre scans exige estado global e uma decisão explícita sobre o que preservar da origem.
+Não há agregação entre scans **no mapa canônico**: a redundância entre scans sobrepostos permanece. Isso é uma limitação assumida, não um descuido; uma política entre scans exige estado global e uma decisão explícita sobre o que preservar da origem. Essa política existe só como representação **derivada** de um mapa bruto finalizado, em um artifact separado que não o modifica: ver [`inter-scan-aggregation.md`](inter-scan-aggregation.md).
 
 ## Sem semântica
 
