@@ -122,24 +122,27 @@ def validate_timestamp_ordering(
         A list of human-readable problems; empty means no problem found.
     """
     problems: list[str] = []
-    last_by_clock: dict[str, tuple[float, str]] = {}
+    # Nanossegundos inteiros, como em synchronize(): em epochs reais o float64 não separa
+    # diferenças abaixo de ~238 ns e esconderia regressões ou inventaria duplicatas.
+    last_by_clock: dict[str, tuple[int, str]] = {}
     for observation in observations:
         clock_id = observation.timestamp.clock_id
-        seconds = observation.timestamp.to_float_seconds()
+        nanoseconds = observation.timestamp.total_nanoseconds()
         previous = last_by_clock.get(clock_id)
         if previous is not None:
-            previous_seconds, previous_id = previous
-            if seconds < previous_seconds:
+            previous_nanoseconds, previous_id = previous
+            if nanoseconds < previous_nanoseconds:
                 problems.append(
-                    f"{observation.observation_id}: timestamp {seconds} is before "
-                    f"{previous_id}'s {previous_seconds} on clock {clock_id!r} (non-monotonic)"
+                    f"{observation.observation_id}: timestamp {nanoseconds} ns is before "
+                    f"{previous_id}'s {previous_nanoseconds} ns on clock {clock_id!r} "
+                    "(non-monotonic)"
                 )
-            elif seconds == previous_seconds and not allow_duplicates:
+            elif nanoseconds == previous_nanoseconds and not allow_duplicates:
                 problems.append(
-                    f"{observation.observation_id}: duplicate timestamp {seconds} on clock "
+                    f"{observation.observation_id}: duplicate timestamp {nanoseconds} ns on clock "
                     f"{clock_id!r} (shared with {previous_id})"
                 )
-        last_by_clock[clock_id] = (seconds, str(observation.observation_id))
+        last_by_clock[clock_id] = (nanoseconds, str(observation.observation_id))
     return problems
 
 

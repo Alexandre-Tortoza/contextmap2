@@ -301,20 +301,22 @@ def diagnose_source_clock(
     """
     missing = 0
     non_monotonic = 0
-    last_by_clock: dict[str, float] = {}
+    # Monotonicidade em nanossegundos inteiros: o float64 colapsa diferenças de ~238 ns em
+    # epochs reais. As deltas continuam em float: são distribuição, não ordem.
+    last_by_clock: dict[str, int] = {}
     deltas: list[float] = []
     for observation in observations:
         raw = _raw_source_timestamp(observation)
         if raw.seconds == 0 and raw.nanoseconds == 0:
             missing += 1
-        seconds = raw.to_float_seconds()
+        nanoseconds = raw.total_nanoseconds()
         previous = last_by_clock.get(raw.clock_id)
-        if previous is not None and seconds < previous:
+        if previous is not None and nanoseconds < previous:
             non_monotonic += 1
-        last_by_clock[raw.clock_id] = seconds
+        last_by_clock[raw.clock_id] = nanoseconds
         recording_ns = observation.provenance.raw_metadata.get(_RECORDING_TIME_METADATA_KEY)
         if isinstance(recording_ns, int):
-            deltas.append(recording_ns / _NANOSECONDS_PER_SECOND - seconds)
+            deltas.append(recording_ns / _NANOSECONDS_PER_SECOND - raw.to_float_seconds())
 
     mean_delta = fmean(deltas) if deltas else None
     stdev_delta = pstdev(deltas) if len(deltas) >= 2 else None

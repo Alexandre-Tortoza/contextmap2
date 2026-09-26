@@ -85,6 +85,40 @@ def test_timestamps_on_different_clocks_are_never_compared() -> None:
     assert validate_timestamp_ordering(observations) == []
 
 
+# Em t ~ 1.7e9 s o ulp de float64 é ~238 ns: estes pares colapsam no mesmo float.
+_EPOCH_SECONDS = 1_700_000_000
+
+
+def _at(observation_id: str, nanoseconds: int) -> ImageObservation:
+    return ImageObservation(
+        observation_id=SourceObservationId(observation_id),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=SourceTimestamp(seconds=_EPOCH_SECONDS, nanoseconds=nanoseconds, clock_id="rec"),
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/corridor"),
+        width=1,
+        height=1,
+        encoding=ImageEncoding.RGB8,
+        data=b"\x00\x00\x00",
+    )
+
+
+def test_a_regression_below_float_resolution_is_non_monotonic() -> None:
+    # Regressão ING-02: 100 ns -> 0 ns viravam o mesmo float e a regressão sumia.
+    problems = validate_timestamp_ordering([_at("first", 100), _at("second", 0)])
+
+    assert len(problems) == 1
+    assert "non-monotonic" in problems[0]
+
+
+def test_distinct_timestamps_below_float_resolution_are_not_duplicates() -> None:
+    problems = validate_timestamp_ordering(
+        [_at("first", 10), _at("second", 50)], allow_duplicates=False
+    )
+
+    assert problems == []
+
+
 def test_detects_unknown_frame_reference() -> None:
     problems = validate_frame_references(
         [build_observation_with_unknown_frame()], build_calibration_set()

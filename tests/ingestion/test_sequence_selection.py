@@ -1,3 +1,4 @@
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,30 @@ def test_timestamp_range_selects_within_bounds(reader: SequenceArtifactReader) -
     )
 
     assert [obs.observation_id for obs in result.observations] == ["frame-0001", "frame-0002"]
+
+
+def test_timestamp_range_bounds_compare_exact_nanoseconds(tmp_path: Path) -> None:
+    # Regressão ING-02: em t ~ 1.7e9 s, 200 ns e 300 ns arredondam para o mesmo float (~238 ns);
+    # o limite inferior é esse float, então só a entrada de 300 ns está de fato dentro da faixa.
+    writer = SequenceArtifactWriter(
+        output_dir=tmp_path / "ingestion",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-0001"),
+    )
+    for observation_id, nanoseconds in (("below", 200), ("inside", 300)):
+        image = _image(observation_id, seconds=1_700_000_000)
+        stamp = SourceTimestamp(seconds=1_700_000_000, nanoseconds=nanoseconds, clock_id="clock-a")
+        writer.add_observation(dataclasses.replace(image, timestamp=stamp))
+    writer.finalize()
+    start = 1_700_000_000 + 200e-9
+    assert start == 1_700_000_000 + 300e-9  # os dois colapsam no mesmo float
+
+    result = resolve_selection(
+        SequenceArtifactReader(tmp_path / "ingestion"),
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=start, end_seconds=1.8e9),
+    )
+
+    assert [obs.observation_id for obs in result.observations] == ["inside"]
 
 
 def test_timestamp_range_excludes_mismatched_clock_id(reader: SequenceArtifactReader) -> None:
