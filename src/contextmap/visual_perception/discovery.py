@@ -645,19 +645,21 @@ def _remap_candidate(
 
 
 def _resize_mask(mask: InlineMask, output_width: int, output_height: int) -> InlineMask:
-    """Resize by nearest neighbour: output pixel ``x`` samples ``int(x * width / output_width)``."""
+    """Resize by nearest neighbour, sampling at pixel centres.
+
+    Output pixel ``x`` covers ``[x, x + 1)`` and its centre ``x + 0.5`` maps to
+    ``(x + 0.5) * width / output_width`` in the input, the same continuous convention the box
+    remap uses; the input pixel containing that point is sampled. Sampling the corner ``x`` instead
+    shifted the mask by up to one pixel whenever the scale was not 1 (VP-08).
+    """
     import numpy as np
 
     if (mask.width, mask.height) == (output_width, output_height):
         return mask
-    # A mesma aritmética da amostragem pixel a pixel: produto inteiro exato, divisão em float64
-    # e truncamento, limitado à última coluna/linha.
-    columns = np.minimum(
-        mask.width - 1, (np.arange(output_width) * mask.width / output_width).astype(np.int64)
-    )
-    rows = np.minimum(
-        mask.height - 1, (np.arange(output_height) * mask.height / output_height).astype(np.int64)
-    )
+    # floor((2x + 1) * in / (2 * out)) em inteiros: exato, sem erro de ponto flutuante, e sempre
+    # em [0, in - 1], porque (2x + 1) < 2 * out; por isso não há clamp nas bordas.
+    columns = (2 * np.arange(output_width) + 1) * mask.width // (2 * output_width)
+    rows = (2 * np.arange(output_height) + 1) * mask.height // (2 * output_height)
     return InlineMask(mask.as_array()[rows[:, None], columns[None, :]])
 
 

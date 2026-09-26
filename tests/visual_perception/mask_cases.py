@@ -10,6 +10,11 @@ Issue #608 re-recorded the normalization digests on purpose: the merge represent
 the largest-area member (``largest_area_v1``), and that policy joined the config digest every
 normalization digest covers.
 
+Issue #619 (VP-08) re-recorded the remap digests on purpose: the nearest-neighbour tile resize
+samples pixel centres instead of corners. The 33 re-recorded seeds each resize at least one axis
+by a ratio that is not an integer upscale; the 7 unchanged ones are integer upscales on both axes
+(where both rules pick the same pixel) or seeds (4, 23, 36) whose moved samples hit equal pixels.
+
 ``inline_mask`` is the only place these tests build a mask from pixels, so the representation
 change touches one helper and never the scenarios or the digests.
 """

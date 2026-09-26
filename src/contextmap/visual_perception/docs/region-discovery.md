@@ -188,7 +188,12 @@ adapters pelo `RegionCandidateDiscovery`: ele recebe `DiscoveryInput` e devolve 
 mais diagnostics. A orquestração do Core não contém branches para SAM2, SAM3 ou Florence-2.
 Propostas locais de tiles são remapeadas para a imagem preparada, recebem ID prefixado pelo pass e
 preservam o ID nativo em provenance. Máscaras inline são redimensionadas e expandidas no espaço
-global antes da normalização.
+global antes da normalização. O redimensionamento é por vizinho mais próximo amostrando o
+**centro** de cada pixel de saída: o pixel `x` cobre `[x, x + 1)`, seu centro `x + 0.5` vai para
+`(x + 0.5) * largura_entrada / largura_saída`, a mesma convenção contínua do remapeamento de
+boxes, e o pixel de entrada que contém esse ponto é o amostrado (em aritmética inteira, sem erro de
+ponto flutuante). Amostrar o canto `x` deslocava a máscara em até 1 px sempre que a escala não era
+1 (#619).
 
 `TilingConfig.scale` define as dimensões efetivamente apresentadas ao backend: cada
 `DiscoveryPass` registra `input_dimensions` e o transform inverso para o espaço preparado. Boxes e

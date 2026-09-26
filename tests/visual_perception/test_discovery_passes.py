@@ -330,6 +330,27 @@ def test_tile_mask_remapping_matches_the_recorded_behaviour(seed: int) -> None:
     assert digest(remapped) == GOLDEN["remap"][str(seed)]
 
 
+@pytest.mark.parametrize(
+    ("row", "output_width", "expected"),
+    [
+        # VP-08: amostrar o canto da célula dava (F, F, T), deslocando a máscara em até 1 px.
+        pytest.param([False, True], 3, [False, True, True], id="upscale-2-to-3"),
+        pytest.param([False, True, False, False], 2, [True, False], id="downscale-4-to-2"),
+        pytest.param([False, True, True], 3, [False, True, True], id="identity"),
+    ],
+)
+def test_nearest_neighbour_resize_samples_pixel_centres(
+    row: list[bool], output_width: int, expected: list[bool]
+) -> None:
+    horizontal = _resize_mask(InlineMask(np.array([row], dtype=bool)), output_width, 1)
+    vertical = _resize_mask(
+        InlineMask(np.array([[value] for value in row], dtype=bool)), 1, output_width
+    )
+
+    assert horizontal.as_array().tolist() == [expected]
+    assert vertical.as_array().tolist() == [[value] for value in expected]
+
+
 def test_a_tile_mask_that_does_not_fit_the_image_is_refused() -> None:
     # Antes, um tile fora da imagem dava a volta para a linha seguinte em silêncio.
     tile = InlineMask(np.ones((2, 3), dtype=bool))
