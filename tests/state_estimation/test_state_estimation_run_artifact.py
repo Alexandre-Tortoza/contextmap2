@@ -316,6 +316,26 @@ def test_gaps_rejections_and_motion_can_be_investigated_from_the_persisted_run(
     assert {event["code"] for event in events} == set(manifest.diagnostic_counts)
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "outputs/../../escaped.json",
+        "metrics/../outputs/../../escaped.json",
+        "outputs/../manifest.json",
+    ],
+)
+def test_a_record_path_that_leaves_its_contractual_directory_is_refused(
+    tmp_path: Path, relative_path: str
+) -> None:
+    # #594: o prefixo textual não basta; `..` escaparia de outputs/ ou metrics/.
+    _write(tmp_path)
+    (tmp_path / "escaped.json").write_text("{}", encoding="utf-8")
+    reader = StateEstimationRunReader(_run_dir(tmp_path))
+
+    with pytest.raises(RunArtifactError, match="not a contractual JSON record"):
+        reader.read_record(relative_path)
+
+
 def test_the_preflight_report_and_frame_summary_are_persisted(tmp_path: Path) -> None:
     _write(tmp_path)
     reader = StateEstimationRunReader(_run_dir(tmp_path))

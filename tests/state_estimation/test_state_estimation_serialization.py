@@ -5,7 +5,7 @@ import math
 import pytest
 from pose_builders import make_pose, make_trajectory
 
-from contextmap.ingestion import SourceObservationId
+from contextmap.ingestion import SequenceArtifactId, SourceObservationId
 from contextmap.state_estimation import (
     PoseEstimateId,
     PoseProvenance,
@@ -94,6 +94,38 @@ def test_trajectory_metadata_preserves_run_level_provenance() -> None:
         "backend_version": "0",
         "configuration_fingerprint": "sha256:cfg",
     }
+
+
+def test_trajectory_metadata_round_trips_the_auxiliary_sequence_lineage() -> None:
+    # #594: a sequência auxiliar mesclada (#555) é linhagem da trajetória, não só do manifesto.
+    trajectory = make_trajectory()
+    trajectory = dataclasses.replace(
+        trajectory,
+        provenance=dataclasses.replace(
+            trajectory.provenance,
+            auxiliary_sequence_artifact_id=SequenceArtifactId("sequence-aux-0001"),
+            auxiliary_selection_id="aux-selection",
+        ),
+    )
+
+    metadata = _through_json(encode_trajectory_metadata(trajectory))
+
+    assert decode_trajectory(metadata, trajectory.poses) == trajectory
+
+
+def test_trajectory_metadata_without_auxiliary_lineage_decodes_as_absent() -> None:
+    # Records gravados antes da #594 não têm os campos auxiliares.
+    trajectory = make_trajectory()
+    metadata = _through_json(encode_trajectory_metadata(trajectory))
+    provenance = metadata["provenance"]
+    assert isinstance(provenance, dict)
+    provenance.pop("auxiliary_sequence_artifact_id", None)
+    provenance.pop("auxiliary_selection_id", None)
+
+    decoded = decode_trajectory(metadata, trajectory.poses)
+
+    assert decoded.provenance.auxiliary_sequence_artifact_id is None
+    assert decoded.provenance.auxiliary_selection_id is None
 
 
 def test_derived_pose_round_trips_with_the_estimates_it_was_derived_from() -> None:

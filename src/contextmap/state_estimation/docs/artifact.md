@@ -42,7 +42,9 @@ Um run cujo preflight de geometria estava `BLOCKED` nunca é persistido: o write
 
 `StateEstimationRunReader` abre um run somente pelo seu diretório. `pose(estimate_id)` e `pose_at(timestamp)` usam `pose-index.jsonl` para ler apenas os bytes daquela pose: não carregam as demais nem qualquer arquivo de debug. `pose_at` exige o mesmo domínio de clock (`ClockDomainMismatchError` caso contrário) e devolve `None` quando nenhuma pose tem exatamente aquele timestamp; para pose mais próxima ou interpolada use `TrajectoryLookup(reader.trajectory())`.
 
-`read_record()` lê JSON de `outputs/` e `metrics/` e recusa `debug/`, para que nenhum estágio downstream dependa dele por engano.
+`outputs/trajectory.json` carrega a `TrajectoryProvenance` completa, inclusive `auxiliary_sequence_artifact_id`/`auxiliary_selection_id` (#594): a trajetória lida de volta preserva a mesma linhagem do manifesto. Records gravados antes disso, sem esses campos, decodificam com `None`.
+
+`read_record()` lê JSON de `outputs/` e `metrics/` e recusa `debug/`, para que nenhum estágio downstream dependa dele por engano. Também recusa caminhos absolutos ou com `..`, que escapariam do diretório contratual apesar do prefixo.
 
 ## Investigar anomalias sem reexecutar
 
