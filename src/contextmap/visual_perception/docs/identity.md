@@ -73,6 +73,13 @@ Uma região de grounding nunca colide com uma região de discovery nem com a sa�
 outro request, e mudar só a query muda só as identidades que dependem dela. Ver
 [`region-grounding.md`](region-grounding.md).
 
+`grounding_point_id_for()` dá a um ponto de grounding (que não é região) a mesma forma de
+identidade, `"<rid>--grounding-<sha256>-point-NNNN"`, para que um prompt de refinamento o
+nomeie. `refined_region_id_for(result_id, proposal_id, configuration_fingerprint)` identifica a
+região produzida por um refinador: `"<rid>--refinement-<sha256(proposta, fingerprint)>"`, distinta
+da proposta e diferente para cada configuração do refinador. Ver
+[`region-refinement.md`](region-refinement.md).
+
 ## Runs repetidos permanecem distintos
 
 Duas execuções (`run_id` diferente) sobre a **mesma** `SourceObservation` produzem `PerceptionResultId`s diferentes (o `run_id` faz parte da chave), mas ambas preservam o mesmo `source_observation_id` — exatamente a distinção central da issue #48/#50: reprocessamento nunca é uma nova observação física.

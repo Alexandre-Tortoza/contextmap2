@@ -248,16 +248,7 @@ class RegionGroundingRequest:
             raise ValueError("grounding request perception_result_id must not be empty")
         if not self.configuration_fingerprint.strip():
             raise ValueError("grounding request configuration_fingerprint must not be empty")
-        if self.image.payload_artifact is None:
-            raise ValueError(
-                "grounding request image needs a content-addressed payload_artifact: its "
-                "hash is part of the request identity"
-            )
-        if self.image.valid_region is not None or self.image.exclusion_regions:
-            raise ValueError(
-                "grounding does not apply prepared-image valid/exclusion constraints yet; "
-                "refusing a constrained image instead of ignoring the constraint"
-            )
+        validate_grounding_image(self.image, "grounding request")
 
     @property
     def source_observation_id(self) -> SourceObservationId:
@@ -521,21 +512,64 @@ def with_grounded_regions(
 # --- serialization ---------------------------------------------------------------------
 
 
+def validate_grounding_image(image: PreparedImage, owner: str) -> None:
+    """Require the prepared image a grounding-stage request is evaluated on to be usable.
+
+    Shared by grounding and refinement requests: the image must be content-addressed
+    (``payload_artifact``), because its hash is part of the request identity, and carry no
+    valid/exclusion constraint, which neither stage applies yet; a constrained image is
+    refused instead of having its constraint silently ignored.
+
+    Args:
+        image: The prepared image.
+        owner: Name of the request, for the error message.
+
+    Raises:
+        ValueError: If the image is not content-addressed or is constrained.
+    """
+    if image.payload_artifact is None:
+        raise ValueError(
+            f"{owner} image needs a content-addressed payload_artifact: its hash is part of "
+            "the request identity"
+        )
+    if image.valid_region is not None or image.exclusion_regions:
+        raise ValueError(
+            f"{owner}: prepared-image valid/exclusion constraints are not applied yet; "
+            "refusing a constrained image instead of ignoring the constraint"
+        )
+
+
+def encode_prepared_image_reference(image: PreparedImage) -> dict[str, Any]:
+    """Encode the identity of a validated prepared image (never its pixels)."""
+    artifact = cast(ArtifactReference, image.payload_artifact)
+    return {
+        "source_observation_id": str(image.source_observation_id),
+        "payload_reference": image.payload_reference,
+        "payload_artifact": artifact.to_dict(),
+        "width": image.width,
+        "height": image.height,
+        "transformations": [record.to_dict() for record in image.transformations],
+    }
+
+
+def decode_prepared_image_reference(record: Mapping[str, Any]) -> PreparedImage:
+    """Decode :func:`encode_prepared_image_reference` output."""
+    return PreparedImage(
+        source_observation_id=SourceObservationId(record["source_observation_id"]),
+        payload_reference=record["payload_reference"],
+        payload_artifact=ArtifactReference.from_dict(record["payload_artifact"]),
+        width=record["width"],
+        height=record["height"],
+        transformations=tuple(_decode_transformation(item) for item in record["transformations"]),
+    )
+
+
 def encode_region_grounding_request(request: RegionGroundingRequest) -> dict[str, Any]:
     """Encode a grounding request, including its query verbatim and its identity."""
-    image = request.image
-    artifact = cast(ArtifactReference, image.payload_artifact)
     return {
         "request_id": str(request.request_id),
         "perception_result_id": str(request.perception_result_id),
-        "image": {
-            "source_observation_id": str(image.source_observation_id),
-            "payload_reference": image.payload_reference,
-            "payload_artifact": artifact.to_dict(),
-            "width": image.width,
-            "height": image.height,
-            "transformations": [record.to_dict() for record in image.transformations],
-        },
+        "image": encode_prepared_image_reference(request.image),
         "query": _encode_query(request.query),
         "configuration_fingerprint": request.configuration_fingerprint,
     }
@@ -547,19 +581,9 @@ def decode_region_grounding_request(record: Mapping[str, Any]) -> RegionGroundin
     Raises:
         ValueError: If the recorded ``request_id`` is not the digest of the decoded inputs.
     """
-    raw_image = record["image"]
     request = RegionGroundingRequest(
         perception_result_id=PerceptionResultId(record["perception_result_id"]),
-        image=PreparedImage(
-            source_observation_id=SourceObservationId(raw_image["source_observation_id"]),
-            payload_reference=raw_image["payload_reference"],
-            payload_artifact=ArtifactReference.from_dict(raw_image["payload_artifact"]),
-            width=raw_image["width"],
-            height=raw_image["height"],
-            transformations=tuple(
-                _decode_transformation(item) for item in raw_image["transformations"]
-            ),
-        ),
+        image=decode_prepared_image_reference(record["image"]),
         query=_decode_query(record["query"]),
         configuration_fingerprint=record["configuration_fingerprint"],
     )

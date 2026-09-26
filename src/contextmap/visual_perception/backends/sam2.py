@@ -1,15 +1,25 @@
-"""SAM2 adapter for the canonical Region Discovery capability."""
+"""SAM2 adapters: automatic Region Discovery and prompted grounding-to-mask refinement.
+
+Both adapters share one SAM2 model runtime family: the automatic path wraps the official
+``SAM2AutomaticMaskGenerator``, the prompted path wraps the official
+``SAM2ImagePredictor`` built from the same, already loaded, model. The model loader itself
+belongs to the runtime provider; no path here loads a second SAM2.
+"""
 
 from __future__ import annotations
 
+import io
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 from importlib import import_module
 from math import isfinite
+from pathlib import Path, PurePosixPath
 from time import perf_counter
-from typing import Protocol, cast
+from types import MappingProxyType
+from typing import Any, Protocol, cast
 
 from ..discovery import (
     BackendDiagnostics,
@@ -19,8 +29,20 @@ from ..discovery import (
     discover_canonical_regions,
     validate_materialized_discovery_image,
 )
+from ..grounding import GroundingGeometry
 from ..models import BackendProvenance, PreparedImage, Region2D
 from ..normalization import NormalizationConfig
+from ..refinement import (
+    REFINEMENT_CAPABILITY,
+    RefinementDiagnostics,
+    RefinementPrompt,
+    RefinementRequestError,
+    RegionRefinementCapabilities,
+    RegionRefinementExecution,
+    RegionRefinementRequest,
+    refinement_outcome,
+    validate_refinement_request,
+)
 from ..region_models import (
     BackendScore,
     BoundingBox,
@@ -287,6 +309,335 @@ class Sam2RegionDiscovery:
                 *proposal.metadata,
             ),
         )
+
+
+_REFINEMENT_PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
+_PREDICTED_IOU_SEMANTICS = (
+    "SAM2-native predicted IoU of the mask for its prompt; a model self-estimate, not a "
+    "calibrated probability that the mask is correct"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Sam2RefinementConfig:
+    """Effective configuration of SAM2 prompted refinement.
+
+    Attributes:
+        checkpoint: SAM2 checkpoint identity.
+        model_version: SAM2 model/package version.
+        device: Device the provider runs the model on.
+        precision: ``float32`` runs as loaded; ``float16``/``bfloat16`` run under
+            ``torch.autocast``, as the official examples do.
+        mask_threshold: Logit threshold of the official ``SAM2ImagePredictor``.
+        max_hole_area: Official post-processing: fill holes up to this area (0 disables).
+        max_sprinkle_area: Official post-processing: remove specks up to this area.
+    """
+
+    checkpoint: str
+    model_version: str = "unknown"
+    device: str = "cpu"
+    precision: str = "float32"
+    mask_threshold: float = 0.0
+    max_hole_area: float = 0.0
+    max_sprinkle_area: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Validate identity and predictor settings before any model is requested."""
+        if not self.checkpoint or not self.model_version or not self.device:
+            raise ValueError("SAM2 refinement checkpoint, version and device must not be empty")
+        if self.precision not in _REFINEMENT_PRECISIONS:
+            raise ValueError(
+                f"SAM2 refinement precision must be one of {sorted(_REFINEMENT_PRECISIONS)}"
+            )
+        if not isfinite(self.mask_threshold):
+            raise ValueError("SAM2 refinement mask_threshold must be finite")
+        for name, value in (
+            ("max_hole_area", self.max_hole_area),
+            ("max_sprinkle_area", self.max_sprinkle_area),
+        ):
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"SAM2 refinement {name} must be finite and non-negative")
+
+    @property
+    def digest(self) -> str:
+        """Return the deterministic identity of this refiner configuration."""
+        payload = {"task": "prompt_refinement", **asdict(self)}
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return f"sha256:{sha256(serialized.encode()).hexdigest()}"
+
+
+@dataclass(frozen=True, slots=True)
+class Sam2PromptedMask:
+    """SDK-isolated SAM2 answer to one prompt: a full-image mask and its predicted IoU."""
+
+    mask: tuple[bool, ...]
+    predicted_iou: float
+
+    def __post_init__(self) -> None:
+        """Reject a non-finite native score."""
+        if not isfinite(self.predicted_iou):
+            raise ValueError("SAM2 predicted IoU must be finite")
+
+
+class Sam2PromptRuntime(Protocol):
+    """Internal seam around a loaded SAM2 model answering box and point prompts.
+
+    It receives the exact, already hash-verified image bytes, so a provider-supplied
+    runtime never needs to know where the run keeps its prepared images.
+    """
+
+    def predict_prompts(
+        self,
+        *,
+        image: bytes,
+        width: int,
+        height: int,
+        prompts: tuple[RefinementPrompt, ...],
+        config: Sam2RefinementConfig,
+    ) -> tuple[Sam2PromptedMask, ...]:
+        """Return one row-major ``width x height`` mask per prompt, in prompt order."""
+        ...
+
+
+class _Sam2ImagePredictor(Protocol):
+    """Minimum official ``SAM2ImagePredictor`` surface used by the prompted runtime."""
+
+    def set_image(self, image: Any) -> None:
+        """Encode one image for the following prompts."""
+        ...
+
+    def predict(self, **kwargs: Any) -> tuple[Any, Any, Any]:
+        """Return masks, predicted IoUs and low-resolution logits for one prompt."""
+        ...
+
+
+class Sam2ImagePredictorRuntime:
+    """Execute the official ``SAM2ImagePredictor`` box/point prompt API."""
+
+    def __init__(
+        self,
+        *,
+        predictor: _Sam2ImagePredictor,
+        config_digest: str,
+        image_decoder: Callable[[bytes], Any] | None = None,
+        autocast: Callable[[Sam2RefinementConfig], AbstractContextManager[object]] | None = None,
+    ) -> None:
+        """Bind a predictor built for one refiner configuration.
+
+        Args:
+            predictor: Official image predictor around the loaded SAM2 model.
+            config_digest: Digest of the configuration the predictor was built for.
+            image_decoder: Decodes image bytes into an HWC RGB array; defaults to Pillow
+                and NumPy, imported lazily.
+            autocast: Builds the precision context; defaults to ``torch.autocast`` for
+                ``float16``/``bfloat16`` and no context for ``float32``.
+        """
+        if not config_digest:
+            raise ValueError("SAM2 prompted runtime configuration digest must not be empty")
+        self._predictor = predictor
+        self._config_digest = config_digest
+        self._decode = image_decoder or _decode_rgb
+        self._autocast = autocast or _refinement_autocast
+
+    @classmethod
+    def from_model(
+        cls, *, model: object, config: Sam2RefinementConfig
+    ) -> Sam2ImagePredictorRuntime:
+        """Build the official predictor around a SAM2 model the provider already loaded."""
+        module = import_module("sam2.sam2_image_predictor")
+        predictor = module.SAM2ImagePredictor(
+            model,
+            mask_threshold=config.mask_threshold,
+            max_hole_area=config.max_hole_area,
+            max_sprinkle_area=config.max_sprinkle_area,
+        )
+        return cls(predictor=predictor, config_digest=config.digest)
+
+    def predict_prompts(
+        self,
+        *,
+        image: bytes,
+        width: int,
+        height: int,
+        prompts: tuple[RefinementPrompt, ...],
+        config: Sam2RefinementConfig,
+    ) -> tuple[Sam2PromptedMask, ...]:
+        """Encode the image once, then answer every prompt with a single mask."""
+        if config.digest != self._config_digest:
+            raise ValueError("SAM2 prompted runtime configuration digest does not match")
+        array = self._decode(image)
+        shape = tuple(getattr(array, "shape", ())[:2])
+        if shape != (height, width):
+            raise ValueError(
+                f"decoded image dimensions {shape} differ from the prepared image {(height, width)}"
+            )
+        numpy = import_module("numpy")
+        answers: list[Sam2PromptedMask] = []
+        with self._autocast(config):
+            self._predictor.set_image(array)
+            for prompt in prompts:
+                if prompt.box is not None:
+                    box = prompt.box
+                    arguments: dict[str, Any] = {
+                        "box": numpy.array(
+                            [box.x_min, box.y_min, box.x_max, box.y_max], dtype=numpy.float32
+                        )
+                    }
+                else:
+                    point = cast(Any, prompt.point)
+                    arguments = {
+                        "point_coords": numpy.array([[point.x, point.y]], dtype=numpy.float32),
+                        "point_labels": numpy.array([1], dtype=numpy.int32),
+                    }
+                # Uma máscara por prompt: escolher entre as saídas multimask seria uma
+                # política científica a mais, não declarada nesta configuração.
+                masks, scores, _logits = self._predictor.predict(
+                    **arguments, multimask_output=False
+                )
+                answers.append(
+                    Sam2PromptedMask(
+                        mask=tuple(
+                            bool(value) for value in numpy.asarray(masks[0]).reshape(-1).tolist()
+                        ),
+                        predicted_iou=float(numpy.asarray(scores).reshape(-1)[0]),
+                    )
+                )
+        return tuple(answers)
+
+
+class Sam2PromptRefinement:
+    """Refine grounding proposals into mask-backed regions with SAM2 box/point prompts."""
+
+    def __init__(
+        self,
+        *,
+        config: Sam2RefinementConfig,
+        runtime: Sam2PromptRuntime,
+        prepared_image_root: Path,
+    ) -> None:
+        """Bind the refiner to one configuration, runtime and prepared-image directory."""
+        self._config = config
+        self._runtime = runtime
+        self._root = prepared_image_root
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Return SAM2 identity as a refiner."""
+        return BackendProvenance(
+            backend_id="sam2",
+            capability=REFINEMENT_CAPABILITY,
+            provider="facebook",
+            model=self._config.checkpoint,
+            version=self._config.model_version,
+            configuration_fingerprint=self._config.digest,
+        )
+
+    def capabilities(self) -> RegionRefinementCapabilities:
+        """Declare box and point prompts, both native to SAM2."""
+        return RegionRefinementCapabilities(
+            prompt_geometries=frozenset({GroundingGeometry.BOX, GroundingGeometry.POINT})
+        )
+
+    def refine(self, request: RegionRefinementRequest) -> RegionRefinementExecution:
+        """Validate the request, run SAM2 once per image and judge every mask.
+
+        Raises:
+            RefinementRequestError: Before inference, for an unaccepted prompt or a request
+                fingerprinted for another configuration.
+            ValueError: If the image no longer matches its hash, or the runtime breaks its
+                seam (missing mask, mask of another size).
+        """
+        validate_refinement_request(request, self.capabilities())
+        if request.configuration_fingerprint != self._config.digest:
+            raise RefinementRequestError(
+                "refinement request configuration fingerprint does not match this SAM2 "
+                "refiner configuration"
+            )
+        payload = _read_prepared_image(self._root, request.image)
+        width, height = request.image.width, request.image.height
+        started = perf_counter()
+        answers = self._runtime.predict_prompts(
+            image=payload,
+            width=width,
+            height=height,
+            prompts=request.prompts,
+            config=self._config,
+        )
+        latency_ms = (perf_counter() - started) * 1000
+        if len(answers) != len(request.prompts):
+            raise ValueError(
+                f"SAM2 runtime answered {len(answers)} of {len(request.prompts)} prompts"
+            )
+        provenance = self.backend_provenance()
+        outcomes = []
+        for prompt, answer in zip(request.prompts, answers, strict=True):
+            if len(answer.mask) != width * height:
+                raise ValueError(
+                    f"SAM2 mask for {prompt.proposal_id!r} does not match the {width}x{height} "
+                    "prepared image"
+                )
+            outcomes.append(
+                refinement_outcome(
+                    request=request,
+                    prompt=prompt,
+                    provenance=provenance,
+                    mask=InlineMask(width=width, height=height, data=answer.mask),
+                    native_scores=(
+                        BackendScore(
+                            name="predicted_iou",
+                            value=answer.predicted_iou,
+                            semantics=_PREDICTED_IOU_SEMANTICS,
+                        ),
+                    ),
+                )
+            )
+        return RegionRefinementExecution(
+            request=request,
+            provenance=provenance,
+            outcomes=tuple(outcomes),
+            diagnostics=RefinementDiagnostics(latency_ms=latency_ms),
+            effective_configuration=MappingProxyType(
+                cast(dict[str, JsonScalar], asdict(self._config))
+            ),
+        )
+
+
+def _read_prepared_image(root: Path, image: PreparedImage) -> bytes:
+    """Read the prepared image under ``root`` and verify it is the one the request names."""
+    artifact = image.payload_artifact
+    if artifact is None:
+        raise ValueError("the prepared image has no recorded sha256 to verify")
+    reference = PurePosixPath(image.payload_reference)
+    if reference.is_absolute() or ".." in reference.parts:
+        raise ValueError(
+            f"prepared image {image.payload_reference!r} points outside the prepared-image root"
+        )
+    payload = (root / reference).read_bytes()
+    if sha256(payload).hexdigest() != artifact.sha256:
+        raise ValueError(
+            f"prepared image {image.payload_reference!r} does not match its recorded sha256"
+        )
+    return payload
+
+
+def _decode_rgb(payload: bytes) -> Any:
+    """Decode image bytes into the HWC uint8 RGB array SAM2 expects."""
+    image_module = import_module("PIL.Image")
+    numpy = import_module("numpy")
+    with image_module.open(io.BytesIO(payload)) as image:
+        return numpy.asarray(image.convert("RGB"))
+
+
+def _refinement_autocast(config: Sam2RefinementConfig) -> AbstractContextManager[object]:
+    """Return the ``torch.autocast`` context that realizes the configured precision."""
+    if config.precision == "float32":
+        return nullcontext()
+    torch = import_module("torch")
+    return cast(
+        AbstractContextManager[object],
+        torch.autocast(
+            device_type=config.device.split(":", 1)[0], dtype=getattr(torch, config.precision)
+        ),
+    )
 
 
 def _validate_unit_threshold(value: float, name: str) -> None:

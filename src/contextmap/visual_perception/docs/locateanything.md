@@ -83,6 +83,34 @@ O adapter ainda registra warnings, sem mudar a evidência:
 - Nenhum desses valores é confiança, e nenhum é inventado quando ausente. O worker público
   não expõe probabilidade por caixa; calibração é trabalho separado (#573).
 
+## Diagnósticos nativos e calibração (#573)
+
+Todos os valores abaixo são **diagnósticos nativos brutos**: nome e valor como o upstream os
+produz, preservados sem alteração na serialização e no artifact. Nenhum é confiança nem
+probabilidade calibrada, e um valor ausente continua ausente (nunca vira 0 ou 1; um valor
+não finito, como `nan`, fica como o texto nativo). Eles permanecem só diagnósticos até que
+uma calibração seja ajustada e avaliada num split retido
+([`score-calibration.md`](../../evaluation/docs/score-calibration.md)).
+
+| Campo | Granularidade | Origem | Semântica |
+|---|---|---|---|
+| `stats.raw` | execução | texto "Statistic Info" do `generate()` oficial, ou o dict do runtime batch serializado | verbatim |
+| `stats.num_tokens` | execução | idem | tokens gerados |
+| `stats.generate_time(s)` | execução | idem | tempo de geração medido pelo upstream, em segundos |
+| `stats.tps`, `stats.bps` | execução | idem | tokens/s e caixas/s do upstream |
+| `stats.forward_step` | execução | idem | passos de forward do decoder |
+| `stats.num_boxes` | execução | idem | contagem de `<box>` do upstream (inclui `none` e rejeitadas) |
+| `stats.prefill_time` | execução | idem | tempo de prefill, em segundos |
+| `stats.switch_to_ar` | execução | idem | fallbacks MTP → AR do modo `hybrid` |
+| `runtime.cold_load_ms` | execução | runtime empacotado | só na chamada que carregou o modelo |
+| `decoder` | saída | histórico de amostragem | `mtp`, `ar` ou `mtp+ar`; ausente se o histórico não reconstrói a resposta ou não existe (runtime batch) |
+| `latency_ms`, `peak_memory_bytes` | execução | adapter/runtime | medições da chamada |
+
+O worker público não expõe probabilidade por caixa ou ponto; as probabilidades de token que
+o `generate()` calcula internamente não são devolvidas, então não há score nativo por saída
+para calibrar hoje. Se um runtime passar a expor um, ele entra como score nativo com nome e
+semântica próprios, nunca como `confidence`.
+
 ## Runtime e configuração reproduzível (#569)
 
 O adapter só conhece o seam `LocateAnythingRuntime.generate(image, prompt, config) ->

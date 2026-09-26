@@ -1,6 +1,6 @@
 # Matriz de capacidades e compatibilidade (#522)
 
-`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.0.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
+`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.1.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
 
 A matriz descreve composições experimentais admissíveis; ela **não** escolhe um pipeline canônico. Um modelo só ocupa vários papéis por contratos de evidência explícitos de cada capability: geometria, hipótese semântica e crença persistente nunca se fundem só porque saem da mesma inferência.
 
@@ -52,7 +52,7 @@ Comparar operações de grupos diferentes (por exemplo, caixa × máscara numa m
 |---|---|
 | 1. grade de capability/backend | grupos com dois ou mais membros `supported`: `dense_visual_features`, `scene_interpretation.*`, `region_interpretation.*` |
 | 2. tarefa/estratégia nativa | as tasks do Florence-2, a estratégia do SAM3 e as políticas do LocateAnything são capabilities distintas (`RuntimeBinding.settings`); compará-las é ablação de tarefa, não de backend |
-| 3. grounding/refinamento | LocateAnything → refinamento SAM2 (`planned`, #568) × SAM3 texto; caixa sem máscara → associação é `incompatible` |
+| 3. grounding/refinamento | LocateAnything → refinamento SAM2 (`supported`, #568) × SAM3 texto; caixa sem máscara → associação é `incompatible` |
 | 4. features densas/de região | `dense_visual_features`; amostragem 2D→3D ainda `planned` |
 | 5. intérprete semântico | Qwen × Gemini × Eagle 2.5 no mesmo grupo; Florence-2 à parte |
 | 6–9. prompt, views, contexto, orçamento | controles: `prompt_policy` e orçamentos visuais (`min_pixels`/`max_pixels` do Qwen, tiles do Eagle 2.5) `supported`; views (#524), contexto de cena (#529) e política de requisição (#544) `planned` |
@@ -88,7 +88,7 @@ As tabelas abaixo são geradas de `CAPABILITY_MATRIX`; `tests/evaluation/test_ca
 | id | backend | operação nativa | papel | status | issue | grupo de comparação |
 |---|---|---|---|---|---|---|
 | `sam2.automatic_mask_generation` | SAM2 | automatic mask generation (point-grid prompts, IoU/stability filter) | region_discovery | supported | — | automatic_region_proposal.mask |
-| `sam2.box_prompt_refinement` | SAM2 | promptable image segmentation from a box or points (image predictor) | region_refinement | planned | #568 | prompted_mask_refinement |
+| `sam2.box_prompt_refinement` | SAM2 | promptable image segmentation from a box or points (image predictor) | region_refinement | supported | — | prompted_mask_refinement |
 | `sam2.video_tracking` | SAM2 | video object segmentation with memory (masklets across frames) | — | out_of_scope | — | — |
 | `sam3.text_concept_segmentation` | SAM3 | promptable concept segmentation of every instance of a noun phrase | region_discovery | supported | — | category_conditioned_instance_masks |
 | `sam3.exemplar_prompts` | SAM3 | concept segmentation from visual exemplars (positive/negative boxes) | — | out_of_scope | — | — |
@@ -137,10 +137,10 @@ As tabelas abaixo são geradas de `CAPABILITY_MATRIX`; `tests/evaluation/test_ca
 <!-- compositions:start (gerado de CAPABILITY_MATRIX; não editar à mão) -->
 | produtor | consumidor | status | issue | grupo de comparação |
 |---|---|---|---|---|
-| `locateanything.category_detection` | `sam2.box_prompt_refinement` | planned | #568 | category_conditioned_instance_masks |
-| `locateanything.phrase_grounding` | `sam2.box_prompt_refinement` | planned | #568 | phrase_conditioned_instance_masks |
-| `locateanything.pointing` | `sam2.box_prompt_refinement` | incompatible | — | — |
-| `sam2.box_prompt_refinement` | `contextmap2.mask_membership_association` | planned | #568 | — |
+| `locateanything.category_detection` | `sam2.box_prompt_refinement` | supported | — | category_conditioned_instance_masks |
+| `locateanything.phrase_grounding` | `sam2.box_prompt_refinement` | supported | — | phrase_conditioned_instance_masks |
+| `locateanything.pointing` | `sam2.box_prompt_refinement` | supported | — | — |
+| `sam2.box_prompt_refinement` | `contextmap2.mask_membership_association` | supported | — | — |
 | `locateanything.category_detection` | `contextmap2.mask_membership_association` | incompatible | — | — |
 | `florence2.object_detection` | `contextmap2.mask_membership_association` | incompatible | — | — |
 | `florence2.open_vocabulary_detection` | `contextmap2.mask_membership_association` | not_scientifically_comparable | — | — |
