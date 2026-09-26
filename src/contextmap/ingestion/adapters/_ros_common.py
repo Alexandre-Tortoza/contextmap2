@@ -16,8 +16,7 @@ cross-capability access and is not part of the public adapter contract.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -641,7 +640,7 @@ class StreamingContentHash:
 def resolve_window_bounds(
     config: SourceAdapterConfig,
     *,
-    open_reader: Callable[[], AbstractContextManager[Any]],
+    reader: Any,
     topic_kinds: Mapping[str, str],
 ) -> tuple[int | None, int | None]:
     """Resolve a configured window into nanosecond bounds for the bag reader's own time filter.
@@ -654,9 +653,9 @@ def resolve_window_bounds(
 
     Args:
         config: The adapter configuration; ``config.window`` may be ``None``.
-        open_reader: Opens a new reader for the configured source, as a
-            context manager (a fresh one, so this never interferes with a
-            reader already open for the main read).
+        reader: An open ``rosbags`` reader of the configured source. Only
+            its connections and index are read, never a message chunk, so
+            the caller can reuse the same reader for its other checks.
         topic_kinds: Configured topic name -> modality kind, as built by
             each adapter's own ``_configured_topic_kinds()``.
 
@@ -685,7 +684,7 @@ def resolve_window_bounds(
     start_ns = round(window.start_seconds * 1_000_000_000)
     stop_ns = round(window.end_seconds * 1_000_000_000)
 
-    bounds = _recording_time_bounds(open_reader, topic_kinds)
+    bounds = _recording_time_bounds(reader, topic_kinds)
     if bounds is None:
         return start_ns, stop_ns
     source_min_ns, source_max_ns = bounds
@@ -698,10 +697,7 @@ def resolve_window_bounds(
     return start_ns, stop_ns
 
 
-def _recording_time_bounds(
-    open_reader: Callable[[], AbstractContextManager[Any]],
-    topic_kinds: Mapping[str, str],
-) -> tuple[int, int] | None:
+def _recording_time_bounds(reader: Any, topic_kinds: Mapping[str, str]) -> tuple[int, int] | None:
     """Return ``(min, max)`` recording-time nanoseconds for the configured topics, cheaply.
 
     Reading either bound never decompresses a message chunk: a ROS 1
@@ -713,24 +709,23 @@ def _recording_time_bounds(
     its topics either.
 
     Args:
-        open_reader: Opens a new reader for the configured source.
+        reader: An open reader of the configured source.
         topic_kinds: Configured topic name -> modality kind.
 
     Returns:
         The bounds, or ``None`` when the source has no messages on any
         configured topic (ROS 1) or no messages at all (ROS 2).
     """
-    with open_reader() as reader:
-        indexes = getattr(reader, "indexes", None)
-        if indexes is not None:
-            connections = [
-                connection for connection in reader.connections if connection.topic in topic_kinds
-            ]
-            recording_times = [
-                entry.time for connection in connections for entry in indexes[connection.id]
-            ]
-            return (min(recording_times), max(recording_times)) if recording_times else None
+    indexes = getattr(reader, "indexes", None)
+    if indexes is not None:
+        connections = [
+            connection for connection in reader.connections if connection.topic in topic_kinds
+        ]
+        recording_times = [
+            entry.time for connection in connections for entry in indexes[connection.id]
+        ]
+        return (min(recording_times), max(recording_times)) if recording_times else None
 
-        if reader.message_count == 0:
-            return None
-        return reader.start_time, reader.end_time
+    if reader.message_count == 0:
+        return None
+    return reader.start_time, reader.end_time
