@@ -6,6 +6,11 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Geometric mapping:** agregação voxel **inter-scan** como representação derivada e experimental de um mapa bruto, sem modificá-lo: grade (frame, origem, resolução, indexação) como identidade da política, contagens de pontos, scans e observações separadas, lineage por scan recuperável e verificável, invariância a ordem e chunking com tolerância documentada, o artifact derivado `VoxelAggregationArtifact` e a leitura dos centróides como `GeometryBlockSource`. A decisão de contrato está registrada (#623).
+- **Evaluation:** avaliação pareada bruto × agregação, com fidelidade geométrica por faixa de alcance, estabilidade da associação 2D→3D por voxel e geometria do suporte, com as métricas fixadas antes dos resultados. O experimento `experiments/geometric-aggregation-raw-vs-voxel-20260926/` está preparado; o run real está pendente (#624).
+
 ## [0.1.0] - 2026-09-25
 
 Primeira release validada da Solution 1. Escopo congelado em [docs/release-v0.1.0.md](docs/release-v0.1.0.md); notas completas, com capacidades validadas e limitações, em [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

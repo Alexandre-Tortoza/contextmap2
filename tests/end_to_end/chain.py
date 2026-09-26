@@ -58,6 +58,7 @@ from contextmap.geometric_mapping import (
     GeometricMapArtifactReader,
     GeometricMapArtifactWriter,
     GeometricMapRunId,
+    GeometryBlockSource,
     MapDebugLevel,
     MotionCorrectionPolicy,
     ScanDisposition,
@@ -391,16 +392,20 @@ def _frame_input(image: ImageObservation, result: PerceptionResult) -> Associati
     )
 
 
-def _associate(
+def associate(
     workspace: Path,
     sequence: SequenceArtifactReader,
     trajectory: StateEstimationRunReader,
-    geometry: GeometricMapArtifactReader,
+    geometry: GeometryBlockSource,
     results: dict[PerceptionResultId, PerceptionResult],
     run: PerceptionRunId,
     run_index: int,
 ) -> tuple[SensorAssociationOutcome, SensorAssociationRunReader]:
-    """Associate the regions of one perception run; a frame appears once per association run."""
+    """Associate the regions of one perception run; a frame appears once per association run.
+
+    ``geometry`` is any block source of the map, so the same association also runs over a
+    derived representation of it.
+    """
     # O subconjunto de CI grava as imagens sem `calibration_id`, e a associação recusa uma imagem
     # que não nomeia a sua calibração: o teste a nomeia aqui, sem alterar o fixture versionado.
     images = {
@@ -418,7 +423,7 @@ def _associate(
     request = SensorAssociationRequest(
         sequence_artifact_id=sequence.manifest.artifact_id,
         selection_id="full-sequence",
-        geometry=geometry.geometry(),
+        geometry=geometry,
         trajectory=TrajectoryLookup(trajectory.trajectory()),
         pose_policy=LookupPolicy.exact(),
         calibration=calibration,
@@ -728,7 +733,7 @@ def synthetic_chain(workspace: Path) -> Iterator[SyntheticChain]:
             for position, run in enumerate((RUN_A, RUN_B))
         )
         associations = tuple(
-            _associate(workspace, sequence, trajectory, geometry, results, run, run_index)
+            associate(workspace, sequence, trajectory, geometry.geometry(), results, run, run_index)
             for run_index, run in enumerate((RUN_A, RUN_B), start=1)
         )
         fusion_outcomes, excluded, fusion = _fuse(
