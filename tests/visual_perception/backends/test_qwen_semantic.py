@@ -332,3 +332,24 @@ def test_a_rejected_qwen_response_is_preserved_as_evidence_not_reduced_to_a_stri
     assert failed.provenance.backend.model == config.model
     assert failed.diagnostics.input_tokens == 120
     assert failed.rendered_prompt.text, "the exact prompt sent must be preserved"
+
+
+def test_qwen_leaves_the_raw_response_reference_to_the_run_writer() -> None:
+    """#619 (VP-06): the adapter named a debug/ file; where a response lands is not its call."""
+    from contextmap.visual_perception import SemanticInterpretationFailedError
+
+    config = QwenSemanticConfig(
+        model="Qwen/Qwen2.5-VL-3B-Instruct",
+        device="cpu",
+        precision="float32",
+        max_new_tokens=32,
+        temperature=0.0,
+    )
+    adapter = QwenSemanticInterpreter(config=config, runtime=_FakeQwenRuntime())
+    execution = adapter.interpret(_request(adapter))
+    assert [claim.provenance.raw_response_reference for claim in execution.parsed.claims] == [None]
+
+    rejecting = QwenSemanticInterpreter(config=config, runtime=_NonScalarAttributeQwenRuntime())
+    with pytest.raises(SemanticInterpretationFailedError) as raised:
+        rejecting.interpret(_request(rejecting))
+    assert raised.value.failure.provenance.raw_response_reference is None

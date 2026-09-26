@@ -20,10 +20,10 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -56,11 +56,16 @@ from contextmap.visual_perception.mask_store import (
     write_mask_index,
 )
 from contextmap.visual_perception.models import (
+    ClaimId,
     FeatureId,
     PerceptionResult,
+    PerceptionResultId,
     PerceptionRunId,
     Region2D,
     RegionId,
+    SceneContext,
+    SemanticClaim,
+    SemanticInferenceProvenance,
     VisualFeature,
 )
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
@@ -118,7 +123,6 @@ _METRICS_FILENAME = "metrics/stage-timings.jsonl"
 _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
 _SEMANTIC_FAILURES_FILENAME = "outputs/semantic-interpretation-failures.jsonl"
 _REGION_DISCOVERY_AUDIT_FILENAME = "outputs/region-discovery-audit.jsonl"
-_SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
 _MASKS_DIRNAME = "outputs/masks"
 
@@ -562,7 +566,8 @@ class PerceptionRunWriter:
                 ``SUCCEEDED``/``WARNING`` feature diagnostic does not describe
                 exactly one feature of this run's results, if a region
                 discovery audit names an observation without a result in this
-                run, or if writing fails.
+                run, if semantic evidence arrives with a ``raw_response_reference``
+                this writer would not materialize, or if writing fails.
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
@@ -575,6 +580,7 @@ class PerceptionRunWriter:
             self._validate_failed_semantic_interpretations()
             self._validate_semantic_view_payloads()
             self._validate_region_discovery_audits()
+            self._validate_raw_response_references()
 
             self._ensure_staging()
             manifest = self._write_contents()
@@ -886,6 +892,75 @@ class PerceptionRunWriter:
                     f"source_observation_id={source_observation_id!r}"
                 )
 
+    def _execution_backed_evidence(
+        self,
+    ) -> tuple[frozenset[tuple[PerceptionResultId, ClaimId]], frozenset[PerceptionResultId]]:
+        """Index the result evidence each recorded execution materialized.
+
+        :meth:`_validate_semantic_execution_materialization` already holds every execution's
+        claims and scene context to its one result, so a claim is identified by its result and
+        its id, and a scene context by its result.
+
+        Returns:
+            The ``(result_id, claim_id)`` of every execution claim, and the ids of the results
+            whose scene context came from an execution.
+        """
+        claims = frozenset(
+            (execution.request.perception_result_id, claim.claim_id)
+            for execution in self._semantic_executions
+            for claim in execution.parsed.claims
+        )
+        scene_contexts = frozenset(
+            execution.request.perception_result_id
+            for execution in self._semantic_executions
+            if execution.parsed.scene_context is not None
+        )
+        return claims, scene_contexts
+
+    def _validate_raw_response_references(self) -> None:
+        """Accept only the ``raw_response_reference`` this writer would materialize itself.
+
+        The writer, not the backend, knows which contractual stream an attempt lands in, so it
+        materializes the reference at persistence time (#619): a backend leaves it ``None``. A
+        value already equal to the one the writer would write is accepted as is; any other, such
+        as a ``debug/`` path, would contradict the record that holds the raw response. Evidence
+        no execution of this run backs has no raw response here, so it must name none.
+
+        Raises:
+            RunArtifactError: If any semantic provenance names another reference.
+        """
+        for execution in self._semantic_executions:
+            _require_raw_response_reference(
+                execution.parsed.provenances(),
+                _SEMANTIC_EXECUTIONS_FILENAME,
+                f"semantic execution {str(execution.request.request_id)!r}",
+            )
+        for failed in self._semantic_failures:
+            _require_raw_response_reference(
+                (failed.provenance,),
+                _SEMANTIC_FAILURES_FILENAME,
+                f"failed semantic interpretation {str(failed.request.request_id)!r}",
+            )
+        backed_claims, backed_scene_contexts = self._execution_backed_evidence()
+        for result in self._results:
+            for claim in result.claims:
+                if (result.result_id, claim.claim_id) not in backed_claims:
+                    _require_raw_response_reference(
+                        (claim.provenance,),
+                        None,
+                        f"claim {str(claim.claim_id)!r} of result {str(result.result_id)!r}",
+                    )
+            scene_context = result.scene_context
+            if scene_context is not None and result.result_id not in backed_scene_contexts:
+                _require_raw_response_reference(
+                    (
+                        scene_context.provenance,
+                        *(claim.provenance for claim in scene_context.claims),
+                    ),
+                    None,
+                    f"scene context of result {str(result.result_id)!r}",
+                )
+
     def _write_mask_index(self, file_entries: list[RunArtifactFileEntry]) -> None:
         """Index the masks already persisted by :meth:`_persist_result_masks`.
 
@@ -918,8 +993,17 @@ class PerceptionRunWriter:
 
         self._write_mask_index(file_entries)
 
+        # A referência à resposta bruta é materializada aqui, na persistência: o writer sabe em
+        # que stream contratual cada tentativa cai; o backend a deixou None (#619).
+        backed_claims, backed_scene_contexts = self._execution_backed_evidence()
         results_content = "".join(
-            f"{json.dumps(encode_perception_result(result), sort_keys=True)}\n"
+            json.dumps(
+                encode_perception_result(
+                    _with_materialized_references(result, backed_claims, backed_scene_contexts)
+                ),
+                sort_keys=True,
+            )
+            + "\n"
             for result in self._results
         )
         results_path = self._tmp_dir / _RESULTS_FILENAME
@@ -949,11 +1033,12 @@ class PerceptionRunWriter:
         if self._semantic_executions:
             semantic_records: list[dict[str, Any]] = []
             for execution in self._semantic_executions:
-                raw_reference = _semantic_raw_response_reference(execution)
-                _validate_semantic_raw_response_reference(execution, raw_reference)
+                persisted = _execution_with_reference(execution, _SEMANTIC_EXECUTIONS_FILENAME)
+                # O debug espelha o registro persistido; a cópia bruta em debug/ (FULL) é só
+                # diagnóstico e nenhum campo contratual aponta para ela.
                 audit_paths = write_semantic_audit(
                     run_root=self._tmp_dir,
-                    execution=execution,
+                    execution=persisted,
                     debug_level=self._semantic_debug_level,
                 )
                 for relative_path in audit_paths:
@@ -962,8 +1047,8 @@ class PerceptionRunWriter:
                     )
                 semantic_records.append(
                     encode_semantic_execution(
-                        execution,
-                        raw_response_reference=raw_reference,
+                        persisted,
+                        raw_response_reference=_SEMANTIC_EXECUTIONS_FILENAME,
                     )
                 )
             semantic_content = "".join(
@@ -976,7 +1061,16 @@ class PerceptionRunWriter:
                 _file_entry(_SEMANTIC_EXECUTIONS_FILENAME, semantic_content.encode("utf-8"))
             )
 
-        for failed in self._semantic_failures:
+        persisted_failures = [
+            replace(
+                failed,
+                provenance=replace(
+                    failed.provenance, raw_response_reference=_SEMANTIC_FAILURES_FILENAME
+                ),
+            )
+            for failed in self._semantic_failures
+        ]
+        for failed in persisted_failures:
             # Mesmo diretorio por request das execucoes bem-sucedidas, mesmo writer.
             for relative_path in write_semantic_audit(
                 run_root=self._tmp_dir,
@@ -998,7 +1092,7 @@ class PerceptionRunWriter:
         # (e todo artifact ja escrito sob esta versao de schema).
         failures_content = "".join(
             f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
-            for failed in self._semantic_failures
+            for failed in persisted_failures
         )
         failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
         failures_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1164,7 +1258,8 @@ class PerceptionRunReader:
 
         Raises:
             RunArtifactError: While iterating, if a line is not JSON or not a valid execution
-                record; the error names the file and line.
+                record, or if its ``raw_response_reference`` does not name this stream; the
+                error names the file and line.
         """
         executions_path = self._root / _SEMANTIC_EXECUTIONS_FILENAME
         if not executions_path.is_file():
@@ -1174,15 +1269,37 @@ class PerceptionRunReader:
                 stripped = line.strip()
                 if not stripped:
                     continue
+                location = f"{_SEMANTIC_EXECUTIONS_FILENAME}:{line_number}"
                 try:
-                    execution = decode_semantic_execution(json.loads(stripped))
+                    record = json.loads(stripped)
+                    execution = decode_semantic_execution(record)
                 except (ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(
-                        "invalid semantic execution record at "
-                        f"{_SEMANTIC_EXECUTIONS_FILENAME}:{line_number}: "
+                        f"invalid semantic execution record at {location}: "
                         f"{type(error).__name__}: {error}"
                     ) from error
+                self._require_contractual_reference(
+                    record["raw_response_reference"], _SEMANTIC_EXECUTIONS_FILENAME, location
+                )
                 yield execution
+
+    def _require_contractual_reference(
+        self, reference: str | None, stream: str, location: str
+    ) -> None:
+        """Require a persisted ``raw_response_reference`` to name the stream holding the record.
+
+        A ``0.5.0`` run named the ``debug/`` copy of the raw response instead; that is what those
+        runs recorded, so their references are read as they are.
+
+        Raises:
+            RunArtifactError: If a run of the current schema names anything else.
+        """
+        if self._manifest.schema_version == _PRE_AUDIT_SCHEMA_VERSION or reference == stream:
+            return
+        raise RunArtifactError(
+            f"invalid semantic record at {location}: raw_response_reference {reference!r} must "
+            f"name {stream!r}, the contractual record that holds the raw response"
+        )
 
     def tracks_semantic_failures(self) -> bool:
         """Whether this run recorded its rejected interpretations at all.
@@ -1215,21 +1332,31 @@ class PerceptionRunReader:
         Empty when the run recorded none, including every run written before this stream
         existed: its absence is not an error, so artifacts frozen under the same schema
         version stay readable.
+
+        Raises:
+            RunArtifactError: While iterating, if a record is invalid or its provenance's
+                ``raw_response_reference`` does not name this stream.
         """
         failures_path = self._root / _SEMANTIC_FAILURES_FILENAME
         if not failures_path.is_file():
             return
         with failures_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if not stripped:
                     continue
                 try:
-                    yield decode_failed_semantic_interpretation(json.loads(stripped))
+                    failed = decode_failed_semantic_interpretation(json.loads(stripped))
                 except (ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(
                         f"invalid failed semantic interpretation record: {error}"
                     ) from error
+                self._require_contractual_reference(
+                    failed.provenance.raw_response_reference,
+                    _SEMANTIC_FAILURES_FILENAME,
+                    f"{_SEMANTIC_FAILURES_FILENAME}:{line_number}",
+                )
+                yield failed
 
     def list_failed_semantic_interpretations(self) -> list[FailedSemanticInterpretation]:
         """Return every observed-but-unparsed interpretation of this run."""
@@ -1386,32 +1513,95 @@ def _encode_stage_outcome(outcome: StageOutcome) -> dict[str, Any]:
     }
 
 
-def _semantic_raw_response_reference(execution: SemanticInterpretationExecution) -> str:
-    request_id = str(execution.request.request_id)
-    request_path = PurePosixPath(request_id)
-    if request_path.name != request_id or request_id in {".", ".."}:
-        raise RunArtifactError(f"semantic request_id is not a safe path segment: {request_id!r}")
-    return f"{_SEMANTIC_DEBUG_ROOT}/{request_id}/raw-response.txt"
-
-
-def _validate_semantic_raw_response_reference(
-    execution: SemanticInterpretationExecution,
-    expected_reference: str,
+def _require_raw_response_reference(
+    provenances: Iterable[SemanticInferenceProvenance], materialized: str | None, owner: str
 ) -> None:
-    provenances = [claim.provenance for claim in execution.parsed.claims]
-    if execution.parsed.scene_context is not None:
-        provenances.append(execution.parsed.scene_context.provenance)
-        provenances.extend(claim.provenance for claim in execution.parsed.scene_context.claims)
-    mismatches = {
-        provenance.raw_response_reference
-        for provenance in provenances
-        if provenance.raw_response_reference != expected_reference
-    }
-    if mismatches:
+    """Require every provenance to name no reference, or the one the writer materializes.
+
+    Args:
+        provenances: The provenances of one piece of semantic evidence.
+        materialized: The reference the writer persists for it, or ``None`` when no record of
+            this run holds its raw response.
+        owner: The evidence, for the error message.
+
+    Raises:
+        RunArtifactError: If a provenance names any other reference.
+    """
+    stray = sorted(
+        {
+            str(provenance.raw_response_reference)
+            for provenance in provenances
+            if provenance.raw_response_reference not in {None, materialized}
+        }
+    )
+    if not stray:
+        return
+    if materialized is None:
         raise RunArtifactError(
-            "semantic provenance raw_response_reference does not match the materialized path: "
-            f"expected {expected_reference!r}, found {sorted(mismatches, key=str)!r}"
+            f"{owner} names raw_response_reference {stray!r}, but no record of this run holds "
+            "its raw response: only evidence of a recorded execution can name one"
         )
+    raise RunArtifactError(
+        f"{owner} names raw_response_reference {stray!r}; the writer materializes it as "
+        f"{materialized!r}, the contractual record that holds the raw response, so evidence "
+        "must arrive with None"
+    )
+
+
+def _claim_with_reference(claim: SemanticClaim, reference: str) -> SemanticClaim:
+    return replace(claim, provenance=replace(claim.provenance, raw_response_reference=reference))
+
+
+def _scene_context_with_reference(scene_context: SceneContext, reference: str) -> SceneContext:
+    return replace(
+        scene_context,
+        provenance=replace(scene_context.provenance, raw_response_reference=reference),
+        claims=tuple(_claim_with_reference(claim, reference) for claim in scene_context.claims),
+    )
+
+
+def _execution_with_reference(
+    execution: SemanticInterpretationExecution, reference: str
+) -> SemanticInterpretationExecution:
+    """Return ``execution`` as persisted: every claim and its scene context name ``reference``."""
+    parsed = execution.parsed
+    scene_context = parsed.scene_context
+    return replace(
+        execution,
+        parsed=replace(
+            parsed,
+            claims=tuple(_claim_with_reference(claim, reference) for claim in parsed.claims),
+            scene_context=(
+                None
+                if scene_context is None
+                else _scene_context_with_reference(scene_context, reference)
+            ),
+        ),
+    )
+
+
+def _with_materialized_references(
+    result: PerceptionResult,
+    backed_claims: frozenset[tuple[PerceptionResultId, ClaimId]],
+    backed_scene_contexts: frozenset[PerceptionResultId],
+) -> PerceptionResult:
+    """Return ``result`` as persisted: execution evidence names the executions stream.
+
+    A claim or scene context no execution of this run backs is kept as is; its reference was
+    already required to be ``None``.
+    """
+    claims = tuple(
+        _claim_with_reference(claim, _SEMANTIC_EXECUTIONS_FILENAME)
+        if (result.result_id, claim.claim_id) in backed_claims
+        else claim
+        for claim in result.claims
+    )
+    scene_context = result.scene_context
+    if scene_context is not None and result.result_id in backed_scene_contexts:
+        scene_context = _scene_context_with_reference(scene_context, _SEMANTIC_EXECUTIONS_FILENAME)
+    if claims == tuple(result.claims) and scene_context is result.scene_context:
+        return result
+    return replace(result, claims=claims, scene_context=scene_context)
 
 
 def _with_persisted_masks(

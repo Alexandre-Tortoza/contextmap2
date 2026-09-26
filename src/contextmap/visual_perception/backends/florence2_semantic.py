@@ -293,9 +293,6 @@ class Florence2SemanticInterpreter:
             task_identity=f"florence2-{self._config.task}-{request.mode.value}",
             prompt_template_id=template.template_id,
             output_schema_version=template.output_schema_version,
-            raw_response_reference=(
-                f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
-            ),
         )
         task_text = response.text.strip()
         try:

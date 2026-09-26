@@ -202,9 +202,6 @@ class QwenSemanticInterpreter:
             task_identity=f"qwen-{request.mode.value}-interpretation",
             prompt_template_id=template.template_id,
             output_schema_version=template.output_schema_version,
-            raw_response_reference=(
-                f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
-            ),
         )
         diagnostics = SemanticBackendDiagnostics(
             latency_ms=latency_ms,

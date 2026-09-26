@@ -363,7 +363,14 @@ class SemanticEvidenceReference:
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticInferenceProvenance:
-    """Trace a semantic output through backend, task, prompt, schema, and raw response."""
+    """Trace a semantic output through backend, task, prompt, schema, and raw response.
+
+    Attributes:
+        raw_response_reference: The contractual record of the perception run that holds the raw
+            response inline, e.g. ``outputs/semantic-interpretations.jsonl``. A backend leaves it
+            ``None``: only the run writer knows which stream the attempt lands in, and it
+            materializes the reference when it persists the evidence. Never a ``debug/`` path.
+    """
 
     backend: BackendProvenance
     task_identity: str

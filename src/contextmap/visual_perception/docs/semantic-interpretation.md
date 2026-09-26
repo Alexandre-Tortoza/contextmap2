@@ -160,16 +160,37 @@ bruta é registrado separadamente dos outputs canônicos.
 produziram `SemanticInterpretationExecution` e materializa
 `execution.parsed.claims`/`scene_context` no `PerceptionResult`, validando as
 identidades da observação e do resultado. Ao receber os mesmos outcomes,
-`PerceptionRunWriter` persiste a execução em
-`outputs/semantic-interpretations.jsonl` e materializa a resposta bruta no path
-de debug declarado pela proveniência. Assim, execução, evidência canônica e
+`PerceptionRunWriter` persiste a execução, com a resposta bruta inline, em
+`outputs/semantic-interpretations.jsonl`. Assim, execução, evidência canônica e
 artifact permanecem ligados pelo mesmo request id.
+
+### A referência à resposta bruta (#619)
+
+`SemanticInferenceProvenance.raw_response_reference` nomeia o registro
+contratual que guarda a resposta bruta, e quem decide qual é esse registro é o
+`PerceptionRunWriter`, não o backend. Os backends (Qwen, Gemini, Florence-2)
+deixam o campo `None`: montam a proveniência antes do parsing, então nem sabem
+se a resposta vai virar execução ou falha, e não conhecem o layout do artifact.
+Na persistência, o writer materializa:
+
+- execução bem-sucedida: `outputs/semantic-interpretations.jsonl`, no registro
+  da execução e em cada claim e no `SceneContext` dela, tanto no próprio
+  registro quanto em `outputs/results.jsonl`;
+- resposta rejeitada pelo parser: `outputs/semantic-interpretation-failures.jsonl`.
+
+O writer recusa uma evidência que chegue com outra referência (por exemplo um
+caminho em `debug/`) e uma claim ou `SceneContext` sem execução registrada no
+run que nomeie alguma: nenhum registro do run guarda a resposta dela. O leitor
+exige que o registro persistido e suas claims nomeiem o stream em que estão;
+só um run `0.5.0`, que ainda nomeava a cópia em `debug/`, é lido como gravado.
+Em memória, o valor continua `None` até a persistência.
 
 `SemanticDebugLevel` controla apenas o conteúdo humano em
 `debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
 `STANDARD` grava request, prompt, parsing, outputs finais e diagnostics, e
-`FULL` acrescenta a resposta bruta. Os outputs canônicos, hashes, métricas e
-views content-addressed continuam válidos em qualquer nível. Antes da
+`FULL` acrescenta uma cópia da resposta bruta, só para diagnóstico: nenhum campo
+contratual aponta para `debug/`, em nível nenhum. Os outputs canônicos, hashes,
+métricas e views content-addressed continuam válidos em qualquer nível. Antes da
 serialização, campos de credencial conhecidos são redigidos recursivamente;
 contadores como `input_tokens`/`output_tokens` não são confundidos com secrets.
 

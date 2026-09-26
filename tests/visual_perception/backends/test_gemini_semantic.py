@@ -239,6 +239,26 @@ def test_configuration_validates_the_new_settings() -> None:
         _config(retry_backoff_s=-1)
 
 
+def test_gemini_leaves_the_raw_response_reference_to_the_run_writer() -> None:
+    """#619 (VP-06): the adapter named a debug/ file; where a response is persisted is not its call.
+
+    It cannot know it either: the same provenance is built before parsing, so it ends up in a
+    successful execution or in a rejected response alike.
+    """
+    adapter = _adapter(_Client())
+    execution = adapter.interpret(_request(adapter))
+    context = execution.parsed.scene_context
+    assert context is not None
+    provenances = [context.provenance]
+    provenances.extend(claim.provenance for claim in (*execution.parsed.claims, *context.claims))
+    assert {provenance.raw_response_reference for provenance in provenances} == {None}
+
+    malformed = _adapter(_Client(text='{"abstained": false, "claims": ['))
+    with pytest.raises(SemanticInterpretationFailedError) as raised:
+        malformed.interpret(_request(malformed))
+    assert raised.value.failure.provenance.raw_response_reference is None
+
+
 def test_the_persisted_execution_record_carries_no_credential_field() -> None:
     adapter = _adapter(_Client())
     execution = adapter.interpret(_request(adapter))

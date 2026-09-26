@@ -121,6 +121,18 @@ class ParsedSemanticResponse:
     abstained: bool
     diagnostics: tuple[SemanticParseDiagnostic, ...] = ()
 
+    def provenances(self) -> tuple[SemanticInferenceProvenance, ...]:
+        """Return every provenance this response carries.
+
+        Returns:
+            The provenance of each claim, then of the scene context and of each of its claims.
+        """
+        provenances = [claim.provenance for claim in self.claims]
+        if self.scene_context is not None:
+            provenances.append(self.scene_context.provenance)
+            provenances.extend(claim.provenance for claim in self.scene_context.claims)
+        return tuple(provenances)
+
 
 def render_semantic_prompt(
     request: SemanticInterpretationRequest,
