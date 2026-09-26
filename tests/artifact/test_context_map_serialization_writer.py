@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -278,6 +279,50 @@ def test_repeated_writes_are_semantically_equal_with_a_stable_identity(world: Wo
     assert first_files.keys() == second_files.keys()
     differing = {path for path in first_files if first_files[path] != second_files[path]}
     assert differing <= {MANIFEST}
+
+
+def _contractual_digest(output_dir: Path) -> str:
+    """Digest of every file of the artifact and of the manifest apart from its write time."""
+    manifest = json.loads((output_dir / MANIFEST).read_text(encoding="utf-8"))
+    manifest.pop("written_at")
+    files = {
+        path: hashlib.sha256(data).hexdigest()
+        for path, data in tree_files(output_dir).items()
+        if path != MANIFEST
+    }
+    record = json.dumps({"manifest": manifest, "files": files}, sort_keys=True)
+    return hashlib.sha256(record.encode()).hexdigest()
+
+
+def _write_geometry_only(world: World) -> tuple[Path, ContextMapArtifactManifest]:
+    return write_artifact(
+        world,
+        context_map=make_context_map(world, kind="geometry-only"),
+        locations={MAP_ID: world.geometry_dir},
+    )
+
+
+# #600: gravados antes de o writer codificar o mapa uma vez só e gravar as tabelas em fluxo; os
+# bytes publicados não podem mudar.
+_RECORDED_ARTIFACTS: dict[str, tuple[Callable[[World], tuple[Path, Any]], str]] = {
+    "populated": (
+        write_artifact,
+        "4b4d37e76ec92d8a8a62a8dc0f1cd68ef5cabdf53b112d1a5cbd2c4990af0860",
+    ),
+    "geometry-only": (
+        _write_geometry_only,
+        "c6cf97814231975a755ab3085310e5bd90a819abea75f5d283e4128946a2919f",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_RECORDED_ARTIFACTS))
+def test_the_published_artifact_matches_the_recorded_bytes(world: World, case: str) -> None:
+    write, recorded = _RECORDED_ARTIFACTS[case]
+
+    output_dir, _ = write(world)
+
+    assert _contractual_digest(output_dir) == recorded
 
 
 def test_a_different_map_has_a_different_identity(world: World) -> None:
