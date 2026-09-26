@@ -556,7 +556,7 @@ class IndexEntry(NamedTuple):
         observation_id: Identity of the observation this entry describes.
         timestamp: Capture time in the source's own clock domain.
         modality: The observation's modality (``"image"``, ``"lidar"``,
-            ``"imu"``, ``"pose"``), exactly as recorded in the index. It is
+            ``"imu"``, ``"external_pose"``), exactly as recorded in the index. It is
             here so a consumer that only wants one modality can select it
             while paying the index cost, never the payload-decoding cost of
             :meth:`SequenceArtifactReader.list_observations`.

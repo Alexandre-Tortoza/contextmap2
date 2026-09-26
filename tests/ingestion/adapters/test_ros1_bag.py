@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from rosbags.rosbag1 import Writer
+from rosbags.rosbag1 import Reader, Writer
 from rosbags.typesys import Stores, get_typestore
 
 from contextmap.ingestion import (
@@ -28,7 +28,7 @@ from contextmap.ingestion import (
     SynchronizationConfig,
     synchronize,
 )
-from contextmap.ingestion.adapters import _ros_common
+from contextmap.ingestion.adapters import _ros_common, ros1_bag
 from contextmap.ingestion.adapters.ros1_bag import Ros1BagSourceAdapter
 from contextmap.ingestion.calibration import (
     FisheyeCameraModel,
@@ -64,8 +64,10 @@ def _build_bag(
     path: Path,
     *,
     distortion_model: str = "plumb_bob",
+    distortion_coefficients_override: tuple[float, ...] | None = None,
     imu_orientation_available: bool = True,
     include_bad_image: bool = False,
+    camera_info_repeats: int = 1,
     include_changed_camera_info: bool = False,
     include_unsupported_point_field: bool = False,
 ) -> None:
@@ -115,6 +117,8 @@ def _build_bag(
             if distortion_model == "equidistant"
             else np.array([0.1, -0.05, 0.0, 0.0, 0.0], dtype=np.float64)
         )
+        if distortion_coefficients_override is not None:
+            distortion_coefficients = np.array(distortion_coefficients_override, dtype=np.float64)
         camera_info_msg: Any = types["sensor_msgs/msg/CameraInfo"](
             header=_header(1, "front_camera_optical"),
             height=720,
@@ -131,6 +135,8 @@ def _build_bag(
             ),
         )
         _write(cam_info_conn, writer, camera_info_msg, 1_000_000_000)
+        for repeat in range(1, camera_info_repeats):
+            _write(cam_info_conn, writer, camera_info_msg, 1_000_000_000 + repeat)
         if include_changed_camera_info:
             camera_info_msg.K[0] = 601.0
             camera_info_msg.header = _header(2, "front_camera_optical")
@@ -360,7 +366,7 @@ def test_read_calibration_scans_the_bag_only_once_per_adapter_instance(
 
     monkeypatch.setattr(Ros1BagSourceAdapter, "_camera_calibration_entry", counting_entry)
 
-    list(adapter.read_observations())  # calls read_calibration() internally
+    list(adapter.read_observations())  # discovers the calibration internally
     second_call_result = adapter.read_calibration()  # mirrors the runtime's second call
 
     assert len(calls) == 1, (
@@ -379,7 +385,8 @@ def test_missing_required_topic_raises_before_any_observation(bag_path: Path) ->
     adapter = Ros1BagSourceAdapter(config)
 
     with pytest.raises(MissingRequiredTopicError):
-        list(adapter.read_observations())
+        # Erro de pré-condição na chamada, sem iterar (o generator nunca é consumido).
+        adapter.read_observations()
 
 
 def test_unsupported_encoding_becomes_a_warning_not_a_crash(tmp_path: Path) -> None:
@@ -646,7 +653,8 @@ def test_window_clock_id_mismatch_is_rejected_before_reading_anything(
     adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
 
     with pytest.raises(InvalidSourceWindowError, match="clock"):
-        list(adapter.read_observations())
+        # Erro de pré-condição na chamada, sem iterar (o generator nunca é consumido).
+        adapter.read_observations()
 
 
 def test_window_with_no_overlap_is_rejected_explicitly(tmp_path: Path) -> None:
@@ -659,7 +667,8 @@ def test_window_with_no_overlap_is_rejected_explicitly(tmp_path: Path) -> None:
     adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
 
     with pytest.raises(InvalidSourceWindowError, match="does not overlap"):
-        list(adapter.read_observations())
+        # Erro de pré-condição na chamada, sem iterar (o generator nunca é consumido).
+        adapter.read_observations()
 
 
 def test_content_hash_covers_only_the_window_not_the_whole_source(tmp_path: Path) -> None:
@@ -704,3 +713,105 @@ def test_no_window_configured_behaves_exactly_as_before(bag_path: Path) -> None:
 
     assert len(observations) == 4
     assert adapter.content_hash() is not None
+
+
+def test_a_windowed_read_opens_the_bag_only_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tópicos e janela numa abertura (na chamada); calibração e mensagens na outra."""
+    path = tmp_path / "counted.bag"
+    _build_bag(path)
+    opened: list[str] = []
+
+    class CountingReader(Reader):
+        def open(self) -> None:
+            opened.append(str(self.path))
+            super().open()
+
+    monkeypatch.setattr(ros1_bag, "Reader", CountingReader)
+    base_config = SourceAdapterConfig(
+        source_type="ros1_bag",
+        path=str(path),
+        topics=_TOPICS,
+        required_topics=frozenset({"rgb", "camera_info"}),
+    )
+    window = SourceWindow(
+        clock_id=base_config.resolved_window_clock_id(), start_seconds=0.5, end_seconds=1.5
+    )
+    adapter = Ros1BagSourceAdapter(replace(base_config, window=window))
+
+    observations = list(adapter.read_observations())
+    adapter.read_calibration()  # o runtime chama de novo; o cache não reabre o bag
+
+    assert len(observations) == 4
+    assert len(opened) == 2
+
+
+def test_repeated_identical_camera_info_is_kept_once_during_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "counted.bag"
+    _build_bag(path, camera_info_repeats=3)
+    merged: list[int] = []
+    real_merge = _ros_common.merge_calibration
+
+    def spying_merge(
+        provided: CalibrationSet | None, discovered_entries: tuple[CalibrationEntry, ...]
+    ) -> CalibrationSet | None:
+        merged.append(len(discovered_entries))
+        return real_merge(provided, discovered_entries)
+
+    monkeypatch.setattr(_ros_common, "merge_calibration", spying_merge)
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    calibration = adapter.read_calibration()
+
+    assert calibration is not None
+    assert len(calibration.entries) == 1
+    assert merged == [1]
+
+
+@pytest.mark.parametrize(
+    "coefficients",
+    [(0.01, 0.002, 0.0003, 0.00004, 0.5), (0.01, 0.002)],
+    ids=["five_truncated", "two_zero_filled"],
+)
+def test_equidistant_coefficients_that_are_not_four_leave_a_conversion_note(
+    tmp_path: Path, coefficients: tuple[float, ...]
+) -> None:
+    path = tmp_path / "fisheye.bag"
+    _build_bag(path, distortion_model="equidistant", distortion_coefficients_override=coefficients)
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    calibration = adapter.read_calibration()
+
+    assert calibration is not None
+    (entry,) = calibration.entries.values()
+    assert isinstance(entry.camera_model, FisheyeCameraModel)
+    (conversion,) = entry.provenance.conversions_applied
+    assert f"got {len(coefficients)}" in conversion
+
+
+def test_an_unrecognized_distortion_model_is_reported_as_a_warning(tmp_path: Path) -> None:
+    # Com D=[], o fallback para "none" seria indistinguível de uma câmera sem distorção.
+    path = tmp_path / "unknown_model.bag"
+    _build_bag(path, distortion_model="kannala_brandt", distortion_coefficients_override=())
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    list(adapter.read_observations())
+
+    (warning,) = adapter.warnings()
+    assert warning.topic == "/camera/camera_info"
+    assert warning.message_index == 0
+    assert "'kannala_brandt'" in warning.reason
+    calibration = adapter.read_calibration()
+    assert calibration is not None
+    (entry,) = calibration.entries.values()
+    assert isinstance(entry.camera_model, PinholeCameraModel)
+    assert tuple(entry.provenance.conversions_applied) == (warning.reason,)

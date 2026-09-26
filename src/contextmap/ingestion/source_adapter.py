@@ -42,10 +42,6 @@ class MissingRequiredTopicError(SourceAdapterError):
     """Raised when a configured required topic/channel is absent from the source."""
 
 
-class UnsupportedSourceMessageError(SourceAdapterError):
-    """Raised when a source message cannot be decoded by this adapter."""
-
-
 class InvalidSourceWindowError(SourceAdapterError):
     """Raised when a configured :class:`SourceWindow` cannot be honored.
 

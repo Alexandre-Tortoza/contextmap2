@@ -84,16 +84,59 @@ def compute_configuration_hash(config: Mapping[str, object]) -> str | None:
     """Compute a deterministic hash of an effective ingestion configuration.
 
     Args:
-        config: Effective ingestion configuration, as primitive values.
+        config: Effective ingestion configuration, as primitive values:
+            ``str``, ``int``, ``float``, ``bool`` and ``None``, nested in
+            ``dict``s and ``list``/``tuple``s.
 
     Returns:
         ``"sha256:<hex digest>"``, or ``None`` when ``config`` is empty
         (nothing to distinguish).
+
+    Raises:
+        TypeError: If ``config`` holds a value outside that primitive form.
+            The message names the offending key path, so the value is fixed
+            at its source instead of being hashed through ``str(value)``,
+            which may embed a memory address and silently break determinism.
     """
     if not config:
         return None
-    payload = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+    try:
+        payload = json.dumps(dict(config), sort_keys=True).encode("utf-8")
+    except TypeError as error:
+        raise TypeError(_non_primitive_configuration_message(config, error)) from error
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _non_primitive_configuration_message(config: Mapping[str, object], error: TypeError) -> str:
+    """Describe why ``config`` cannot be hashed, naming the first non-primitive value's key path."""
+    found = _first_non_primitive(dict(config), "config")
+    if found is None:
+        # Chaves não primitivas ou de tipos misturados: o json já diz qual é o problema.
+        return f"ingestion configuration is not JSON-serializable: {error}"
+    path, value = found
+    return (
+        f"ingestion configuration value at {path} is not a JSON primitive: got "
+        f"{type(value).__name__}; use str, int, float, bool, None, lists and dicts"
+    )
+
+
+def _first_non_primitive(value: object, path: str) -> tuple[str, object] | None:
+    """Return the key path and value of the first non-primitive entry, depth first, or ``None``."""
+    if isinstance(value, dict):
+        children: list[tuple[str, object]] = [
+            (f"{path}[{key!r}]", item) for key, item in value.items()
+        ]
+    elif isinstance(value, list | tuple):
+        children = [(f"{path}[{index}]", item) for index, item in enumerate(value)]
+    elif isinstance(value, str | int | float | bool) or value is None:
+        return None
+    else:
+        return path, value
+    for child_path, child in children:
+        found = _first_non_primitive(child, child_path)
+        if found is not None:
+            return found
+    return None
 
 
 def compute_source_content_hash(source_path: Path) -> str:

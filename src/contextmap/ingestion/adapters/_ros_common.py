@@ -16,10 +16,11 @@ cross-capability access and is not part of the public adapter contract.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
+
+import numpy as np
 
 from contextmap.ingestion.calibration import (
     CalibrationEntry,
@@ -422,7 +423,11 @@ def _remove_row_padding(
     row_payload_size: int,
     payload_name: str,
 ) -> bytes:
-    """Validate a ROS row layout and return a tightly packed payload."""
+    """Validate a ROS row layout and return a tightly packed payload.
+
+    A payload without row padding is already tightly packed and is returned as
+    the same object, never copied.
+    """
     if height <= 0 or row_payload_size <= 0:
         raise ValueError(f"{payload_name} dimensions must be positive")
     if row_step < row_payload_size:
@@ -434,6 +439,8 @@ def _remove_row_padding(
         raise ValueError(
             f"{payload_name} data size {len(data)} does not match height*row_step={expected_size}"
         )
+    if row_step == row_payload_size:
+        return data
     return b"".join(
         data[row_index * row_step : row_index * row_step + row_payload_size]
         for row_index in range(height)
@@ -453,8 +460,14 @@ def _normalize_point_field_byte_order(
     point_step: int,
     fields: tuple[PointFieldDescriptor, ...],
 ) -> bytes:
-    """Convert declared multibyte point fields from big- to little-endian."""
-    normalized = bytearray(data)
+    """Convert declared multibyte point fields from big- to little-endian.
+
+    ``data`` is tightly packed (a whole number of ``point_step`` records, as
+    :func:`_remove_row_padding` guarantees). Each field is swapped for every
+    point at once, as a ``(points, count, value_size)`` byte view reversed on
+    its last axis, with the same bytes as a per-point, per-element loop.
+    """
+    points = np.frombuffer(data, dtype=np.uint8).reshape(-1, point_step).copy()
     for field in fields:
         value_size = POINTFIELD_SIZE_BYTES[field.data_type]
         field_end = field.offset_bytes + value_size * field.count
@@ -462,12 +475,11 @@ def _normalize_point_field_byte_order(
             raise ValueError(f"point field {field.name!r} exceeds point_step={point_step}")
         if value_size == 1:
             continue
-        for point_offset in range(0, len(normalized), point_step):
-            for element_index in range(field.count):
-                start = point_offset + field.offset_bytes + element_index * value_size
-                end = start + value_size
-                normalized[start:end] = normalized[start:end][::-1]
-    return bytes(normalized)
+        values = points[:, field.offset_bytes : field_end].reshape(-1, field.count, value_size)
+        points[:, field.offset_bytes : field_end] = values[:, :, ::-1].reshape(
+            -1, field.count * value_size
+        )
+    return points.tobytes()
 
 
 def _with_raw_metadata(provenance: SourceProvenance, **metadata: object) -> SourceProvenance:
@@ -530,7 +542,7 @@ def build_camera_model(
     k_matrix: Any,
     distortion_model_name: str,
     distortion_coefficients: Any,
-) -> CameraModel:
+) -> tuple[CameraModel, tuple[str, ...]]:
     """Build a canonical camera model from primitive ``CameraInfo`` values.
 
     Callers extract ``K``/``D`` (ROS 1) or ``k``/``d`` (ROS 2) themselves,
@@ -545,12 +557,18 @@ def build_camera_model(
         distortion_coefficients: The distortion coefficient array.
 
     Returns:
-        A :class:`~contextmap.ingestion.calibration.FisheyeCameraModel` when
-        ``distortion_model_name == "equidistant"``, otherwise a
+        The camera model and the notes of every normalization applied to the
+        source values, for
+        :attr:`~contextmap.ingestion.calibration.CalibrationProvenance.conversions_applied`
+        (empty when the values mapped as given). The model is a
+        :class:`~contextmap.ingestion.calibration.FisheyeCameraModel` when
+        ``distortion_model_name == "equidistant"``, whose ``D`` is truncated
+        or zero-filled to its four coefficients (with a note), otherwise a
         :class:`~contextmap.ingestion.calibration.PinholeCameraModel`
         (falling back to :attr:`DistortionModel.NONE` for an unrecognized
-        model name, leaving validation to catch the resulting
-        inconsistency rather than raising here).
+        model name, with a note naming it, and leaving validation to catch
+        a resulting coefficient-count inconsistency rather than raising
+        here).
     """
     fx = float(k_matrix[0])
     fy = float(k_matrix[4])
@@ -558,9 +576,19 @@ def build_camera_model(
     cy = float(k_matrix[5])
 
     if distortion_model_name == "equidistant":
-        coefficients = [float(value) for value in distortion_coefficients[:4]]
-        coefficients += [0.0] * (4 - len(coefficients))
-        k1, k2, k3, k4 = coefficients
+        source = [float(value) for value in distortion_coefficients]
+        conversions: tuple[str, ...] = ()
+        if len(source) > 4:
+            conversions = (
+                f"equidistant takes 4 distortion coefficients (k1, k2, k3, k4), got "
+                f"{len(source)}: dropped {len(source) - 4} extra coefficient(s) {source[4:]}",
+            )
+        elif len(source) < 4:
+            conversions = (
+                f"equidistant takes 4 distortion coefficients (k1, k2, k3, k4), got "
+                f"{len(source)}: zero-filled the missing {4 - len(source)}",
+            )
+        k1, k2, k3, k4 = (source + [0.0] * 4)[:4]
         return FisheyeCameraModel(
             width=width,
             height=height,
@@ -569,9 +597,18 @@ def build_camera_model(
             cx=cx,
             cy=cy,
             distortion_coefficients=(k1, k2, k3, k4),
-        )
+        ), conversions
 
-    distortion_model = PINHOLE_DISTORTION_MODEL_MAP.get(distortion_model_name, DistortionModel.NONE)
+    coefficients = tuple(float(value) for value in distortion_coefficients)
+    distortion_model = PINHOLE_DISTORTION_MODEL_MAP.get(distortion_model_name)
+    pinhole_conversions: tuple[str, ...] = ()
+    if distortion_model is None:
+        # Com D=[], o fallback seria indistinguível de uma câmera sem distorção: fica registrado.
+        distortion_model = DistortionModel.NONE
+        pinhole_conversions = (
+            f"unrecognized distortion_model {distortion_model_name!r}: fell back to none "
+            f"with the {len(coefficients)} coefficient(s) of D as given",
+        )
     return PinholeCameraModel(
         width=width,
         height=height,
@@ -580,8 +617,8 @@ def build_camera_model(
         cx=cx,
         cy=cy,
         distortion_model=distortion_model,
-        distortion_coefficients=tuple(float(value) for value in distortion_coefficients),
-    )
+        distortion_coefficients=coefficients,
+    ), pinhole_conversions
 
 
 class StreamingContentHash:
@@ -628,7 +665,7 @@ class StreamingContentHash:
 def resolve_window_bounds(
     config: SourceAdapterConfig,
     *,
-    open_reader: Callable[[], AbstractContextManager[Any]],
+    reader: Any,
     topic_kinds: Mapping[str, str],
 ) -> tuple[int | None, int | None]:
     """Resolve a configured window into nanosecond bounds for the bag reader's own time filter.
@@ -641,9 +678,9 @@ def resolve_window_bounds(
 
     Args:
         config: The adapter configuration; ``config.window`` may be ``None``.
-        open_reader: Opens a new reader for the configured source, as a
-            context manager (a fresh one, so this never interferes with a
-            reader already open for the main read).
+        reader: An open ``rosbags`` reader of the configured source. Only
+            its connections and index are read, never a message chunk, so
+            the caller can reuse the same reader for its other checks.
         topic_kinds: Configured topic name -> modality kind, as built by
             each adapter's own ``_configured_topic_kinds()``.
 
@@ -672,7 +709,7 @@ def resolve_window_bounds(
     start_ns = round(window.start_seconds * 1_000_000_000)
     stop_ns = round(window.end_seconds * 1_000_000_000)
 
-    bounds = _recording_time_bounds(open_reader, topic_kinds)
+    bounds = _recording_time_bounds(reader, topic_kinds)
     if bounds is None:
         return start_ns, stop_ns
     source_min_ns, source_max_ns = bounds
@@ -685,10 +722,7 @@ def resolve_window_bounds(
     return start_ns, stop_ns
 
 
-def _recording_time_bounds(
-    open_reader: Callable[[], AbstractContextManager[Any]],
-    topic_kinds: Mapping[str, str],
-) -> tuple[int, int] | None:
+def _recording_time_bounds(reader: Any, topic_kinds: Mapping[str, str]) -> tuple[int, int] | None:
     """Return ``(min, max)`` recording-time nanoseconds for the configured topics, cheaply.
 
     Reading either bound never decompresses a message chunk: a ROS 1
@@ -700,24 +734,23 @@ def _recording_time_bounds(
     its topics either.
 
     Args:
-        open_reader: Opens a new reader for the configured source.
+        reader: An open reader of the configured source.
         topic_kinds: Configured topic name -> modality kind.
 
     Returns:
         The bounds, or ``None`` when the source has no messages on any
         configured topic (ROS 1) or no messages at all (ROS 2).
     """
-    with open_reader() as reader:
-        indexes = getattr(reader, "indexes", None)
-        if indexes is not None:
-            connections = [
-                connection for connection in reader.connections if connection.topic in topic_kinds
-            ]
-            recording_times = [
-                entry.time for connection in connections for entry in indexes[connection.id]
-            ]
-            return (min(recording_times), max(recording_times)) if recording_times else None
+    indexes = getattr(reader, "indexes", None)
+    if indexes is not None:
+        connections = [
+            connection for connection in reader.connections if connection.topic in topic_kinds
+        ]
+        recording_times = [
+            entry.time for connection in connections for entry in indexes[connection.id]
+        ]
+        return (min(recording_times), max(recording_times)) if recording_times else None
 
-        if reader.message_count == 0:
-            return None
-        return reader.start_time, reader.end_time
+    if reader.message_count == 0:
+        return None
+    return reader.start_time, reader.end_time

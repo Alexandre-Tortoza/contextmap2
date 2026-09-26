@@ -531,7 +531,7 @@ class TestTimestampPolicy:
         )
         correction_document = cast(dict[str, Any], timestamp_policy_document["correction"])
         assert correction_document["type"] == "constant_offset"
-        assert correction_document["offset_seconds"] == pytest.approx(789_004_800.0)
+        assert correction_document["offset_nanoseconds"] == 789_004_800 * 1_000_000_000
 
     def test_a_sibling_request_without_a_policy_does_not_inherit_the_correction(
         self, tmp_path: Path

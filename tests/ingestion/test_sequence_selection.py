@@ -84,6 +84,33 @@ def test_frame_range_start_beyond_length_raises(reader: SequenceArtifactReader) 
         resolve_selection(reader, FrameRangeSelection(start_frame_index=10, end_frame_index=12))
 
 
+@pytest.fixture
+def empty_reader(tmp_path: Path) -> SequenceArtifactReader:
+    SequenceArtifactWriter(
+        output_dir=tmp_path / "empty",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-empty"),
+    ).finalize()
+    return SequenceArtifactReader(tmp_path / "empty")
+
+
+def test_frame_range_start_beyond_an_empty_sequence_raises(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    with pytest.raises(SequenceSelectionError, match="out of range for 0 observations"):
+        resolve_selection(empty_reader, FrameRangeSelection(start_frame_index=3, end_frame_index=5))
+
+
+def test_frame_range_from_zero_over_an_empty_sequence_is_empty(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    result = resolve_selection(
+        empty_reader, FrameRangeSelection(start_frame_index=0, end_frame_index=10)
+    )
+
+    assert result.observations == ()
+
+
 def test_timestamp_range_selects_within_bounds(reader: SequenceArtifactReader) -> None:
     result = resolve_selection(
         reader, TimestampRangeSelection(clock_id="clock-a", start_seconds=1.0, end_seconds=3.0)
@@ -156,6 +183,17 @@ def test_empty_frame_range_is_a_valid_empty_result(reader: SequenceArtifactReade
 def test_explicit_ids_selection_rejects_empty_set() -> None:
     with pytest.raises(ValueError, match="must not be empty"):
         ExplicitIdsSelection(observation_ids=frozenset())
+
+
+def test_timestamp_range_rejects_a_zero_width_interval() -> None:
+    # [t, t) não contém nenhum instante: mesma regra de SourceWindow.
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=2.0)
+
+
+def test_timestamp_range_rejects_end_before_start() -> None:
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=1.0)
 
 
 def test_frame_range_rejects_end_before_start() -> None:

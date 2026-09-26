@@ -236,14 +236,6 @@ F32 = PointFieldDataType.FLOAT32
             ),
             "floating-point",
         ),
-        (
-            (
-                _field("x", 0, F32),
-                _field("y", 4, F32),
-                _field("z", 8, PointFieldDataType.FLOAT64),
-            ),
-            "share one",
-        ),
         ((_field("x", 0, F32, 2), _field("y", 4, F32), _field("z", 8, F32)), "count"),
         ((_field("x", 0, F32), _field("y", 2, F32), _field("z", 8, F32)), "overlap"),
         ((_field("x", 0, F32), _field("y", 4, F32), _field("z", 10, F32)), "point_step_bytes"),
@@ -254,6 +246,18 @@ def test_an_unsupported_layout_is_refused_with_a_reason(
 ) -> None:
     with pytest.raises(UnsupportedPointCloudLayoutError, match=message):
         resolve_point_cloud_layout(_with_fields(make_scan(), fields))
+
+
+def test_coordinates_of_mixed_floating_point_types_are_refused() -> None:
+    # Registro de 24 bytes: o z float32 cabe nele, então o único defeito é a mistura de tipos.
+    fields = (
+        _field("x", 0, PointFieldDataType.FLOAT64),
+        _field("y", 8, PointFieldDataType.FLOAT64),
+        _field("z", 16, F32),
+    )
+
+    with pytest.raises(UnsupportedPointCloudLayoutError, match="share one"):
+        resolve_point_cloud_layout(_with_fields(make_scan(double_precision=True), fields))
 
 
 def test_a_payload_that_disagrees_with_its_declared_size_is_refused() -> None:
