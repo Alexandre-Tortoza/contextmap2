@@ -45,13 +45,14 @@ from dataclasses import dataclass
 from enum import Enum
 
 from contextmap.entity_resolution import ResolvedEntityReference
-from contextmap.geometric_mapping import Bounds3D, MapId
+from contextmap.geometric_mapping import MapId
 from contextmap.semantic_mapping import EntityGeometry
 from contextmap.spatial_relations._bounds import (
     axis_overlap_m,
     bounds_gap_m,
     cross_section_axes,
     directed_interval,
+    widest_spread_axis,
 )
 from contextmap.spatial_relations._checks import require_canonical, require_finite, require_present
 from contextmap.spatial_relations._identity import (
@@ -457,7 +458,7 @@ def _neighbor_pairs(geometries: list[EntityGeometry], reach: float) -> Iterator[
     if count < 2:
         return
     bounds = [geometry.bounds for geometry in geometries]
-    axis = max(range(3), key=lambda k: _center_spread(bounds, k))
+    axis = widest_spread_axis(bounds)
     order = sorted(range(count), key=lambda index: (bounds[index].minimum_m[axis], index))
     for position, first in enumerate(order):
         limit = bounds[first].maximum_m[axis] + reach
@@ -468,11 +469,6 @@ def _neighbor_pairs(geometries: list[EntityGeometry], reach: float) -> Iterator[
                 axis_overlap_m(bounds[first], bounds[second], other) >= -reach for other in range(3)
             ):
                 yield (min(first, second), max(first, second))
-
-
-def _center_spread(bounds: list[Bounds3D], axis: int) -> float:
-    centers = [(box.minimum_m[axis] + box.maximum_m[axis]) / 2.0 for box in bounds]
-    return max(centers) - min(centers)
 
 
 def _assess(

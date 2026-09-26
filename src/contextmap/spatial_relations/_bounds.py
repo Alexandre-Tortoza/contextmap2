@@ -1,14 +1,16 @@
-"""Arithmetic on axis-aligned bounds shared by candidate generation and the geometric predicates.
+"""Arithmetic on axis-aligned bounds shared by candidate generation and the predicate evaluators.
 
-Both stages reason about the same boxes, so the rules that read them (how far apart two boxes are,
-how much their intervals share along an axis, how a box looks along a signed direction) live here
-once. Every function is pure, works in the frame of the boxes it is given, and never reads a label:
-callers are responsible for having checked that both boxes are expressed in one frame.
+These stages reason about the same boxes, so the rules that read them (how far apart two boxes
+are, how much their intervals share along an axis, how a box looks along a signed direction, along
+which axis to sweep them) live here once. Every function is pure, works in the frame of the boxes
+it is given, and never reads a label: callers are responsible for having checked that the boxes
+are expressed in one frame.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from contextmap.geometric_mapping import Bounds3D
 from contextmap.spatial_relations.frame_conventions import AxisDirection
@@ -75,3 +77,23 @@ def cross_section_axes(direction: AxisDirection) -> tuple[int, int]:
     """
     first, second = (axis for axis in range(3) if axis != direction.axis_index)
     return (first, second)
+
+
+def widest_spread_axis(bounds: Sequence[Bounds3D]) -> int:
+    """Name the axis along which the centers of some boxes are most spread out.
+
+    A sweep along it meets the boxes as far apart from each other as the scene allows, so the
+    fewest of them are within reach of its front at any time.
+
+    Args:
+        bounds: At least one box.
+
+    Returns:
+        ``0`` for x, ``1`` for y or ``2`` for z; the lowest index on a tie.
+    """
+
+    def spread(axis: int) -> float:
+        centers = [(box.minimum_m[axis] + box.maximum_m[axis]) / 2.0 for box in bounds]
+        return max(centers) - min(centers)
+
+    return max(range(3), key=spread)
