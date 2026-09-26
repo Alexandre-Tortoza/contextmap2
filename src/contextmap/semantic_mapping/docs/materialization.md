@@ -66,7 +66,9 @@ Um candidato que não vira uma entidade válida **não é descartado**: vira um 
 | `empty_geometry_support` | O candidato não tem suporte 3D. |
 | `unresolvable_geometry` | As referências de geometria não resolvem no mapa. |
 | `invalid_temporal_evidence` | A evidência temporal está ausente ou inconsistente. |
-| `invalid_entity` | As partes não satisfazem o contrato de `Entity`. |
+| `invalid_entity` | As partes, válidas uma a uma, não satisfazem juntas o contrato de `Entity` (`EntityContractError`). |
+
+Só essas quatro causas viram rejeição. Qualquer outro erro durante a materialização, inclusive um `ValueError` cru levantado ao construir uma parte, é defeito e **propaga**: engoli-lo rejeitaria todos os candidatos em silêncio e o run terminaria "bem-sucedido" com um mapa vazio (#604).
 
 `EntityMaterialization` guarda as entidades (ordenadas por id) e as rejeições (ordenadas por suporte); cada candidato está em exatamente um dos dois.
 
