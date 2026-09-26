@@ -68,7 +68,7 @@ Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl
 
 O run não repete XYZ nem vetores de embedding:
 
-- **região → geometria**: `geometry-support.u32` guarda, por observação, as posições ordenadas da geometria como `uint32` little-endian; a identidade do mapa é posicional (`geometry_id_for`), então a referência se reconstrói sem guardá-la. `spatial-observations.jsonl` guarda só `support: {offset, count}`. O leitor devolve o `SpatialObservation` completo, revalidado pelo contrato;
+- **região → geometria**: `geometry-support.u32` guarda, por observação, as posições ordenadas da geometria como `uint32` little-endian; a identidade do mapa é posicional (`geometry_id_for`), então a referência se reconstrói sem guardá-la. Um índice global `≥ 2³²` não cabe em `uint32`: o writer o **recusa** com `RunArtifactError` (aqui e nos `eligible_indices` densos) em vez de deixar o cast dar a volta e apontar o suporte para outra geometria. `spatial-observations.jsonl` guarda só `support: {offset, count}`. O leitor devolve o `SpatialObservation` completo, revalidado pelo contrato;
 - **geometria → regiões**: derivada da tabela anterior por `regions_of(frame, referência)`, que preserva toda região sobreposta; não há uma segunda cópia;
 - **associação densa**: por frame e canal, o índice JSON traz a proveniência e o offset, e `dense-feature-cells.bin` traz cinco seções sequenciais: pontos elegíveis, amostrados, linhas, colunas e pesos das células. Nenhum vetor de feature é persistido; ele é lido do payload do artefato de percepção quando preciso.
 

@@ -7,6 +7,7 @@ import sys
 import zlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 from projection_builders import SEQUENCE_ID
 from run_builders import (
@@ -251,6 +252,67 @@ def test_an_observation_that_disagrees_with_its_membership_is_never_persisted(
         _writer(tmp_path).transaction() as run,
     ):
         SensorAssociationService().run(_request(), sink=_Forging(run))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+_BEYOND_U32 = 2**32
+
+
+class _WideIndices:
+    """Hands the run frames whose global indices from ``first_row`` on sit past 2**32.
+
+    Only the identities move, and consistently: the observations are rebuilt from the shifted
+    rows, so the one thing wrong with the frame is an index the ``<u4`` tables cannot hold. No
+    map of that size is materialized.
+    """
+
+    def __init__(self, inner: object, *, first_row: int) -> None:
+        self._inner = inner
+        self._first_row = first_row
+
+    def accept(self, frame: FrameAssociation) -> None:
+        projection = frame.resolution.frame
+        indices = projection.global_indices.copy()
+        indices[self._first_row :] += _BEYOND_U32
+        wide = dataclasses.replace(projection, global_indices=indices)
+        observations = tuple(
+            dataclasses.replace(
+                observation,
+                geometry_support=wide.map_references(np.asarray(region.associated_indices)),
+            )
+            for region, observation in zip(
+                frame.membership.regions, frame.observations, strict=True
+            )
+        )
+        frame = dataclasses.replace(
+            frame,
+            resolution=dataclasses.replace(frame.resolution, frame=wide),
+            observations=observations,
+        )
+        self._inner.accept(frame)  # type: ignore[attr-defined]
+
+
+def test_a_support_index_past_32_bits_is_refused_instead_of_wrapped(tmp_path: Path) -> None:
+    # A linha 3 é suporte da região B: o cast silencioso a gravaria como o índice 3.
+    with (
+        pytest.raises(RunArtifactError, match="32-bit outputs/geometry-support"),
+        _writer(tmp_path).transaction() as run,
+    ):
+        SensorAssociationService().run(_request(), sink=_WideIndices(run, first_row=3))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_dense_eligible_index_past_32_bits_is_refused_instead_of_wrapped(
+    tmp_path: Path,
+) -> None:
+    # A linha 4 é visível e elegível, mas não está em região nenhuma: só o caminho denso a grava.
+    with (
+        pytest.raises(RunArtifactError, match="32-bit outputs/dense-feature-cells"),
+        _writer(tmp_path).transaction() as run,
+    ):
+        SensorAssociationService().run(_request(NATIVE), sink=_WideIndices(run, first_row=4))
 
     assert list(tmp_path.iterdir()) == []
 

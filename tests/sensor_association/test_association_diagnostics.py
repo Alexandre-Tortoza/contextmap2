@@ -198,6 +198,34 @@ def test_a_correspondence_the_camera_cannot_project_is_counted_as_invalid() -> N
     assert statistics.max_px == pytest.approx(0.0, abs=1e-9)
 
 
+def test_a_correspondence_projected_outside_the_image_is_valid_and_keeps_its_residual() -> None:
+    """Invalid means the camera model cannot project the geometry, not "outside the image".
+
+    A reference names geometry that was really observed, so a projection that lands far outside
+    the image is a large residual -- the very thing the statistics exist to expose -- and not a
+    correspondence to set aside. Only the behind-the-camera one is invalid here.
+    """
+    frame = project_frame(
+        [
+            map_point_for_pixel(100, 100, 3.0),
+            map_point_for_pixel(-2500, 240, 3.0),
+            (-3.0, 0.0, 0.0),
+        ]
+    )
+    assert bool(frame.projectable[1]) and not bool(frame.in_prepared_image[1])
+    observed = np.array([[100.0, 100.0], [-280.0, 240.0], [10.0, 10.0]])
+    correspondences = TrustedCorrespondences(
+        reference_id="trusted-0001", geometry_indices=np.arange(3), observed_pixels=observed
+    )
+
+    statistics = reprojection_statistics(frame, correspondences)
+
+    assert statistics is not None
+    assert (statistics.correspondence_count, statistics.invalid_count) == (3, 1)
+    assert statistics.evaluated_count == 3
+    assert (statistics.mean_px, statistics.max_px) == pytest.approx((1110.0, 2220.0))
+
+
 def test_the_diagnostics_never_fabricate_a_reprojection_without_a_trusted_reference() -> None:
     diagnostics = _diagnose(scene_frame(*PIXELS))
 

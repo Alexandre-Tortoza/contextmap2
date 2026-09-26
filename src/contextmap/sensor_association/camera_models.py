@@ -17,11 +17,13 @@ Viewing domain
     Every model can project only part of the sphere of directions. A point the
     model cannot project is reported as not ``projectable`` with ``NaN`` pixels;
     it is never clipped into the image. The limit is where the projection stops
-    being injective: the plane ``z = 0`` for a pinhole, the angle where the
-    radius stops growing for a fisheye, and the horizon of the sphere model for
-    MEI (``acos(-1 / xi)`` for ``xi > 1``, ``acos(-xi)`` otherwise). Distortion
-    polynomials are trusted inside that domain; a calibration whose polynomial
-    folds earlier is a calibration problem that reprojection diagnostics expose.
+    being injective: the plane ``z = 0`` for a pinhole, narrowed for a distorted
+    one to the radius where its radial polynomial stops growing, the angle where
+    the radius stops growing for a fisheye, and the horizon of the sphere model
+    for MEI (``acos(-1 / xi)`` for ``xi > 1``, ``acos(-xi)`` otherwise). The
+    tangential terms and the MEI distortion are trusted inside that domain; a
+    calibration whose MEI polynomial folds earlier is a calibration problem that
+    reprojection diagnostics expose.
 
 NumPy is imported lazily so that importing the capability contracts stays cheap.
 See ``src/contextmap/sensor_association/docs/camera_models.md``.
@@ -64,7 +66,10 @@ _UNDISTORT_RESIDUAL_TOLERANCE = 1e-9
 """Normalized-plane residual above which an undistorted pixel is rejected as ray-less."""
 
 _RADIUS_SCAN_STEPS = 31416
-"""Angular resolution (about 1e-4 rad) of the scan for the fisheye radius limit."""
+"""Samples of the angle scan for a radius growth limit.
+
+About 1e-4 rad over the fisheye's ``[0, pi]`` and half that over the pinhole's ``[0, pi/2]``.
+"""
 
 _BISECTION_STEPS = 64
 
@@ -203,6 +208,36 @@ def _as_pixels(value: NDArray[Any], *, finite: bool) -> NDArray[Any]:
     return pixels  # type: ignore[no-any-return]
 
 
+def _growth_limit(growth: Callable[[NDArray[Any]], NDArray[Any]], upper: float) -> float | None:
+    """Largest angle to the optical axis up to which a projected radius keeps growing.
+
+    Past the first zero of ``growth`` two angles share a radius, so the projection is no
+    longer injective. The first non-positive sample of a scan over ``[0, upper]`` is refined
+    by bisection, and the angle returned stays on the growing side.
+
+    Args:
+        growth: Something with the sign of the radius' derivative, as a function of the
+            angle; positive at zero.
+        upper: The end of the scan, in radians.
+
+    Returns:
+        The limit angle, in radians, or ``None`` when ``growth`` never stops being positive.
+    """
+    np = _numpy()
+    angle = np.linspace(0.0, upper, _RADIUS_SCAN_STEPS)
+    stalled = np.flatnonzero(growth(angle) <= 0)
+    if stalled.size == 0:
+        return None
+    low, high = float(angle[stalled[0] - 1]), float(angle[stalled[0]])
+    for _ in range(_BISECTION_STEPS):
+        middle = (low + high) / 2
+        if float(growth(np.array([middle]))[0]) > 0:
+            low = middle
+        else:
+            high = middle
+    return low
+
+
 def _undistort(
     distort: Callable[[NDArray[Any], NDArray[Any]], tuple[NDArray[Any], NDArray[Any]]],
     xd: NDArray[Any],
@@ -334,6 +369,37 @@ class PinholeProjection(_CalibratedProjection):
         super().__init__(entry, model)
         self._distorted = model.distortion_model is not DistortionModel.NONE
         self._k = _pinhole_coefficients(model)
+        # Maior raio do plano normalizado (sem distorção) dentro do domínio; infinito quando
+        # nada dobra, e então o domínio é o hemisfério da frente, como no pinhole ideal.
+        self._max_radius = self._radius_growth_limit() if self._distorted else math.inf
+
+    def _radius_growth_limit(self) -> float:
+        """Largest normalized radius up to which the distorted radius keeps growing.
+
+        The radial term maps the undistorted radius ``r`` to ``r * N(s) / D(s)``, with
+        ``s = r^2``. Wherever ``D`` does not vanish its derivative has the sign of
+        ``N D + 2 s (N' D - N D')``; past the first zero two radii share a distorted radius and
+        a point far off the axis folds back into the image, even onto the principal point.
+        The scan runs over the angle to the optical axis, ``r = tan(angle)``.
+
+        Returns:
+            The limit radius, or ``inf`` when the radius grows over the whole front hemisphere.
+        """
+        np = _numpy()
+        k1, k2, _, _, k3, k4, k5, k6 = self._k
+
+        def growth(angle: NDArray[Any]) -> NDArray[Any]:
+            s = np.tan(angle) ** 2
+            numerator = 1 + s * (k1 + s * (k2 + s * k3))
+            denominator = 1 + s * (k4 + s * (k5 + s * k6))
+            numerator_slope = k1 + s * (2 * k2 + s * 3 * k3)
+            denominator_slope = k4 + s * (2 * k5 + s * 3 * k6)
+            return numerator * denominator + 2 * s * (  # type: ignore[no-any-return]
+                numerator_slope * denominator - numerator * denominator_slope
+            )
+
+        limit = _growth_limit(growth, math.pi / 2)
+        return math.inf if limit is None else math.tan(limit)
 
     def _distort(self, x: NDArray[Any], y: NDArray[Any]) -> tuple[NDArray[Any], NDArray[Any]]:
         k1, k2, p1, p2, k3, k4, k5, k6 = self._k
@@ -347,7 +413,11 @@ class PinholeProjection(_CalibratedProjection):
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]
     ) -> NDArray[Any]:
         # z > margem * alcance também exclui a origem (0 > 0 é falso).
-        return z > _COSINE_MARGIN * range_m  # type: ignore[no-any-return]
+        in_front = z > _COSINE_MARGIN * range_m
+        if math.isinf(self._max_radius):
+            return in_front  # type: ignore[no-any-return]
+        # Raio x/z, y/z comparado sem dividir: z > 0 onde o ponto está na frente.
+        return in_front & (_numpy().hypot(x, y) < self._max_radius * z)  # type: ignore[no-any-return]
 
     def _to_pixels(
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]
@@ -360,7 +430,9 @@ class PinholeProjection(_CalibratedProjection):
     def _to_rays(self, xd: NDArray[Any], yd: NDArray[Any]) -> tuple[NDArray[Any], NDArray[Any]]:
         np = _numpy()
         if self._distorted:
-            xn, yn, has_ray = _undistort(self._distort, xd, yd)
+            xn, yn, converged = _undistort(self._distort, xd, yd)
+            # Um raio além da dobra é um ramo externo do polinômio, que project recusa.
+            has_ray = converged & (np.hypot(xn, yn) < self._max_radius)
         else:
             xn, yn, has_ray = xd, yd, np.ones(xd.shape, dtype=bool)
         rays = np.column_stack((xn, yn, np.ones_like(xn)))
@@ -393,25 +465,14 @@ class FisheyeProjection(_CalibratedProjection):
         first zero two angles share a radius, so the projection is no longer injective.
         Falls back to ``pi`` when it never vanishes in ``(0, pi)``.
         """
-        np = _numpy()
         k1, k2, k3, k4 = self._k
 
         def growth(theta: NDArray[Any]) -> NDArray[Any]:
             t2 = theta * theta
             return 1 + t2 * (3 * k1 + t2 * (5 * k2 + t2 * (7 * k3 + t2 * 9 * k4)))  # type: ignore[no-any-return]
 
-        theta = np.linspace(0.0, math.pi, _RADIUS_SCAN_STEPS)
-        stalled = np.flatnonzero(growth(theta) <= 0)
-        if stalled.size == 0:
-            return math.pi
-        low, high = float(theta[stalled[0] - 1]), float(theta[stalled[0]])
-        for _ in range(_BISECTION_STEPS):
-            middle = (low + high) / 2
-            if float(growth(np.array([middle]))[0]) > 0:
-                low = middle
-            else:
-                high = middle
-        return low
+        limit = _growth_limit(growth, math.pi)
+        return math.pi if limit is None else limit
 
     def _in_domain(
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]

@@ -54,7 +54,7 @@ Todo modelo projeta apenas parte da esfera de direções. Um ponto que o modelo 
 
 | Modelo | Projetável quando |
 | --- | --- |
-| Pinhole | `z > 1e-9·‖P‖` (o plano `z = 0` e a origem ficam de fora) |
+| Pinhole | `z > 1e-9·‖P‖` (o plano `z = 0` e a origem ficam de fora); com distorção, também `√(x² + y²) < r_max·z`, com `r_max` o primeiro zero de `d(r·radial)/dr` (ou sem limite se nunca se anula) |
 | Fisheye | `θ < θ_max`, o primeiro zero de `dθ_d/dθ = 1 + 3k1θ² + 5k2θ⁴ + 7k3θ⁶ + 9k4θ⁸` (ou `π` se nunca se anula) |
 | MEI | `cos θ > −min(xi, 1/xi)`: o horizonte da esfera para `xi > 1` (a projeção dobra de volta além dele) e o zero de `z + xi·‖P‖` para `xi < 1` |
 
@@ -62,11 +62,13 @@ A margem de `1e-9` em cosseno (constante `_COSINE_MARGIN`) mantém as coordenada
 
 O ponto sobre o eixo negativo, por exemplo, **não** vira o ponto principal em MEI com `xi > 1`, onde uma implementação ingênua o dobraria de volta para dentro da imagem.
 
-Os polinômios de distorção são confiados dentro desse domínio. Uma calibração cujo polinômio dobra antes é um problema de calibração, que os diagnósticos de reprojeção expõem; a projeção não tenta adivinhá-lo.
+No pinhole distorcido, o termo radial leva o raio sem distorção `r` a `r·radial(r)`. Além do primeiro zero de `d(r·radial)/dr` dois raios compartilham o mesmo raio distorcido e o polinômio dobra de volta: com `k1 = −0,28` sozinho, um ponto a 62,1° do eixo cairia exatamente no ponto principal, dentro da imagem. `r_max` é derivado no construtor pela mesma técnica do `θ_max` do fisheye (varredura do ângulo com o eixo, `r = tan θ`, refinada por bisseção), e os pontos além dele são não projetáveis. O pinhole sem distorção não tem esse limite.
+
+Os termos tangenciais e a distorção do MEI são confiados dentro do domínio. Uma calibração cujo polinômio do MEI dobra antes é um problema de calibração, que os diagnósticos de reprojeção expõem; a projeção não tenta adivinhá-lo.
 
 ## Raio inverso e pixels sem raio
 
-`unproject` **falha** quando algum pixel não tem raio sob o modelo (além do horizonte da esfera, além de `θ_d(θ_max)` num fisheye, ou quando a distorção não tem inverso confiável), com uma mensagem que conta os pixels e mostra o primeiro. Não devolve um raio chutado.
+`unproject` **falha** quando algum pixel não tem raio sob o modelo (além do horizonte da esfera, além de `θ_d(θ_max)` num fisheye, com raio além de `r_max` num pinhole distorcido, ou quando a distorção não tem inverso confiável), com uma mensagem que conta os pixels e mostra o primeiro. Não devolve um raio chutado.
 
 ## Seleção e validação
 
@@ -74,4 +76,4 @@ Os polinômios de distorção são confiados dentro desse domínio. Uma calibra�
 
 ## Como é verificado
 
-Os testes comparam as três projeções contra as fórmulas publicadas, escritas de forma escalar e independente da implementação (OpenCV plumb_bob/racional e equidistante; CamOdoCal `spaceToPlane`), contra casos exatos que se conferem à mão (pinhole por triângulos semelhantes, fisheye ideal linear em θ, MEI com `xi = 0` igual ao pinhole e `xi = 1` estereográfico), contra os limites analíticos do domínio e por ida e volta `unproject → project` em uma grade de pixels da imagem, com tolerância de `1e-6` pixel.
+Os testes comparam as três projeções contra as fórmulas publicadas, escritas de forma escalar e independente da implementação (OpenCV plumb_bob/racional e equidistante; CamOdoCal `spaceToPlane`), contra casos exatos que se conferem à mão (pinhole por triângulos semelhantes, fisheye ideal linear em θ, MEI com `xi = 0` igual ao pinhole e `xi = 1` estereográfico), contra os limites analíticos do domínio (inclusive a dobra do polinômio radial do pinhole) e por ida e volta `unproject → project` em uma grade de pixels da imagem, com tolerância de `1e-6` pixel.
