@@ -576,6 +576,8 @@ A ciência continua na Semantic Fusion; a integração (#500) só entrega as ent
 - as refs vêm dos registros das `ContextRun`s (`provided`), não de um catálogo, então a regra de concordância de `selection` de `selection.py` (um run inteiro sobre uma única seleção) não se aplica ao build e não muda. O que garante a coerência é a fundação comum: todas as `ContextRun`s do build têm a mesma `SpatialFoundationId`, logo a mesma sequência, calibração e mapa;
 - observação física continua sendo `SourceObservationId`: inferências repetidas sobre um frame são evidência correlacionada, nunca observações independentes.
 
+Implementada em #500: `SemanticFusionExecutor` aceita N runs de `association` e `perception`, lê uma vez um run alcançado duas vezes, recusa uma associação cuja percepção não é entrada da fusão e duas associações da mesma percepção, e grava na linhagem todos os runs fundidos. Na cadeia real de CI, uma segunda percepção sobre os mesmos frames mantém `physical_observations` e dobra `inference_results`.
+
 **Limite da inferência repetida:** a identidade de execução de percepção é função da configuração e das entradas. Duas inferências só são evidência distinta quando algo na configuração difere (backend, modelo, prompt, parâmetro). Repetir a mesma configuração devolve, com reuso, o mesmo artifact. Recomputar à força um backend não determinístico com a mesma identidade é um risco já existente (#556, #580), e v0.1.1 não o resolve.
 
 ### Reusar ou implementar

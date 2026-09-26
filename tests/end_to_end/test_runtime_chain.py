@@ -59,6 +59,7 @@ from contextmap.runtime import (
 from contextmap.runtime.executors import (
     ContextMapExecutor,
     EntityResolutionExecutor,
+    ExecutorError,
     GeometricMappingExecutor,
     SemanticFusionExecutor,
     SemanticMappingExecutor,
@@ -562,3 +563,137 @@ def test_resolution_and_relations_are_derived_from_the_entities_without_rewritin
     assert refs["spatial_relations"].content_hash == inventory_digest(
         relations.manifest.file_inventory
     )
+
+
+class TestFusionOverSeveralContextRuns:
+    """Issue #500: a build fuses the runs of several ContextRuns as separate, correlated evidence.
+
+    The canned perception double answers the same frames for any run, so a second perception run
+    with another configuration is repeated inference over the same physical observations.
+    """
+
+    @staticmethod
+    def _stage(
+        workspace: Path, stage_id: str, inputs: dict[str, list[ArtifactRef]], digest: str
+    ) -> ArtifactRef:
+        request = StageRequest(
+            stage_id=stage_id,
+            inputs={name: tuple(refs) for name, refs in inputs.items()},
+            components={},
+            config_digest=digest,
+            output_dir=workspace / CI_FIXTURE_ID / f"run-{digest[-4:]}" / stage_id,
+            workspace=workspace,
+        )
+        ref: ArtifactRef = _executors()[stage_id].execute(request)
+        return ref
+
+    @staticmethod
+    def _first(tmp_path: Path) -> tuple[Path, dict[str, ArtifactRef]]:
+        effective, execution = _scope(tmp_path)
+        workspace = tmp_path / "ws"
+        _, record = _run(effective, execution, workspace, _executors())
+        return workspace, _outputs(record)
+
+    def _association(
+        self, workspace: Path, refs: dict[str, ArtifactRef], perception: ArtifactRef, digest: str
+    ) -> ArtifactRef:
+        return self._stage(
+            workspace,
+            "sensor_association",
+            {
+                "sequence": [refs["ingestion"]],
+                "perception": [perception],
+                "trajectory": [refs["state_estimation"]],
+                "geometry": [refs["geometric_mapping"]],
+            },
+            digest,
+        )
+
+    def _fuse(
+        self,
+        workspace: Path,
+        refs: dict[str, ArtifactRef],
+        associations: list[ArtifactRef],
+        perceptions: list[ArtifactRef],
+    ) -> ArtifactRef:
+        return self._stage(
+            workspace,
+            "semantic_fusion",
+            {
+                "sequence": [refs["ingestion"]],
+                "association": associations,
+                "perception": perceptions,
+                "geometry": [refs["geometric_mapping"]],
+            },
+            "sha256:fuse",
+        )
+
+    @staticmethod
+    def _counts(workspace: Path, fusion: ArtifactRef) -> dict[str, Any]:
+        path = workspace / str(fusion.location) / "metrics" / "counts.json"
+        counts: dict[str, Any] = json.loads(path.read_text("utf-8"))
+        return counts
+
+    def test_repeated_inference_stays_one_physical_observation_per_frame(
+        self, tmp_path: Path
+    ) -> None:
+        workspace, refs = self._first(tmp_path)
+        perception = self._stage(
+            workspace, "visual_perception", {"sequence": [refs["ingestion"]]}, "sha256:0002"
+        )
+        association = self._association(workspace, refs, perception, "sha256:0002")
+
+        fused = self._fuse(
+            workspace,
+            refs,
+            [refs["sensor_association"], association],
+            [refs["visual_perception"], perception],
+        )
+
+        single = self._counts(workspace, refs["semantic_fusion"])
+        both = self._counts(workspace, fused)
+        assert both["physical_observations"] == single["physical_observations"]
+        assert both["inference_results"] == 2 * single["inference_results"]
+        lineage = SemanticFusionRunReader(workspace / str(fused.location)).manifest.lineage
+        assert set(lineage.association_run_ids) == {
+            refs["sensor_association"].artifact_id,
+            association.artifact_id,
+        }
+        assert set(lineage.perception_run_ids) == {
+            refs["visual_perception"].artifact_id,
+            perception.artifact_id,
+        }
+
+    def test_a_run_reached_through_two_context_runs_is_one_input(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+
+        fused = self._fuse(
+            workspace,
+            refs,
+            [refs["sensor_association"], refs["sensor_association"]],
+            [refs["visual_perception"], refs["visual_perception"]],
+        )
+
+        assert self._counts(workspace, fused) == self._counts(workspace, refs["semantic_fusion"])
+
+    def test_two_associations_of_one_perception_run_are_refused(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+        again = self._association(workspace, refs, refs["visual_perception"], "sha256:0003")
+
+        with pytest.raises(ExecutorError, match="perception run"):
+            self._fuse(
+                workspace,
+                refs,
+                [refs["sensor_association"], again],
+                [refs["visual_perception"]],
+            )
+
+    def test_an_association_of_a_perception_run_left_out_is_refused(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+        perception = self._stage(
+            workspace, "visual_perception", {"sequence": [refs["ingestion"]]}, "sha256:0002"
+        )
+        association = self._association(workspace, refs, perception, "sha256:0002")
+
+        with pytest.raises(ExecutorError, match="not an input"):
+            self._fuse(workspace, refs, [association], [refs["visual_perception"]])
