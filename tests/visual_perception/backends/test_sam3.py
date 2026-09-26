@@ -6,6 +6,7 @@ from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
+from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam3_candidates
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -426,3 +427,9 @@ def test_official_sam3_runtime_default_context_is_torch_autocast(
     runtime.predict(_input(), _text_prompt_config("bfloat16"))
 
     assert calls == [{"device_type": "cuda", "dtype": "torch.bfloat16"}]
+
+
+@pytest.mark.parametrize("seed", BACKEND_SEEDS)
+def test_sam3_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
+    # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
+    assert digest(sam3_candidates(seed)) == GOLDEN["sam3"][str(seed)]

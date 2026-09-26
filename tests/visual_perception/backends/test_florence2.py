@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 import pytest
+from mask_cases import BACKEND_SEEDS, GOLDEN, digest, florence2_candidates
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -285,3 +286,9 @@ def test_zero_florence2_detections_are_a_valid_empty_result() -> None:
     assert output.candidates == ()
     assert output.diagnostics.proposal_count == 0
     assert dict(output.diagnostics.metadata)["box_count"] == 0
+
+
+@pytest.mark.parametrize("seed", BACKEND_SEEDS)
+def test_florence2_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
+    # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
+    assert digest(florence2_candidates(seed)) == GOLDEN["florence2"][str(seed)]

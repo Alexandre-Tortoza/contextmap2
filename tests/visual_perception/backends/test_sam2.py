@@ -3,6 +3,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 
 import pytest
+from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam2_candidates
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -322,3 +323,9 @@ def test_sam2_accepts_official_masks_whose_bbox_uses_inclusive_indices() -> None
     box = regions[0].bounding_box
     assert (box.x, box.y, box.width, box.height) == (2, 1, 3, 3)
     assert regions[0].area_pixels == 9
+
+
+@pytest.mark.parametrize("seed", BACKEND_SEEDS)
+def test_sam2_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
+    # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
+    assert digest(sam2_candidates(seed)) == GOLDEN["sam2"][str(seed)]
