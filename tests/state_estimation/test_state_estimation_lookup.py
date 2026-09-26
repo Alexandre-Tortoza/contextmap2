@@ -292,6 +292,71 @@ def test_interpolation_never_extrapolates() -> None:
     assert result.rejection is LookupRejection.OUT_OF_RANGE
 
 
+# --- The smallest trajectory: one pose --------------------------------------
+
+
+def _single_pose_lookup() -> TrajectoryLookup:
+    """One pose at 100 ms: the smallest trajectory the contract accepts."""
+    return TrajectoryLookup(make_trajectory([make_pose(1)]))
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        LookupPolicy.exact(),
+        LookupPolicy.nearest(max_time_delta_ns=10 * MS),
+        LookupPolicy.interpolated(),
+        LookupPolicy.interpolated(max_interpolation_gap_ns=10 * MS),
+    ],
+    ids=["exact", "nearest", "interpolated", "interpolated-bounded"],
+)
+def test_a_single_pose_trajectory_resolves_its_own_timestamp_exactly(
+    policy: LookupPolicy,
+) -> None:
+    lookup = _single_pose_lookup()
+    (pose,) = lookup.trajectory.poses
+
+    result = _resolved(lookup.pose_at(timestamp_ns(100 * MS), policy=policy))
+
+    assert result.outcome is LookupOutcome.EXACT
+    assert result.pose == pose
+    assert result.source_estimate_ids == (pose.estimate_id,)
+    assert result.time_delta_ns == 0
+
+
+@pytest.mark.parametrize("query_ns", [100 * MS - 1, 100 * MS + 1])
+def test_a_single_pose_trajectory_has_no_interval_to_interpolate_on_either_side(
+    query_ns: int,
+) -> None:
+    lookup = _single_pose_lookup()
+
+    exact = _rejected(lookup.pose_at(timestamp_ns(query_ns), policy=LookupPolicy.exact()))
+    interpolated = _rejected(
+        lookup.pose_at(timestamp_ns(query_ns), policy=LookupPolicy.interpolated())
+    )
+
+    assert exact.rejection is LookupRejection.OUT_OF_RANGE
+    assert interpolated.rejection is LookupRejection.OUT_OF_RANGE
+
+
+def test_a_single_pose_trajectory_serves_its_pose_as_nearest_only_within_tolerance() -> None:
+    lookup = _single_pose_lookup()
+    (pose,) = lookup.trajectory.poses
+    policy = LookupPolicy.nearest(max_time_delta_ns=10 * MS)
+
+    before = _resolved(lookup.pose_at(timestamp_ns(95 * MS), policy=policy))
+    after = _resolved(lookup.pose_at(timestamp_ns(105 * MS), policy=policy))
+    too_far = _rejected(lookup.pose_at(timestamp_ns(111 * MS), policy=policy))
+
+    assert (before.outcome, before.pose, before.time_delta_ns) == (
+        LookupOutcome.NEAREST,
+        pose,
+        5 * MS,
+    )
+    assert (after.outcome, after.pose, after.time_delta_ns) == (LookupOutcome.NEAREST, pose, 5 * MS)
+    assert too_far.rejection is LookupRejection.OUT_OF_RANGE
+
+
 # --- Clock domains, observations, determinism -------------------------------
 
 
