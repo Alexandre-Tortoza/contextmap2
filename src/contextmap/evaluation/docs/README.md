@@ -232,6 +232,7 @@ pipeline principal.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
 - [`end-to-end.md`](end-to-end.md) — cenário canônico congelado, perfil de backends, opções só por ablação, matriz de aceitação por estágio, relatório sem score global e regras de versionamento.
+- [`score-calibration.md`](score-calibration.md) — scores nativos ficam diagnósticos até haver calibração; par de splits de calibração/avaliação retida que recusa vazamento.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.

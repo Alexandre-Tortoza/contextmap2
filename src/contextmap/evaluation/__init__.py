@@ -359,6 +359,7 @@ from contextmap.evaluation.report_schema import (
     validate_evaluation_report,
     write_evaluation_report,
 )
+from contextmap.evaluation.score_calibration import CalibrationSplitError, CalibrationSplitPair
 from contextmap.evaluation.semantic_fusion import (
     FusionAnnotationReport,
     FusionArmRole,
@@ -612,6 +613,8 @@ __all__ = [
     "ArtifactRecord",
     "AssociationReport",
     "CalibrationIdentity",
+    "CalibrationSplitError",
+    "CalibrationSplitPair",
     "CertifiedReferenceSet",
     "CiFixtureSubset",
     "ComparisonArm",
