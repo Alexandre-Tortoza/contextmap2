@@ -14,7 +14,8 @@ O reuso **nunca** usa nome de diretório nem nome legível de run como chave, e 
 | configuração própria do estágio | `PlannedStage.config_digest` (contrato declarado, backend e parâmetros dos componentes) |
 | entradas | o tipo e o **hash de conteúdo** de cada artifact de entrada (`ArtifactRef.content_hash`), não seu nome nem seu id de run |
 | código e políticas | `ReusePolicy.code_identity`, **sem default**: reusar entre versões de código é uma decisão |
-| identidades extras | `ReusePolicy.identities[estágio]`: calibração, mapa, seleção de observações, transformações opcionais |
+| seleção de observações | para um estágio `observation_scoped` com `inputs.observation_selection`, a seleção entra no `config_digest` do estágio (#497); a jusante, ela chega pelo hash de conteúdo das entradas |
+| identidades extras | `ReusePolicy.identities[estágio]`: calibração, mapa, transformações opcionais |
 
 `ReuseKey.digest` é o SHA-256 da forma canônica. Como a chave usa o **conteúdo** das entradas, dois artifacts com o mesmo hash de conteúdo são intercambiáveis, e um estágio recomputado que reproduz o mesmo conteúdo não invalida seus dependentes.
 

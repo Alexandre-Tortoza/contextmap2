@@ -23,6 +23,10 @@ checkpoint = "..."
 
 [inputs]                     # seleção/run inputs
 sequence = "seq-01"
+[inputs.observation_selection]   # opcional: só estes frames nos estágios de contexto
+kind = "frame_range"
+start_frame_index = 0
+end_frame_index = 500
 [inputs.selections]
 state_estimation = "seq-01--run-0003"
 
@@ -40,11 +44,19 @@ debug_level = "standard"     # none | standard | full
 |---|---|
 | `pipeline` | preset de topologia e quais estágios opcionais participam |
 | `components` | backend escolhido para cada ponto de variação, com os parâmetros **somente desse backend** |
-| `inputs` | sequência esperada e seleção explícita de runs/artifacts upstream por estágio: ids exatos, listas de runs, seleções nomeadas ou `latest` ([`selection.md`](selection.md)) |
+| `inputs` | sequência esperada, seleção explícita de runs/artifacts upstream por estágio (ids exatos, listas de runs, seleções nomeadas ou `latest`, [`selection.md`](selection.md)) e, opcionalmente, `observation_selection`: as observações da sequência que os estágios de contexto processam |
 | `resources` | dispositivo (repassado aos backends que declaram um parâmetro de dispositivo e não o definiram), workspace e `providers` (alvos `RuntimeProvider` declarados por componente, ver seção própria) |
 | `policies` | nível de debug; o debug nunca é dependência contratual de um estágio downstream |
 
 Não há campos de política de avaliação: nenhum consumidor existe ainda, e o schema não ganha campo sem consumidor.
+
+### `inputs.observation_selection`
+
+Uma `SequenceSelection` na forma canônica de `contextmap.ingestion.encode_selection` (`frame_range`, `timestamp_range`, `explicit_ids`; issue #497). Omitida, vale a sequência inteira; é assim que a sequência inteira se escreve, e `{"kind": "full"}` explícito seria só outra identidade para o mesmo trabalho.
+
+- Vale só para os estágios `observation_scoped` do catálogo, hoje `visual_perception`. Os estágios da fundação espacial (`state_estimation`, `geometric_mapping`) continuam na sequência inteira; `sensor_association` cobre exatamente os frames da run de percepção que consome e grava a seleção dela.
+- Entra no `config_digest` do estágio e, portanto, no `run_id` publicado e na chave de reuso. Sem seleção, o digest é o mesmo de antes do campo existir.
+- A configuração só confere o formato (objeto com `kind` em texto). O executor decodifica pela Ingestion, exige a forma canônica (recusa campos de outro tipo de seleção, que uma fusão de camadas pode deixar) e resolve contra a sequência antes de preparar qualquer imagem.
 
 ## Precedência
 

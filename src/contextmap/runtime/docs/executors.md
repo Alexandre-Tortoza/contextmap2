@@ -32,6 +32,10 @@ Diferente dos outros quatro, dois dos backends compostos (`dense_features`/`regi
 
 Um backend que ainda não satisfaz a forma que `CANONICAL_PRESET_V1` espera — por exemplo um `SemanticInterpreter` que só implementa a porta nova `interpret(request)` enquanto os estágios `scene_interpretation`/`region_interpretation` do preset canônico ainda despacham pela forma legada `interpret_scene`/`interpret_regions` — não recebe nenhum tratamento especial aqui: `execute_stage_graph()` isola essa falha por observação (`StageStatus.FAILED`, mensagem honesta) e os estágios independentes (region discovery, features densa/de região) continuam produzindo evidência real. O executor nunca contorna uma incompatibilidade backend/preset; isso é lacuna de capability, não de runtime.
 
+## Seleção de observações
+
+`VisualPerceptionExecutor` processa só as imagens de `StageRequest.observation_selection` (issue #497): decodifica a seleção pela Ingestion, exige a forma canônica e a resolve com `resolve_selection_offsets` antes de preparar qualquer imagem, filtra o índice pelo offset sem decodificar nada fora dela e grava o `selection_id` real no `PerceptionRunArtifact`. `SensorAssociationExecutor` já itera só os resultados da percepção que consome, e grava o `selection_id` dela. Os estágios da fundação espacial continuam sobre a sequência inteira. Detalhes em [`configuration.md`](configuration.md#inputsobservation_selection).
+
 ## Identidade
 
 O `run_id` que o writer grava vem de `StageRequest.identity()`: o estágio, o `config_digest` e o hash de conteúdo exato de cada entrada. Uma execução idêntica publica a **mesma** identidade e, portanto, o mesmo conteúdo; qualquer mudança de configuração ou de entrada muda a identidade. É isso que faz dois runs da mesma execução terem hashes contratuais idênticos e que mantém o reuso válido entre runs. O `run_index` é o número do run (`StageRequest.run_number()`). O `content_hash` do `ArtifactRef` é o digest do inventário contratual do manifest (`inventory_digest`).

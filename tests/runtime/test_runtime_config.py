@@ -359,6 +359,8 @@ class TestStructuralValidation:
             ({"policies": {"debug_level": "loud"}}, "debug_level"),
             ({"policies": {"trajectory_mode": "always_ground_truth"}}, "trajectory_mode"),
             ({"inputs": {"selections": {"ingestion": 3}}}, "inputs.selections"),
+            ({"inputs": {"observation_selection": "frames 0-9"}}, "inputs.observation_selection"),
+            ({"inputs": {"observation_selection": {"start": 0}}}, "inputs.observation_selection"),
         ],
     )
     def test_rejects_invalid_documents_naming_the_offending_path(
@@ -626,6 +628,37 @@ class TestSecrets:
 
         assert "s3cr3t" not in written.read_text(encoding="utf-8")
         assert "s3cr3t" not in json.dumps(effective.config.to_document())
+
+
+_FRAMES = {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 10}
+
+
+class TestObservationSelection:
+    """Issue #497: which observations of the sequence the context stages process."""
+
+    def test_the_whole_sequence_is_the_default(self) -> None:
+        effective = resolve_effective_config()
+
+        assert effective.config.inputs.observation_selection is None
+        assert "observation_selection" not in effective.config.to_document()["inputs"]
+
+    def test_a_selection_is_read_as_its_encoded_document(self, tmp_path: Path) -> None:
+        file = _write(tmp_path / "a.json", {"inputs": {"observation_selection": _FRAMES}})
+
+        effective = resolve_effective_config(files=[file])
+
+        assert effective.config.inputs.observation_selection == _FRAMES
+        assert effective.config.to_document()["inputs"]["observation_selection"] == _FRAMES
+        assert effective.digest != resolve_effective_config().digest
+
+    def test_a_selection_round_trips_through_persistence(self, tmp_path: Path) -> None:
+        file = _write(tmp_path / "a.json", {"inputs": {"observation_selection": _FRAMES}})
+        effective = resolve_effective_config(files=[file])
+
+        loaded = read_effective_config(write_effective_config(effective, tmp_path / "run"))
+
+        assert loaded.config.inputs.observation_selection == _FRAMES
+        assert loaded.digest == effective.digest
 
 
 class TestPersistence:

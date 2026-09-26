@@ -161,11 +161,17 @@ class InputsConfig:
             selection defined in ``named``). A stage that is not listed is never
             selected implicitly.
         named: Named selections, each mapping stages to exact artifact ids.
+        observation_selection: Which observations of the sequence the observation-scoped
+            stages process, as a selection encoded by
+            ``contextmap.ingestion.encode_selection`` (issue #497); ``None`` for the whole
+            sequence. Only its shape is checked here: the stage that uses it decodes it
+            through the Ingestion, which owns the selection kinds.
     """
 
     sequence: str | None
     selections: Mapping[str, tuple[str, ...]]
     named: Mapping[str, Mapping[str, tuple[str, ...]]]
+    observation_selection: Mapping[str, ConfigValue] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -272,6 +278,11 @@ class RuntimeConfig:
                     name: {stage: list(ids) for stage, ids in stages.items()}
                     for name, stages in self.inputs.named.items()
                 },
+                **(
+                    {}
+                    if self.inputs.observation_selection is None
+                    else {"observation_selection": _thaw(self.inputs.observation_selection)}
+                ),
             },
             "resources": {
                 "device": self.resources.device,
@@ -1004,7 +1015,9 @@ def _parse_inputs(
     value: object, problems: list[ConfigProblem], known_stages: set[str] | None
 ) -> InputsConfig:
     section = _mapping(value, "inputs", problems)
-    _reject_unknown(section, {"sequence", "selections", "named"}, "inputs", problems)
+    _reject_unknown(
+        section, {"sequence", "selections", "named", "observation_selection"}, "inputs", problems
+    )
     named = _parse_named(section.get("named", {}), problems, known_stages)
     selections: dict[str, tuple[str, ...]] = {}
     for stage_id, raw in _mapping(
@@ -1041,7 +1054,30 @@ def _parse_inputs(
         sequence=_optional_text(section.get("sequence"), "inputs.sequence", problems),
         selections=MappingProxyType(selections),
         named=MappingProxyType(named),
+        observation_selection=_parse_observation_selection(
+            section.get("observation_selection"), problems
+        ),
     )
+
+
+def _parse_observation_selection(
+    value: object, problems: list[ConfigProblem]
+) -> Mapping[str, ConfigValue] | None:
+    """Read an encoded sequence selection; ``None`` selects the whole sequence."""
+    if value is None:
+        return None
+    path = "inputs.observation_selection"
+    kind = value.get("kind") if isinstance(value, Mapping) else None
+    if not isinstance(kind, str) or not kind:
+        problems.append(
+            ConfigProblem(
+                path=path,
+                message="must be an encoded sequence selection: a mapping with a non-empty 'kind'",
+            )
+        )
+        return None
+    frozen = _freeze(value, path, problems)
+    return frozen if isinstance(frozen, Mapping) else None
 
 
 def _parse_named(

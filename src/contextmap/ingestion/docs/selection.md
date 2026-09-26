@@ -6,6 +6,8 @@ Este documento descreve `src/contextmap/ingestion/sequence_selection.py`: como u
 
 `resolve_selection(reader, selection)` é o único caminho de leitura para qualquer tipo de seleção. Isso garante a propriedade central desta issue: ler a sequência inteira e ler a porção correspondente de um `FrameRangeSelection` produzem exatamente as mesmas observações para os frames em comum — não há dois caminhos de leitura que possam divergir.
 
+O casamento em si é `resolve_selection_offsets(reader, selection)`: devolve os offsets do índice das observações selecionadas, em ordem canônica, sem decodificar nenhuma. `resolve_selection` o usa, e quem só precisa de uma modalidade (a percepção visual, que só lê imagens) filtra `iter_index()` por esses offsets e não decodifica o resto (#497).
+
 
 
 ## Fluxo de replay

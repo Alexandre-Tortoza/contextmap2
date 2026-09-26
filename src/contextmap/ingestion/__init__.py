@@ -74,6 +74,7 @@ from contextmap.ingestion.sequence_selection import (
     decode_selection,
     encode_selection,
     resolve_selection,
+    resolve_selection_offsets,
     selection_identity,
 )
 from contextmap.ingestion.source_adapter import (
@@ -201,6 +202,7 @@ __all__ = [
     "encode_timestamp_policy",
     "observation_modality",
     "resolve_selection",
+    "resolve_selection_offsets",
     "selection_identity",
     "summarize_observations",
     "synchronize",

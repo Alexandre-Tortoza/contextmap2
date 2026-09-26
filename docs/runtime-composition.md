@@ -529,11 +529,11 @@ Implementada em `runtime/foundation.py` (#494): `resolve_spatial_foundation(work
 
 ### Seleção de observações de uma `ContextRun`
 
-É a única identidade realmente nova de reuso. A configuração ganha `inputs.observation_selection`, uma `SequenceSelection` codificada com `encode_selection` (padrão: sequência inteira). Ela:
+É a única identidade realmente nova de reuso. A configuração ganha `inputs.observation_selection`, uma `SequenceSelection` codificada com `encode_selection` (padrão: sequência inteira). Implementada em #497:
 
-- vale só para os estágios de contexto (`visual_perception`, `sensor_association`); os estágios da fundação continuam na sequência inteira;
-- entra no `config_digest` desses dois estágios, portanto em `StageRequest.identity()` (o `run_id` publicado) e na `ReuseKey`, pelo mecanismo existente, sem campo novo na chave;
-- é resolvida pela própria Ingestion (`resolve_selection`), e os executores passam o `selection_id` real à capability em vez de fixar `FullSequenceSelection()`.
+- vale só para os estágios marcados `observation_scoped` no catálogo, hoje só `visual_perception`. `sensor_association` já cobre exatamente os frames da run de percepção que consome e grava a seleção dela: herda a seleção pelo conteúdo da entrada, sem configuração própria. Os estágios da fundação continuam na sequência inteira;
+- entra no `config_digest` de `visual_perception`, portanto em `StageRequest.identity()` (o `run_id` publicado) e na `ReuseKey`, pelo mecanismo existente, sem campo novo na chave. Sem seleção, o digest é o de antes;
+- é resolvida pela própria Ingestion (`resolve_selection_offsets`), sem decodificar nada fora da seleção, e o executor grava o `selection_id` real em vez de fixar `FullSequenceSelection()`.
 
 Evolução aditiva de configuração: todo documento `0.1.0` continua válido com o mesmo significado. A versão do schema de configuração segue [`versioning.md`](versioning.md), sem camada de compatibilidade.
 
@@ -572,7 +572,7 @@ A ciência continua na Semantic Fusion; a integração (#500) só entrega as ent
 | invalidar evidência de outra fundação/mapa | hash de conteúdo do mapa nas chaves de quem o consome | nada |
 | invalidar a fusão quando o conjunto de runs muda | hash combinado das entradas `multiple` | nada |
 | mudar só uma política de jusante | invalidação só do estágio e dependentes | nada |
-| seleção de observações | `SequenceSelection`, `selection_identity`, `resolve_selection` (Ingestion) | `inputs.observation_selection`, que entra no `config_digest` dos estágios de contexto; executores param de fixar a sequência inteira |
+| seleção de observações | `SequenceSelection`, `selection_identity`, `resolve_selection` (Ingestion) | `inputs.observation_selection`, que entra no `config_digest` de `visual_perception`; a percepção aplica a seleção e a associação grava a da percepção |
 | fusão de várias runs | agrupamento por observação física na Semantic Fusion | executor com N entradas, deduplicação e recusa de associação dupla |
 | upstream explícito | `scope(provided=..., selections=...)` | `provided` com várias refs por estágio |
 | montagem do mapa | `ContextMapExecutor` → `assemble_context_map_with_metrics` → `write_context_map_with_metrics` | nada; validação `FULL` depois de gravar |
