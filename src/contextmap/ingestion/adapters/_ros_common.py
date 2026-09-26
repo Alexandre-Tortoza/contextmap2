@@ -198,12 +198,16 @@ def decode_lidar(
 
     Returns:
         The canonical LiDAR observation.
+
+    Raises:
+        ValueError: If a ``PointField.datatype`` is outside the supported
+            ``sensor_msgs/PointField`` datatypes.
     """
     fields = tuple(
         PointFieldDescriptor(
             name=field.name,
             offset_bytes=field.offset,
-            data_type=POINTFIELD_TYPE_MAP[field.datatype],
+            data_type=_point_field_data_type(field),
             count=field.count,
         )
         for field in message.fields
@@ -378,6 +382,29 @@ def decode_pose(
         ),
         twist_covariance=tuple(float(value) for value in message.twist.covariance),
     )
+
+
+def _point_field_data_type(field: Any) -> PointFieldDataType:
+    """Map a ``sensor_msgs/PointField`` datatype code to its canonical data type.
+
+    Args:
+        field: A decoded ``sensor_msgs/PointField`` (has ``.name``/``.datatype``).
+
+    Returns:
+        The canonical point field data type.
+
+    Raises:
+        ValueError: If ``field.datatype`` is not one of the supported codes;
+            the message names the field, the received code and the supported
+            range, so the resulting adapter warning is actionable.
+    """
+    data_type = POINTFIELD_TYPE_MAP.get(field.datatype)
+    if data_type is None:
+        raise ValueError(
+            f"unsupported PointField datatype {field.datatype!r} for field {field.name!r}; "
+            f"supported datatypes are {min(POINTFIELD_TYPE_MAP)}-{max(POINTFIELD_TYPE_MAP)}"
+        )
+    return data_type
 
 
 def _available_covariance(values: Any) -> tuple[float, ...] | None:
