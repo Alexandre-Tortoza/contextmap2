@@ -22,12 +22,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Any, overload
 
 from contextmap.ingestion.models import SourceObservation, SourceObservationId
 from contextmap.ingestion.sequence_artifact import SequenceArtifactId, SequenceArtifactReader
+
+_NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
 class SequenceSelectionError(Exception):
@@ -79,9 +83,10 @@ class TimestampRangeSelection:
             expressed in. An observation whose ``timestamp.clock_id``
             differs is excluded, never compared as if it were the same
             clock (see ``docs/synchronization.md``).
-        start_seconds: Inclusive lower bound of normalized timestamp
-            (``timestamp.to_float_seconds()``).
-        end_seconds: Exclusive upper bound.
+        start_seconds: Inclusive lower bound of normalized timestamp, in seconds. It is
+            compared with the exact ``timestamp.total_nanoseconds()``, never with a float
+            conversion of the timestamp.
+        end_seconds: Exclusive upper bound, compared the same way.
     """
 
     clock_id: str
@@ -222,14 +227,27 @@ def _resolve_frame_range_offsets(
 def _resolve_timestamp_range_offsets(
     reader: SequenceArtifactReader, selection: TimestampRangeSelection
 ) -> list[int]:
+    start = _ceil_nanoseconds(selection.start_seconds)
+    end = _ceil_nanoseconds(selection.end_seconds)
     offsets: list[int] = []
     for entry in reader.iter_index():
         if entry.timestamp.clock_id != selection.clock_id:
             continue
-        seconds = entry.timestamp.to_float_seconds()
-        if selection.start_seconds <= seconds < selection.end_seconds:
+        if start <= entry.timestamp.total_nanoseconds() < end:
             offsets.append(entry.offset)
     return offsets
+
+
+def _ceil_nanoseconds(seconds: float) -> int | float:
+    """Return the smallest whole nanosecond count not below ``seconds``, computed exactly.
+
+    For an integer ``t``, ``t >= x`` iff ``t >= ceil(x)`` and ``t < x`` iff ``t < ceil(x)``, so
+    both bounds of a range compare exactly with integer nanoseconds. A non-finite bound is
+    returned as is: it already compares correctly with any integer.
+    """
+    if not math.isfinite(seconds):
+        return seconds
+    return math.ceil(Fraction(seconds) * _NANOSECONDS_PER_SECOND)
 
 
 def _resolve_explicit_ids_offsets(

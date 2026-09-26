@@ -183,6 +183,12 @@ class TestDiagnoseSourceClock:
         messages = diagnostics.warnings()
         assert any("non-monotonic" in message for message in messages)
 
+    def test_a_regression_below_float_resolution_is_non_monotonic(self) -> None:
+        # Regressão ING-02: em t ~ 1.7e9 s, 100 ns e 0 ns colapsam no mesmo float64.
+        observations = [_image(1_700_000_000, 100), _image(1_700_000_000, 0)]
+        diagnostics = diagnose_source_clock(observations)
+        assert diagnostics.non_monotonic_count == 1
+
     def test_the_recording_minus_source_distribution_is_computed_when_available(self) -> None:
         offset_ns = 5 * 1_000_000_000
         observations = [
