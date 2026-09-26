@@ -85,14 +85,24 @@ def region_discovery_evaluation_report(
     """Lift a Region Discovery report into the envelope.
 
     Quality metrics are means over the frames that have a regions annotation;
-    frames without one are excluded from the population, not scored as zero.
+    frames without one are excluded from the population, not scored as zero. The
+    duplicate rate is normalized by the discovered regions, so an annotated frame
+    that discovered none has no duplicate rate and is excluded from that population
+    in the same way.
     """
     annotated = [frame.accuracy for frame in report.frames if frame.accuracy is not None]
     quality: list[MetricResult] = []
     for name, values in (
         ("region.iou.mean", [item.mean_iou for item in annotated]),
         ("region.recall.mean", [item.region_recall for item in annotated]),
-        ("region.duplicate_rate.mean", [item.duplicate_region_rate for item in annotated]),
+        (
+            "region.duplicate_rate.mean",
+            [
+                item.duplicate_region_rate
+                for item in annotated
+                if item.duplicate_region_rate is not None
+            ],
+        ),
     ):
         quality.append(
             _value(name, fmean(values), len(values))

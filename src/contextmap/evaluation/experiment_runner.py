@@ -280,7 +280,9 @@ class MetricComparison:
         kind: Quality or performance.
         strata: The stratum, empty for the whole population.
         entries: One entry per completed arm that reported it.
-        same_population: Whether every value was computed over the same number of samples.
+        same_population: Whether every value was computed over the same, reported number
+            of samples; ``False`` as soon as one value does not report its sample count,
+            because an unknown population is no evidence of a shared one.
     """
 
     metric: str
@@ -447,7 +449,9 @@ def _metric_comparisons(
                     kind=kind,
                     strata=key,
                     entries=tuple(entries),
-                    same_population=len(counts) <= 1,
+                    # Valor sem sample_count não é evidência de população comum: {None} não
+                    # conta como "mesmo número de amostras".
+                    same_population=None not in counts and len(counts) <= 1,
                 )
             )
     return tuple(comparisons)

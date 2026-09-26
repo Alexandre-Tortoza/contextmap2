@@ -152,6 +152,43 @@ def test_the_comparison_lists_metrics_side_by_side_without_a_winner(
     assert not (_keys(run.comparison.to_record()) & forbidden)
 
 
+def test_values_without_a_sample_count_are_not_claimed_to_share_a_population(
+    validated: ValidatedReferenceSet, tmp_path: Path
+) -> None:
+    manifest = backend_experiment(validated.manifest)
+
+    def uncounted_quality(
+        manifest: ExperimentManifest, arm: Any, result: ArmExecution
+    ) -> ArmExecution:
+        values = BACKEND_VALUES[arm.arm_id]
+        quality = tuple(
+            MetricResult(
+                metric=ref.name,
+                metric_version=ref.version,
+                status=MetricStatus.VALUE,
+                value=values[ref.name],
+                sample_count=None,
+            )
+            for ref in manifest.quality_metrics
+        )
+        return replace(result, report=make_report(manifest, arm, values, quality=quality))
+
+    run = _run(
+        validated,
+        tmp_path / "run",
+        manifest,
+        make_executor(BACKEND_VALUES, tweak=uncounted_quality)[0],
+    )
+
+    acceptable = next(
+        item for item in run.comparison.metrics if item.metric == "semantic.acceptable_claim_rate"
+    )
+    assert [item.status for item in acceptable.entries] == [MetricStatus.VALUE] * 2
+    assert [item.sample_count for item in acceptable.entries] == [None, None]
+    # Sem contagem não há evidência de que os valores vieram do mesmo número de amostras.
+    assert acceptable.same_population is False
+
+
 def test_quality_and_resource_metrics_stay_in_separate_kinds(
     validated: ValidatedReferenceSet, tmp_path: Path
 ) -> None:
