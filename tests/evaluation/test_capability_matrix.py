@@ -208,7 +208,7 @@ def _accepts(component_id: str, backend_id: str, name: str, value: str) -> bool:
     if (component_id, backend_id, name) == (
         "visual_perception.region_grounding",
         "locateanything",
-        "policy_id",
+        "query_set.queries.policy_id",
     ):
         return value in {CATEGORY_DETECTION_POLICY, PHRASE_GROUNDING_POLICY, POINTING_POLICY}
     raise AssertionError(f"no validator for selector {name!r} of {component_id}/{backend_id}")

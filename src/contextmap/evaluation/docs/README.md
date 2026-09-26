@@ -182,6 +182,7 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 
 ### Experimentos e ablações
 
+- `PhaseSpec`/`expand_phase()`/`PhaseManifest` — fases nomeadas do experimento de percepção (#527) expandidas em configurações comuns do runtime, sem carregar modelos: cada arm resolve pelo runtime, a fiação é conferida contra a matriz, arms bloqueados e duplicados ficam registrados com motivo e os executáveis viram um `ExperimentManifest` em modo `selected`. Ver [`experiment-phases.md`](experiment-phases.md).
 - `CAPABILITY_MATRIX`/`Capability`/`Composition` — matriz versionada de capacidades nativas e de compatibilidade produtor → consumidor do experimento de percepção (#522): status (`supported` preso ao catálogo do runtime, `planned`, `blocked`, `out_of_scope`), grupos de comparação por tarefa + condicionamento + geometria e `require_supported_composition()` para excluir composições inválidas antes de carregar modelos. Ver [`capability-matrix.md`](capability-matrix.md).
 - `ExperimentManifest`/`ExperimentVariable`/`ExperimentArm`/`ResolvedTopology` — manifesto versionado e hasheado de uma comparação controlada: seleção exata de amostras do reference set, topologia resolvida por arm, artifacts upstream pinados, variáveis sob teste, controles fixos, métricas e política de captura de recursos. Só se constrói se **apenas as variáveis declaradas variam** e se o trecho variado consome artifacts imutáveis pinados.
 - `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.

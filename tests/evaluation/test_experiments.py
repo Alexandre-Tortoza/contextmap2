@@ -467,3 +467,22 @@ def test_unknown_schemas_and_missing_fields_are_refused(reference) -> None:  # t
     del broken["arms"]
     with pytest.raises(ExperimentError, match="arms"):
         decode_experiment(broken)
+
+
+def test_a_selected_matrix_runs_only_its_listed_cells(reference) -> None:  # type: ignore[no-untyped-def]
+    manifest = factorial_experiment(reference)
+    baseline, *others = manifest.arms
+
+    selected = replace(manifest, mode=AblationMode.SELECTED, arms=(baseline, others[-1]))
+
+    assert [arm.arm_id for arm in selected.arms] == ["baseline", others[-1].arm_id]
+    with pytest.raises(ExperimentError, match="baseline"):
+        replace(manifest, mode=AblationMode.SELECTED, arms=(others[-1],))
+    with pytest.raises(ExperimentError, match="same values"):
+        replace(
+            manifest,
+            mode=AblationMode.SELECTED,
+            arms=(baseline, others[-1], replace(others[-1], arm_id="copy")),
+        )
+    with pytest.raises(ExperimentError, match="explicitly"):
+        ablation_cells((FUSION_POLICY, FUSION_CHANNELS), AblationMode.SELECTED)
