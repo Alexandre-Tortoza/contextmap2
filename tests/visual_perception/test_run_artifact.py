@@ -800,7 +800,7 @@ def test_a_run_with_no_feature_payloads_has_an_empty_feature_store(tmp_path: Pat
 
 def _full_frame_mask(width: int = 640, height: int = 480) -> InlineMask:
     data = tuple((x // 40 + y // 40) % 2 == 0 for y in range(height) for x in range(width))
-    return InlineMask(width=width, height=height, data=data)
+    return InlineMask(np.array(data, dtype=bool).reshape(height, width))
 
 
 def test_full_frame_mask_is_persisted_compactly_and_lazily_loadable(tmp_path: Path) -> None:
@@ -813,7 +813,7 @@ def test_full_frame_mask_is_persisted_compactly_and_lazily_loadable(tmp_path: Pa
         source_observation_id=SourceObservationId("frame-0001"),
         image_width=640,
         image_height=480,
-        area_pixels=float(sum(mask.data)),
+        area_pixels=float(mask.area),
         mask=mask,
     )
     result = PerceptionResult(
@@ -928,7 +928,7 @@ def _masked_result(observation_id: str, mask: InlineMask) -> PerceptionResult:
         source_observation_id=SourceObservationId(observation_id),
         image_width=mask.width,
         image_height=mask.height,
-        area_pixels=float(sum(mask.data)),
+        area_pixels=float(mask.area),
         mask=mask,
     )
     return PerceptionResult(

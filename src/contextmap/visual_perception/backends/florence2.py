@@ -291,6 +291,8 @@ class Florence2RegionDiscovery:
         height: int,
     ) -> RegionCandidate:
         """Convert one parsed Florence region without semantic promotion."""
+        import numpy as np
+
         mask = None
         if region.mask is not None:
             if len(region.mask) != width * height:
@@ -298,7 +300,7 @@ class Florence2RegionDiscovery:
                     f"Florence-2 proposal {region.proposal_id} mask length must match "
                     "discovery pass dimensions"
                 )
-            mask = InlineMask(width=width, height=height, data=region.mask)
+            mask = InlineMask(np.array(region.mask, dtype=np.bool_).reshape(height, width))
 
         score = None
         if region.score is not None:

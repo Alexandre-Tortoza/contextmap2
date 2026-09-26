@@ -291,6 +291,8 @@ class Sam3RegionDiscovery:
         keeps the native box clamped to the pass, when any part of it is inside, and
         is rejected explicitly by normalization.
         """
+        import numpy as np
+
         if len(proposal.mask) != width * height:
             raise ValueError("SAM3 proposal mask length must match discovery pass dimensions")
         mask_box = _mask_bounding_box(proposal.mask, width=width, height=height)
@@ -323,7 +325,7 @@ class Sam3RegionDiscovery:
             image_width=width,
             image_height=height,
             bounding_box=bounding_box,
-            mask=InlineMask(width=width, height=height, data=proposal.mask),
+            mask=InlineMask(np.array(proposal.mask, dtype=np.bool_).reshape(height, width)),
             score=BackendScore(
                 name=proposal.score_name,
                 value=proposal.score,

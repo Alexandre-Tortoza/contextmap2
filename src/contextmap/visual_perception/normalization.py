@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from math import ceil, floor, isfinite
+from typing import TYPE_CHECKING
 
 from contextmap.ingestion import SourceObservationId
 
@@ -19,6 +20,10 @@ from .region_models import (
     RejectedRegionCandidate,
     RejectionReason,
 )
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
 
 
 class MergeKind(StrEnum):
@@ -107,12 +112,33 @@ class NormalizationResult:
     config_digest: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class _Geometry:
+    """A candidate's footprint: its pixels, cropped to the tight box of pixels they occupy.
+
+    ``pixels`` covers ``[x0, x1) x [y0, y1)`` of the image and is a read-only view whenever it
+    comes from a mask, so a footprint copies no image. ``pixel_count`` is its foreground, which
+    the overlap and the constraint fractions divide by; ``area_pixels`` is the area the region
+    reports (the box area for a box-only candidate).
+    """
+
     candidate: RegionCandidate
     bounding_box: BoundingBox
-    pixels: frozenset[tuple[int, int]]
+    x0: int
+    y0: int
+    pixels: NDArray[np.bool_]
+    pixel_count: int
     area_pixels: float
+
+    @property
+    def x1(self) -> int:
+        """Exclusive right edge of the footprint, in pixels."""
+        return self.x0 + int(self.pixels.shape[1])
+
+    @property
+    def y1(self) -> int:
+        """Exclusive bottom edge of the footprint, in pixels."""
+        return self.y0 + int(self.pixels.shape[0])
 
 
 @dataclass(slots=True)
@@ -294,40 +320,37 @@ def _validate_candidate_set(
 
 
 def _candidate_geometry(candidate: RegionCandidate) -> _Geometry | None:
+    import numpy as np
+
     if isinstance(candidate.mask, InlineMask):
-        pixels = frozenset(
-            (x, y)
-            for y in range(candidate.mask.height)
-            for x in range(candidate.mask.width)
-            if candidate.mask.value_at(x, y)
-        )
-        if not pixels:
+        full = candidate.mask.as_array()
+        rows = np.flatnonzero(full.any(axis=1))
+        columns = np.flatnonzero(full.any(axis=0))
+        if rows.size == 0:
             return None
-        mask_box = _pixels_bounding_box(pixels)
+        x0, x1 = int(columns[0]), int(columns[-1]) + 1
+        y0, y1 = int(rows[0]), int(rows[-1]) + 1
+        mask_box = BoundingBox(x0, y0, x1, y1)
         if candidate.bounding_box is not None and not _contains_box(
             candidate.bounding_box, mask_box
         ):
             return None
+        pixels = full[y0:y1, x0:x1]
+        count = int(np.count_nonzero(pixels))
         bounding_box = candidate.bounding_box or mask_box
-        return _Geometry(candidate, bounding_box, pixels, float(len(pixels)))
+        return _Geometry(candidate, bounding_box, x0, y0, pixels, count, float(count))
 
     if candidate.bounding_box is None:
         return None
-    pixels = _box_pixels(candidate.bounding_box)
-    if not pixels:
+    box = candidate.bounding_box
+    # Um pixel pertence à caixa quando o seu centro está nela; nas duas direções isso é um
+    # intervalo, então a pegada de uma caixa é um retângulo de pixels.
+    xs = [x for x in range(floor(box.x_min), ceil(box.x_max)) if box.x_min <= x + 0.5 < box.x_max]
+    ys = [y for y in range(floor(box.y_min), ceil(box.y_max)) if box.y_min <= y + 0.5 < box.y_max]
+    if not xs or not ys:
         return None
-    return _Geometry(
-        candidate,
-        candidate.bounding_box,
-        pixels,
-        candidate.bounding_box.area,
-    )
-
-
-def _pixels_bounding_box(pixels: frozenset[tuple[int, int]]) -> BoundingBox:
-    xs = [x for x, _ in pixels]
-    ys = [y for _, y in pixels]
-    return BoundingBox(min(xs), min(ys), max(xs) + 1, max(ys) + 1)
+    pixels = np.ones((len(ys), len(xs)), dtype=np.bool_)
+    return _Geometry(candidate, box, xs[0], ys[0], pixels, len(xs) * len(ys), box.area)
 
 
 def _contains_box(container: BoundingBox, contained: BoundingBox) -> bool:
@@ -339,35 +362,34 @@ def _contains_box(container: BoundingBox, contained: BoundingBox) -> bool:
     )
 
 
-def _box_pixels(box: BoundingBox) -> frozenset[tuple[int, int]]:
-    return frozenset(
-        (x, y)
-        for y in range(floor(box.y_min), ceil(box.y_max))
-        for x in range(floor(box.x_min), ceil(box.x_max))
-        if box.x_min <= x + 0.5 < box.x_max and box.y_min <= y + 0.5 < box.y_max
-    )
+def _window(mask: InlineMask, geometry: _Geometry) -> NDArray[np.bool_]:
+    """Return the part of a full-image mask under a footprint."""
+    return mask.as_array()[geometry.y0 : geometry.y1, geometry.x0 : geometry.x1]
 
 
 def _outside_valid_region(
     geometry: _Geometry, prepared_image: PreparedImage, minimum_fraction: float
 ) -> bool:
+    import numpy as np
+
     if prepared_image.valid_region is None:
         return False
-    foreground = geometry.pixels
-    valid_count = sum(prepared_image.valid_region.mask.value_at(x, y) for x, y in foreground)
-    return valid_count / len(foreground) < minimum_fraction
+    valid = _window(prepared_image.valid_region.mask, geometry) & geometry.pixels
+    return int(np.count_nonzero(valid)) / geometry.pixel_count < minimum_fraction
 
 
 def _overlaps_exclusion(
     geometry: _Geometry, prepared_image: PreparedImage, maximum_fraction: float
 ) -> bool:
+    import numpy as np
+
     if not prepared_image.exclusion_regions:
         return False
-    excluded_count = sum(
-        any(region.mask.value_at(x, y) for region in prepared_image.exclusion_regions)
-        for x, y in geometry.pixels
-    )
-    return excluded_count / len(geometry.pixels) > maximum_fraction
+    excluded = np.zeros_like(geometry.pixels)
+    for region in prepared_image.exclusion_regions:
+        excluded |= _window(region.mask, geometry)
+    excluded_count = int(np.count_nonzero(excluded & geometry.pixels))
+    return excluded_count / geometry.pixel_count > maximum_fraction
 
 
 def _find_duplicate(
@@ -375,8 +397,15 @@ def _find_duplicate(
     groups: list[_RegionGroup],
     config: NormalizationConfig,
 ) -> tuple[_RegionGroup, MergeKind, float, float] | None:
+    # Pegadas cujas caixas não se encontram têm IoU e contenção 0; com os dois limiares
+    # positivos elas nunca casam, e a comparação pixel a pixel pode ser evitada. Com um limiar
+    # 0 todo par casa, então nenhum par é pulado.
+    disjoint_can_match = config.duplicate_iou_threshold <= 0 or config.containment_threshold <= 0
     for group in groups:
-        iou, containment = _overlap(geometry, group.representative)
+        representative = group.representative
+        if not disjoint_can_match and not _boxes_meet(geometry, representative):
+            continue
+        iou, containment = _overlap(geometry, representative)
         if iou >= config.duplicate_iou_threshold:
             return group, MergeKind.IOU_DUPLICATE, iou, containment
         if containment >= config.containment_threshold:
@@ -384,12 +413,34 @@ def _find_duplicate(
     return None
 
 
+def _boxes_meet(geometry: _Geometry, representative: _Geometry) -> bool:
+    return (
+        geometry.x0 < representative.x1
+        and representative.x0 < geometry.x1
+        and geometry.y0 < representative.y1
+        and representative.y0 < geometry.y1
+    )
+
+
 def _overlap(geometry: _Geometry, representative: _Geometry) -> tuple[float, float]:
     """Return the IoU and the containment fraction of two candidate footprints, in pixels."""
-    intersection = len(geometry.pixels & representative.pixels)
-    union = len(geometry.pixels | representative.pixels)
+    import numpy as np
+
+    x0, x1 = max(geometry.x0, representative.x0), min(geometry.x1, representative.x1)
+    y0, y1 = max(geometry.y0, representative.y0), min(geometry.y1, representative.y1)
+    intersection = 0
+    if x0 < x1 and y0 < y1:
+        left = geometry.pixels[
+            y0 - geometry.y0 : y1 - geometry.y0, x0 - geometry.x0 : x1 - geometry.x0
+        ]
+        right = representative.pixels[
+            y0 - representative.y0 : y1 - representative.y0,
+            x0 - representative.x0 : x1 - representative.x0,
+        ]
+        intersection = int(np.count_nonzero(left & right))
+    union = geometry.pixel_count + representative.pixel_count - intersection
     iou = intersection / union if union else 0.0
-    minimum_area = min(len(geometry.pixels), len(representative.pixels))
+    minimum_area = min(geometry.pixel_count, representative.pixel_count)
     containment = intersection / minimum_area if minimum_area else 0.0
     return iou, containment
 

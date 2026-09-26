@@ -53,8 +53,7 @@ _BACKEND = BackendProvenance(
 
 def inline_mask(pixels: np.ndarray[Any, Any]) -> InlineMask:
     """Build a mask from a ``(height, width)`` boolean array."""
-    height, width = pixels.shape
-    return InlineMask(width=width, height=height, data=tuple(bool(value) for value in pixels.flat))
+    return InlineMask(pixels)
 
 
 def digest(document: object) -> str:

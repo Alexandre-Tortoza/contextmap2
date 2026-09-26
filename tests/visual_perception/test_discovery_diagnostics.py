@@ -2,6 +2,7 @@ import json
 from hashlib import sha256
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.ingestion import SourceObservationId
@@ -51,13 +52,14 @@ def _record() -> DiscoveryAuditRecord:
         image_height=3,
         bounding_box=box,
         mask=InlineMask(
-            width=4,
-            height=3,
-            data=tuple(
-                box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
-                for y in range(3)
-                for x in range(4)
-            ),
+            np.array(
+                tuple(
+                    box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
+                    for y in range(3)
+                    for x in range(4)
+                ),
+                dtype=bool,
+            ).reshape(3, 4)
         ),
         provenance=RegionProvenance(
             backend_id="sam3",

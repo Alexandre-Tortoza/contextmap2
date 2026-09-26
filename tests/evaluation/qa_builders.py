@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from pathlib import Path
 
+import numpy as np
 from reference_set_builders import make_valid_manifest, sample_id
 
 from contextmap.evaluation.annotation_qa import AnnotationQaPolicy
@@ -64,7 +65,9 @@ POLICY = AnnotationQaPolicy(
 
 def mask(*cells: int, width: int = WIDTH, height: int = HEIGHT) -> InlineMask:
     return InlineMask(
-        width=width, height=height, data=tuple(index in cells for index in range(width * height))
+        np.array(tuple(index in cells for index in range(width * height)), dtype=bool).reshape(
+            height, width
+        )
     )
 
 

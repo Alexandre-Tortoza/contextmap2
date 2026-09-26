@@ -505,17 +505,20 @@ def _remap_candidate(
 
 
 def _resize_mask(mask: InlineMask, output_width: int, output_height: int) -> InlineMask:
+    """Resize by nearest neighbour: output pixel ``x`` samples ``int(x * width / output_width)``."""
+    import numpy as np
+
     if (mask.width, mask.height) == (output_width, output_height):
         return mask
-    data = tuple(
-        mask.value_at(
-            min(mask.width - 1, int(x * mask.width / output_width)),
-            min(mask.height - 1, int(y * mask.height / output_height)),
-        )
-        for y in range(output_height)
-        for x in range(output_width)
+    # A mesma aritmética da amostragem pixel a pixel: produto inteiro exato, divisão em float64
+    # e truncamento, limitado à última coluna/linha.
+    columns = np.minimum(
+        mask.width - 1, (np.arange(output_width) * mask.width / output_width).astype(np.int64)
     )
-    return InlineMask(width=output_width, height=output_height, data=data)
+    rows = np.minimum(
+        mask.height - 1, (np.arange(output_height) * mask.height / output_height).astype(np.int64)
+    )
+    return InlineMask(mask.as_array()[rows[:, None], columns[None, :]])
 
 
 def _expand_mask(
@@ -525,12 +528,26 @@ def _expand_mask(
     x_offset: int,
     y_offset: int,
 ) -> InlineMask:
-    data = [False] * (output_width * output_height)
-    for y in range(mask.height):
-        for x in range(mask.width):
-            if mask.value_at(x, y):
-                data[(y + y_offset) * output_width + x + x_offset] = True
-    return InlineMask(width=output_width, height=output_height, data=tuple(data))
+    """Place a tile mask at ``(x_offset, y_offset)`` of an empty full-image mask.
+
+    Raises:
+        ValueError: If the tile does not lie inside the image.
+    """
+    import numpy as np
+
+    if (
+        x_offset < 0
+        or y_offset < 0
+        or x_offset + mask.width > output_width
+        or y_offset + mask.height > output_height
+    ):
+        raise ValueError(
+            f"a {mask.width}x{mask.height} tile mask at ({x_offset}, {y_offset}) does not lie "
+            f"inside the {output_width}x{output_height} image"
+        )
+    pixels = np.zeros((output_height, output_width), dtype=np.bool_)
+    pixels[y_offset : y_offset + mask.height, x_offset : x_offset + mask.width] = mask.as_array()
+    return InlineMask(pixels)
 
 
 def _rejection(

@@ -4,6 +4,8 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+
 from contextmap.evaluation.annotations import (
     Coverage,
     FrameRegionAnnotation,
@@ -230,7 +232,9 @@ def regions_for(*indices: int) -> RegionAnnotationSet:
                     RegionAnnotation(
                         region_id=f"object-{index}",
                         mask=InlineMask(
-                            width=4, height=3, data=tuple(cell in (0, 1) for cell in range(12))
+                            np.array(
+                                tuple(cell in (0, 1) for cell in range(12)), dtype=bool
+                            ).reshape(3, 4)
                         ),
                     ),
                 ),

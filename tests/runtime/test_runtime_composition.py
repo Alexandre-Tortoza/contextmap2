@@ -1938,7 +1938,9 @@ class TestComposeVisualPerceptionExecutor:
                         bounding_box=BoundingBox2D(x=0, y=0, width=2, height=2),
                         provenance=self.backend_provenance(),
                         mask_reference="masks/region-0000.npy",
-                        mask=InlineMask(width=2, height=2, data=(True, True, True, True)),
+                        mask=InlineMask(
+                            np.array((True, True, True, True), dtype=bool).reshape(2, 2)
+                        ),
                         image_width=2,
                         image_height=2,
                     )

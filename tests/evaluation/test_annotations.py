@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.evaluation.annotations import (
@@ -59,9 +60,9 @@ SCAN = SourceObservationId("scan-0000")
 
 def _mask(width: int = 4, height: int = 3, *, foreground: tuple[int, ...] = (0, 1)) -> InlineMask:
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple(index in foreground for index in range(width * height)),
+        np.array(tuple(index in foreground for index in range(width * height)), dtype=bool).reshape(
+            height, width
+        )
     )
 
 

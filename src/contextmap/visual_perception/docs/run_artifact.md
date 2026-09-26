@@ -103,7 +103,7 @@ Cada payload pesado é gravado **no momento em que é adicionado**, não em `fin
 
 Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **mesma** tupla de `Region2D` com máscaras que `add_result()` recebe, e as métricas de estágio nunca serializam esse `output`: retê-lo guardaria os pixels uma segunda vez.
 
-O motivo é medido, não hipotético: uma `InlineMask` de 640x480 é uma tuple de 307200 ponteiros (~2,36 MB), então as 7828 regiões de um run real de 360 frames custavam ~18 GB só de máscaras — e outro tanto pelos `StageOutcome` retidos — antes de `finalize()` sequer começar. Depois da mudança, o crescimento de RSS do writer não escala com o número de frames; o que permanece é O(N) apenas em metadata leve (ids, hashes, contagens), medido em ~0,04 MB por frame.
+O motivo é medido, não hipotético: uma `InlineMask` de 640x480 era então uma tuple de 307200 ponteiros (~2,36 MB; desde o #593 é um array de um byte por pixel, ~0,31 MB, e as mesmas regiões ainda somariam ~2,4 GB), então as 7828 regiões de um run real de 360 frames custavam ~18 GB só de máscaras — e outro tanto pelos `StageOutcome` retidos — antes de `finalize()` sequer começar. Depois da mudança, o crescimento de RSS do writer não escala com o número de frames; o que permanece é O(N) apenas em metadata leve (ids, hashes, contagens), medido em ~0,04 MB por frame.
 
 `finalize()` passa a fazer só o que é inerentemente global: validar os invariantes entre frames, escrever `mask-index.jsonl`/`feature-index.jsonl`, o `manifest.json`, o `README.md`, conferir o inventário e publicar por rename.
 

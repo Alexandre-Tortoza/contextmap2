@@ -1,5 +1,7 @@
 import json
 
+import numpy as np
+
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     BackendProvenance,
@@ -132,7 +134,7 @@ def test_encode_region_never_inlines_a_full_frame_mask() -> None:
         image_width=width,
         image_height=height,
         area_pixels=float(sum(bits)),
-        mask=InlineMask(width=width, height=height, data=bits),
+        mask=InlineMask(np.array(bits, dtype=bool).reshape(height, width)),
     )
 
     encoded_size = len(json.dumps(encode_region(region), sort_keys=True))

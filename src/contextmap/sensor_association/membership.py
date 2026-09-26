@@ -346,8 +346,8 @@ def associate_regions(
                 f"{region_mask.height} but the prepared image is {width}x{height}: regions must be "
                 f"expressed in the prepared image the geometry was projected into"
             )
-        mask = np.array(region_mask.data, dtype=bool).reshape(height, width)
-        mask_area_px = int(mask.sum())
+        mask = region_mask.as_array()
+        mask_area_px = region_mask.area
         if mask_area_px == 0:
             skipped.append(SkippedRegion(region_id=region.region_id, reason=SkipReason.EMPTY_MASK))
             continue

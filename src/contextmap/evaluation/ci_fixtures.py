@@ -364,13 +364,11 @@ def _payload_hash(observation: SourceObservation) -> str:
 
 
 def _mask(*, x: range, y: range) -> InlineMask:
-    return InlineMask(
-        width=IMAGE_WIDTH,
-        height=IMAGE_HEIGHT,
-        data=tuple(
-            column in x and row in y for row in range(IMAGE_HEIGHT) for column in range(IMAGE_WIDTH)
-        ),
-    )
+    import numpy as np
+
+    rows = np.isin(np.arange(IMAGE_HEIGHT), y)
+    columns = np.isin(np.arange(IMAGE_WIDTH), x)
+    return InlineMask(rows[:, None] & columns[None, :])
 
 
 def _sample_id(index: int) -> ReferenceSampleId:
@@ -1007,10 +1005,13 @@ _RESPONSE_REPEAT = {
 
 
 def _overlap_expected() -> dict[str, Any]:
+    import numpy as np
+
     region_a = _mask(x=range(2, 9), y=range(2, 8))
     region_b = _mask(x=range(6, 13), y=range(4, 10))
-    inter = sum(a and b for a, b in zip(region_a.data, region_b.data, strict=True))
-    union = sum(a or b for a, b in zip(region_a.data, region_b.data, strict=True))
+    pixels_a, pixels_b = region_a.as_array(), region_b.as_array()
+    inter = int(np.count_nonzero(pixels_a & pixels_b))
+    union = int(np.count_nonzero(pixels_a | pixels_b))
     return {
         "area_a": region_a.area,
         "area_b": region_b.area,

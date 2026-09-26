@@ -50,13 +50,14 @@ def _backend_provenance(backend: str = "fake") -> BackendProvenance:
 
 def _mask(box: BoundingBox | None) -> InlineMask:
     return InlineMask(
-        width=WIDTH,
-        height=HEIGHT,
-        data=tuple(
-            box is not None and box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
-            for y in range(HEIGHT)
-            for x in range(WIDTH)
-        ),
+        np.array(
+            tuple(
+                box is not None and box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
+                for y in range(HEIGHT)
+                for x in range(WIDTH)
+            ),
+            dtype=bool,
+        ).reshape(HEIGHT, WIDTH)
     )
 
 
@@ -261,14 +262,12 @@ def _vga_image() -> PreparedImage:
 _GRID = [(x * 160, y * 160, x * 160 + 150, y * 160 + 150) for y in range(3) for x in range(4)]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: geometry is a pixel set")
 def test_the_normalized_geometry_holds_no_pixel_sets() -> None:
     annotations = normalization_module._Geometry.__annotations__.values()
 
     assert not any("frozenset" in str(annotation) for annotation in annotations)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: no bounding-box prefilter")
 def test_only_candidates_whose_boxes_meet_are_compared_pixel_by_pixel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -290,10 +289,9 @@ def test_only_candidates_whose_boxes_meet_are_compared_pixel_by_pixel(
     assert compared == 1
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: pixel sets per candidate")
 def test_normalizing_twelve_vga_masks_keeps_a_bounded_transient_peak() -> None:
     # Complemento do gate estrutural: o pico de memória transitória, medido por tracemalloc.
-    # Referência medida com pixels em frozenset: >11 MB neste cenário.
+    # Referência medida com pixels em frozenset: 48 MB neste cenário.
     candidates = _vga_candidates(_GRID)
     image = _vga_image()
     tracemalloc.start()
