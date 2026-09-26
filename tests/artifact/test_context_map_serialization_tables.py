@@ -130,6 +130,21 @@ def test_a_table_iterates_every_line_in_order(tmp_path: Path) -> None:
     assert [line["key"] for line in table.iter_lines()] == ["entity-a", "entity-b", "entity-c"]
 
 
+def test_bytes_the_caller_already_read_are_used_instead_of_the_files(tmp_path: Path) -> None:
+    # #600: um validador que já leu os arquivos não os lê de novo; o disco aqui guarda lixo do
+    # mesmo tamanho, então só os bytes informados podem produzir estas linhas.
+    payload, index = _write(tmp_path, _lines())
+    payload_bytes, index_bytes = payload.read_bytes(), index.read_bytes()
+    payload.write_bytes(b"x" * len(payload_bytes))
+    index.write_bytes(b"x" * len(index_bytes))
+
+    table = RecordTable(payload, index, record_count=3, index_bytes=index_bytes)
+
+    assert list(table.iter_lines(payload_bytes)) == sorted(_lines(), key=lambda line: line["key"])
+    with pytest.raises(BrokenIndexError, match="entity-a"):
+        list(table.iter_lines())
+
+
 def test_reading_one_record_does_not_parse_the_others(tmp_path: Path) -> None:
     payload, index = _write(tmp_path, _lines())
     data = bytearray(payload.read_bytes())

@@ -216,13 +216,23 @@ class RecordTable:
     records. A record is read, and only then parsed, when it is asked for.
     """
 
-    def __init__(self, payload_path: Path, index_path: Path, *, record_count: int) -> None:
+    def __init__(
+        self,
+        payload_path: Path,
+        index_path: Path,
+        *,
+        record_count: int,
+        index_bytes: bytes | None = None,
+    ) -> None:
         """Open a table and verify its index against the payload's size.
 
         Args:
             payload_path: The JSON Lines file.
             index_path: The index of that file.
             record_count: The number of records the manifest declares for the table.
+            index_bytes: The content of ``index_path`` when the caller has already read it (a
+                validator that also compares it with a rebuilt index), so it is not read again;
+                read from ``index_path`` otherwise.
 
         Raises:
             MissingPayloadError: If either file is missing.
@@ -233,7 +243,9 @@ class RecordTable:
             if not path.is_file():
                 raise MissingPayloadError(f"missing file {path.name} of a record table")
         self._path = payload_path
-        entries = _load_index(index_path)
+        entries = _load_index(
+            index_path.read_bytes() if index_bytes is None else index_bytes, index_path.name
+        )
         if len(entries) != record_count:
             raise BrokenIndexError(
                 f"{index_path.name} has {len(entries)} entries but the manifest declares "
@@ -285,8 +297,13 @@ class RecordTable:
             chunk = handle.read(length + 1)
         return self._decode(chunk, key)
 
-    def iter_lines(self) -> Iterator[dict[str, Any]]:
+    def iter_lines(self, payload_bytes: bytes | None = None) -> Iterator[dict[str, Any]]:
         """Read every record once, in file order.
+
+        Args:
+            payload_bytes: The content of the payload file when the caller has already read it
+                (a validator that also rebuilds the index from it), so it is not read again;
+                read from disk, line by line, otherwise.
 
         Returns:
             The parsed lines.
@@ -294,7 +311,9 @@ class RecordTable:
         Raises:
             BrokenIndexError: If a line is not well formed or does not match the index.
         """
-        with self._path.open("rb") as handle:
+        # Os bytes em memória são lidos na mesma sequência de tamanhos que o arquivo.
+        source = self._path.open("rb") if payload_bytes is None else io.BytesIO(payload_bytes)
+        with source as handle:
             for key in self._keys:
                 _, length = self._entries[key]
                 yield self._decode(handle.read(length + 1), key)
@@ -319,36 +338,35 @@ class RecordTable:
         return line
 
 
-def _load_index(index_path: Path) -> list[tuple[str, int, int]]:
-    raw = index_path.read_bytes()
+def _load_index(raw: bytes, index_name: str) -> list[tuple[str, int, int]]:
     if raw and not raw.endswith(b"\n"):
-        raise BrokenIndexError(f"{index_path.name} is not terminated by a newline")
+        raise BrokenIndexError(f"{index_name} is not terminated by a newline")
     entries: list[tuple[str, int, int]] = []
     for number, text in enumerate(raw.split(b"\n")[:-1]):
         try:
             entry = json.loads(text)
         except ValueError as error:
             raise BrokenIndexError(
-                f"entry {number} of {index_path.name} is not valid JSON ({error})"
+                f"entry {number} of {index_name} is not valid JSON ({error})"
             ) from error
         if not isinstance(entry, dict) or entry.keys() != _INDEX_FIELDS:
             raise BrokenIndexError(
-                f"entry {number} of {index_path.name} must have exactly the fields "
+                f"entry {number} of {index_name} must have exactly the fields "
                 f"{sorted(_INDEX_FIELDS)}"
             )
         key, offset, length = entry["key"], entry["offset"], entry["length"]
         if not isinstance(key, str) or not key:
-            raise BrokenIndexError(f"entry {number} of {index_path.name} has an invalid key")
+            raise BrokenIndexError(f"entry {number} of {index_name} has an invalid key")
         for name, value in (("offset", offset), ("length", length)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise BrokenIndexError(
-                    f"entry {number} of {index_path.name} has an invalid {name}: {value!r}"
+                    f"entry {number} of {index_name} has an invalid {name}: {value!r}"
                 )
         entries.append((key, offset, length))
     for (previous, _, _), (current, _, _) in pairwise(entries):
         if previous >= current:
             raise BrokenIndexError(
-                f"the keys of {index_path.name} are not strictly sorted: "
+                f"the keys of {index_name} are not strictly sorted: "
                 f"{current!r} follows {previous!r}"
             )
     return entries

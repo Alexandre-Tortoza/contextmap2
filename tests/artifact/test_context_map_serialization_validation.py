@@ -9,9 +9,11 @@ artifact verified.
 
 import hashlib
 import json
+import pathlib
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -861,6 +863,34 @@ def test_findings_are_ordered_errors_first_then_by_code_and_subject(artifact: Pa
         if item.severity is Severity.ERROR
     ]
     assert errors == sorted(errors)
+
+
+def test_full_validation_reads_each_table_once_beyond_the_hash_pass(
+    artifact: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #600 (ART-06): o artifact não muda durante a leitura, então nenhuma verificação relê o que
+    # outra já leu; a passada de hash continua lendo cada arquivo do disco.
+    opened: Counter[str] = Counter()
+    real_open = pathlib.Path.open
+
+    def counting(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.is_relative_to(artifact):
+            opened[self.relative_to(artifact).as_posix()] += 1
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "open", counting)
+    report = validate_context_map_artifact(artifact)
+    monkeypatch.undo()
+
+    assert report.status is ValidationStatus.VERIFIED
+    tables = (
+        "entities/entities.jsonl",
+        "indexes/entity-index.jsonl",
+        "relations/relations.jsonl",
+        "indexes/relation-index.jsonl",
+        "indexes/entity-relation-index.jsonl",
+    )
+    assert {path: opened[path] for path in tables} == dict.fromkeys(tables, 2)
 
 
 def test_validation_never_changes_or_repairs_the_artifact(artifact: Path) -> None:
