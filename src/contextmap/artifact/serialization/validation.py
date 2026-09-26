@@ -413,6 +413,8 @@ class _Validation:
         self._manifest: ContextMapArtifactManifest | None = None
         self._files: dict[str, CheckedFile] = {}
         self._usable: set[str] = set()
+        self._contents: dict[str, bytes] = {}
+        self._tables: dict[str, RecordTable] = {}
         self._metadata: ContextMapMetadata | None = None
         self._link: GeometricMapLink | None = None
         self._entity_records: list[dict[str, Any]] | None = None
@@ -441,6 +443,7 @@ class _Validation:
             self._check("geometry_consistency", self._check_geometry)
             self._at_full("reference_integrity", self._check_references)
             self._at_full("index_rebuild", self._check_index_rebuild)
+            self._release_tables()
             self._at_full("schema_invariants", self._check_schema_invariants)
             self._at_full("structural_references", self._check_structural_references)
             self._at_full("dependency_integrity", self._check_upstream_files)
@@ -526,7 +529,42 @@ class _Validation:
         self._results[name] = CheckResult(name=name, outcome=outcome, detail=None)
 
     def _read(self, relative_path: str) -> bytes:
-        return (self._root / relative_path).read_bytes()
+        """Read a file of the artifact at most once per validation.
+
+        The artifact is only read while it is validated, so every check that needs a file's
+        content shares the same bytes. The hash pass is apart: it streams each file on its own.
+        """
+        content = self._contents.get(relative_path)
+        if content is None:
+            content = self._contents[relative_path] = (self._root / relative_path).read_bytes()
+        return content
+
+    def _table(self, payload_path: str, index_path: str, record_count: int) -> RecordTable:
+        """Open a record table once per validation, over the index bytes the checks share.
+
+        Raises:
+            ContextMapArtifactError: If the table cannot be opened; it is opened again, from the
+                bytes already read, by the next check that asks, and fails the same way.
+        """
+        table = self._tables.get(payload_path)
+        if table is None:
+            table = self._tables[payload_path] = RecordTable(
+                self._root / payload_path,
+                self._root / index_path,
+                record_count=record_count,
+                index_bytes=self._read(index_path),
+            )
+        return table
+
+    def _release_tables(self) -> None:
+        """Drop the bytes and views of the tables once no later check reads them.
+
+        The map that the schema check builds next is as large as the tables: holding both would
+        raise the peak of a validation by the size of the tables.
+        """
+        for path in (ENTITIES, ENTITY_INDEX, RELATIONS, RELATION_INDEX, ENTITY_RELATION_INDEX):
+            self._contents.pop(path, None)
+        self._tables.clear()
 
     def _document(self, relative_path: str) -> dict[str, Any]:
         record = json.loads(self._read(relative_path).decode("utf-8"))
@@ -638,7 +676,7 @@ class _Validation:
             if not {payload_path, index_path} <= self._usable:
                 continue
             try:
-                RecordTable(self._root / payload_path, self._root / index_path, record_count=count)
+                self._table(payload_path, index_path, count)
             except ContextMapArtifactError as error:
                 self._error("index.broken", str(error), index_path)
         if ENTITY_RELATION_INDEX in self._usable:
@@ -814,19 +852,11 @@ class _Validation:
         if not needed <= self._usable:
             raise _Skip("the record tables are not intact")
         try:
-            entities = RecordTable(
-                self._root / ENTITIES,
-                self._root / ENTITY_INDEX,
-                record_count=manifest.entity_count,
-            )
-            relations = RecordTable(
-                self._root / RELATIONS,
-                self._root / RELATION_INDEX,
-                record_count=manifest.relation_count,
-            )
+            entities = self._table(ENTITIES, ENTITY_INDEX, manifest.entity_count)
+            relations = self._table(RELATIONS, RELATION_INDEX, manifest.relation_count)
             keys: set[str] = set()
             entity_records: list[dict[str, Any]] = []
-            for line in entities.iter_lines():
+            for line in entities.iter_lines(self._read(ENTITIES)):
                 if line.keys() != ENTITY_LINE_FIELDS:
                     raise RecordTableError(f"the entity {line['key']!r} has the wrong fields")
                 record = line["record"]
@@ -840,7 +870,7 @@ class _Validation:
                 entity_records.append(record)
             endpoints: list[tuple[str, str, str]] = []
             relation_records: list[dict[str, Any]] = []
-            for line in relations.iter_lines():
+            for line in relations.iter_lines(self._read(RELATIONS)):
                 if line.keys() != RELATION_LINE_FIELDS:
                     raise RecordTableError(f"the relation {line['key']!r} has the wrong fields")
                 record = line["record"]

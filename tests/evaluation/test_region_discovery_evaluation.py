@@ -5,6 +5,7 @@ from functools import partial
 from hashlib import sha256
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.evaluation import (
@@ -37,13 +38,14 @@ from contextmap.visual_perception import (
 
 def _mask(width: int, height: int, box: BoundingBox) -> InlineMask:
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple(
-            box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
-            for y in range(height)
-            for x in range(width)
-        ),
+        np.array(
+            tuple(
+                box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
+                for y in range(height)
+                for x in range(width)
+            ),
+            dtype=bool,
+        ).reshape(height, width)
     )
 
 
@@ -74,29 +76,34 @@ def _frame(frame_id: str, condition: str, *, annotated: bool) -> ReferenceFrame:
 
 
 def _evaluated(
-    frame: ReferenceFrame, backend_id: str, duration_ms: float
+    frame: ReferenceFrame,
+    backend_id: str,
+    duration_ms: float,
+    boxes: tuple[BoundingBox, ...] = (BoundingBox(1, 1, 4, 3),),
 ) -> EvaluatedDiscoveryFrame:
-    box = BoundingBox(1, 1, 4, 3)
-    candidate = RegionCandidate(
-        candidate_id=f"{backend_id}-proposal",
-        source_observation_id=frame.prepared_image.source_observation_id,
-        perception_run_id=f"run-{backend_id}",
-        perception_result_id=f"result-{frame.frame_id}",
-        image_width=frame.prepared_image.width,
-        image_height=frame.prepared_image.height,
-        bounding_box=box,
-        mask=_mask(frame.prepared_image.width, frame.prepared_image.height, box),
-        provenance=RegionProvenance(
-            backend_id=backend_id,
-            backend_version="1",
-            checkpoint=f"{backend_id}-checkpoint",
-            config_digest=f"sha256:{backend_id}",
-            discovery_pass_id="full-frame",
-            native_proposal_id="proposal-1",
-        ),
+    candidates = tuple(
+        RegionCandidate(
+            candidate_id=f"{backend_id}-proposal-{index}",
+            source_observation_id=frame.prepared_image.source_observation_id,
+            perception_run_id=f"run-{backend_id}",
+            perception_result_id=f"result-{frame.frame_id}",
+            image_width=frame.prepared_image.width,
+            image_height=frame.prepared_image.height,
+            bounding_box=box,
+            mask=_mask(frame.prepared_image.width, frame.prepared_image.height, box),
+            provenance=RegionProvenance(
+                backend_id=backend_id,
+                backend_version="1",
+                checkpoint=f"{backend_id}-checkpoint",
+                config_digest=f"sha256:{backend_id}",
+                discovery_pass_id="full-frame",
+                native_proposal_id=f"proposal-{index}",
+            ),
+        )
+        for index, box in enumerate(boxes, start=1)
     )
     discovery = DiscoveryRunResult(
-        candidates=(candidate,),
+        candidates=candidates,
         rejected=(),
         passes=(
             DiscoveryPass(
@@ -108,7 +115,7 @@ def _evaluated(
         diagnostics=(
             BackendDiagnostics(
                 duration_ms=duration_ms,
-                proposal_count=1,
+                proposal_count=len(candidates),
                 warnings=(),
                 metadata=(("peak_memory_mb", 256.0),),
             ),
@@ -204,6 +211,57 @@ def test_same_reference_selection_uses_one_report_schema_for_all_backends() -> N
     assert sam3.frames[1].performance.peak_memory_mb == 256.0
 
 
+def test_segmentation_rates_are_undefined_when_no_region_is_discovered() -> None:
+    # Sem predição as taxas não têm denominador: 0.0 seria o melhor valor possível,
+    # atribuído justamente ao backend que não produziu nada.
+    reference_set = RegionDiscoveryReferenceSet(
+        version="reference-v1", frames=(_frame("frame-1", "synthetic", annotated=True),)
+    )
+
+    report = RegionDiscoveryEvaluator().evaluate(
+        reference_set, _descriptor("sam3"), lambda frame: _evaluated(frame, "sam3", 4.0, boxes=())
+    )
+
+    accuracy = report.frames[0].accuracy
+    assert accuracy is not None
+    assert accuracy.over_segmentation_rate is None
+    assert accuracy.under_segmentation_rate is None
+    assert accuracy.duplicate_region_rate is None
+    # A falha em recuperar a região anotada continua sendo uma medição real.
+    assert (accuracy.mean_iou, accuracy.region_recall, accuracy.coverage) == (0.0, 0.0, 0.0)
+    persisted = json.loads(json.dumps(report.to_dict()))["frames"][0]["accuracy"]
+    assert persisted["over_segmentation_rate"] is None
+    assert persisted["under_segmentation_rate"] is None
+    assert persisted["duplicate_region_rate"] is None
+
+
+def test_region_recall_matches_each_annotation_to_its_best_prediction_without_exclusivity() -> None:
+    # Pin do matching documentado: melhor IoU por ground truth, sem atribuição 1:1, então
+    # uma predição que cobre duas anotações conta recall para ambas.
+    frame = replace(
+        _frame("frame-1", "synthetic", annotated=False),
+        annotations=tuple(
+            GroundTruthRegion(region_id=region_id, mask=_mask(6, 4, box))
+            for region_id, box in (
+                ("gt-left", BoundingBox(1, 1, 3, 3)),
+                ("gt-right", BoundingBox(3, 1, 5, 3)),
+            )
+        ),
+    )
+
+    report = RegionDiscoveryEvaluator(match_iou_threshold=0.5).evaluate(
+        RegionDiscoveryReferenceSet(version="reference-v1", frames=(frame,)),
+        _descriptor("sam3"),
+        lambda item: _evaluated(item, "sam3", 4.0, boxes=(BoundingBox(1, 1, 5, 3),)),
+    )
+
+    accuracy = report.frames[0].accuracy
+    assert accuracy is not None
+    assert accuracy.mean_iou == 0.5
+    assert accuracy.region_recall == 1.0
+    assert accuracy.under_segmentation_rate == 1.0
+
+
 def test_report_serialization_is_deterministic_and_immutable(tmp_path: Path) -> None:
     reference_set = RegionDiscoveryReferenceSet(
         version="reference-v1", frames=(_frame("frame-1", "synthetic", annotated=True),)
@@ -220,7 +278,7 @@ def test_report_serialization_is_deterministic_and_immutable(tmp_path: Path) -> 
     write_region_discovery_report(output, report)
 
     serialized = output.read_text()
-    assert json.loads(serialized)["metric_schema_version"] == "1.0.0"
+    assert json.loads(serialized)["metric_schema_version"] == "2.0.0"
     assert json.loads(manifest.read_text())["frames"][0]["source_condition"] == "synthetic"
     with pytest.raises(FileExistsError, match="already exists"):
         write_region_discovery_report(output, report)

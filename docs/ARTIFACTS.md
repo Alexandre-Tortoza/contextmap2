@@ -91,7 +91,7 @@ class StateEstimationRunWriter:
 
 **Finalização.** O writer cria `output_dir` com `AtomicRunDirectory` (diretório temporário irmão, publicado por rename depois da checagem do inventário), recusa um `output_dir` que já exista e não deixa nada em caso de falha. Ele não cria registro, não escreve `runs.json` e não toca em nenhum outro diretório.
 
-**Identidade.** O writer **nunca aloca** identidade: `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos. `run_index` é um ordinal do chamador (a runtime usa o número de `run-NNNN`) que serve para ordenar candidatos, por exemplo na seleção `latest`; não substitui identidade nem hash. Ids derivados do `run_id`, como `map_id = <sequência>--<run_id>`, continuam iguais, então manifests, leitores e linhagem não mudam. Um executor da runtime deriva `run_id` da identidade do estágio (id do estágio, `config_digest` e hashes de conteúdo das entradas), de modo que execuções idênticas produzem o mesmo id e o mesmo conteúdo, o que mantém o reuso válido entre runs; nos testes, o id é um texto fixo e legível.
+**Identidade.** O writer **nunca aloca** identidade: `run_id` e `run_index` são entregues pelo chamador e gravados como recebidos. `run_index` é um ordinal do chamador (a runtime usa o número de `run-NNNN`) que serve para ordenar candidatos, por exemplo na seleção `latest`; não substitui identidade nem hash. Ids derivados do `run_id`, como `map_id = <sequência>--<run_id>`, continuam iguais, então manifests, leitores e linhagem não mudam. Um executor da runtime deriva `run_id` da identidade do estágio (id do estágio, `config_digest` e hashes de conteúdo das entradas), de modo que execuções idênticas produzem o mesmo id e o mesmo conteúdo, o que mantém o reuso válido entre runs. Um estágio-fonte (`ingestion`, `pose_ingestion`) não tem entradas, então a identidade dele inclui também a da fonte que lê (`IngestionRequest.identity`: gravação, tópicos, janela, sincronização e política de timestamps); sem isso, dois bags diferentes com a mesma configuração receberiam o mesmo id. Nos testes, o id é um texto fixo e legível.
 
 **O que foi removido** de todas as capabilities: `_sequence_dir`, `allocate_*_run_index`, `rebuild_*_registry`, os helpers que só serviam a eles (`_valid_run_index`, `_registry_record`), a chamada do registro dentro de `finalize()` e os símbolos do `__init__` e do `__all__`. `contextmap.shared.run_directory` também perdeu `next_run_index` e `write_run_registry`, sem nenhum uso restante.
 
@@ -184,7 +184,7 @@ flowchart LR
 
 `SequenceArtifact` é a sequência canônica concreta produzida por Ingestion. `PerceptionRunArtifact` é o artifact imutável de uma execução de Visual Perception. `StateEstimationRunArtifact` é o artifact imutável de uma execução de State Estimation. `GeometricMapArtifact` é o artifact imutável do mapa que um run construiu. `SensorAssociationRunArtifact` é o artifact imutável das observações espaciais de um run de associação. `PointRepresentationRunArtifact` é o artifact imutável das representações 3D que um encoder produziu sobre um mapa. `SemanticFusionRunArtifact` é o artifact imutável dos suportes de fusão e da evidência fundida. `SemanticMappingRunArtifact` é o artifact imutável das entidades semânticas. Os artifacts downstream do diagrama anterior permanecem planejados.
 
-O mecanismo comum de run (escrita atômica em diretório temporário e inventário com tamanho e SHA-256) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact`, `SemanticMappingRunArtifact`, `EntityResolutionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
+O mecanismo comum de run (escrita atômica e durável em diretório temporário e inventário com tamanho e SHA-256; ver [Durabilidade](#durabilidade)) é implementado uma vez em `contextmap.shared.run_directory` e usado por `StateEstimationRunArtifact`, `GeometricMapArtifact`, `SensorAssociationRunArtifact`, `PointRepresentationRunArtifact`, `SemanticFusionRunArtifact`, `SemanticMappingRunArtifact`, `EntityResolutionRunArtifact` e pelos artifacts das próximas capabilities. Um payload grande é gravado em fluxo (`open_binary`) e hasheado durante a escrita, então um artifact maior que a memória pode ser produzido. Os writers de Ingestion e Visual Perception mantêm suas implementações próprias.
 
 ### `SequenceArtifact` atual
 
@@ -841,6 +841,21 @@ flowchart LR
 ```
 
 Somente depois da verificação o run entra no conjunto de artifacts válidos.
+
+### Durabilidade
+
+O `rename` atômico protege contra a morte do processo, não contra uma queda de energia: sem sincronização, o sistema de arquivos pode persistir o `rename` antes dos blocos de dados e deixar um run "publicado" com arquivos vazios ou truncados. O inventário com SHA-256 detectaria a corrupção depois, mas o run já pareceria válido. Por isso a publicação de `contextmap.shared.run_directory` segue a sequência durável:
+
+1. cada arquivo é sincronizado em disco (`fsync`) ao ser escrito (`write_bytes`, ou ao fechar o fluxo de `open_binary`);
+2. `publish` escreve e sincroniza o manifest e o README e, depois de conferir o inventário, sincroniza cada diretório do run temporário;
+3. o `rename` torna o run visível;
+4. o diretório pai é sincronizado.
+
+Depois de uma queda, o caminho final ou não existe ou contém o run completo. Os documentos JSON do runtime (`effective_config.json`, `plan.json`, `status.json`, `execution.json` e as entradas do índice de reuso) seguem a mesma regra: o conteúdo é sincronizado antes do `link`/`replace` que lhe dá o nome, e o diretório logo depois (dois `fsync` por documento, ~0,8 ms a mais no ambiente medido abaixo).
+
+O custo é um `fsync` por arquivo e por diretório do run, mais um para o pai; cada um espera o dispositivo de armazenamento, então cresce com o número de arquivos, não com o que a capability calcula. Medido no ambiente de desenvolvimento (ext4 sobre disco virtual), cada `fsync` custou entre 0,5 e 0,8 ms: um run de 5 arquivos pequenos passou de ~1 ms para ~6 ms, um de 200 arquivos pequenos de ~40 ms para ~150–170 ms, e um payload de 100 MiB ficou ~10% mais lento. Sincronizar um diretório exige abri-lo só para leitura, comportamento POSIX (a plataforma do projeto é Linux). Não há alternativa silenciosa: uma sincronização que falha levanta o erro, e um run cujos dados não chegaram ao disco não é publicado.
+
+Os writers com implementação própria (`SequenceArtifactWriter` de Ingestion, o `PerceptionRunArtifact` e a evidência de Region Discovery de Visual Perception) e os documentos de `evaluation` ainda publicam só de forma atômica, sem essa sequência.
 
 ## Reprodutibilidade
 

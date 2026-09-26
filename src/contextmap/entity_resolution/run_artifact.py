@@ -438,21 +438,26 @@ class EntityResolutionRunWriter:
                 out.write(line)
                 offset += len(line)
         sizes[_RESOLVED] = offset
-        tables: dict[str, list[dict[str, Any]]] = {
-            _CANDIDATE_SETS: [to_record(item) for item in records.candidate_sets],
-            _MATCH_EVIDENCE: [to_record(item.evidence) for item in records.resolutions],
-            _DECISIONS: [to_record(item.decision) for item in records.resolutions],
+        # Cada tabela é gravada linha a linha: a evidência de todos os pares nunca vira um texto só.
+        tables: dict[str, Iterable[Mapping[str, Any]]] = {
+            _CANDIDATE_SETS: (to_record(item) for item in records.candidate_sets),
+            _MATCH_EVIDENCE: (to_record(item.evidence) for item in records.resolutions),
+            _DECISIONS: (to_record(item.decision) for item in records.resolutions),
             _RESOLVED_INDEX: index_rows,
             _UNRESOLVED: records.unresolved_rows(),
             _SOURCE_INDEX: records.source_rows(),
             _MERGE_LINEAGE: records.lineage_rows(),
-            _CONTRADICTIONS: [to_record(item) for item in records.contradictions],
-            _SPLITS: [to_record(item) for item in records.split_candidates],
+            _CONTRADICTIONS: (to_record(item) for item in records.contradictions),
+            _SPLITS: (to_record(item) for item in records.split_candidates),
         }
         for path, rows in tables.items():
-            text = "".join(_line(row).decode() + "\n" for row in rows)
-            run.write_text(path, text)
-            sizes[path] = len(text.encode())
+            size = 0
+            with run.open_binary(path) as out:
+                for row in rows:
+                    line = _line(row) + b"\n"
+                    out.write(line)
+                    size += len(line)
+            sizes[path] = size
         return sizes
 
     def _write_metrics(

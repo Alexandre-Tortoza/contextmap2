@@ -13,6 +13,7 @@ import math
 
 import numpy as np
 import pytest
+from perception_builders import make_region, make_result, rect_mask
 from projection_builders import (
     CAMERA_CALIBRATION_ID,
     UNBOUNDED_CANDIDATES,
@@ -35,7 +36,9 @@ from contextmap.sensor_association import (
     VisibilityState,
     camera_projection_for,
 )
+from contextmap.sensor_association.diagnostics import DiagnosticTolerances, diagnose_frame
 from contextmap.sensor_association.frame_projection import FrameProjection
+from contextmap.sensor_association.membership import associate_regions, build_spatial_observations
 from contextmap.sensor_association.visibility import resolve_visibility
 from contextmap.shared import Vector3
 
@@ -320,6 +323,12 @@ _RETAINED = (
     _ADVERSARIAL_RANGE_M * math.cos(0.30),
 )
 _EXCLUDED = (20.2 * math.sin(0.55), 0.0, 20.2 * math.cos(0.55))
+_NO_TOLERANCE = DiagnosticTolerances(
+    max_pose_time_delta_ns=None,
+    max_map_window_offset_ns=None,
+    max_reprojection_p95_px=None,
+    max_reprojection_invalid_rate=None,
+)
 # Grade grossa: a `OcclusionPolicy` não tem default, e uma janela larga é uma configuração
 # válida. Com a grade do run real (cell 4, raio 2) o par não cai na mesma janela.
 _COARSE = OcclusionPolicy(
@@ -385,6 +394,73 @@ def test_a_pinhole_camera_can_lose_the_support_that_came_from_a_neighbouring_cel
 
     assert baseline == VisibilityState.OCCLUDED.value
     assert culled == VisibilityState.VISIBLE_UNASSIGNED.value
+
+
+def _evidence_of_retained(*, max_range_m: float | None) -> tuple[str, bool]:
+    """The retained element's state and whether a region's evidence names it, on a pinhole.
+
+    The region's mask covers only the retained element's pixel, as a segmentation of the
+    surface it lies on would.
+    """
+    scene = [map_point_for_camera_point(_RETAINED), map_point_for_camera_point(_EXCLUDED)]
+    frame = project_frame(scene, candidate_policy=CandidateGeometryPolicy(max_range_m=max_range_m))
+    resolution = resolve_visibility(frame, _COARSE)
+    rows, found = frame.rows_for(np.array([0]))
+    assert bool(found[0]), "o ponto retido deve estar sempre na população avaliada"
+    row = int(rows[0])
+    u, v = (int(np.floor(c + 0.5)) for c in frame.prepared_pixels[row])
+    region = make_region("region-retained", rect_mask(640, 480, u - 2, v - 2, u + 3, v + 3))
+    membership = associate_regions(resolution, make_result([region]))
+    (observation,) = build_spatial_observations(
+        membership, configuration_fingerprint=None, code_version=None
+    )
+    state = resolution.correspondence(
+        row,
+        visible_state=VisibilityState.ASSOCIATED
+        if membership.regions_of(row)
+        else VisibilityState.VISIBLE_UNASSIGNED,
+    ).visibility
+    return state.value, frame.map_reference(row) in observation.geometry_support
+
+
+def test_support_that_pinhole_culling_frees_can_become_associated_evidence() -> None:
+    """The caveat carried one step further, from occlusion to membership.
+
+    The element culling makes less occluded is visible, and a visible element inside a region's
+    mask is ``ASSOCIATED``: the region's spatial observation names geometry that the full map
+    rejected as occluded. On a pinhole the range policy can therefore *add* evidence, a false
+    positive, and not only redefine the support population.
+    """
+    baseline = _evidence_of_retained(max_range_m=None)
+    culled = _evidence_of_retained(max_range_m=_ADVERSARIAL_RANGE_M)
+
+    assert baseline == (VisibilityState.OCCLUDED.value, False)
+    assert culled == (VisibilityState.ASSOCIATED.value, True)
+
+
+def test_the_range_limit_diagnostic_flags_the_support_culling_freed() -> None:
+    """The element culling frees is a candidate of the range-limit diagnostic.
+
+    It is counted because its depth reaches ``max_range_m * cos(theta_max)``, the smallest depth
+    an excluded element landing in the image can have; a frame whose count is zero has no
+    associated support such an element could have hidden.
+    """
+    scene = [map_point_for_camera_point(_RETAINED), map_point_for_camera_point(_EXCLUDED)]
+    frame = project_frame(
+        scene, candidate_policy=CandidateGeometryPolicy(max_range_m=_ADVERSARIAL_RANGE_M)
+    )
+    resolution = resolve_visibility(frame, _COARSE)
+    u, v = (int(np.floor(c + 0.5)) for c in frame.prepared_pixels[0])
+    region = make_region("region-retained", rect_mask(640, 480, u - 2, v - 2, u + 3, v + 3))
+    membership = associate_regions(resolution, make_result([region]))
+
+    diagnostics = diagnose_frame(resolution, tolerances=_NO_TOLERANCE, membership=membership)
+
+    assert membership.regions_of(0) == (region.region_id,)
+    assert diagnostics.range_limit_candidate_support_count == 1
+    assert diagnostics.min_range_slack_m == pytest.approx(
+        _ADVERSARIAL_RANGE_M - float(frame.camera_range_m[0])
+    )
 
 
 def test_the_occlusion_grid_of_the_real_run_is_too_fine_for_that_pair_to_interact() -> None:

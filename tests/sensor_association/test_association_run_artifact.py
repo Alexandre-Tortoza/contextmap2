@@ -7,6 +7,7 @@ import sys
 import zlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 from projection_builders import SEQUENCE_ID
 from run_builders import (
@@ -22,6 +23,7 @@ from run_builders import (
 import contextmap.sensor_association as sensor_association
 from contextmap.geometric_mapping import MapId, geometry_id_for
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     IncompleteRunArtifactError,
     RunArtifactError,
     SensorAssociationDebugLevel,
@@ -255,6 +257,67 @@ def test_an_observation_that_disagrees_with_its_membership_is_never_persisted(
     assert list(tmp_path.iterdir()) == []
 
 
+_BEYOND_U32 = 2**32
+
+
+class _WideIndices:
+    """Hands the run frames whose global indices from ``first_row`` on sit past 2**32.
+
+    Only the identities move, and consistently: the observations are rebuilt from the shifted
+    rows, so the one thing wrong with the frame is an index the ``<u4`` tables cannot hold. No
+    map of that size is materialized.
+    """
+
+    def __init__(self, inner: object, *, first_row: int) -> None:
+        self._inner = inner
+        self._first_row = first_row
+
+    def accept(self, frame: FrameAssociation) -> None:
+        projection = frame.resolution.frame
+        indices = projection.global_indices.copy()
+        indices[self._first_row :] += _BEYOND_U32
+        wide = dataclasses.replace(projection, global_indices=indices)
+        observations = tuple(
+            dataclasses.replace(
+                observation,
+                geometry_support=wide.map_references(np.asarray(region.associated_indices)),
+            )
+            for region, observation in zip(
+                frame.membership.regions, frame.observations, strict=True
+            )
+        )
+        frame = dataclasses.replace(
+            frame,
+            resolution=dataclasses.replace(frame.resolution, frame=wide),
+            observations=observations,
+        )
+        self._inner.accept(frame)  # type: ignore[attr-defined]
+
+
+def test_a_support_index_past_32_bits_is_refused_instead_of_wrapped(tmp_path: Path) -> None:
+    # A linha 3 é suporte da região B: o cast silencioso a gravaria como o índice 3.
+    with (
+        pytest.raises(RunArtifactError, match="32-bit outputs/geometry-support"),
+        _writer(tmp_path).transaction() as run,
+    ):
+        SensorAssociationService().run(_request(), sink=_WideIndices(run, first_row=3))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_dense_eligible_index_past_32_bits_is_refused_instead_of_wrapped(
+    tmp_path: Path,
+) -> None:
+    # A linha 4 é visível e elegível, mas não está em região nenhuma: só o caminho denso a grava.
+    with (
+        pytest.raises(RunArtifactError, match="32-bit outputs/dense-feature-cells"),
+        _writer(tmp_path).transaction() as run,
+    ):
+        SensorAssociationService().run(_request(NATIVE), sink=_WideIndices(run, first_row=4))
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_the_geometry_to_region_index_keeps_every_overlapping_region(tmp_path: Path) -> None:
     written = _write(tmp_path, _request())
     reader = written.reader
@@ -313,7 +376,7 @@ def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_pa
     assert projection[0]["calibration_ref"]["camera_model_kind"] == "pinhole"
     assert visibility[0]["state_counts"]["occluded"] == 1
     assert visibility[0]["membership"]["associated_count"] == 3
-    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v2"
+    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v3"
     assert diagnostics[0]["findings"] == []
 
 
@@ -329,6 +392,30 @@ def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: 
     assert reader.manifest.rejected_frame_count == 1
     assert summary["observation_count"] == 2
     assert summary["state_counts"]["occluded"] == 1
+
+
+def test_the_summary_totals_the_range_limit_diagnostics_over_the_frames(tmp_path: Path) -> None:
+    # Com 3,5 m o ponto de fundo (alcance 8,7 m) sai; as três associadas, a z = 3 m, ficam além
+    # do piso 3,5 * cos(theta_max), cerca de 2,73 m, nos dois frames.
+    written = _write(tmp_path, make_request(candidates=CandidateGeometryPolicy(max_range_m=3.5)))
+    frames = [frame.diagnostics for frame in written.frames]
+
+    summary = written.reader.read_record("metrics/summary.json")
+
+    assert [d.range_limit_candidate_support_count for d in frames] == [3, 3]
+    assert summary["range_limit_candidate_support_count"] == 6
+    slacks = [d.min_range_slack_m for d in frames]
+    assert all(slack is not None for slack in slacks)
+    assert summary["min_range_slack_m"] == pytest.approx(min(s for s in slacks if s is not None))
+
+
+def test_without_a_range_limit_the_summary_says_the_diagnostics_do_not_apply(
+    tmp_path: Path,
+) -> None:
+    summary = _write(tmp_path, _request()).reader.read_record("metrics/summary.json")
+
+    assert summary["range_limit_candidate_support_count"] is None
+    assert summary["min_range_slack_m"] is None
 
 
 # --- Immutability, atomicity and integrity ----------------------------------

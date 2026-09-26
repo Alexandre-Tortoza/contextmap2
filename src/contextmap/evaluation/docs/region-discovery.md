@@ -67,6 +67,16 @@ Dice = 2|P ∩ G| / (|P| + |G|)
 - `duplicate_region_rate`: atribuições previstas repetidas ao mesmo melhor ground truth,
   normalizadas pelo count previsto.
 
+O melhor IoU é escolhido por ground truth, **sem atribuição 1:1**: uma predição que cobre duas
+regiões anotadas pode contar recall para ambas, e o caso aparece em `under_segmentation_rate`.
+
+As três taxas de segmentação têm como população as predições do frame. Um frame anotado em que o
+backend não descobriu nenhuma região não tem essa população, e as três valem `null`, nunca `0.0`:
+zero seria o melhor valor possível, atribuído justamente ao backend que não produziu nada.
+`mean_iou`, `mean_dice`, `region_recall` e `coverage` continuam `0.0` nesse frame, porque são
+normalizados pela anotação e medem uma falha real. A `metric_schema_version` `2.0.0` introduziu
+esse `null`; a `1.0.0` reportava `0.0` nas três taxas.
+
 Frames sem annotation mantêm `accuracy = null`. Candidate count, área ou inspeção visual não são
 apresentados como substitutos de accuracy.
 

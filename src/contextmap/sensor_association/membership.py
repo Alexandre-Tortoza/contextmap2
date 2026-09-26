@@ -60,10 +60,13 @@ class SkipReason(Enum):
         NO_INLINE_MASK: The region has no mask at all: a box-only region, or a region
             whose mask was persisted by reference (#378) without a ``mask_loader``
             supplied to :func:`associate_regions` to resolve it.
+        EMPTY_MASK: The accepted region's mask has no foreground pixel, so it has no
+            footprint to support geometry and its per-pixel statistics are undefined.
     """
 
     REJECTED = "rejected"
     NO_INLINE_MASK = "no_inline_mask"
+    EMPTY_MASK = "empty_mask"
 
 
 class RegionMaskLoader(Protocol):
@@ -290,6 +293,10 @@ def associate_regions(
             keeps the previous behavior: a region without an inline mask
             is skipped with :attr:`SkipReason.NO_INLINE_MASK`.
 
+    An accepted region whose mask has no foreground pixel is skipped with
+    :attr:`SkipReason.EMPTY_MASK`: every :class:`RegionMembership` has ``mask_area_px >= 1``,
+    which the per-pixel statistics and the observation quality require.
+
     Returns:
         The region-to-geometry and geometry-to-region indexes, the support statistics and
         the regions that were skipped.
@@ -339,7 +346,11 @@ def associate_regions(
                 f"{region_mask.height} but the prepared image is {width}x{height}: regions must be "
                 f"expressed in the prepared image the geometry was projected into"
             )
-        mask = np.array(region_mask.data, dtype=bool).reshape(height, width)
+        mask = region_mask.as_array()
+        mask_area_px = region_mask.area
+        if mask_area_px == 0:
+            skipped.append(SkippedRegion(region_id=region.region_id, reason=SkipReason.EMPTY_MASK))
+            continue
         inside = mask[rows, columns]
         associated = inside & visible
         associated_indices = in_image[associated]
@@ -348,7 +359,7 @@ def associate_regions(
         regions.append(
             RegionMembership(
                 region_id=region.region_id,
-                mask_area_px=int(mask.sum()),
+                mask_area_px=mask_area_px,
                 associated_indices=associated_indices,
                 occluded_count=int((inside & occluded).sum()),
                 outside_valid_support_count=int((inside & unsupported).sum()),

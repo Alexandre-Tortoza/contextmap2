@@ -57,10 +57,12 @@ O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega;
 │   └── dense-feature-cells.bin            # índices e pesos das células (se houver canais)
 ├── metrics/                               # contratual
 │   ├── frame-diagnostics.jsonl            # FrameDiagnostics por frame, com os achados
-│   ├── summary.json                       # agregados e frames rejeitados
+│   ├── summary.json                       # agregados, corte de alcance e frames rejeitados
 │   └── runtime.json                       # somente quando o tempo foi medido
 └── debug/                                 # nunca contratual
 ```
+
+`metrics/summary.json` soma `range_limit_candidate_support_count` sobre os frames e guarda o menor `min_range_slack_m`; ambos são `null` quando o run não tem limite de alcance, nunca `0` (ver [`diagnostics.md`](diagnostics.md)).
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a configuração efetiva e a linhagem ficam no `manifest.json`, e os achados, em `metrics/frame-diagnostics.jsonl`. Criar arquivos sem produtor real violaria YAGNI, o critério dos outros artifacts.
 
@@ -68,7 +70,7 @@ Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl
 
 O run não repete XYZ nem vetores de embedding:
 
-- **região → geometria**: `geometry-support.u32` guarda, por observação, as posições ordenadas da geometria como `uint32` little-endian; a identidade do mapa é posicional (`geometry_id_for`), então a referência se reconstrói sem guardá-la. `spatial-observations.jsonl` guarda só `support: {offset, count}`. O leitor devolve o `SpatialObservation` completo, revalidado pelo contrato;
+- **região → geometria**: `geometry-support.u32` guarda, por observação, as posições ordenadas da geometria como `uint32` little-endian; a identidade do mapa é posicional (`geometry_id_for`), então a referência se reconstrói sem guardá-la. Um índice global `≥ 2³²` não cabe em `uint32`: o writer o **recusa** com `RunArtifactError` (aqui e nos `eligible_indices` densos) em vez de deixar o cast dar a volta e apontar o suporte para outra geometria. `spatial-observations.jsonl` guarda só `support: {offset, count}`. O leitor devolve o `SpatialObservation` completo, revalidado pelo contrato;
 - **geometria → regiões**: derivada da tabela anterior por `regions_of(frame, referência)`, que preserva toda região sobreposta; não há uma segunda cópia;
 - **associação densa**: por frame e canal, o índice JSON traz a proveniência e o offset, e `dense-feature-cells.bin` traz cinco seções sequenciais: pontos elegíveis, amostrados, linhas, colunas e pesos das células. Nenhum vetor de feature é persistido; ele é lido do payload do artefato de percepção quando preciso.
 

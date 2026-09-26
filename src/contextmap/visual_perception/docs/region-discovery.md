@@ -31,6 +31,25 @@ ser uma bounding box ou uma máscara `InlineMask` materializada. Uma `mask_refer
 junto da máscara materializada que a normalização realmente inspeciona; uma referência opaca não é
 publicada como geometria consumível.
 
+`InlineMask` é uma máscara da imagem inteira, imutável, com um byte por pixel (#593). Os pixels são
+copiados uma vez, na construção, para um buffer `bytes` da própria máscara, e `as_array()` devolve
+uma view `(height, width)` somente leitura desse buffer, sem cópia: nem a view nem nada abaixo dela
+pode voltar a ser gravável, então a máscara continua sendo um valor, com igualdade e hash por
+dimensões e pixels. Não há acesso a uma tupla de pixels: quem consome a máscara usa `as_array()`,
+`area` ou `value_at()`. `to_dict()`/`from_dict()` mantêm a forma serializada (lista plana de 0/1
+em ordem de linha), então nenhum artifact muda.
+
+Os backends produzem a máscara direto da saída nativa, sem uma lista Python por pixel: a
+segmentação do SAM2 é lida como array; os logits do SAM3 saem do tensor para a CPU em float64 (exato
+para float32, float16 e bfloat16) e são comparados com `mask_threshold` em float64, como sempre foram;
+os polígonos do Florence-2 são rasterizados pela regra par-ímpar no centro do pixel, aresta por aresta,
+com a mesma aritmética do teste ponto a ponto.
+
+A normalização trabalha sobre o recorte da máscara na caixa justa dos seus pixels (uma view) e só
+compara pixel a pixel duas propostas cujas caixas se encontram. Com os dois limiares de merge
+positivos, propostas de caixas disjuntas têm IoU e contenção 0 e não podem se fundir; com um limiar
+0, todo par é comparado, como antes.
+
 `Region2D` é o contrato único definido pelo Visual Perception Core e representa geometria aceita e
 congelada. O `region_id` é local ao `PerceptionResult`, que fornece os escopos de run e observação;
 portanto, dois resultados podem usar o mesmo `region_id` sem sugerir que representam o mesmo objeto
@@ -173,6 +192,8 @@ metadados do pass sem produzir o crop/resize correspondente falha explicitamente
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
+Um candidato só-máscara (sem `bounding_box`) é testado pela caixa justa dos pixels verdadeiros da
+máscara; uma máscara vazia não toca borda nenhuma (#596).
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.
 
 ## Validação da imagem materializada
@@ -272,7 +293,9 @@ lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
 move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
-chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões.
+chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões;
+um frame sem detecções devolve zero regiões (`box_count=0`, `polygon_count=0`), como SAM2 e SAM3,
+e não falha o estágio.
 Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser
 permanecem metadata de descoberta.
 
@@ -307,7 +330,7 @@ flowchart TD
     G --> AREA["filtros de área"]
     AREA --> CONS["valid/exclusion constraints"]
     CONS --> DUP["IoU / containment"]
-    DUP --> MERGE["merge + contributor lineage"]
+    DUP --> MERGE["merge, eleição do representante<br/>e contributor lineage"]
     MERGE --> BUDGET["maximum_regions"]
     BUDGET --> FREEZE["Region2D imutável"]
     G -. inválido .-> REJ["RejectedRegionCandidate"]
@@ -322,17 +345,36 @@ A chamada recebe o `BackendProvenance` exato reportado pelo adapter e valida sua
 as propostas. O mesmo value object acompanha cada `Region2D`; provider, model, versão e fingerprint
 não são reconstruídos a partir da provenance reduzida da proposta.
 
-A ordem canônica é pelo `candidate_id`, tornando IDs `region-0001`, `region-0002` e decisões de
-budget reproduzíveis. No merge, a primeira geometria canônica permanece como representante e todas
-as propostas contribuintes e respectivas provenances são preservadas. A proposta incorporada gera
-tanto `MergeDecision` quanto uma rejeição `merged_duplicate`, portanto não desaparece dos
-diagnostics.
+A ordem canônica de processamento é pelo `candidate_id`, tornando IDs `region-0001`,
+`region-0002` e decisões de budget reproduzíveis: cada grupo ocupa a posição do seu primeiro
+membro. Quem representa o grupo, e portanto a única geometria congelada na `Region2D`, não depende
+do nome dos candidatos: é decidido pela política versionada
+`NormalizationConfig.merge_representative_policy`. A política atual, `largest_area_v1`, elege o
+membro de maior `area_pixels`, com empate resolvido pelo menor `candidate_id`. Scores não são
+critério, porque não são comparáveis entre backends (o SAM2 reporta `predicted_iou`; o Florence-2
+pode não reportar score algum).
 
-Os thresholds e budgets vivem em `NormalizationConfig`; seu digest acompanha o resultado. Máscaras
-inline são avaliadas pixel a pixel. `RegionCandidate` não aceita uma máscara persistida opaca como
-substituta da geometria materializada, mesmo quando existe bounding box, evitando ignorar
-silenciosamente a máscara. Constraints só são aplicadas quando a `PreparedImage` as declara
-explicitamente.
+A eleição acontece a cada merge. Quando a proposta que chega vence o representante atual, ela
+assume a representação e o representante anterior passa a ser o incorporado. `MergeDecision` e a
+rejeição `merged_duplicate` registram o par comparado já resolvido pela eleição, então as decisões
+de um grupo formam uma cadeia que termina no representante final; IoU e containment são simétricos
+e continuam descrevendo o par registrado. Todas as propostas contribuintes e respectivas
+provenances permanecem em `contributor_candidate_ids` e `discovery_provenance`, na ordem de
+processamento, e nenhuma proposta incorporada desaparece dos diagnostics.
+
+Há um efeito colateral aceito: depois que um representante maior é eleito, os candidatos seguintes
+são comparados com a geometria dele, então o agrupamento pode mudar transitivamente, e uma proposta
+que antes formaria região própria pode ser incorporada ao grupo. Grupos já formados não são
+fundidos entre si. O resultado continua determinístico, porque a ordem de processamento e o
+desempate são fixos. A união das geometrias do grupo foi avaliada como alternativa e não foi
+implementada: exigiria recompor máscara e bounding box, e não é necessária para remover a
+arbitrariedade da ordem lexicográfica.
+
+Os thresholds, os budgets e a política de representante vivem em `NormalizationConfig`; seu digest
+acompanha o resultado e muda quando a política muda. Máscaras inline são avaliadas pixel a pixel.
+`RegionCandidate` não aceita uma máscara persistida opaca como substituta da geometria
+materializada, mesmo quando existe bounding box, evitando ignorar silenciosamente a máscara.
+Constraints só são aplicadas quando a `PreparedImage` as declara explicitamente.
 
 ## Evidência persistida e diagnostics
 

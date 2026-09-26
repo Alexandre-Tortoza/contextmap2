@@ -343,8 +343,12 @@ def _svg_box(box: BoundingBox | BoundingBox2D, label: str, color: str) -> list[s
 
 
 def _portable_bitmap(mask: InlineMask) -> str:
-    rows = [
-        " ".join("1" if mask.value_at(x, y) else "0" for x in range(mask.width))
-        for y in range(mask.height)
-    ]
-    return f"P1\n{mask.width} {mask.height}\n" + "\n".join(rows) + "\n"
+    """Render a mask as plain PBM: one row of space-separated ``0``/``1`` per image row."""
+    import numpy as np
+
+    # Cada linha tem 2 x width caracteres: dígitos nas posições pares, espaços nas ímpares e a
+    # quebra de linha no lugar do último espaço.
+    text = np.full((mask.height, 2 * mask.width), ord(" "), dtype=np.uint8)
+    text[:, 0::2] = mask.as_array() + ord("0")
+    text[:, -1] = ord("\n")
+    return f"P1\n{mask.width} {mask.height}\n" + text.tobytes().decode("ascii")

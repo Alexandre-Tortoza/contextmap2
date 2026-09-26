@@ -35,8 +35,8 @@ As funções de validação detectam problemas; a decisão de transformar um pro
 | Função | O que detecta |
 | --- | --- |
 | `validate_image_observation()` | `width`/`height` não positivos; `len(data)` inconsistente com `width * height * bytes_por_pixel` do `encoding` declarado. |
-| `validate_lidar_observation()` | `point_step_bytes` não positivo; `len(data)` inconsistente com `point_count * point_step_bytes`; nome de campo duplicado; `offset_bytes` de um campo fora do intervalo `[0, point_step_bytes)`. |
-| `validate_timestamp_ordering()` | Timestamps não-monotônicos dentro do **mesmo** `clock_id` (observações de `clock_id` diferentes nunca são comparadas — mesma regra de `docs/synchronization.md`); duplicatas quando `allow_duplicates=False`. |
+| `validate_lidar_observation()` | `point_step_bytes` não positivo; `len(data)` inconsistente com `point_count * point_step_bytes`; nome de campo duplicado; `offset_bytes` de um campo fora do intervalo `[0, point_step_bytes)`; campo que termina além do registro (`offset_bytes + tamanho(data_type) * count > point_step_bytes`), independente da ordem de bytes da fonte. |
+| `validate_timestamp_ordering()` | Timestamps não-monotônicos dentro do **mesmo** `clock_id` (observações de `clock_id` diferentes nunca são comparadas — mesma regra de `docs/synchronization.md`); duplicatas quando `allow_duplicates=False`. Compara `total_nanoseconds()` inteiros, nunca `float`: em epochs reais o float64 não separa diferenças abaixo de ~238 ns. |
 | `validate_frame_references()` | `frame_id` de uma observação que não aparece em nenhuma `CalibrationEntry.frame_id` nem em `CalibrationSet.static_transforms` (quando uma calibração é fornecida; sem calibração, não há nada para checar). |
 | `validate_observations()` | Roda todas as anteriores sobre uma sequência completa. |
 

@@ -1,6 +1,6 @@
 # Validação de Geometric Mapping
 
-Este documento descreve `src/contextmap/evaluation/geometric_mapping.py`.
+Este documento descreve `src/contextmap/evaluation/geometric_mapping.py`, versão `EVALUATOR_VERSION = "2"`.
 
 Um mapa não é aceito só porque foi persistido: seus pontos precisam ser numericamente válidos, a cadeia que os colocou precisa reproduzir suas coordenadas, scans que se sobrepõem precisam concordar entre si, e reabrir o artefato não pode mudar uma coordenada nem uma referência. O harness mede isso **antes** de a associação RGB↔3D fazer um erro de geometria parecer uma falha de percepção. Projeção de câmera e correção semântica ficam fora.
 
@@ -34,6 +34,8 @@ Os contadores por origem e as checagens de finitude e de frame cobrem os pontos 
 ### Concordância entre scans (`overlap`)
 
 Para pares `(i, i + lag)` espalhados pelo mapa, amostra-se pontos do scan anterior e mede-se a distância **ponto-plano** de cada um a um plano ajustado pelos `plane_neighbour_count` pontos mais próximos do scan posterior. Um ponto sem vizinhança plana (borda, canto, `max_plane_curvature`) ou com vizinhos além do raio de correspondência não tem contraparte e não contribui com resíduo. `ghost_residual_m` marca a fração de resíduos grandes como **indicador** de superfície duplicada ou fantasma, não como prova.
+
+`overlap_fraction` é a fração de todos os pontos consultados que têm contraparte. Sem nenhum par candidato (menos de `lag + 1` scans com geometria), nenhum ponto é consultado e ela vale `null`, como `pooled_residual_m` e `inconsistent_fraction`: nada medido não é overlap zero, que leria "nenhum ponto tem contraparte". A versão `"2"` do avaliador introduziu esse `null`; a `"1"` reportava `0.0`.
 
 A distância ponto-ponto ao vizinho mais próximo não serve para LiDAR de poucos anéis: ela é dominada pelo espaçamento da amostragem (a resolução vertical de um Velodyne de 16 anéis é de dezenas de centímetros a 10 m) e não mudou nem para um erro de montagem de 10° (medida real abaixo). O resíduo ponto-plano não depende de quão esparsa é a superfície.
 

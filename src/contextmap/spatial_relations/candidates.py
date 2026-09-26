@@ -14,13 +14,20 @@ How it stays sub-quadratic: entities are ordered along the axis on which they ar
 and a sweep only pairs boxes whose gap along that axis is within the largest reach of the policy
 (sweep and prune), so a long corridor of entities costs work proportional to the pairs that are
 actually near each other. Pairs the sweep proves farther apart than every reach are not enumerated
-and are only counted, which keeps the exclusion record bounded and honest.
+and are only counted. Every enumerated pair still records a candidate or an exclusion per evaluated
+predicate and direction, so the exclusion record grows with the pairs near each other: it is not
+bounded.
 
 Every precondition is a *necessary* condition for the corresponding evaluator to *support* the
-relation, on the assumption
-that the reaches of the policy cover the distance tolerances of the evaluators. If they do not, a
-true relation can be lost before it is measured; that loss is a candidate-retrieval failure and is
-measured separately from predicate quality.
+relation, on the assumption that the reaches of the policy cover the distance tolerances of the
+evaluators. If they did not, a true relation could be lost before it is measured. The assumption is
+verified where the policies of a run meet:
+:class:`~contextmap.spatial_relations.RelationsRunPolicies` refuses a ``proximity_radius_m`` below
+``next_to_max_gap_m`` or ``2 * containment_slack_m`` of the geometric evaluators, or below
+``contact_distance_m + contact_tolerance_m`` of the contact evaluators, for each evaluator the run
+declares. This module alone cannot check it, since it does not know the evaluators; a caller that
+pairs the policies without ``RelationsRunPolicies`` carries the assumption itself. A loss that
+remains is a candidate-retrieval failure and is measured separately from predicate quality.
 
 Preconditions are checked in a fixed order and the first that fails is the recorded reason:
 
@@ -45,13 +52,14 @@ from dataclasses import dataclass
 from enum import Enum
 
 from contextmap.entity_resolution import ResolvedEntityReference
-from contextmap.geometric_mapping import Bounds3D, MapId
+from contextmap.geometric_mapping import MapId
 from contextmap.semantic_mapping import EntityGeometry
 from contextmap.spatial_relations._bounds import (
     axis_overlap_m,
     bounds_gap_m,
     cross_section_axes,
     directed_interval,
+    widest_spread_axis,
 )
 from contextmap.spatial_relations._checks import require_canonical, require_finite, require_present
 from contextmap.spatial_relations._identity import (
@@ -115,7 +123,9 @@ class CandidatePolicy:
 
     There are no defaults: how far a relation may reach is a scientific choice that a profile
     declares. Both reaches should cover the distance tolerances of the evaluators they feed, or
-    true relations are lost before they are measured.
+    true relations are lost before they are measured. This policy only validates itself;
+    :class:`~contextmap.spatial_relations.RelationsRunPolicies` verifies the proximity reach
+    against the tolerances of the evaluators a run declares (see the module docstring).
 
     Attributes:
         predicates: The predicates to generate candidates for, unique, each one evaluated
@@ -457,7 +467,7 @@ def _neighbor_pairs(geometries: list[EntityGeometry], reach: float) -> Iterator[
     if count < 2:
         return
     bounds = [geometry.bounds for geometry in geometries]
-    axis = max(range(3), key=lambda k: _center_spread(bounds, k))
+    axis = widest_spread_axis(bounds)
     order = sorted(range(count), key=lambda index: (bounds[index].minimum_m[axis], index))
     for position, first in enumerate(order):
         limit = bounds[first].maximum_m[axis] + reach
@@ -468,11 +478,6 @@ def _neighbor_pairs(geometries: list[EntityGeometry], reach: float) -> Iterator[
                 axis_overlap_m(bounds[first], bounds[second], other) >= -reach for other in range(3)
             ):
                 yield (min(first, second), max(first, second))
-
-
-def _center_spread(bounds: list[Bounds3D], axis: int) -> float:
-    centers = [(box.minimum_m[axis] + box.maximum_m[axis]) / 2.0 for box in bounds]
-    return max(centers) - min(centers)
 
 
 def _assess(

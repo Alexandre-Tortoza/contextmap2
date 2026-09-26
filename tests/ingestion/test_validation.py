@@ -1,7 +1,12 @@
+import pytest
+
 from contextmap.ingestion import (
     FrameId,
     ImageEncoding,
     ImageObservation,
+    LidarObservation,
+    PointFieldDataType,
+    PointFieldDescriptor,
     SensorId,
     SourceObservationId,
     SourceProvenance,
@@ -46,6 +51,67 @@ def test_detects_lidar_data_size_and_field_offset_problems() -> None:
     assert any("out of range" in problem for problem in problems)
 
 
+@pytest.mark.parametrize(
+    ("field", "field_end"),
+    [
+        (
+            PointFieldDescriptor(
+                name="range", offset_bytes=4, data_type=PointFieldDataType.FLOAT64
+            ),
+            12,
+        ),
+        (
+            PointFieldDescriptor(
+                name="normal", offset_bytes=0, data_type=PointFieldDataType.FLOAT32, count=3
+            ),
+            12,
+        ),
+    ],
+    ids=["wide_data_type", "element_count"],
+)
+def test_detects_a_field_that_extends_beyond_point_step(
+    field: PointFieldDescriptor, field_end: int
+) -> None:
+    # O offset está dentro do registro, mas offset + size*count ultrapassa o point_step.
+    lidar = LidarObservation(
+        observation_id=SourceObservationId("scan-overflow"),
+        sensor_id=SensorId("velodyne_top"),
+        frame_id=FrameId("velodyne"),
+        timestamp=SourceTimestamp(seconds=1, nanoseconds=0, clock_id="fixture:header"),
+        provenance=SourceProvenance(source_type="dataset", source_path="fixtures/example"),
+        point_count=1,
+        point_step_bytes=8,
+        fields=(field,),
+        data=b"\x00" * 8,
+    )
+
+    problems = validate_lidar_observation(lidar)
+
+    assert problems == [
+        f"scan-overflow: field {field.name!r} ends at byte {field_end}, beyond point_step_bytes=8"
+    ]
+
+
+def test_a_field_ending_exactly_at_point_step_is_valid() -> None:
+    lidar = LidarObservation(
+        observation_id=SourceObservationId("scan-tight"),
+        sensor_id=SensorId("velodyne_top"),
+        frame_id=FrameId("velodyne"),
+        timestamp=SourceTimestamp(seconds=1, nanoseconds=0, clock_id="fixture:header"),
+        provenance=SourceProvenance(source_type="dataset", source_path="fixtures/example"),
+        point_count=1,
+        point_step_bytes=8,
+        fields=(
+            PointFieldDescriptor(
+                name="xy", offset_bytes=0, data_type=PointFieldDataType.FLOAT32, count=2
+            ),
+        ),
+        data=b"\x00" * 8,
+    )
+
+    assert validate_lidar_observation(lidar) == []
+
+
 def test_detects_non_monotonic_timestamps_on_the_same_clock() -> None:
     problems = validate_timestamp_ordering(build_non_monotonic_observations())
 
@@ -83,6 +149,40 @@ def test_timestamps_on_different_clocks_are_never_compared() -> None:
     observations = [*build_valid_sequence(), later_but_different_clock]
 
     assert validate_timestamp_ordering(observations) == []
+
+
+# Em t ~ 1.7e9 s o ulp de float64 é ~238 ns: estes pares colapsam no mesmo float.
+_EPOCH_SECONDS = 1_700_000_000
+
+
+def _at(observation_id: str, nanoseconds: int) -> ImageObservation:
+    return ImageObservation(
+        observation_id=SourceObservationId(observation_id),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=SourceTimestamp(seconds=_EPOCH_SECONDS, nanoseconds=nanoseconds, clock_id="rec"),
+        provenance=SourceProvenance(source_type="fixture", source_path="fixtures/corridor"),
+        width=1,
+        height=1,
+        encoding=ImageEncoding.RGB8,
+        data=b"\x00\x00\x00",
+    )
+
+
+def test_a_regression_below_float_resolution_is_non_monotonic() -> None:
+    # Regressão ING-02: 100 ns -> 0 ns viravam o mesmo float e a regressão sumia.
+    problems = validate_timestamp_ordering([_at("first", 100), _at("second", 0)])
+
+    assert len(problems) == 1
+    assert "non-monotonic" in problems[0]
+
+
+def test_distinct_timestamps_below_float_resolution_are_not_duplicates() -> None:
+    problems = validate_timestamp_ordering(
+        [_at("first", 10), _at("second", 50)], allow_duplicates=False
+    )
+
+    assert problems == []
 
 
 def test_detects_unknown_frame_reference() -> None:

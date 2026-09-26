@@ -4,8 +4,10 @@
 name concrete backends. These tests narrow that permission: the composition root may import
 capabilities, lazily; the ingestion application service and the stage executors may import the
 public root of the capabilities they run (and nothing below it, so never an adapter or a
-backend, and never eagerly from the package root); every other runtime module, meaning
-configuration, DAG, reuse, selection, lifecycle and CLI code, can never grow a dependency on a
+backend, and never eagerly from the package root); the CLI may import only the public root of
+``contextmap.artifact``, and only inside the one function that hands a ContextMapArtifact to
+that capability's own validator (``contextmap validate``); every other runtime module, meaning
+configuration, DAG, reuse, selection and lifecycle code, can never grow a dependency on a
 capability or on a concrete backend.
 """
 
@@ -52,6 +54,12 @@ CAPABILITIES = frozenset(
     }
 )
 BACKEND_PARTS = frozenset({"backends", "adapters", "infrastructure"})
+# Exceções restritas a uma função, não ao módulo: o `validate` da CLI delega um
+# ContextMapArtifact ao validador do dono (issue #603), e só essa função pode importar a raiz
+# pública de `contextmap.artifact`. Fora dela, a CLI continua sem nenhuma capability.
+FUNCTION_SCOPED_IMPORTERS = {
+    "cli.py": {"_context_map_findings": {"contextmap.artifact"}},
+}
 
 
 def _module_level_imports(tree: ast.Module) -> list[tuple[int, str]]:
@@ -86,19 +94,57 @@ def _runtime_modules() -> list[Path]:
     return sorted(path for path in RUNTIME.glob("*.py"))
 
 
+def _function_scoped_imports(name: str, tree: ast.Module) -> set[tuple[int, str]]:
+    """The imports a module may make only inside the function its exception names."""
+    allowed: set[tuple[int, str]] = set()
+    for function, modules in FUNCTION_SCOPED_IMPORTERS.get(name, {}).items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function:
+                allowed.update(item for item in _all_imports(node) if item[1] in modules)
+    return allowed
+
+
+def _capability_violations(name: str, tree: ast.Module) -> list[str]:
+    allowed = PUBLIC_ROOT_IMPORTERS.get(name, set())
+    scoped = _function_scoped_imports(name, tree)
+    return [
+        f"{name}:{line} imports {module} ({capability})"
+        for line, module in _all_imports(tree)
+        if (capability := _capability_of(module)) is not None
+        and module not in allowed
+        and (line, module) not in scoped
+    ]
+
+
 def test_only_the_composition_root_imports_a_capability() -> None:
     violations = []
     for path in _runtime_modules():
         if path == COMPOSITION:
             continue
-        allowed = PUBLIC_ROOT_IMPORTERS.get(path.name, set())
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for line, module in _all_imports(tree):
-            capability = _capability_of(module)
-            if capability is not None and module not in allowed:
-                violations.append(f"{path.name}:{line} imports {module} ({capability})")
+        violations.extend(
+            _capability_violations(path.name, ast.parse(path.read_text(encoding="utf-8")))
+        )
 
     assert not violations, "\n".join(violations)
+
+
+def test_the_cli_exception_is_scoped_to_the_context_map_validation() -> None:
+    # A permissão é da função do `validate`, não do módulo: o mesmo import em qualquer outro
+    # lugar da CLI continua sendo violação.
+    elsewhere = ast.parse(
+        "from contextmap.artifact import validate_context_map_artifact\n"
+        "def _run_command():\n"
+        "    from contextmap.artifact import ValidationLevel\n"
+        "def _context_map_findings():\n"
+        "    from contextmap.artifact import Severity\n"
+        "    from contextmap.spatial_relations import Relation\n"
+    )
+
+    assert _capability_violations("cli.py", elsewhere) == [
+        "cli.py:1 imports contextmap.artifact (artifact)",
+        "cli.py:3 imports contextmap.artifact (artifact)",
+        "cli.py:6 imports contextmap.spatial_relations (spatial_relations)",
+    ]
 
 
 def test_the_composition_root_imports_capabilities_lazily() -> None:

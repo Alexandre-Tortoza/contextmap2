@@ -94,7 +94,7 @@ O `ComparisonManifest` lista:
 
 - os arms (assignments, digest da topologia, status, falha), as variáveis e os controles fixos;
 - os **artifacts compartilhados**: os que todo arm concluído reporta idênticos para o mesmo estágio (a prova de que só o declarado difere; em uma ablação de DAG, o artifact upstream compartilhado);
-- cada métrica declarada **lado a lado**, por estrato: valor, status (`value`/`not_applicable`/`unsupported`), `sample_count` e a diferença **para o baseline na mesma métrica**; `same_population` indica se todos os valores vieram do mesmo número de amostras;
+- cada métrica declarada **lado a lado**, por estrato: valor, status (`value`/`not_applicable`/`unsupported`), `sample_count` e a diferença **para o baseline na mesma métrica**; `same_population` indica se todos os valores vieram do mesmo número de amostras e é `false` quando algum valor não informa `sample_count`, porque população desconhecida não é evidência de população comum;
 - `physical_sample_count` (amostras físicas distintas) e `repetitions_per_sample`, separados.
 
 **Não há score geral nem vencedor.** Métricas distintas nunca são agregadas, qualidade e performance ficam em `kind` diferentes, e nada ranqueia os arms; a decisão de manter, adiar ou promover uma configuração é humana e explícita.

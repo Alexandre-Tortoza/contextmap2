@@ -51,6 +51,7 @@ from contextmap.runtime.config import (
     resolve_secrets,
 )
 from contextmap.runtime.errors import (
+    CompositionError,
     PlanDocumentError,
     PreflightError,
     RunCancelledError,
@@ -829,8 +830,10 @@ class Runtime:
         once. It looks up and imports nothing, so it is cheap enough for an interactive
         frontend. ``missing_executors`` accounts for both the executors this runtime was
         constructed with and the ones :func:`~contextmap.runtime.composition.compose_executors`
-        can build from ``config`` alone; a composition failure (an invalid backend parameter, a
-        missing module or secret) is reported the same way, never raised.
+        can build from ``config`` alone. A composition failure is reported, never raised: a
+        rejected backend parameter, a missing model runtime or an unresolvable
+        ``resources.providers`` target at the component it failed on, a missing module or
+        secret by the availability check.
 
         Args:
             config: The effective configuration.
@@ -847,15 +850,17 @@ class Runtime:
         """
         scoped = self._scope(config, targets, provided, catalog)
         execution = scoped.execution
-        executors = self._executors_for(config)
+        failures: dict[str, CompositionError | ConfigurationError] = {}
+        executors = self._executors_for(config, composition_failures=failures)
         report = preflight(
             execution,
             executors=executors,
             environ=self._environ,
             module_available=self._module_available,
             reuse=reuse,
+            composition_failures=failures,
         )
-        predicted = {} if reuse is None else predict_reuse(execution, reuse)
+        predicted = {} if reuse is None else predict_reuse(execution, reuse, executors=executors)
         return RuntimePreflightReport(
             ok=report.ok,
             problems=report.problems,
@@ -931,7 +936,8 @@ class Runtime:
         workspace = self._workspace_for(config)
         scoped = self._scope(config, targets, provided, catalog)
         provider_overrides: list[str] = []
-        executors = self._executors_for(config, provider_overrides)
+        failures: dict[str, CompositionError | ConfigurationError] = {}
+        executors = self._executors_for(config, provider_overrides, failures)
         previous: Path | None = None
         if resume is not None:
             if reuse is None:
@@ -960,6 +966,7 @@ class Runtime:
                     cancellation=cancellation,
                     redact=cleaner,
                     clock=self._clock,
+                    composition_failures=failures,
                 )
             else:
                 run_plan(
@@ -974,6 +981,7 @@ class Runtime:
                     cancellation=cancellation,
                     redact=cleaner,
                     clock=self._clock,
+                    composition_failures=failures,
                 )
         except _RECORDED_OUTCOMES:
             pass  # o run já registrou o desfecho: o resultado é lido do registro persistido
@@ -1229,7 +1237,10 @@ class Runtime:
         return tuple(warnings)
 
     def _executors_for(
-        self, config: EffectiveConfig, provider_overrides: list[str] | None = None
+        self,
+        config: EffectiveConfig,
+        provider_overrides: list[str] | None = None,
+        composition_failures: dict[str, CompositionError | ConfigurationError] | None = None,
     ) -> Mapping[str, StageExecutor]:
         """Merge the executors composed from ``config`` with the ones given at construction.
 
@@ -1247,6 +1258,8 @@ class Runtime:
             provider_overrides: When given, receives (by mutation) the component identities
                 where ``self._providers`` won over a ``resources.providers`` target ``config``
                 also declared, so :meth:`run` can record it on the run's own trail.
+            composition_failures: When given, receives (by mutation) why each stage could not
+                be composed, by stage, for preflight to report the real cause.
         """
         composed = compose_executors(
             config,
@@ -1254,6 +1267,9 @@ class Runtime:
             environ=self._environ,
             module_available=self._module_available,
             on_provider_override=None if provider_overrides is None else provider_overrides.append,
+            on_composition_failure=(
+                None if composition_failures is None else composition_failures.__setitem__
+            ),
         )
         return {**composed, **self._executors}
 

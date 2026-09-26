@@ -301,20 +301,22 @@ def diagnose_source_clock(
     """
     missing = 0
     non_monotonic = 0
-    last_by_clock: dict[str, float] = {}
+    # Monotonicidade em nanossegundos inteiros: o float64 colapsa diferenças de ~238 ns em
+    # epochs reais. As deltas continuam em float: são distribuição, não ordem.
+    last_by_clock: dict[str, int] = {}
     deltas: list[float] = []
     for observation in observations:
         raw = _raw_source_timestamp(observation)
         if raw.seconds == 0 and raw.nanoseconds == 0:
             missing += 1
-        seconds = raw.to_float_seconds()
+        nanoseconds = raw.total_nanoseconds()
         previous = last_by_clock.get(raw.clock_id)
-        if previous is not None and seconds < previous:
+        if previous is not None and nanoseconds < previous:
             non_monotonic += 1
-        last_by_clock[raw.clock_id] = seconds
+        last_by_clock[raw.clock_id] = nanoseconds
         recording_ns = observation.provenance.raw_metadata.get(_RECORDING_TIME_METADATA_KEY)
         if isinstance(recording_ns, int):
-            deltas.append(recording_ns / _NANOSECONDS_PER_SECOND - seconds)
+            deltas.append(recording_ns / _NANOSECONDS_PER_SECOND - raw.to_float_seconds())
 
     mean_delta = fmean(deltas) if deltas else None
     stdev_delta = pstdev(deltas) if len(deltas) >= 2 else None
@@ -429,7 +431,9 @@ def encode_timestamp_policy(policy: TimestampPolicy) -> dict[str, Any]:
         policy: The policy to encode.
 
     Returns:
-        A dict matching the ``time:`` configuration shape from issue #554.
+        A dict matching the ``time:`` configuration shape from issue #554. A constant offset is
+        persisted as integer ``offset_nanoseconds``, never as float seconds, so decoding it
+        rebuilds exactly the same correction.
     """
     correction: dict[str, Any]
     if policy.correction is None:
@@ -437,7 +441,7 @@ def encode_timestamp_policy(policy: TimestampPolicy) -> dict[str, Any]:
     else:
         correction = {
             "type": "constant_offset",
-            "offset_seconds": policy.correction.offset_seconds,
+            "offset_nanoseconds": policy.correction.offset_nanoseconds,
             "anchor_source_time": _encode_timestamp(policy.correction.anchor_source_time),
             "anchor_reference_time": _encode_timestamp(policy.correction.anchor_reference_time),
         }
@@ -459,7 +463,8 @@ def decode_timestamp_policy(document: dict[str, Any] | None) -> TimestampPolicy:
         The decoded policy, or :data:`DEFAULT_TIMESTAMP_POLICY` when ``document`` is ``None``.
 
     Raises:
-        ValueError: If ``document["correction"]["type"]`` is not a supported correction type.
+        ValueError: If ``document["correction"]["type"]`` is not a supported correction type,
+            or a ``constant_offset`` correction's ``offset_nanoseconds`` is not an integer.
     """
     if document is None:
         return DEFAULT_TIMESTAMP_POLICY
@@ -469,16 +474,17 @@ def decode_timestamp_policy(document: dict[str, Any] | None) -> TimestampPolicy:
     if correction_type == "none":
         correction = None
     elif correction_type == "constant_offset":
-        anchor_source = _decode_timestamp(correction_document["anchor_source_time"])
-        anchor_reference = _decode_timestamp(correction_document["anchor_reference_time"])
-        if anchor_source is not None and anchor_reference is not None:
-            correction = ConstantOffsetCorrection.from_anchors(
-                source_time=anchor_source, reference_time=anchor_reference
+        offset_nanoseconds = correction_document["offset_nanoseconds"]
+        # Um float aqui reintroduziria a perda de precisão que a forma inteira evita.
+        if not isinstance(offset_nanoseconds, int) or isinstance(offset_nanoseconds, bool):
+            raise ValueError(
+                f"constant_offset offset_nanoseconds must be an integer, got {offset_nanoseconds!r}"
             )
-        else:
-            correction = ConstantOffsetCorrection.from_offset_seconds(
-                correction_document["offset_seconds"]
-            )
+        correction = ConstantOffsetCorrection(
+            offset_nanoseconds=offset_nanoseconds,
+            anchor_source_time=_decode_timestamp(correction_document["anchor_source_time"]),
+            anchor_reference_time=_decode_timestamp(correction_document["anchor_reference_time"]),
+        )
     else:
         raise ValueError(f"unsupported timestamp correction type: {correction_type!r}")
     return TimestampPolicy(

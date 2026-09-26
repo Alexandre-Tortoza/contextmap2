@@ -10,7 +10,7 @@ from calibration_builders import (
 )
 
 from contextmap.ingestion import FrameId, RigidTransform
-from contextmap.shared import quaternion_angle_between
+from contextmap.shared import Quaternion, quaternion_angle_between
 from contextmap.state_estimation import FrameGraphError, StaticFrameGraph
 
 
@@ -156,3 +156,47 @@ def test_calibration_sets_build_the_same_graph() -> None:
     graph = StaticFrameGraph.from_calibration(calibration(*transforms))
 
     assert graph.frames == frozenset({FrameId("body"), FrameId("lidar")})
+
+
+def _scaled(rotation: Quaternion, factor: float) -> Quaternion:
+    x, y, z, w = (factor * value for value in rotation)
+    return (x, y, z, w)
+
+
+# Norma 1.044: um quarto de volta em z escalado, como uma calibração mal gerada.
+_SCALED_QUARTER_TURN_Z = _scaled(QUARTER_TURN_Z, 1.044)
+
+
+@pytest.mark.parametrize(("parent", "child"), [("lidar", "body"), ("body", "lidar")])
+def test_a_non_unit_rotation_on_the_path_is_refused_naming_its_edge(
+    parent: str, child: str
+) -> None:
+    # Regressão SE-02: o inverso pelo conjugado erra a translação (8,4 cm medidos na auditoria)
+    # e compose_rigid renormaliza a rotação, escondendo o erro.
+    graph = StaticFrameGraph([rigid("body", "lidar", (0.2, 0.0, 0.5), _SCALED_QUARTER_TURN_Z)])
+
+    with pytest.raises(FrameGraphError, match=r"T_body_lidar.*1\.044"):
+        graph.resolve(FrameId(parent), FrameId(child))
+
+
+def test_a_text_precision_unit_rotation_is_accepted() -> None:
+    x, y, z, w = (round(value, 9) for value in QUARTER_TURN_Z)
+    rounded = (x, y, z, w)
+    graph = StaticFrameGraph([rigid("body", "lidar", (0.2, 0.0, 0.5), rounded)])
+
+    resolved = graph.resolve(FrameId("lidar"), FrameId("body"))
+
+    assert resolved.translation == pytest.approx((0.0, 0.2, -0.5), abs=1e-8)
+
+
+def test_a_non_unit_rotation_off_the_path_does_not_block_other_frames() -> None:
+    graph = StaticFrameGraph(
+        [
+            rigid("body", "camera", (0.1, 0.0, 0.0)),
+            rigid("body", "lidar", (0.0, 0.0, 0.5), _SCALED_QUARTER_TURN_Z),
+        ]
+    )
+
+    resolved = graph.resolve(FrameId("camera"), FrameId("body"))
+
+    assert resolved.translation == pytest.approx((-0.1, 0.0, 0.0))

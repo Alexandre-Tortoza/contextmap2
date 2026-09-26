@@ -41,6 +41,8 @@ O manifest não tem caminho absoluto nem segredo, então o run é **portável**:
 
 ## O que é validado na escrita
 
+Antes do escritor, `RelationsRunPolicies` recusa (`ValueError`) já na construção uma política de candidatos cujo `proximity_radius_m` não cobre as tolerâncias dos avaliadores declarados, então um run com políticas incoerentes nunca chega a ser publicado ([coerência entre alcance e tolerâncias](candidates.md#coerência-entre-alcance-e-tolerâncias-dos-avaliadores)).
+
 `SpatialRelationsRunWriter.write` recusa (`RelationsRunArtifactError`) antes de gravar qualquer coisa:
 
 - relação sobre entidade de **outro** run de resolução que o selecionado na linhagem;
@@ -55,13 +57,17 @@ O manifest não tem caminho absoluto nem segredo, então o run é **portável**:
 `SpatialRelationsRunReader(run_dir)` só precisa do diretório do run:
 
 - `iter_relations()`, `relation(id)`, `iter_evidence()`, `evidence(id)`, `evidence_of(relation)`, `iter_decisions()`, `decision(relation_id)`;
-- `relations_of(entidade, as_subject=, as_object=)` usa o índice de entidades, sem varrer os pares;
+- `relation(id)` lê e decodifica **só o registro pedido** (`seek`/`read`), a partir dos deslocamentos das linhas de `relations.jsonl`, obtidos uma vez por leitor numa passada que lê a identidade de cada linha sem decodificar nenhuma relação (#601);
+- `relations_of(entidade, as_subject=, as_object=)` usa o índice de entidades, carregado uma vez por leitor, e decodifica só as relações da entidade, na ordem canônica da tabela;
+- `iter_relations()` lê a tabela linha a linha e não guarda as relações no leitor; `evidence(id)`, `evidence_of` e `decision` ainda carregam a própria tabela inteira na primeira consulta;
 - `candidate_set()` reconstrói os candidatos, as exclusões com a razão e os predicados pulados;
 - `read_table` e `read_record` só aceitam `outputs/` e `metrics/`: `debug/` nunca é uma fonte válida;
 - `verify_integrity()` compara o inventário com o disco e detecta arquivo ausente, tamanho ou hash diferente;
 - `validate_resolution(leitor_de_resolução)` confere a linhagem contra o `EntityResolutionRunReader` do run de resolução (identidade, versão do schema e digest) e que **toda entidade resolvida** que as relações citam existe nele (`resolved_entity`, sem carregar as demais); devolve os problemas, e vazio significa que tudo bate. Um run que não é o nomeado é reportado sozinho.
 
-Toda decodificação reconstrói os contratos pelos construtores, então uma linha adulterada é recusada em vez de aceita.
+Toda decodificação reconstrói os contratos pelos construtores, então uma linha adulterada é recusada em vez de aceita. Como `relation(id)` só decodifica o registro pedido, uma linha adulterada de outra relação só é detectada quando for lida (ou por `verify_integrity()`); uma linha que nem é JSON válido é recusada já na passada dos deslocamentos.
+
+Os deslocamentos não são persistidos: os runs gravados antes (entre eles o de `examples/v0.1.0/`) não teriam o índice e precisam continuar legíveis, então o leitor o deriva, sem mudar o layout nem a `schema_version`. Medido numa máquina de desenvolvimento, num run de 11 646 relações: a primeira `relation(id)` passou de 11 646 relações decodificadas (14,5 MiB retidos no leitor) para 1 (2,7 MiB, só os deslocamentos), e `relations_of` num leitor novo, de 456 ms e 11 646 decodificadas para 91 ms e as 270 da entidade. Consultar **todas** as relações uma a uma (como a validação `FULL` do Context Map) ficou mais lento, 0,42 s → 0,67 s, porque cada consulta abre o arquivo e decodifica o próprio registro em vez de achar a relação já decodificada em memória; para ler todas, `iter_relations()` é o caminho (0,49 s → 0,36 s).
 
 ## Entidades resolvidas de um run de Entity Resolution
 

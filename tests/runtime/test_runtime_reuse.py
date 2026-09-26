@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 from runtime_documents import effective_from, selected_document
-from runtime_worlds import World
+from runtime_worlds import World, source_identities
 
 from contextmap.runtime import (
     ArtifactRef,
+    BackendRuntimeMissingError,
     FileArtifactStore,
     PreflightError,
     ReusePolicy,
@@ -130,7 +131,12 @@ class TestReuseOfIdenticalWork:
         world = World()
         _run(tmp_path, world, _document())
         plan = resolve_plan(effective_from(tmp_path, _document()))
-        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+        # Sem executor, a fonte da ingestion precisa ser declarada na política.
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"),
+            code_identity=CODE,
+            identities=source_identities("ingestion"),
+        )
 
         record = run_plan(
             plan.scope(targets=["semantic_fusion"]),
@@ -417,6 +423,8 @@ class TestNothingUnsafeIsReused:
         world = World()
 
         class Bare:
+            source_identity = "bare-source"
+
             def execute(self, request: StageRequest) -> ArtifactRef:
                 return ArtifactRef(
                     stage_id="ingestion", contract="SequenceArtifact", artifact_id="seq-1"
@@ -460,7 +468,9 @@ class TestPreflightAndPrediction:
         plan = resolve_plan(effective_from(tmp_path, changed))
         policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
 
-        predicted = predict_reuse(plan.scope(targets=["semantic_fusion"]), policy)
+        predicted = predict_reuse(
+            plan.scope(targets=["semantic_fusion"]), policy, executors=world.executors(plan)
+        )
 
         assert {stage_id: d.kind for stage_id, d in predicted.items()} == {
             "ingestion": "reused",
@@ -481,12 +491,91 @@ class TestPreflightAndPrediction:
         plan = resolve_plan(effective_from(tmp_path, document))
         policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
 
-        predicted = predict_reuse(plan.scope(targets=["semantic_fusion"]), policy)
+        predicted = predict_reuse(
+            plan.scope(targets=["semantic_fusion"]), policy, executors=world.executors(plan)
+        )
 
         assert predicted["visual_perception"].kind == "recomputed"
         assert predicted["sensor_association"].kind == "recomputed"
         assert "upstream" in predicted["sensor_association"].reason
         assert predicted["state_estimation"].kind == "reused"
+
+    @pytest.mark.parametrize("stage_id", ["ingestion", "pose_ingestion"])
+    def test_a_source_stage_whose_source_is_unknown_cannot_be_reused(
+        self, tmp_path: Path, stage_id: str
+    ) -> None:
+        # Regressão RT-01: sem entradas, a chave de um estágio-fonte seria só a configuração, e
+        # dois bags diferentes com a mesma configuração compartilhariam a mesma chave.
+        world = World()
+        document = _document()
+        document["pipeline"]["stages"]["pose_ingestion"] = True
+        plan = resolve_plan(effective_from(tmp_path, document))
+        unnamed = world.executor(stage_id, "SequenceArtifact")
+        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+
+        with pytest.raises(PreflightError) as raised:
+            run_plan(
+                plan.scope(targets=[stage_id]),
+                {stage_id: unnamed},
+                environ={},
+                module_available=_ready,
+                reuse=policy,
+            )
+
+        assert [problem.path for problem in raised.value.report.problems] == [
+            f"reuse.identities.{stage_id}.source"
+        ]
+        assert "source identity" in raised.value.report.problems[0].message
+        assert world.runs == []
+
+    def test_a_declared_source_that_contradicts_the_executor_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        world = World()
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"),
+            code_identity=CODE,
+            identities={"ingestion": {"source": "another-recording"}},
+        )
+
+        report = preflight(
+            plan.scope(targets=["ingestion"]),
+            executors=world.executors(plan),
+            environ={},
+            module_available=_ready,
+            reuse=policy,
+        )
+
+        assert [problem.path for problem in report.problems] == [
+            "reuse.identities.ingestion.source"
+        ]
+        assert "another-recording" in report.problems[0].message
+
+    def test_a_certainly_reused_stage_needs_no_executor_despite_a_composition_failure(
+        self, tmp_path: Path
+    ) -> None:
+        # Sem provider para sam3, visual_perception não compõe; reaproveitado, nada dele roda.
+        world = World()
+        _run(tmp_path, world, _document())
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        executors = world.executors(plan)
+        del executors["visual_perception"]
+        failure = BackendRuntimeMissingError(
+            "visual_perception.region_discovery", "sam3", "Sam3Runtime"
+        )
+        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+
+        report = preflight(
+            plan.scope(targets=["semantic_fusion"]),
+            executors=executors,
+            environ={},
+            module_available=_ready,
+            reuse=policy,
+            composition_failures={"visual_perception": failure},
+        )
+
+        assert report.problems == ()
 
     def test_a_run_without_a_reuse_policy_records_no_decision(self, tmp_path: Path) -> None:
         world = World()

@@ -10,6 +10,7 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
+    ArtifactReference,
     BackendProvenance,
     BoundingBox2D,
     DenseFeatureDiagnostic,
@@ -28,6 +29,7 @@ from contextmap.visual_perception import (
     PreparedImage,
     Region2D,
     RegionId,
+    TransformationRecord,
     VisualFeature,
     embedding_space_fingerprint,
     feature_id_for,
@@ -75,6 +77,28 @@ def _image() -> PreparedImage:
         width=12,
         height=8,
         transformations=(),
+    )
+
+
+def _resized_image() -> PreparedImage:
+    """The same prepared image, reached through one recorded resize."""
+    return PreparedImage(
+        source_observation_id=SourceObservationId("frame-0001"),
+        payload_reference="prepared/frame-0001.png",
+        width=12,
+        height=8,
+        transformations=(
+            TransformationRecord(
+                operation="resize",
+                provenance_source="test",
+                parameters=(("interpolation", "bilinear"),),
+                input_dimensions=(24, 16),
+                output_dimensions=(12, 8),
+                output_image=ArtifactReference(
+                    uri="prepared/frame-0001.png", sha256="0" * 64, media_type="image/png"
+                ),
+            ),
+        ),
     )
 
 
@@ -208,6 +232,17 @@ def test_invalid_numerical_payload_is_rejected_before_persistence(
         backend.extract_dense(_image())
 
     assert sink.calls == []
+
+
+def test_recorded_transformations_take_part_in_the_sampling_identity() -> None:
+    # Regressão VPB-01: o payload de identidade recebia o dataclass cru e o json.dumps falhava.
+    backend, _, _ = _backend()
+
+    plain = backend.extract_dense(_image()).dense_map.sampling
+    resized = backend.extract_dense(_resized_image()).dense_map.sampling
+
+    assert resized.coordinate_transform_id.startswith("sha256:")
+    assert resized.coordinate_transform_id != plain.coordinate_transform_id
 
 
 def test_feature_identity_is_unique_across_composed_feature_stages() -> None:

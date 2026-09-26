@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import shutil
+import warnings
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from relation_builders import entity_ref
@@ -27,6 +31,7 @@ from contextmap.geometric_mapping import MapId
 from contextmap.spatial_relations import (  # noqa: F401
     CONSERVATIVE_DECISION_POLICY_ID,
     IncompleteRelationsRunArtifactError,
+    Relation,
     RelationEvidenceStatus,
     RelationsRunArtifactError,
     RelationsRunDebugLevel,
@@ -36,6 +41,11 @@ from contextmap.spatial_relations import (  # noqa: F401
     SpatialRelationsRunManifest,
     SpatialRelationsRunReader,
     decision_policy_fingerprint,
+    encode_candidate_set,
+    encode_relation,
+    encode_relation_decision,
+    encode_relation_evidence,
+    run_artifact,
 )
 
 
@@ -212,6 +222,111 @@ def test_the_entity_index_lists_the_relations_of_each_resolved_entity(
     assert reader.relations_of(entity_ref(9)) == ()
 
 
+def contractual_digest(directory: Path) -> str:
+    """Digest of every contractual file and of the manifest apart from its creation time."""
+    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest.pop("created_at")
+    files = {
+        path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.relative_to(directory).parts[0] in ("outputs", "metrics")
+    }
+    record = json.dumps({"manifest": manifest, "files": files}, sort_keys=True)
+    return hashlib.sha256(record.encode()).hexdigest()
+
+
+def answers_digest(reader: SpatialRelationsRunReader, run: Run) -> str:
+    """Digest of every answer the reader gives: lookups, the entity index and the iterations."""
+    relation_ids = sorted(item.relation_id for item in run.decisions.relations)
+    evidence_ids = sorted(item.evidence_id for item in run.evidence)
+    entities = [*sorted(run.entities, key=lambda item: item.resolved_entity_id), entity_ref(9)]
+    record = {
+        "relation": [encode_relation(reader.relation(item)) for item in relation_ids],
+        "decision": [encode_relation_decision(reader.decision(item)) for item in relation_ids],
+        "evidence": [encode_relation_evidence(reader.evidence(item)) for item in evidence_ids],
+        "evidence_of": [
+            [encode_relation_evidence(item) for item in reader.evidence_of(reader.relation(key))]
+            for key in relation_ids
+        ],
+        "relations_of": [
+            [
+                encode_relation(item)
+                for item in reader.relations_of(entity, as_subject=subject, as_object=obj)
+            ]
+            for entity in entities
+            for subject, obj in ((True, True), (True, False), (False, True), (False, False))
+        ],
+        "iter_relations": [encode_relation(item) for item in reader.iter_relations()],
+        "iter_evidence": [encode_relation_evidence(item) for item in reader.iter_evidence()],
+        "iter_decisions": [encode_relation_decision(item) for item in reader.iter_decisions()],
+        "candidate_set": encode_candidate_set(reader.candidate_set()),
+    }
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+# #601 (SR-06): gravados antes de o leitor passar a buscar por deslocamento.
+RECORDED_RUN_BYTES = "376ca0ca19756e1ef0b8320dbd77e476dd415b33ac4e9d29012dfe4833ece74e"
+RECORDED_READER_ANSWERS = "a2cf3c4b17dcf49e5110ec5c59bf66bae87f18124c37904aeca23da807e8971b"
+
+
+def test_the_persisted_run_matches_the_recorded_bytes(run: Run, tmp_path: Path) -> None:
+    _write(run, tmp_path / "relations")
+    assert contractual_digest(tmp_path / "relations") == RECORDED_RUN_BYTES
+
+
+def test_the_reader_gives_the_recorded_answers(run: Run, tmp_path: Path) -> None:
+    _write(run, tmp_path / "relations")
+    reader = SpatialRelationsRunReader(tmp_path / "relations")
+    assert answers_digest(reader, run) == RECORDED_READER_ANSWERS
+
+
+def _count_relation_decodes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the identity of every relation record the reader decodes."""
+    decoded: list[str] = []
+    decode = run_artifact.decode_relation
+
+    def counting(record: Mapping[str, Any]) -> Relation:
+        decoded.append(record["relation_id"])
+        return decode(record)
+
+    monkeypatch.setattr(run_artifact, "decode_relation", counting)
+    return decoded
+
+
+def test_a_relation_is_read_without_decoding_the_others(
+    run: Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SR-06: buscar uma relação decodificava a tabela inteira.
+    _write(run, tmp_path / "relations")
+    reader = SpatialRelationsRunReader(tmp_path / "relations")
+    first, last = run.decisions.relations[0], run.decisions.relations[-1]
+    decoded = _count_relation_decodes(monkeypatch)
+
+    assert reader.relation(last.relation_id) == last
+    assert reader.relation(first.relation_id) == first
+
+    assert decoded == [last.relation_id, first.relation_id]
+
+
+def test_the_relations_of_an_entity_are_read_without_decoding_the_others(
+    run: Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SR-06: relations_of decodificava todas as relações para filtrar as da entidade.
+    _write(run, tmp_path / "relations")
+    reader = SpatialRelationsRunReader(tmp_path / "relations")
+    expected = tuple(
+        item
+        for item in run.decisions.relations
+        if entity_ref(4) in (item.subject_entity_ref, item.object_entity_ref)
+    )
+    decoded = _count_relation_decodes(monkeypatch)
+
+    assert reader.relations_of(entity_ref(4)) == expected
+    assert reader.relations_of(entity_ref(9)) == ()
+
+    assert 0 < len(decoded) == len(expected) < len(run.decisions.relations)
+
+
 def test_the_artifact_does_not_copy_entities_or_geometry(run: Run, tmp_path: Path) -> None:
     _write(run, tmp_path / "relations")
     for path in (tmp_path / "relations" / "outputs").iterdir():
@@ -304,7 +419,7 @@ def test_evidence_without_its_declared_policy_is_refused(run: Run, tmp_path: Pat
     with pytest.raises(RelationsRunArtifactError, match="contact"):
         _write(run, tmp_path / "relations", policies=without_contact)
     changed = dataclasses.replace(
-        POLICIES, geometric=dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+        POLICIES, geometric=dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.55)
     )
     with pytest.raises(RelationsRunArtifactError, match="fingerprint"):
         _write(run, tmp_path / "relations", policies=changed)
@@ -322,6 +437,84 @@ def test_evidence_that_is_not_about_a_candidate_is_refused(run: Run, tmp_path: P
     )
     with pytest.raises(RelationsRunArtifactError, match="candidate"):
         _write(dataclasses.replace(run, candidates=fewer), tmp_path / "relations")
+
+
+def test_a_run_under_incoherent_policies_is_refused_before_anything_is_published(
+    run: Run, tmp_path: Path
+) -> None:
+    wider = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+    with pytest.raises(ValueError, match="next_to_max_gap_m"):
+        _write(
+            run,
+            tmp_path / "relations",
+            policies=dataclasses.replace(POLICIES, geometric=wider),
+        )
+    assert not (tmp_path / "relations").exists()
+
+
+# --- coherence of the candidate reach with the evaluators' tolerances ---
+
+
+def test_a_next_to_gap_beyond_the_proximity_reach_is_refused() -> None:
+    wider = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, geometric=wider)
+    message = str(error.value)
+    assert "next_to_max_gap_m=0.9 exceeds proximity_radius_m=0.6" in message
+    assert "NEXT_TO relations would be excluded" in message
+    assert "before evaluation" in message
+
+
+def test_a_contact_reach_beyond_the_proximity_reach_is_refused() -> None:
+    # Cada parâmetro cabe sozinho no alcance; é a soma, o raio de busca real do canal de contato,
+    # que passa dele.
+    farther = dataclasses.replace(CONTACT, contact_distance_m=0.5, contact_tolerance_m=0.2)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, contact=farther)
+    message = str(error.value)
+    assert "contact_distance_m + contact_tolerance_m = 0.7 (0.5 + 0.2)" in message
+    assert "exceeds proximity_radius_m=0.6" in message
+    assert "TOUCHING, ON_TOP_OF and LEANING_AGAINST relations would be excluded" in message
+
+
+def test_a_containment_slack_on_both_faces_beyond_the_proximity_reach_is_refused() -> None:
+    # containment_slack_m <= proximity_radius_m < 2 * containment_slack_m: o sujeito pode
+    # ultrapassar as duas faces de um eixo, então o avaliador aceita um excesso de extensão
+    # que a pré-condição de INSIDE já teria descartado.
+    looser = dataclasses.replace(GEOMETRIC, containment_slack_m=0.4)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, geometric=looser)
+    message = str(error.value)
+    assert "2 * containment_slack_m = 0.8" in message
+    assert "containment_slack_m=0.4" in message
+    assert "exceeds proximity_radius_m=0.6" in message
+    assert "INSIDE relations would be excluded" in message
+
+
+def test_every_incoherence_is_reported_at_once() -> None:
+    short = dataclasses.replace(CANDIDATES, proximity_radius_m=0.04)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, candidate=short)
+    message = str(error.value)
+    for name in ("next_to_max_gap_m=", "2 * containment_slack_m", "contact_distance_m +"):
+        assert name in message
+
+
+def test_policies_whose_reach_covers_every_tolerance_are_accepted_silently() -> None:
+    # Os limites são inclusivos: um alcance exatamente igual à tolerância não perde nada.
+    geometric = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.6, containment_slack_m=0.3)
+    contact = dataclasses.replace(CONTACT, contact_distance_m=0.5, contact_tolerance_m=0.1)
+    short = dataclasses.replace(CANDIDATES, proximity_radius_m=0.04)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        at_the_limit = dataclasses.replace(POLICIES, geometric=geometric, contact=contact)
+        # Um canal ausente não tem tolerância a cobrir, por menor que seja o alcance.
+        without_channels = dataclasses.replace(
+            POLICIES, candidate=short, geometric=None, contact=None
+        )
+    assert at_the_limit.geometric == geometric
+    assert at_the_limit.contact == contact
+    assert without_channels.candidate == short
 
 
 # --- reading errors ---

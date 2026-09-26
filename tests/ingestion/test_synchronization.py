@@ -1,3 +1,5 @@
+import random
+from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
@@ -81,6 +83,31 @@ def test_matches_nearest_candidate_within_tolerance() -> None:
     )
     assert first_imu_decision.status == "matched"
     assert first_imu_decision.offset_nanoseconds == -10_000_000
+
+
+@pytest.mark.parametrize(
+    ("winner_seconds", "loser_seconds"),
+    [(1.01, 0.99), (1.01, 1.01)],
+    ids=["symmetric_offsets", "equal_timestamps"],
+)
+def test_a_tie_goes_to_the_smallest_observation_id_and_the_loser_is_dropped(
+    winner_seconds: float, loser_seconds: float
+) -> None:
+    # O empate em |offset| é decidido por observation_id, não pela ordem de entrada nem pelo sinal.
+    observations: list[SourceObservation] = [
+        _imu("imu-b", loser_seconds),
+        _image("frame-0001", 1.00),
+        _imu("imu-a", winner_seconds),
+    ]
+    config = SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=50_000_000)
+
+    groups, diagnostics = synchronize(observations, config=config)
+
+    assert _observation_id(groups[0].associations["imu"]) == "imu-a"
+    assert [
+        (str(event.observation.observation_id), event.reason)
+        for event in diagnostics.dropped_events
+    ] == [("imu-b", "no_anchor_within_tolerance")]
 
 
 def test_missing_modality_is_explicit_none_not_dropped_silently() -> None:
@@ -203,3 +230,143 @@ def test_large_epoch_timestamps_are_compared_without_float_precision_loss() -> N
     )
 
     assert groups[0].associations["imu"].offset_nanoseconds == 1
+
+
+# --- ING-01: busca por bisseção, com o comportamento da varredura linear --------------------
+
+
+def _brute_force(
+    observations: Sequence[SourceObservation], config: SynchronizationConfig
+) -> tuple[list[tuple[object, ...]], list[tuple[str, str]]]:
+    """Referência de força bruta: a varredura linear por anchor, decisão a decisão."""
+    by_modality: dict[str, list[SourceObservation]] = {"image": [], "imu": []}
+    for item in observations:
+        by_modality["image" if isinstance(item, ImageObservation) else "imu"].append(item)
+    anchors = sorted(
+        by_modality["image"],
+        key=lambda item: (item.timestamp.total_nanoseconds(), str(item.observation_id)),
+    )
+    decisions: list[tuple[object, ...]] = []
+    selected: set[str] = set()
+    for frame_index, anchor in enumerate(anchors):
+        anchor_ns = anchor.timestamp.total_nanoseconds()
+        comparable = [
+            item
+            for item in by_modality["imu"]
+            if item.timestamp.clock_id == anchor.timestamp.clock_id
+            and abs(item.timestamp.total_nanoseconds() - anchor_ns) <= config.tolerance_nanoseconds
+        ]
+        if comparable:
+            best = min(
+                comparable,
+                key=lambda item: (
+                    abs(item.timestamp.total_nanoseconds() - anchor_ns),
+                    str(item.observation_id),
+                ),
+            )
+            selected.add(str(best.observation_id))
+            offset = best.timestamp.total_nanoseconds() - anchor_ns
+            decisions.append(
+                (
+                    frame_index,
+                    str(anchor.observation_id),
+                    str(best.observation_id),
+                    offset,
+                    "matched",
+                )
+            )
+        else:
+            if not by_modality["imu"]:
+                status = "no_candidate"
+            elif all(
+                item.timestamp.clock_id != anchor.timestamp.clock_id for item in by_modality["imu"]
+            ):
+                status = "clock_id_mismatch"
+            else:
+                status = "outside_tolerance"
+            decisions.append((frame_index, str(anchor.observation_id), None, None, status))
+    anchor_clocks = {anchor.timestamp.clock_id for anchor in anchors}
+    dropped = [
+        (
+            str(item.observation_id),
+            "no_anchor_within_tolerance"
+            if item.timestamp.clock_id in anchor_clocks
+            else "clock_id_mismatch",
+        )
+        for item in by_modality["imu"]
+        if str(item.observation_id) not in selected
+    ]
+    return decisions, dropped
+
+
+def _random_scene(seed: int) -> list[SourceObservation]:
+    rng = random.Random(seed)
+    ids = rng.sample(range(10_000), 60)
+    observations: list[SourceObservation] = []
+    for index, number in enumerate(ids):
+        # Passos de 10 ms com repetição: timestamps duplicados, empates de offset e eventos fora
+        # da tolerância; dois relógios para exercitar o domínio de clock.
+        seconds = 1_700_000_000 + rng.randrange(0, 40) * 0.01
+        clock = rng.choice(["clock-a", "clock-a", "clock-b"])
+        if index < 15:
+            observations.append(_image(f"frame-{number:05d}", seconds, clock))
+        else:
+            observations.append(_imu(f"imu-{number:05d}", seconds, clock))
+    rng.shuffle(observations)
+    return observations
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_bisection_selects_exactly_what_the_linear_scan_selects(seed: int) -> None:
+    observations = _random_scene(seed)
+    config = SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=20_000_000)
+
+    _, diagnostics = synchronize(observations, config=config)
+
+    expected_decisions, expected_dropped = _brute_force(observations, config)
+    imu_decisions = [
+        (
+            decision.frame_index,
+            decision.anchor_observation_id,
+            decision.selected_observation_id,
+            decision.offset_nanoseconds,
+            decision.status,
+        )
+        for decision in diagnostics.decisions
+        if decision.modality == "imu"
+    ]
+    assert imu_decisions == expected_decisions
+    dropped = [
+        (str(event.observation.observation_id), event.reason)
+        for event in diagnostics.dropped_events
+        if isinstance(event.observation, ImuObservation)
+    ]
+    assert dropped == expected_dropped
+
+
+def test_the_work_per_anchor_does_not_grow_with_the_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gate de escala por contador (sem tempo de parede): cada anchor não pode examinar todos
+    # os C candidatos da modalidade.
+    calls = 0
+    real = SourceTimestamp.total_nanoseconds
+
+    def counting(self: SourceTimestamp) -> int:
+        nonlocal calls
+        calls += 1
+        return real(self)
+
+    monkeypatch.setattr(SourceTimestamp, "total_nanoseconds", counting)
+    anchor_count, candidate_count = 50, 2_000
+    observations: list[SourceObservation] = [
+        _image(f"frame-{index:04d}", 1_000 + index * 0.1) for index in range(anchor_count)
+    ]
+    observations += [
+        _imu(f"imu-{index:05d}", 1_000 + index * 0.0025) for index in range(candidate_count)
+    ]
+    config = SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=5_000_000)
+
+    synchronize(observations, config=config)
+
+    assert calls <= 4 * (anchor_count + candidate_count)

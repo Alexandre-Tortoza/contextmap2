@@ -56,6 +56,8 @@ Conflito não é prova de identidade distinta: é evidência que a política de 
 
 Opcionais (`SupportDistancePolicy(max_points_per_side, max_mean_distance_m)`). Suportes maiores que `max_points_per_side` são amostrados em posições igualmente espaçadas das referências ordenadas, de forma determinística, e o tamanho da amostra fica em `SupportDistance.points_a/points_b` (compare com `support_count_a/b` para saber se houve amostragem). O NumPy é importado só nesse caminho: ler e gravar resoluções não precisa dele. O cálculo é força bruta em blocos (memória limitada).
 
+No `MatchEvidenceBuilder`, o canal usa um `GeometryComparator` que guarda a amostra resolvida de cada entidade pela vida do builder (um por run), como os canais de aparência e de representação: uma entidade em k pares candidatos é lida do `GeometrySource` uma vez, não k (#599). `compare_geometry` continua sem estado e resolve as duas amostras a cada chamada.
+
 Custo medido por par (sintético, uma máquina de desenvolvimento): só as métricas de caixa e suporte, 0,15 a 0,67 ms; com as estatísticas, 58 ms com 500 pontos por lado, 207 ms com 2 000 e 1,2 s com 5 000. É quadrático na amostra, por isso a amostra é limitada pela política. Para um mapa com milhares de pares candidatos, mantenha `max_points_per_side` na casa de centenas ou desligue o canal e use só as métricas de caixa.
 
 ## O que este módulo não faz

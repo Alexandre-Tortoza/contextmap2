@@ -22,12 +22,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Any, overload
 
 from contextmap.ingestion.models import SourceObservation, SourceObservationId
 from contextmap.ingestion.sequence_artifact import SequenceArtifactId, SequenceArtifactReader
+
+_NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
 class SequenceSelectionError(Exception):
@@ -47,7 +51,10 @@ class FrameRangeSelection:
         start_frame_index: Inclusive lower bound (0-based position in the
             sequence's canonical index order, not a synchronized
             :class:`~contextmap.ingestion.synchronization.ProcessingObservation`
-            index, which is a separate, per-run concept).
+            index, which is a separate, per-run concept). A value at or
+            beyond the sequence's length is a :class:`SequenceSelectionError`
+            when resolved, empty sequences included; only ``0`` over an
+            empty sequence resolves, to an empty result.
         end_frame_index: Exclusive upper bound. Values beyond the
             sequence's length are clipped, not an error, so an
             open-ended "from N to the end" range can be written without
@@ -79,9 +86,14 @@ class TimestampRangeSelection:
             expressed in. An observation whose ``timestamp.clock_id``
             differs is excluded, never compared as if it were the same
             clock (see ``docs/synchronization.md``).
-        start_seconds: Inclusive lower bound of normalized timestamp
-            (``timestamp.to_float_seconds()``).
-        end_seconds: Exclusive upper bound.
+        start_seconds: Inclusive lower bound of normalized timestamp, in seconds. It is
+            compared with the exact ``timestamp.total_nanoseconds()``, never with a float
+            conversion of the timestamp.
+        end_seconds: Exclusive upper bound, compared the same way. Must be
+            strictly greater than ``start_seconds``: ``[t, t)`` contains no
+            instant, so a zero-width range is rejected as invalid
+            configuration, the same rule as
+            :class:`~contextmap.ingestion.source_adapter.SourceWindow`.
     """
 
     clock_id: str
@@ -92,10 +104,11 @@ class TimestampRangeSelection:
         """Validate the range.
 
         Raises:
-            ValueError: If ``end_seconds`` is before ``start_seconds``.
+            ValueError: If ``end_seconds`` does not come strictly after
+                ``start_seconds``.
         """
-        if self.end_seconds < self.start_seconds:
-            raise ValueError("end_seconds must be >= start_seconds")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be > start_seconds (a range must not be empty)")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -211,7 +224,9 @@ def _resolve_frame_range_offsets(
         total = position + 1
         if selection.start_frame_index <= position < selection.end_frame_index:
             offsets.append(entry.offset)
-    if total > 0 and selection.start_frame_index >= total:
+    # start=0 sobre uma sequência vazia é o único início "no fim" aceito: ele descreve a
+    # sequência inteira, que por acaso não tem nada. Qualquer outro start fora do intervalo é erro.
+    if selection.start_frame_index > 0 and selection.start_frame_index >= total:
         raise SequenceSelectionError(
             f"start_frame_index {selection.start_frame_index} is out of range "
             f"for {total} observations"
@@ -222,14 +237,27 @@ def _resolve_frame_range_offsets(
 def _resolve_timestamp_range_offsets(
     reader: SequenceArtifactReader, selection: TimestampRangeSelection
 ) -> list[int]:
+    start = _ceil_nanoseconds(selection.start_seconds)
+    end = _ceil_nanoseconds(selection.end_seconds)
     offsets: list[int] = []
     for entry in reader.iter_index():
         if entry.timestamp.clock_id != selection.clock_id:
             continue
-        seconds = entry.timestamp.to_float_seconds()
-        if selection.start_seconds <= seconds < selection.end_seconds:
+        if start <= entry.timestamp.total_nanoseconds() < end:
             offsets.append(entry.offset)
     return offsets
+
+
+def _ceil_nanoseconds(seconds: float) -> int | float:
+    """Return the smallest whole nanosecond count not below ``seconds``, computed exactly.
+
+    For an integer ``t``, ``t >= x`` iff ``t >= ceil(x)`` and ``t < x`` iff ``t < ceil(x)``, so
+    both bounds of a range compare exactly with integer nanoseconds. A non-finite bound is
+    returned as is: it already compares correctly with any integer.
+    """
+    if not math.isfinite(seconds):
+        return seconds
+    return math.ceil(Fraction(seconds) * _NANOSECONDS_PER_SECOND)
 
 
 def _resolve_explicit_ids_offsets(

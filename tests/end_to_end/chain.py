@@ -13,6 +13,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import numpy as np
+
 from contextmap.artifact import (
     CONTEXT_MAP_ASSEMBLY_POLICY_ID,
     ArtifactKind,
@@ -312,9 +314,9 @@ def _mask_around_landmark(region: RegionId, frame_index: int) -> InlineMask:
     # A associação usa o centro do pixel em coordenadas inteiras, então o pixel é o arredondado.
     u, v = (round(value) for value in projection["pixel"])
     return InlineMask(
-        width=16,
-        height=12,
-        data=tuple(x == u and y == v for y in range(12) for x in range(16)),
+        np.array(
+            tuple(x == u and y == v for y in range(12) for x in range(16)), dtype=bool
+        ).reshape(12, 16)
     )
 
 

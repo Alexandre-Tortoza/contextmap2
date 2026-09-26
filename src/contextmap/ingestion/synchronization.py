@@ -17,6 +17,7 @@ window. No interpolation is performed; a synchronization decision is either
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -109,8 +110,12 @@ class DroppedEvent:
         observation: The event that was not selected.
         reason: ``"clock_id_mismatch"`` when the event never shared a clock
             domain with any anchor event, or ``"no_anchor_within_tolerance"``
-            when it shared a clock domain with at least one anchor but was
-            never the closest candidate within ``tolerance_nanoseconds``.
+            when it shared a clock domain with at least one anchor but no
+            anchor selected it: it was outside every anchor's
+            ``tolerance_nanoseconds``, another candidate was closer, or it
+            tied for the closest and lost the ``observation_id`` tie-break.
+            The reason therefore does not claim the event was outside the
+            tolerance.
     """
 
     observation: SourceObservation
@@ -155,9 +160,14 @@ def synchronize(
     ascending normalized-timestamp order; ties are broken by
     ``observation_id`` for determinism. For every other modality, the
     closest event sharing the anchor's clock domain is selected, when one
-    exists within ``config.tolerance_nanoseconds``. A candidate may be selected
-    by more than one anchor (selection does not consume events); an event is
-    only reported as dropped when no anchor ever selects it.
+    exists within ``config.tolerance_nanoseconds``. Candidates equally close
+    to the anchor (the same absolute offset, before or after it, or equal
+    timestamps) are decided by the lexicographically smallest
+    ``observation_id``. A candidate may be selected by more than one anchor
+    (selection does not consume events); an event is only reported as
+    dropped when no anchor ever selects it, so a candidate that only ever
+    lost a tie is dropped with ``"no_anchor_within_tolerance"``, the same
+    reason as one outside the tolerance.
 
     Only events sharing exactly the anchor's ``timestamp.clock_id`` are
     considered comparable; see module docs for this v0 limitation.
@@ -184,6 +194,7 @@ def synchronize(
     )
 
     other_modalities = sorted(MODALITY_NAMES - {config.reference_modality})
+    indexes = {name: _CandidateIndex(by_modality[name]) for name in other_modalities}
     selected_ids: dict[str, set[str]] = {name: set() for name in other_modalities}
     processing_observations: list[ProcessingObservation] = []
     decisions: list[SynchronizationDecision] = []
@@ -192,9 +203,7 @@ def synchronize(
             config.reference_modality: ModalityAssociation(observation=anchor, offset_nanoseconds=0)
         }
         for modality in other_modalities:
-            best = _closest_within_tolerance(
-                anchor, by_modality[modality], config.tolerance_nanoseconds
-            )
+            best = indexes[modality].closest_within_tolerance(anchor, config.tolerance_nanoseconds)
             if best is not None:
                 candidate, offset_nanoseconds = best
                 selected_ids[modality].add(str(candidate.observation_id))
@@ -222,7 +231,7 @@ def synchronize(
                         modality=modality,
                         selected_observation_id=None,
                         offset_nanoseconds=None,
-                        status=_missing_status(anchor, by_modality[modality]),
+                        status=indexes[modality].missing_status(anchor),
                     )
                 )
 
@@ -255,45 +264,67 @@ def synchronize(
     )
 
 
-def _closest_within_tolerance(
-    anchor: SourceObservation,
-    candidates: Sequence[SourceObservation],
-    tolerance_nanoseconds: int,
-) -> tuple[SourceObservation, int] | None:
-    anchor_clock_id = anchor.timestamp.clock_id
-    anchor_nanoseconds = anchor.timestamp.total_nanoseconds()
+class _CandidateIndex:
+    """The candidates of one modality, sorted once per clock domain for bisection lookup.
 
-    best: tuple[SourceObservation, int] | None = None
-    best_abs_offset: int | None = None
-    for candidate in candidates:
-        if candidate.timestamp.clock_id != anchor_clock_id:
-            continue
-        offset_nanoseconds = candidate.timestamp.total_nanoseconds() - anchor_nanoseconds
-        abs_offset = abs(offset_nanoseconds)
-        if abs_offset > tolerance_nanoseconds:
-            continue
-        if (
-            best_abs_offset is None
-            or abs_offset < best_abs_offset
-            or (
-                abs_offset == best_abs_offset
-                and best is not None
-                and str(candidate.observation_id) < str(best[0].observation_id)
+    Within a clock domain, candidates are ordered by ``(total_nanoseconds, observation_id)``, so
+    the first entry of a run of equal timestamps is the one the ``observation_id`` tie-break
+    selects. A lookup then examines at most two such runs instead of every candidate.
+    """
+
+    def __init__(self, candidates: Sequence[SourceObservation]) -> None:
+        by_clock: dict[str, list[tuple[int, str, SourceObservation]]] = {}
+        for candidate in candidates:
+            by_clock.setdefault(candidate.timestamp.clock_id, []).append(
+                (
+                    candidate.timestamp.total_nanoseconds(),
+                    str(candidate.observation_id),
+                    candidate,
+                )
             )
-        ):
-            best = (candidate, offset_nanoseconds)
-            best_abs_offset = abs_offset
+        self._is_empty = not candidates
+        self._by_clock = {
+            clock_id: sorted(entries, key=lambda entry: (entry[0], entry[1]))
+            for clock_id, entries in by_clock.items()
+        }
+        self._nanoseconds = {
+            clock_id: [entry[0] for entry in entries]
+            for clock_id, entries in self._by_clock.items()
+        }
 
-    return best
+    def closest_within_tolerance(
+        self, anchor: SourceObservation, tolerance_nanoseconds: int
+    ) -> tuple[SourceObservation, int] | None:
+        """Return the closest candidate on the anchor's clock, and its signed offset.
 
+        Ties on the absolute offset go to the smallest ``observation_id``; a candidate farther
+        than ``tolerance_nanoseconds`` is never selected.
+        """
+        clock_id = anchor.timestamp.clock_id
+        entries = self._by_clock.get(clock_id)
+        if entries is None:
+            return None
+        nanoseconds = self._nanoseconds[clock_id]
+        anchor_nanoseconds = anchor.timestamp.total_nanoseconds()
+        after = bisect_left(nanoseconds, anchor_nanoseconds)
+        # O primeiro de cada sequência de timestamps iguais é o de menor observation_id.
+        neighbours = []
+        if after < len(entries):
+            neighbours.append(entries[after])
+        if after > 0:
+            neighbours.append(entries[bisect_left(nanoseconds, nanoseconds[after - 1])])
+        stamp, _, candidate = min(
+            neighbours, key=lambda entry: (abs(entry[0] - anchor_nanoseconds), entry[1])
+        )
+        offset_nanoseconds = stamp - anchor_nanoseconds
+        if abs(offset_nanoseconds) > tolerance_nanoseconds:
+            return None
+        return candidate, offset_nanoseconds
 
-def _missing_status(
-    anchor: SourceObservation,
-    candidates: Sequence[SourceObservation],
-) -> str:
-    """Classify why one anchor/modality association has no selected candidate."""
-    if not candidates:
-        return "no_candidate"
-    if not any(item.timestamp.clock_id == anchor.timestamp.clock_id for item in candidates):
-        return "clock_id_mismatch"
-    return "outside_tolerance"
+    def missing_status(self, anchor: SourceObservation) -> str:
+        """Classify why one anchor/modality association has no selected candidate."""
+        if self._is_empty:
+            return "no_candidate"
+        if anchor.timestamp.clock_id not in self._by_clock:
+            return "clock_id_mismatch"
+        return "outside_tolerance"

@@ -63,7 +63,7 @@ from contextmap.entity_resolution.channels import (
 from contextmap.entity_resolution.evidence import evaluate_comparison_gates
 from contextmap.entity_resolution.models import PolicyRef, reference_order
 from contextmap.geometric_mapping import GeometryReference, GeometrySource
-from contextmap.semantic_mapping import Entity, EntityGeometry, resolve_geometry
+from contextmap.semantic_mapping import Entity, EntityGeometry, EntityReference, resolve_geometry
 
 if TYPE_CHECKING:
     import numpy as np
@@ -235,29 +235,82 @@ def compare_geometry(
         GeometryResolutionError: If the policy asks for them and a reference cannot be resolved
             against ``source``; an invalid reference fails loudly instead of being skipped.
     """
-    first, second = sorted((entity_a, entity_b), key=lambda item: reference_order(item.reference))
-    failed = [gate for gate in evaluate_comparison_gates(first, second) if not gate.passed]
-    if failed:
-        return GeometryEvidence(
-            policy=policy.ref(),
-            unavailable=Unavailability(
-                reason=UnavailableReason.BLOCKED_BY_GATE,
-                detail="; ".join(f"{gate.gate_id}: {gate.detail}" for gate in failed),
-            ),
+    return GeometryComparator(policy, source=source).compare(entity_a, entity_b)
+
+
+class GeometryComparator:
+    """Compares the geometry of entity pairs under one policy, resolving each support once.
+
+    The comparator keeps the resolved sample of every entity it has measured, so an entity that
+    takes part in several candidate pairs has its support read from the map once, like the
+    appearance and point representation channels. Use one comparator per run.
+    """
+
+    def __init__(
+        self, policy: GeometryComparisonPolicy, *, source: GeometrySource | None = None
+    ) -> None:
+        """Create a comparator.
+
+        Args:
+            policy: The thresholds of the rules.
+            source: The read boundary of the geometric map; required exactly when the policy asks
+                for nearest-point statistics.
+        """
+        self._policy = policy
+        self._source = source
+        self._samples: dict[EntityReference, NDArray[np.float64]] = {}
+
+    def compare(self, entity_a: Entity, entity_b: Entity) -> GeometryEvidence:
+        """Compare the persistent 3D support of two entities; see :func:`compare_geometry`."""
+        policy = self._policy
+        first, second = sorted(
+            (entity_a, entity_b), key=lambda item: reference_order(item.reference)
         )
-    if policy.support_distance is not None and source is None:
-        raise ValueError("the policy asks for support distances, which need a GeometrySource")
-    measurement = _measure(first, second, policy, source)
-    return GeometryEvidence(
-        policy=policy.ref(), measurement=measurement, findings=_findings(measurement, policy)
-    )
+        failed = [gate for gate in evaluate_comparison_gates(first, second) if not gate.passed]
+        if failed:
+            return GeometryEvidence(
+                policy=policy.ref(),
+                unavailable=Unavailability(
+                    reason=UnavailableReason.BLOCKED_BY_GATE,
+                    detail="; ".join(f"{gate.gate_id}: {gate.detail}" for gate in failed),
+                ),
+            )
+        distance = None
+        if policy.support_distance is not None:
+            if self._source is None:
+                raise ValueError(
+                    "the policy asks for support distances, which need a GeometrySource"
+                )
+            distance = _support_distance(
+                self._sample_of(first, policy.support_distance, self._source),
+                self._sample_of(second, policy.support_distance, self._source),
+            )
+        measurement = _measure(first, second, distance)
+        return GeometryEvidence(
+            policy=policy.ref(), measurement=measurement, findings=_findings(measurement, policy)
+        )
+
+    def _sample_of(
+        self, entity: Entity, policy: SupportDistancePolicy, source: GeometrySource
+    ) -> NDArray[np.float64]:
+        """The map coordinates of the entity's sampled support, resolved on first use."""
+        cached = self._samples.get(entity.reference)
+        if cached is not None:
+            return cached
+        import numpy as np
+
+        sampled = _sample(entity.geometry.geometry_refs, policy.max_points_per_side)
+        points = np.array(
+            [point.coordinates_m for point in resolve_geometry(sampled, source=source)]
+        )
+        # O cache é compartilhado entre pares: nenhum consumidor pode alterá-lo.
+        points.flags.writeable = False
+        self._samples[entity.reference] = points
+        return points
 
 
 def _measure(
-    first: Entity,
-    second: Entity,
-    policy: GeometryComparisonPolicy,
-    source: GeometrySource | None,
+    first: Entity, second: Entity, distance: SupportDistance | None
 ) -> GeometryMeasurement:
     geometry_a, geometry_b = first.geometry, second.geometry
     volume_a, volume_b = box_volume(geometry_a.bounds), box_volume(geometry_b.bounds)
@@ -268,9 +321,6 @@ def _measure(
     count_a, count_b = len(geometry_a.geometry_refs), len(geometry_b.geometry_refs)
     overlap = intersection_volume(geometry_a.bounds, geometry_b.bounds)
     flat = volume_a == 0.0 or volume_b == 0.0
-    distance = None
-    if policy.support_distance is not None and source is not None:
-        distance = _support_distance(geometry_a, geometry_b, policy.support_distance, source)
     return GeometryMeasurement(
         geometric_map_id=geometry_a.geometric_map_id,
         map_frame=str(geometry_a.map_frame),
@@ -322,29 +372,16 @@ def _sample(references: tuple[GeometryReference, ...], limit: int) -> tuple[Geom
 
 
 def _support_distance(
-    first: EntityGeometry,
-    second: EntityGeometry,
-    policy: SupportDistancePolicy,
-    source: GeometrySource,
+    points_a: NDArray[np.float64], points_b: NDArray[np.float64]
 ) -> SupportDistance:
-    import numpy as np
-
-    sampled_a = _sample(first.geometry_refs, policy.max_points_per_side)
-    sampled_b = _sample(second.geometry_refs, policy.max_points_per_side)
-    points_a = np.array(
-        [point.coordinates_m for point in resolve_geometry(sampled_a, source=source)]
-    )
-    points_b = np.array(
-        [point.coordinates_m for point in resolve_geometry(sampled_b, source=source)]
-    )
     a_to_b = _nearest_distances(points_a, points_b)
     b_to_a = _nearest_distances(points_b, points_a)
     return SupportDistance(
         a_to_b_mean_m=float(a_to_b.mean()),
         b_to_a_mean_m=float(b_to_a.mean()),
         hausdorff_m=float(max(a_to_b.max(), b_to_a.max())),
-        points_a=len(sampled_a),
-        points_b=len(sampled_b),
+        points_a=len(points_a),
+        points_b=len(points_b),
     )
 
 

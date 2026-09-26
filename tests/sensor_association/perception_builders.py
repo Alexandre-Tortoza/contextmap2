@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
+
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     BackendProvenance,
@@ -40,9 +42,10 @@ _REGION_BACKEND = BackendProvenance(
 def rect_mask(width: int, height: int, x0: int, y0: int, x1: int, y1: int) -> InlineMask:
     """A mask that is foreground on ``x0 <= x < x1`` and ``y0 <= y < y1``."""
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple(x0 <= x < x1 and y0 <= y < y1 for y in range(height) for x in range(width)),
+        np.array(
+            tuple(x0 <= x < x1 and y0 <= y < y1 for y in range(height) for x in range(width)),
+            dtype=bool,
+        ).reshape(height, width)
     )
 
 

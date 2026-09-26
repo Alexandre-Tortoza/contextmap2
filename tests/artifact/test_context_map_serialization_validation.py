@@ -7,10 +7,13 @@ only full verification (hashes, records, references, rebuilt indexes, upstream f
 artifact verified.
 """
 
+import hashlib
 import json
+import pathlib
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -46,6 +49,7 @@ from contextmap.artifact import (
     ValidationLevel,
     ValidationReport,
     ValidationStatus,
+    context_map_to_record,
     validate_context_map_artifact,
 )
 from contextmap.artifact.serialization.decoding import entity_lines, relation_lines
@@ -457,13 +461,13 @@ def test_a_spatial_relations_run_linked_to_a_different_entity_resolution_run_is_
 
 
 def _rewrite_entities(artifact: Path, context_map: ContextMap) -> None:
-    table = encode_record_table(entity_lines(context_map))
+    table = encode_record_table(entity_lines(context_map, context_map_to_record(context_map)))
     (artifact / "entities" / "entities.jsonl").write_bytes(table.payload)
     (artifact / "indexes" / "entity-index.jsonl").write_bytes(table.index)
 
 
 def _rewrite_relations(artifact: Path, context_map: ContextMap) -> None:
-    table = encode_record_table(relation_lines(context_map))
+    table = encode_record_table(relation_lines(context_map, context_map_to_record(context_map)))
     (artifact / "relations" / "relations.jsonl").write_bytes(table.payload)
     (artifact / "indexes" / "relation-index.jsonl").write_bytes(table.index)
 
@@ -722,6 +726,97 @@ def test_the_report_is_deterministic_and_carries_no_machine_specific_data(
     assert str(tmp_path) not in first
 
 
+def _untouched(world: World, artifact: Path) -> None:
+    del world, artifact
+
+
+def _reversed_index(relative_path: str) -> Callable[[World, Path], None]:
+    def damage(world: World, artifact: Path) -> None:
+        index = artifact / relative_path
+        lines = index.read_bytes().split(b"\n")[:-1]
+        index.write_bytes(b"\n".join(reversed(lines)) + b"\n")
+        _reseal(artifact)
+
+    return damage
+
+
+def _entity_line_with_another_key(world: World, artifact: Path) -> None:
+    _replace_in(artifact, "entities/entities.jsonl", b'"key":"entity-0002"', b'"key":"entity-0009"')
+    _reseal(artifact)
+
+
+def _relation_with_an_unknown_subject(world: World, artifact: Path) -> None:
+    first = make_context_map(world).relations[0]
+    old = f'"subject":"{first.subject.entity_id}"'.encode()
+    _replace_in(artifact, "relations/relations.jsonl", old, old.replace(b"entity-0", b"entity-9"))
+    _reseal(artifact)
+
+
+def _stale_traversal_index(world: World, artifact: Path) -> None:
+    _replace_in(artifact, "indexes/entity-relation-index.jsonl", b"relation-0001", b"relation-9999")
+    _reseal(artifact)
+
+
+def _unparsable_entities(*, resealed: bool) -> Callable[[World, Path], None]:
+    def damage(world: World, artifact: Path) -> None:
+        (artifact / "entities/entities.jsonl").write_bytes(b"damaged\n")
+        if resealed:
+            _reseal(artifact)
+
+    return damage
+
+
+# #600: relatórios gravados antes de o validador passar a ler cada tabela uma vez só; a ordem, os
+# resultados e os findings das verificações não podem mudar.
+_RECORDED_REPORTS: dict[str, tuple[Callable[[World, Path], None], str]] = {
+    "intact": (
+        _untouched,
+        "acd95cdc9a6789687b852b37b4fb8803b3c50aabf649e3bb1a01975abdb0eb08",
+    ),
+    "entity-index-reversed": (
+        _reversed_index("indexes/entity-index.jsonl"),
+        "46decf7297413e5e44a851b4cad66f87dbb29cecd0b9d8b9e09b3e61d1726241",
+    ),
+    "relation-index-reversed": (
+        _reversed_index("indexes/relation-index.jsonl"),
+        "655eedbfae2123b08b6666997aa3deafbb33ef03213817937656b7dd433eeaae",
+    ),
+    "entity-line-with-another-key": (
+        _entity_line_with_another_key,
+        "5ae386a928e0a48b903d1fc3601216def380d74b921bf2cfa1525ba0e549ab0c",
+    ),
+    "relation-with-an-unknown-subject": (
+        _relation_with_an_unknown_subject,
+        "2cfd6be240d65dc7bc971999b225fc65a7dfa8fc12bbcbdac910276a41aa288d",
+    ),
+    "stale-traversal-index": (
+        _stale_traversal_index,
+        "2612e313645fdee9c76da03e5d5ee152b65a1407049b5b2ac774ca6ccf765961",
+    ),
+    "unparsable-entities": (
+        _unparsable_entities(resealed=False),
+        "62c44b8d952d8393b02a3693c002948bb3fd237ad12d790d117a21c617eb653d",
+    ),
+    "unparsable-entities-resealed": (
+        _unparsable_entities(resealed=True),
+        "0c8698f1e26b49aecfe88b7e8167aaf89a8a18be3e80c703f7ca6068a5199fe2",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_RECORDED_REPORTS))
+def test_the_reports_match_the_recorded_ones(world: World, artifact: Path, case: str) -> None:
+    damage, recorded = _RECORDED_REPORTS[case]
+    damage(world, artifact)
+
+    reports = "".join(
+        validate_context_map_artifact(artifact, level=level).to_json()
+        for level in (STRUCTURAL, FULL)
+    )
+
+    assert hashlib.sha256(reports.encode()).hexdigest() == recorded
+
+
 def test_the_report_is_inspectable_json_with_the_documented_fields(artifact: Path) -> None:
     report = validate_context_map_artifact(artifact)
 
@@ -768,6 +863,34 @@ def test_findings_are_ordered_errors_first_then_by_code_and_subject(artifact: Pa
         if item.severity is Severity.ERROR
     ]
     assert errors == sorted(errors)
+
+
+def test_full_validation_reads_each_table_once_beyond_the_hash_pass(
+    artifact: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #600 (ART-06): o artifact não muda durante a leitura, então nenhuma verificação relê o que
+    # outra já leu; a passada de hash continua lendo cada arquivo do disco.
+    opened: Counter[str] = Counter()
+    real_open = pathlib.Path.open
+
+    def counting(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.is_relative_to(artifact):
+            opened[self.relative_to(artifact).as_posix()] += 1
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "open", counting)
+    report = validate_context_map_artifact(artifact)
+    monkeypatch.undo()
+
+    assert report.status is ValidationStatus.VERIFIED
+    tables = (
+        "entities/entities.jsonl",
+        "indexes/entity-index.jsonl",
+        "relations/relations.jsonl",
+        "indexes/relation-index.jsonl",
+        "indexes/entity-relation-index.jsonl",
+    )
+    assert {path: opened[path] for path in tables} == dict.fromkeys(tables, 2)
 
 
 def test_validation_never_changes_or_repairs_the_artifact(artifact: Path) -> None:

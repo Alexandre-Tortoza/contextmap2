@@ -18,7 +18,7 @@ evaluate_contact_candidates(
 )
 ```
 
-`evaluate_contact_candidates` avalia, na ordem dos candidatos, os do canal de contato, resolve os pontos de cada entidade uma única vez e recusa candidatos gerados sob outras convenções de frame. Os candidatos geométricos ficam para `evaluate_geometric_candidates`.
+`evaluate_contact_candidates` avalia os candidatos do canal de contato e devolve a evidência na ordem dos candidatos; resolve os pontos de cada entidade uma única vez, constrói a grade de contato de cada entidade-objeto uma única vez (ver [Escala](#escala)) e recusa candidatos gerados sob outras convenções de frame. Os candidatos geométricos ficam para `evaluate_geometric_candidates`.
 
 Nenhum label semântico, nenhuma simulação de física e nenhuma gravidade inferida: o eixo vertical é o que a execução declarou. Não existem normais de superfície a montante, então nenhuma é usada.
 
@@ -63,6 +63,19 @@ Além dos suportes inteiros (`subject`, `object`, por contagem e digest), o regi
 
 A busca de pares usa uma grade uniforme com célula do tamanho do raio de busca: cada ponto do sujeito só encontra os pontos do objeto das 27 células ao redor, então o custo é proporcional aos pares realmente próximos, sem varrer todos os pares de pontos. O resultado é exato e independe da ordem dos pontos.
 
+A grade só depende dos pontos do objeto e do raio de busca, que é o da política e fica fixo numa chamada. Por isso `evaluate_contact_candidates` constrói a grade de cada entidade-objeto **uma única vez**, e não uma vez por candidato (#601). Os pontos e a grade de uma entidade são liberados logo depois do último candidato que a nomeia, e nenhuma entidade é resolvida duas vezes.
+
+As identidades das entidades resolvidas são digests e não dizem onde elas estão. Avaliar na ordem dos candidatos, portanto, manteria residente quase toda entidade de uma cena densa. Os candidatos são avaliados em **ordem de varredura** ao longo do eixo em que as entidades mais se espalham (o mesmo critério da geração de candidatos): um candidato é alcançado quando a varredura passa a face inferior das suas duas entidades. A evidência volta na ordem dos candidatos e não muda, porque cada avaliação só depende do seu par. Uma entidade só fica residente enquanto a varredura cruza ela e seus vizinhos, então a memória acompanha a frente de varredura, e não a cena inteira.
+
+Medido numa máquina de desenvolvimento, com pilhas de caixotes de 0,4 m (malha de 0,05 m) sobre um piso, identidades embaralhadas e uma fonte que cria um `GeometryPoint` novo a cada leitura, como o mapa persistido:
+
+| Cena | Candidatos de contato | Grades construídas (antes → depois) | Pontos residentes no pico (antes → depois) | Pico de `tracemalloc` (antes → depois) | Tempo (antes → depois) |
+| --- | --- | --- | --- | --- | --- |
+| 6 × 3 × 2 caixotes, 37 entidades, 28 694 pontos | 802 | 802 → 37 | 28 694 → 11 198 | 25,0 → 18,1 MiB | 4,6 → 4,0 s |
+| 12 × 3 × 2 caixotes, 73 entidades, 57 338 pontos | 1 688 | 1 688 → 73 | 57 338 → 13 598 | 51,8 → 34,3 MiB | 11,7 → 10,5 s |
+
+O tempo cai pouco porque a medição dos pares domina a construção da grade; o ganho é de memória. O pico restante vem sobretudo da própria evidência devolvida. `tests/spatial_relations/test_relation_scaling.py` mantém uma pilha densa no CI, com contadores comparados a um baseline medido no próprio teste (os mesmos candidatos avaliados um a um).
+
 ## Frame e erros
 
 `TOUCHING` só exige o frame do mapa; `ON_TOP_OF` e `LEANING_AGAINST` exigem `up_axis` (`UndeclaredAxisError` se faltar). Geometria ou fonte em outro frame, ou entidades de mapas diferentes: `IncompatibleFrameError`. Pontos que não resolvem no mapa entregue: `GeometryResolutionError`. Pedir um predicado fora do canal levanta `ValueError`.
@@ -70,6 +83,7 @@ A busca de pares usa uma grade uniforme com célula do tamanho do raio de busca:
 ## Limites conhecidos
 
 - A área de contato é uma contagem de pontos, não uma área em m²; com nuvens de densidades muito diferentes o limiar `min_contact_points` precisa ser escolhido com isso em mente.
+- A memória acompanha a frente de varredura, não um número fixo de entidades: uma entidade que atravessa a cena ao longo do eixo de varredura (um piso, uma parede comprida) fica residente durante toda a avaliação, e numa cena densa em toda a seção transversal a frente cresce com essa seção.
 - A inclinação usa o eixo dominante do sujeito: objetos cujos eixos principais são mal definidos (cubos) não têm orientação e `LEANING_AGAINST` fica indisponível para eles.
 - `ON_TOP_OF` e `LEANING_AGAINST` não têm inverso no vocabulário (`SUPPORTS` seria vocabulário novo).
 - Sem validação em dado real: os testes são contratos com nuvens sintéticas (caixotes, mesa, parede e ripa inclinada).

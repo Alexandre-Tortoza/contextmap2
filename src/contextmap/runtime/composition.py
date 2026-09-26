@@ -1118,13 +1118,28 @@ def _compose_semantic_mapping(context: _Context) -> dict[str, object]:
 def _compose_spatial_relations(context: _Context) -> dict[str, object]:
     from contextmap.spatial_relations import RelationsRunPolicies
 
-    policies = RelationsRunPolicies(
-        frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
-        candidate=_construct(context, "spatial_relations.candidate"),
-        geometry_summary=_construct(context, "spatial_relations.geometry_summary"),
-        geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
-        contact=_construct_optional(context, "spatial_relations.contact_predicate"),
-    )
+    frame_conventions = _construct(context, "spatial_relations.frame_conventions")
+    candidate = _construct(context, "spatial_relations.candidate")
+    geometry_summary = _construct(context, "spatial_relations.geometry_summary")
+    geometric = _construct_optional(context, "spatial_relations.geometric_predicate")
+    contact = _construct_optional(context, "spatial_relations.contact_predicate")
+    try:
+        policies = RelationsRunPolicies(
+            frame_conventions=frame_conventions,
+            candidate=candidate,
+            geometry_summary=geometry_summary,
+            geometric=geometric,
+            contact=contact,
+        )
+    except ValueError as error:
+        # A regra de coerência é de spatial_relations; aqui a recusa só é atribuída ao
+        # componente cujo alcance não cobre as tolerâncias, para o preflight apontá-lo.
+        component_id = "spatial_relations.candidate"
+        raise BackendConfigurationError(
+            component_id,
+            context.component(component_id).backend or "",
+            [f"proximity_radius_m: {error}"],
+        ) from error
     return {"spatial_relations_policies": policies}
 
 
@@ -1160,6 +1175,8 @@ def compose_executors(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     on_provider_override: Callable[[str], None] | None = None,
+    on_composition_failure: Callable[[str, CompositionError | ConfigurationError], None]
+    | None = None,
     semantic_map_id: SemanticMapId | None = None,
     code_digest: str | None = None,
     code_version: str | None = None,
@@ -1172,9 +1189,13 @@ def compose_executors(
     caller previously had to build them by hand. A stage whose variation points are not
     (yet) fully selected in ``effective``, whose selected backend rejects its own
     configured parameters, or whose capability the executor does not support, is left out
-    -- never filled with a placeholder or allowed to abort composing the other stages. The
-    existing ``missing_executors``/"no executor is registered" preflight reporting already
-    explains why such a stage will not run; this function never hides that behind a guess.
+    -- never filled with a placeholder or allowed to abort composing the other stages.
+    Leaving a stage out only says *that* it has no executor; *why* is the error
+    :func:`compose` raised for it, which is handed to ``on_composition_failure`` so the
+    caller can pass it to :func:`~contextmap.runtime.pipeline.preflight` as
+    ``composition_failures``. Preflight then reports the real cause (a rejected parameter,
+    an unresolvable ``resources.providers`` target, a missing model runtime) at the
+    component it failed on, instead of a bare "no executor is registered".
 
     ``state_estimation``, ``geometric_mapping``, ``sensor_association``, ``semantic_fusion``,
     ``visual_perception``, ``semantic_mapping``, ``entity_resolution``, ``spatial_relations`` and
@@ -1232,6 +1253,12 @@ def compose_executors(
         on_provider_override: Called with a component identity whenever ``providers``
             overrides a ``resources.providers`` target ``effective`` also declares for it;
             see :func:`compose`.
+        on_composition_failure: Called with a stage identity and the error :func:`compose`
+            raised for it, once for every stage this function tried and could not compose, a
+            disabled one included (preflight only looks up the stages that will run). Only
+            the documented composition errors (:class:`~contextmap.runtime.errors.
+            CompositionError` and :class:`~contextmap.runtime.config.ConfigurationError`)
+            arrive here; anything else propagates.
         semantic_map_id: Identity of the persistent semantic map ``semantic_mapping``'s
             entities belong to. Required, together with ``code_digest``, for this function to
             compose ``semantic_mapping``; see above.
@@ -1244,10 +1271,11 @@ def compose_executors(
 
     Returns:
         One executor per stage that could genuinely be composed from ``effective``. Never
-        raises: a stage this cannot build for any reason (incomplete selection, a rejected
-        parameter, a missing module or secret, or an unresolvable declared provider target)
-        is simply absent from the result, one stage at a time, so one broken stage never
-        costs the others their real executor.
+        raises a composition error: a stage this cannot build for any reason (incomplete
+        selection, a rejected parameter, a missing module or secret, a missing model runtime
+        or an unresolvable declared provider target) is simply absent from the result, one
+        stage at a time, with its cause handed to ``on_composition_failure``, so one broken
+        stage never costs the others their real executor.
     """
     from contextmap.entity_resolution import MatchEvidenceBuilder
     from contextmap.runtime.executors import (
@@ -1265,6 +1293,7 @@ def compose_executors(
     from contextmap.semantic_mapping import EntityMaterializationPolicy
 
     def _compose_stage(stage_id: str) -> ComposedRuntime | None:
+        """Compose one stage, or hand its composition error over and return ``None``."""
         try:
             return compose(
                 effective,
@@ -1274,11 +1303,15 @@ def compose_executors(
                 module_available=module_available,
                 on_provider_override=on_provider_override,
             )
-        except (ConfigurationError, CompositionError):
-            # Seleção incompleta, estágio desabilitado, ou backend selecionado que rejeita seus
-            # próprios parâmetros ou módulo/segredo ausente: ausência honesta, nunca um erro que
-            # aborte a composição dos outros estágios. O preflight já relata "sem executor".
-            return None
+        except (ConfigurationError, CompositionError) as error:
+            # Seleção incompleta, estágio desabilitado, backend que rejeita seus próprios
+            # parâmetros, módulo/segredo/runtime ausente ou alvo de provider irresolvível:
+            # ausência honesta, nunca um erro que aborte a composição dos outros estágios. A
+            # causa segue para quem chama, que a entrega ao preflight.
+            failure = error
+        if on_composition_failure is not None:
+            on_composition_failure(stage_id, failure)
+        return None
 
     executors: dict[str, StageExecutor] = {}
 

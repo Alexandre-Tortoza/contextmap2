@@ -37,8 +37,8 @@ from contextmap.entity_resolution.evidence import (
     evaluate_comparison_gates,
 )
 from contextmap.entity_resolution.geometry_comparison import (
+    GeometryComparator,
     GeometryComparisonPolicy,
-    compare_geometry,
 )
 from contextmap.entity_resolution.models import reference_order
 from contextmap.entity_resolution.representation_comparison import RepresentationComparator
@@ -82,7 +82,11 @@ class ComparisonChannels:
 
 
 class MatchEvidenceBuilder:
-    """Builds the evidence of entity pairs from a fixed set of configured channels."""
+    """Builds the evidence of entity pairs from a fixed set of configured channels.
+
+    The geometry channel keeps each entity's resolved support for the builder's lifetime, as the
+    appearance and representation comparators do: use one builder per run.
+    """
 
     def __init__(self, channels: ComparisonChannels, *, code_version: str | None = None) -> None:
         """Create a builder.
@@ -93,6 +97,7 @@ class MatchEvidenceBuilder:
         """
         self._channels = channels
         self._code_version = code_version
+        self._geometry = GeometryComparator(channels.geometry, source=channels.geometry_source)
 
     def build(self, entity_a: Entity, entity_b: Entity) -> EntityMatchEvidence:
         """Collect the evidence of one comparison.
@@ -136,9 +141,7 @@ class MatchEvidenceBuilder:
         channels = self._channels
         return EntityMatchEvidence(
             **common,  # type: ignore[arg-type]
-            geometry=compare_geometry(
-                first, second, channels.geometry, source=channels.geometry_source
-            ),
+            geometry=self._geometry.compare(first, second),
             semantic=None
             if channels.semantic is None
             else compare_semantics(first, second, channels.semantic),

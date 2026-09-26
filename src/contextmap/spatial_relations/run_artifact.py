@@ -54,6 +54,7 @@ from contextmap.shared import AtomicRunDirectory, FileEntry, RunDirectoryError, 
 from contextmap.spatial_relations._identity import directed_key, reference_key
 from contextmap.spatial_relations.candidates import (
     CANDIDATE_POLICY_ID,
+    CandidateExclusionReason,
     CandidatePolicy,
     RelationCandidateSet,
 )
@@ -116,6 +117,9 @@ _DEBUG_RELATION_LIMIT = 20
 """Relations that get debug evidence at the ``standard`` level; ``full`` covers all of them."""
 
 _T = TypeVar("_T")
+
+_EntityRelations = dict[ResolvedEntityReference, tuple[set[str], set[str]]]
+"""The identities of the relations of each entity: as subject, then as object."""
 
 
 class RelationsRunArtifactError(Exception):
@@ -214,6 +218,83 @@ class RelationsRunPolicies:
     geometry_summary: GeometrySummaryPolicy
     geometric: GeometricPredicatePolicy | None = None
     contact: ContactPredicatePolicy | None = None
+
+    def __post_init__(self) -> None:
+        """Require the candidate reach to cover the distance tolerances of the declared evaluators.
+
+        Candidate generation drops a pair before any evaluator measures it, so a reach shorter
+        than an evaluator's tolerance loses true relations silently: the run would still look
+        successful, with exclusions whose reasons are technically correct. Each policy is valid
+        on its own; only here do they meet. Only the evaluators present are checked.
+
+        Raises:
+            ValueError: If ``proximity_radius_m`` of the candidate policy is below
+                ``next_to_max_gap_m`` or ``2 * containment_slack_m`` of the geometric policy, or
+                below ``contact_distance_m + contact_tolerance_m`` of the contact policy. The
+                message names every such parameter, its value and the relations that would be
+                lost.
+        """
+        problems = _uncovered_tolerances(self.candidate, self.geometric, self.contact)
+        if problems:
+            raise ValueError(
+                "the candidate reach does not cover the evaluators' tolerances: "
+                + "; ".join(problems)
+            )
+
+
+def _uncovered_tolerances(
+    candidate: CandidatePolicy,
+    geometric: GeometricPredicatePolicy | None,
+    contact: ContactPredicatePolicy | None,
+) -> list[str]:
+    """State every evaluator tolerance that the proximity reach of candidate generation misses.
+
+    Each condition keeps a precondition of candidate generation from excluding a pair the
+    evaluator would accept:
+
+    * ``NEXT_TO`` accepts a bounds gap up to ``next_to_max_gap_m``, and a gap beyond
+      ``proximity_radius_m`` is excluded;
+    * ``INSIDE`` accepts a protrusion of ``containment_slack_m`` beyond *each* face, so the
+      subject's extent may exceed the object's by ``2 * containment_slack_m`` on one axis, and
+      an excess beyond ``proximity_radius_m`` is excluded;
+    * the contact evaluators decide point pairs up to their search radius,
+      ``contact_distance_m + contact_tolerance_m``, and the bounds gap never exceeds the distance
+      between two points of the entities.
+
+    Returns:
+        One explanation per tolerance the reach does not cover; empty when it covers them all.
+    """
+    reach = candidate.proximity_radius_m
+    beyond = CandidateExclusionReason.BEYOND_PROXIMITY_RADIUS.value
+    problems: list[str] = []
+    if geometric is not None:
+        if geometric.next_to_max_gap_m > reach:
+            problems.append(
+                f"next_to_max_gap_m={geometric.next_to_max_gap_m!r} exceeds "
+                f"proximity_radius_m={reach!r}: true NEXT_TO relations would be excluded as "
+                f"{beyond} before evaluation"
+            )
+        # Multiplicar por dois é exato em ponto flutuante: a condição não depende de
+        # arredondamento.
+        excess = 2.0 * geometric.containment_slack_m
+        if excess > reach:
+            problems.append(
+                f"2 * containment_slack_m = {excess!r} (a subject may protrude "
+                f"containment_slack_m={geometric.containment_slack_m!r} beyond both faces of an "
+                f"axis) exceeds proximity_radius_m={reach!r}: true INSIDE relations would be "
+                f"excluded as {CandidateExclusionReason.CONTAINMENT_IMPOSSIBLE.value} before "
+                f"evaluation"
+            )
+    # O raio de busca é a própria soma que o avaliador de contato usa, com o mesmo
+    # arredondamento, e não uma cópia da regra.
+    if contact is not None and contact.search_radius_m > reach:
+        problems.append(
+            f"contact_distance_m + contact_tolerance_m = {contact.search_radius_m!r} "
+            f"({contact.contact_distance_m!r} + {contact.contact_tolerance_m!r}) exceeds "
+            f"proximity_radius_m={reach!r}: true TOUCHING, ON_TOP_OF and LEANING_AGAINST "
+            f"relations would be excluded as {beyond} before evaluation"
+        )
+    return problems
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -542,7 +623,8 @@ class SpatialRelationsRunReader:
         """
         self._root = run_dir
         self._manifest = _load_manifest(run_dir)
-        self._relations: dict[RelationId, Relation] | None = None
+        self._relation_lines: dict[RelationId, tuple[int, int]] | None = None
+        self._relations_by_entity: _EntityRelations | None = None
         self._evidence: dict[RelationEvidenceId, RelationEvidence] | None = None
         self._decisions: dict[RelationId, RelationDecision] | None = None
         self._index: list[dict[str, Any]] | None = None
@@ -553,16 +635,20 @@ class SpatialRelationsRunReader:
         return self._manifest
 
     def iter_relations(self) -> Iterator[Relation]:
-        """Iterate every relation, in canonical order."""
-        yield from self._load_relations().values()
+        """Iterate every relation, in canonical order, reading the table line by line."""
+        with (self._root / _RELATIONS).open("rb") as handle:
+            for line in handle:
+                if line.rstrip(b"\r\n"):
+                    yield _decode(_json_line(line, _RELATIONS), decode_relation, "relation")
 
     def relation(self, relation_id: RelationId) -> Relation:
-        """Look a relation up by identity.
+        """Look a relation up by identity, decoding only its own record.
 
         Raises:
             KeyError: If the run has no such relation.
+            RelationsRunArtifactError: If the table is malformed.
         """
-        return self._load_relations()[relation_id]
+        return self._read_relation(self._relation_offsets()[relation_id])
 
     def iter_evidence(self) -> Iterator[RelationEvidence]:
         """Iterate every evidence record, sorted by identity."""
@@ -602,6 +688,8 @@ class SpatialRelationsRunReader:
     ) -> tuple[Relation, ...]:
         """The relations a resolved entity takes part in, using the entity index.
 
+        Only the relations of the entity are read and decoded, each from its own record.
+
         Args:
             entity: A resolved entity reference.
             as_subject: Include the relations where it is the subject.
@@ -610,17 +698,12 @@ class SpatialRelationsRunReader:
         Returns:
             The relations in canonical order; empty when the entity takes part in none.
         """
-        wanted = encode_resolved_entity_reference(entity)
-        ids: set[str] = set()
-        for row in self._load_index():
-            if row["entity_ref"] == wanted:
-                if as_subject:
-                    ids.update(row["as_subject"])
-                if as_object:
-                    ids.update(row["as_object"])
-        return tuple(
-            item for item in self._load_relations().values() if str(item.relation_id) in ids
-        )
+        as_subject_ids, as_object_ids = self._entity_relations().get(entity, (set(), set()))
+        ids = (as_subject_ids if as_subject else set()) | (as_object_ids if as_object else set())
+        offsets = self._relation_offsets()
+        # A ordem canônica é a da tabela: ordenar pelo deslocamento a preserva.
+        lines = sorted(offsets[RelationId(item)] for item in ids if RelationId(item) in offsets)
+        return tuple(self._read_relation(line) for line in lines)
 
     def candidate_set(self) -> RelationCandidateSet:
         """Rebuild the candidates, the exclusions with their reasons and the skipped predicates."""
@@ -699,14 +782,55 @@ class SpatialRelationsRunReader:
                 )
         return tuple(issues)
 
-    def _load_relations(self) -> dict[RelationId, Relation]:
-        if self._relations is None:
-            rows = self._read_rows(_RELATIONS)
-            self._relations = {
-                item.relation_id: item
-                for item in (_decode(r, decode_relation, "relation") for r in rows)
-            }
-        return self._relations
+    def _relation_offsets(self) -> dict[RelationId, tuple[int, int]]:
+        """Where each relation's record lies in the table: its byte offset and length.
+
+        Built once per reader by a single pass over the table that reads each record's identity
+        and decodes no relation. The artifact persists no offset index: the runs written before
+        this reader existed have none and must stay readable, so the reader derives it.
+        """
+        if self._relation_lines is None:
+            lines: dict[RelationId, tuple[int, int]] = {}
+            offset = 0
+            with (self._root / _RELATIONS).open("rb") as handle:
+                for line in handle:
+                    if line.rstrip(b"\r\n"):
+                        record = _json_line(line, _RELATIONS)
+                        try:
+                            lines[RelationId(record["relation_id"])] = (offset, len(line))
+                        except (KeyError, TypeError) as error:
+                            raise RelationsRunArtifactError(
+                                f"malformed relation: record without a relation_id ({error})"
+                            ) from error
+                    offset += len(line)
+            self._relation_lines = lines
+        return self._relation_lines
+
+    def _read_relation(self, line: tuple[int, int]) -> Relation:
+        """Read and decode the one relation record at ``(offset, length)`` of the table."""
+        offset, length = line
+        with (self._root / _RELATIONS).open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read(length)
+        if len(data) != length:
+            raise RelationsRunArtifactError(
+                f"{_RELATIONS} is truncated: {length} bytes expected at {offset}, found {len(data)}"
+            )
+        return _decode(_json_line(data, _RELATIONS), decode_relation, "relation")
+
+    def _entity_relations(self) -> _EntityRelations:
+        """The relation identities of every entity of the index, as subject and as object."""
+        if self._relations_by_entity is None:
+            by_entity: _EntityRelations = {}
+            for row in self._load_index():
+                reference = _decode(
+                    row["entity_ref"], decode_resolved_entity_reference, "entity index row"
+                )
+                as_subject, as_object = by_entity.setdefault(reference, (set(), set()))
+                as_subject.update(row["as_subject"])
+                as_object.update(row["as_object"])
+            self._relations_by_entity = by_entity
+        return self._relations_by_entity
 
     def _load_evidence(self) -> dict[RelationEvidenceId, RelationEvidence]:
         if self._evidence is None:
@@ -899,6 +1023,14 @@ def _decode(source: Any, decoder: Callable[[Any], _T], what: str) -> _T:
         return decoder(source)
     except (ValueError, KeyError, TypeError) as error:
         raise RelationsRunArtifactError(f"malformed {what}: {error}") from error
+
+
+def _json_line(line: bytes, relative_path: str) -> Any:
+    """Parse one JSON Lines record, refusing a malformed one as ``_read_rows`` does."""
+    try:
+        return json.loads(line)
+    except ValueError as error:
+        raise RelationsRunArtifactError(f"malformed table {relative_path}: {error}") from error
 
 
 def _lines(records: Any) -> str:

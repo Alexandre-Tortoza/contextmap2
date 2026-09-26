@@ -58,9 +58,12 @@ def _scope(tmp_path: Path, sequence: str | None = DATASET) -> tuple[EffectiveCon
 class _Recording:
     """An executor that records the directory it was given and writes nothing itself."""
 
-    def __init__(self, world: World, stage_id: str, contract: str) -> None:
-        self._inner = world.executor(stage_id, contract)
+    def __init__(self, world: World, stage_id: str, contract: str, *, source: bool) -> None:
+        self._inner = world.executor(stage_id, contract, source=source)
         self.directories: dict[str, Path | None] = {}
+        if source:
+            # Estágio sem entradas: repassa a identidade da fonte que o executor interno nomeia.
+            self.source_identity: str = self._inner.source_identity
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         self.directories[request.stage_id] = request.output_dir
@@ -72,7 +75,7 @@ def _executors(execution: ExecutionPlan, world: World) -> tuple[dict[str, Any], 
     recorded: dict[str, Path | None] = {}
     executors: dict[str, Any] = {}
     for stage in execution.plan.stages:
-        recording = _Recording(world, stage.stage_id, stage.output or "")
+        recording = _Recording(world, stage.stage_id, stage.output or "", source=not stage.inputs)
         recording.directories = recorded
         executors[stage.stage_id] = recording
     return executors, recorded

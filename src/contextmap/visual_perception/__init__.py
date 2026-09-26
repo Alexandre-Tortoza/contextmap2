@@ -137,6 +137,7 @@ from contextmap.visual_perception.models import (
 from contextmap.visual_perception.normalization import (
     MergeDecision,
     MergeKind,
+    MergeRepresentativePolicy,
     NormalizationConfig,
     NormalizationResult,
     normalize_regions,
@@ -295,6 +296,7 @@ __all__ = [
     "MaskStoreWriter",
     "MergeDecision",
     "MergeKind",
+    "MergeRepresentativePolicy",
     "NormalizationConfig",
     "NormalizationResult",
     "NormalizeOperation",

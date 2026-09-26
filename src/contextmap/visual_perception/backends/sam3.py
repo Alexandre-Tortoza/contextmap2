@@ -11,7 +11,7 @@ from hashlib import sha256
 from importlib import import_module
 from math import isfinite
 from time import perf_counter
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ..discovery import (
     BackendDiagnostics,
@@ -30,7 +30,11 @@ from ..region_models import (
     JsonScalar,
     RegionCandidate,
     RegionProvenance,
+    mask_bounding_box,
 )
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 _SUPPORTED_PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
 
@@ -101,11 +105,11 @@ class Sam3Config:
 
 @dataclass(frozen=True, slots=True)
 class Sam3NativeProposal:
-    """SDK-isolated SAM3 proposal normalized to Python scalar containers."""
+    """SDK-isolated SAM3 proposal: Python scalars and the mask as an immutable ``InlineMask``."""
 
     proposal_id: str
     box: tuple[float, float, float, float]
-    mask: tuple[bool, ...]
+    mask: InlineMask
     score_name: str
     score: float
     query_id: str
@@ -291,9 +295,9 @@ class Sam3RegionDiscovery:
         keeps the native box clamped to the pass, when any part of it is inside, and
         is rejected explicitly by normalization.
         """
-        if len(proposal.mask) != width * height:
-            raise ValueError("SAM3 proposal mask length must match discovery pass dimensions")
-        mask_box = _mask_bounding_box(proposal.mask, width=width, height=height)
+        if (proposal.mask.width, proposal.mask.height) != (width, height):
+            raise ValueError("SAM3 proposal mask dimensions must match discovery pass dimensions")
+        mask_box = mask_bounding_box(proposal.mask)
         bounding_box = mask_box or _clamp_box(proposal.box, width=width, height=height)
         native_metadata: tuple[tuple[str, JsonScalar], ...] = (
             *proposal.metadata,
@@ -323,7 +327,7 @@ class Sam3RegionDiscovery:
             image_width=width,
             image_height=height,
             bounding_box=bounding_box,
-            mask=InlineMask(width=width, height=height, data=proposal.mask),
+            mask=proposal.mask,
             score=BackendScore(
                 name=proposal.score_name,
                 value=proposal.score,
@@ -363,20 +367,6 @@ def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:
     )
 
 
-def _mask_bounding_box(mask: tuple[bool, ...], *, width: int, height: int) -> BoundingBox | None:
-    """Return the tight half-open box of the true pixels, or ``None`` for an empty mask."""
-    rows = [index for index in range(height) if any(mask[index * width : (index + 1) * width])]
-    if not rows:
-        return None
-    x_min = width
-    x_max = 0
-    for index in rows:
-        row = mask[index * width : (index + 1) * width]
-        x_min = min(x_min, row.index(True))
-        x_max = max(x_max, width - row[::-1].index(True))
-    return BoundingBox(x_min=x_min, y_min=rows[0], x_max=x_max, y_max=rows[-1] + 1)
-
-
 def _clamp_box(
     box: tuple[float, float, float, float], *, width: int, height: int
 ) -> BoundingBox | None:
@@ -399,8 +389,9 @@ def _parse_image_processor_output(
     """Detach documented boxes, masks, and scores from SAM3 tensors."""
     boxes = _native_sequence(output.get("boxes"), "boxes")
     scores = _native_sequence(output.get("scores"), "scores")
-    mask_value = output.get("masks_logits", output.get("masks"))
-    masks = _native_sequence(mask_value, "masks")
+    masks = _native_array(output.get("masks_logits", output.get("masks")), "masks")
+    if masks.ndim == 0:
+        raise TypeError("SAM3 masks must be a sequence")
     if not (len(boxes) == len(scores) == len(masks)):
         raise ValueError("SAM3 boxes, scores, and masks must have equal proposal counts")
 
@@ -429,24 +420,58 @@ def _parse_image_processor_output(
 
 
 def _probability_mask(
-    value: object, *, width: int, height: int, threshold: float
-) -> tuple[bool, ...]:
-    native = value.tolist() if hasattr(value, "tolist") else value
-    rows = _native_sequence(native, "mask")
-    if len(rows) == 1:
-        possible_rows = _native_sequence(rows[0], "mask channel")
-        if len(possible_rows) == height:
-            rows = possible_rows
-    if len(rows) != height:
-        raise ValueError("SAM3 mask dimensions must match the discovery pass")
+    value: NDArray[Any], *, width: int, height: int, threshold: float
+) -> InlineMask:
+    """Threshold one proposal's probabilities (or boolean mask) into a binary mask.
 
-    flattened: list[bool] = []
-    for row in rows:
-        pixels = _native_sequence(row, "mask row")
-        if len(pixels) != width:
-            raise ValueError("SAM3 mask dimensions must match the discovery pass")
-        flattened.extend(_finite_number(pixel, "mask value") >= threshold for pixel in pixels)
-    return tuple(flattened)
+    Raises:
+        TypeError: If the values are not numeric.
+        ValueError: If the dimensions differ from the discovery pass, or a value is not finite.
+    """
+    import numpy as np
+
+    pixels = value
+    if pixels.ndim == 3 and pixels.shape[0] == 1 and pixels.shape[1] == height:
+        pixels = pixels[0]  # eixo de canal único do SDK
+    if pixels.shape != (height, width):
+        raise ValueError("SAM3 mask dimensions must match the discovery pass")
+    if pixels.dtype.kind not in "biuf":
+        raise TypeError("SAM3 mask value must be numeric")
+    # Em float64, como a comparação com o float do Python sempre foi: em float32 um limiar como
+    # 0.7 arredonda para baixo e o pixel igual a float32(0.7) viraria primeiro plano.
+    probabilities = pixels.astype(np.float64)
+    if not np.isfinite(probabilities).all():
+        raise ValueError("SAM3 mask value must be finite")
+    return InlineMask(probabilities >= threshold)
+
+
+def _native_array(value: object, name: str) -> NDArray[Any]:
+    """Detach an SDK value to a NumPy array, never as a Python object per element.
+
+    A PyTorch tensor may live on the GPU and in ``bfloat16``, which NumPy cannot hold: it is moved
+    to the CPU in float64 (exact for every float and boolean dtype), as the other backends detach
+    their tensors. Arrays, nested sequences and ``tolist()``-only values are read directly.
+
+    Raises:
+        TypeError: If the value is not a sequence.
+        ValueError: If its nested sequences are ragged.
+    """
+    import numpy as np
+
+    detach = getattr(value, "detach", None)
+    if callable(detach):
+        return np.asarray(detach().to("cpu").double().numpy())
+    native = value
+    if not hasattr(value, "__array__") and hasattr(value, "tolist"):
+        native = value.tolist()
+    if not hasattr(native, "__array__") and (
+        not isinstance(native, Sequence) or isinstance(native, (str, bytes))
+    ):
+        raise TypeError(f"SAM3 {name} must be a sequence")
+    try:
+        return np.asarray(native)
+    except ValueError as error:  # propostas ou linhas de tamanhos diferentes
+        raise ValueError("SAM3 mask dimensions must match the discovery pass") from error
 
 
 def _native_sequence(value: object, name: str) -> Sequence[object]:

@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from contextmap.runtime._files import replace_text
-from contextmap.runtime.config import EffectiveConfig, write_effective_config
-from contextmap.runtime.errors import ResumeError, RunRecordError
+from contextmap.runtime.config import ConfigurationError, EffectiveConfig, write_effective_config
+from contextmap.runtime.errors import CompositionError, ResumeError, RunRecordError
 from contextmap.runtime.lifecycle import (
     RUN_SCHEMA_VERSION,
     TERMINAL_EVENTS,
@@ -529,6 +529,7 @@ def resume_plan(
     cancellation: CancellationToken | None = None,
     redact: Callable[[str], str] | None = None,
     clock: Callable[[], str] | None = None,
+    composition_failures: Mapping[str, CompositionError | ConfigurationError] | None = None,
 ) -> ExecutionRecord:
     """Resume a failed, cancelled or interrupted run as a new run.
 
@@ -554,6 +555,8 @@ def resume_plan(
         cancellation: A cooperative cancellation handle.
         redact: Replaces secret values inside a string.
         clock: Returns event timestamps.
+        composition_failures: Why a stage could not be composed, by stage; see
+            :func:`~contextmap.runtime.pipeline.preflight`.
 
     Returns:
         The execution record of the new run, with a ``resume`` section saying which
@@ -579,4 +582,5 @@ def resume_plan(
         redact=redact,
         clock=clock,
         resume_from=summary,
+        composition_failures=composition_failures,
     )

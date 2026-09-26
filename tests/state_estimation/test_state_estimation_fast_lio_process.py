@@ -1,5 +1,8 @@
 import json
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +192,13 @@ out = Path(args["--out"])
 
 if mode == "hang":
     time.sleep(30)
+if mode == "hang_with_child":
+    import subprocess
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # O work dir some com o timeout; o PID do neto fica no work_root do runner.
+    (out.parents[1] / "grandchild.pid").write_text(str(child.pid))
+    time.sleep(30)
 if mode == "fail":
     print("optimizer exploded", file=sys.stderr)
     sys.exit(3)
@@ -309,6 +319,39 @@ def test_a_hung_process_is_stopped_at_the_timeout(tmp_path: Path) -> None:
         _runner(tmp_path, "hang", timeout_s=2.0).run(_job())
 
     assert raised.value.kind is FastLioFailureKind.TIMEOUT
+
+
+def _is_running(pid: int) -> bool:
+    """Whether ``pid`` names a live process; a zombie awaiting its reaper is not live."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")
+    try:
+        return stat.read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def test_a_timeout_stops_the_whole_process_tree(tmp_path: Path) -> None:
+    # #597: `docker run` e afins geram netos; matar só o filho direto os deixa vivos.
+    started = time.monotonic()
+    with pytest.raises(FastLioFailure) as raised:
+        _runner(tmp_path, "hang_with_child", timeout_s=2.0).run(_job())
+    elapsed = time.monotonic() - started
+
+    assert raised.value.kind is FastLioFailureKind.TIMEOUT
+    assert elapsed < 15.0
+    grandchild = int((tmp_path / "grandchild.pid").read_text())
+    deadline = time.monotonic() + 5.0
+    try:
+        while _is_running(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _is_running(grandchild)
+    finally:
+        if _is_running(grandchild):
+            os.kill(grandchild, signal.SIGKILL)
 
 
 def test_an_executable_that_cannot_start_is_a_process_failure(tmp_path: Path) -> None:

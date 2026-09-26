@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
+from mask_cases import GOLDEN, MASK_STORE_SEEDS, mask_store_case
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import RegionId
@@ -17,7 +19,7 @@ from contextmap.visual_perception.region_models import InlineMask
 
 def _checkerboard_mask(width: int = 8, height: int = 6) -> InlineMask:
     data = tuple((x + y) % 2 == 0 for y in range(height) for x in range(width))
-    return InlineMask(width=width, height=height, data=data)
+    return InlineMask(np.array(data, dtype=bool).reshape(height, width))
 
 
 def test_written_payload_round_trips_bit_exactly(tmp_path: Path) -> None:
@@ -45,7 +47,7 @@ def test_full_image_mask_payload_is_bit_packed_and_smaller_than_one_byte_per_pix
 ) -> None:
     width, height = 640, 480
     data = tuple((x // 40 + y // 40) % 2 == 0 for y in range(height) for x in range(width))
-    mask = InlineMask(width=width, height=height, data=data)
+    mask = InlineMask(np.array(data, dtype=bool).reshape(height, width))
 
     writer = MaskStoreWriter(tmp_path)
     entry = writer.write(
@@ -103,7 +105,7 @@ def test_duplicate_region_key_is_rejected(tmp_path: Path) -> None:
 def test_region_id_is_local_to_source_observation(tmp_path: Path) -> None:
     """The same region_id string in two different frames must not collide (#378)."""
     mask_a = _checkerboard_mask(width=4, height=4)
-    mask_b = InlineMask(width=4, height=4, data=tuple(not value for value in mask_a.data))
+    mask_b = InlineMask(~mask_a.as_array())
     writer = MaskStoreWriter(tmp_path)
     writer.write(
         region_id=RegionId("region-0000"),
@@ -147,3 +149,23 @@ def test_payload_reference_cannot_escape_the_store_root(tmp_path: Path) -> None:
             source_observation_id=SourceObservationId("frame-0001"),
             mask=_checkerboard_mask(),
         )
+
+
+@pytest.mark.parametrize("seed", MASK_STORE_SEEDS)
+def test_persisted_mask_bytes_match_the_recorded_payload(tmp_path: Path, seed: int) -> None:
+    # #593: o payload empacotado (e seu hash no índice) não muda com a representação em memória.
+    mask = mask_store_case(seed)
+    writer = MaskStoreWriter(tmp_path)
+
+    entry = writer.write(
+        region_id=RegionId("region-0001"),
+        source_observation_id=SourceObservationId("frame-1"),
+        mask=mask,
+    )
+    write_mask_index(tmp_path, writer.entries())
+
+    assert entry.content_hash == GOLDEN["mask_store"][str(seed)]
+    assert (
+        MaskStoreReader.open(tmp_path).load(SourceObservationId("frame-1"), RegionId("region-0001"))
+        == mask
+    )

@@ -9,6 +9,11 @@ from typing import Any
 from contextmap.runtime import ArtifactRef, FileArtifactStore, PipelinePlan, StageRequest
 
 
+def source_identities(*stage_ids: str) -> dict[str, dict[str, str]]:
+    """The source identities the fake source executors name, for a policy used without them."""
+    return {stage_id: {"source": f"world-source:{stage_id}"} for stage_id in stage_ids}
+
+
 class World:
     """Fake stages that behave like pure functions of their inputs and configuration.
 
@@ -26,7 +31,7 @@ class World:
         self.fail_with: BaseException = RuntimeError("out of memory")
         self._count = 0
 
-    def executor(self, stage_id: str, contract: str) -> Any:
+    def executor(self, stage_id: str, contract: str, *, source: bool = False) -> Any:
         world = self
 
         class Executor:
@@ -53,11 +58,20 @@ class World:
                     content_hash=content,
                 )
 
-        return Executor()
+        if not source:
+            return Executor()
+
+        class SourceExecutor(Executor):
+            # Um estágio sem entradas lê de fora do DAG: nomeia a fonte para a chave de reuso.
+            source_identity = source_identities(stage_id)[stage_id]["source"]
+
+        return SourceExecutor()
 
     def executors(self, plan: PipelinePlan) -> dict[str, Any]:
         return {
-            stage.stage_id: self.executor(stage.stage_id, stage.output or "")
+            stage.stage_id: self.executor(
+                stage.stage_id, stage.output or "", source=not stage.inputs
+            )
             for stage in plan.stages
         }
 
@@ -70,7 +84,7 @@ def world_executors(world: World) -> dict[str, Any]:
     from contextmap.runtime.catalog import CANONICAL_PRESET
 
     return {
-        stage.stage_id: world.executor(stage.stage_id, stage.output or "")
+        stage.stage_id: world.executor(stage.stage_id, stage.output or "", source=not stage.inputs)
         for stage in CANONICAL_PRESET.stages
     }
 

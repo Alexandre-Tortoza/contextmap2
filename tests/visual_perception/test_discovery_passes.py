@@ -1,7 +1,9 @@
 from collections.abc import Callable
 from hashlib import sha256
 
+import numpy as np
 import pytest
+from mask_cases import GOLDEN, REMAP_SEEDS, digest, remap_case
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -22,6 +24,8 @@ from contextmap.visual_perception.discovery import (
     PassKind,
     RegionCandidateDiscovery,
     TilingConfig,
+    _expand_mask,
+    _resize_mask,
     build_discovery_passes,
     run_discovery_passes,
 )
@@ -44,11 +48,16 @@ def _image(width: int = 6, height: int = 4) -> PreparedImage:
 
 class FakeDiscovery:
     def __init__(
-        self, *, touch_right_border: bool = False, relative_geometry: bool = False
+        self,
+        *,
+        touch_right_border: bool = False,
+        relative_geometry: bool = False,
+        mask_only: bool = False,
     ) -> None:
         self.inputs: list[DiscoveryInput] = []
         self.touch_right_border = touch_right_border
         self.relative_geometry = relative_geometry
+        self.mask_only = mask_only
 
     def backend_provenance(self) -> BackendProvenance:
         return BackendProvenance(
@@ -86,8 +95,8 @@ class FakeDiscovery:
             perception_result_id=discovery_input.perception_result_id,
             image_width=width,
             image_height=height,
-            bounding_box=box,
-            mask=InlineMask(width=width, height=height, data=mask_data),
+            bounding_box=None if self.mask_only else box,
+            mask=InlineMask(np.array(mask_data, dtype=bool).reshape(height, width)),
             provenance=RegionProvenance(
                 backend_id="fake",
                 backend_version="1",
@@ -181,6 +190,50 @@ def test_internal_tile_border_rejection_is_explicit_and_auditable() -> None:
     assert [item.candidate_id for item in result.candidates] == ["tile-0001/proposal-1"]
 
 
+def _internal_border_tiling() -> DiscoveryPassConfig:
+    return DiscoveryPassConfig(
+        tiling=TilingConfig(
+            tile_width=4,
+            tile_height=4,
+            overlap_x=1,
+            overlap_y=0,
+            border_policy=BorderPolicy.REJECT_INTERNAL_BORDER,
+        ),
+        include_full_frame=False,
+    )
+
+
+def test_reject_internal_border_applies_to_mask_only_candidates() -> None:
+    # #596: sem bounding box, a borda vem dos pixels da máscara; não é bypass da política.
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(touch_right_border=True, mask_only=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=_internal_border_tiling(),
+    )
+
+    assert [item.candidate_id for item in result.rejected] == ["tile-0000/proposal-1"]
+    assert result.rejected[0].reason.value == "tile_border_truncation"
+    assert [item.candidate_id for item in result.candidates] == ["tile-0001/proposal-1"]
+
+
+def test_mask_only_candidates_away_from_internal_borders_are_kept() -> None:
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(mask_only=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=_internal_border_tiling(),
+    )
+
+    assert result.rejected == ()
+    assert [item.candidate_id for item in result.candidates] == [
+        "tile-0000/proposal-1",
+        "tile-0001/proposal-1",
+    ]
+
+
 def test_tile_scale_changes_model_input_and_preserves_global_coordinates() -> None:
     baseline_backend = FakeDiscovery(relative_geometry=True)
     scaled_backend = FakeDiscovery(relative_geometry=True)
@@ -226,3 +279,23 @@ def test_invalid_tiling_configuration_fails_before_backend_execution(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         factory()
+
+
+@pytest.mark.parametrize("seed", REMAP_SEEDS)
+def test_tile_mask_remapping_matches_the_recorded_behaviour(seed: int) -> None:
+    # #593: resize por vizinho mais próximo e expansão na imagem, registrados antes da troca.
+    mask, (window_width, window_height), (image_width, image_height, x0, y0) = remap_case(seed)
+
+    resized = _resize_mask(mask, window_width, window_height)
+    expanded = _expand_mask(resized, image_width, image_height, x0, y0)
+
+    remapped = {"resized": resized.to_dict(), "expanded": expanded.to_dict()}
+    assert digest(remapped) == GOLDEN["remap"][str(seed)]
+
+
+def test_a_tile_mask_that_does_not_fit_the_image_is_refused() -> None:
+    # Antes, um tile fora da imagem dava a volta para a linha seguinte em silêncio.
+    tile = InlineMask(np.ones((2, 3), dtype=bool))
+
+    with pytest.raises(ValueError, match="does not lie inside"):
+        _expand_mask(tile, 4, 4, 2, 0)

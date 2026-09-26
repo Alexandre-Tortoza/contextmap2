@@ -1,6 +1,7 @@
 from dataclasses import FrozenInstanceError
 from hashlib import sha256
 
+import numpy as np
 import pytest
 
 from contextmap.ingestion import SourceObservationId
@@ -26,9 +27,9 @@ def _reference(name: str) -> ArtifactReference:
 
 def _mask(width: int, height: int, foreground: set[tuple[int, int]]) -> InlineMask:
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple((x, y) in foreground for y in range(height) for x in range(width)),
+        np.array(
+            tuple((x, y) in foreground for y in range(height) for x in range(width)), dtype=bool
+        ).reshape(height, width)
     )
 
 

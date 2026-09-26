@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from mapping_geometry_fake import InMemoryGeometrySource
 
 import contextmap.semantic_mapping as semantic_mapping
 from contextmap.geometric_mapping import MapId
-from contextmap.semantic_fusion import FusionSupportId, SemanticFusionRunId
+from contextmap.semantic_fusion import FusedEvidenceId, FusionSupportId, SemanticFusionRunId
 from contextmap.semantic_mapping import (
     ENTITY_ID_POLICY_ID,
     ENTITY_MATERIALIZATION_POLICY_ID,
@@ -284,17 +285,62 @@ class TestCandidateRejection:
     def test_parts_that_break_the_entity_contract_are_a_rejection(
         self, run: FusionRun, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def broken(*_: object, **__: object) -> None:
-            raise ValueError("the parts disagree")
+        # Cada parte é válida sozinha; juntas violam o contrato da Entity: as hipóteses citam
+        # uma fused evidence à qual a entidade não se liga.
+        real = semantic_mapping.materialization.semantic_state_from_fused_evidence
+
+        def foreign(*args: object, **kwargs: object) -> object:
+            state = real(*args, **kwargs)  # type: ignore[arg-type]
+            elsewhere = FusedEvidenceId("fused-evidence--elsewhere")
+            return dataclasses.replace(
+                state,
+                hypotheses=tuple(
+                    dataclasses.replace(item, fused_evidence_id=elsewhere)
+                    for item in state.hypotheses
+                ),
+                uncertainty=tuple(
+                    dataclasses.replace(item, fused_evidence_id=elsewhere)
+                    for item in state.uncertainty
+                ),
+                primary_hypothesis=None
+                if state.primary_hypothesis is None
+                else dataclasses.replace(state.primary_hypothesis, fused_evidence_id=elsewhere),
+            )
 
         monkeypatch.setattr(
-            "contextmap.semantic_mapping.materialization.semantic_state_from_fused_evidence", broken
+            "contextmap.semantic_mapping.materialization.semantic_state_from_fused_evidence",
+            foreign,
         )
 
         result = _materialize(run)
 
+        assert result.rejections
         assert {item.reason for item in result.rejections} == {RejectionReason.INVALID_ENTITY}
-        assert result.rejections[0].detail == "the parts disagree"
+        assert "which the entity does not link to" in result.rejections[0].detail
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            "summarize_geometry",
+            "semantic_state_from_fused_evidence",
+            "evidence_links_from_fused_evidence",
+            "summarize_temporal_state",
+        ],
+    )
+    def test_a_programming_bug_fails_the_run_instead_of_rejecting_candidates(
+        self, run: FusionRun, monkeypatch: pytest.MonkeyPatch, part: str
+    ) -> None:
+        # #604: um ValueError cru não é violação de contrato; engoli-lo rejeitaria tudo em
+        # silêncio e o run terminaria "bem-sucedido" com um mapa vazio.
+        def bug(*_: object, **__: object) -> None:
+            raise ValueError("bug")
+
+        monkeypatch.setattr(f"contextmap.semantic_mapping.materialization.{part}", bug)
+
+        with pytest.raises(ValueError, match=r"^bug$") as raised:
+            _materialize(run)
+
+        assert type(raised.value) is ValueError
 
     def test_a_clean_run_rejects_nothing(self, run: FusionRun) -> None:
         assert _materialize(run).rejections == ()

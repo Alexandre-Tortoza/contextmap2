@@ -310,6 +310,22 @@ def test_rejected_and_box_only_regions_are_reported_and_never_evaluated() -> Non
     assert membership.regions_of(0) == (A,)
 
 
+def test_an_accepted_region_with_an_empty_mask_is_skipped_with_its_reason() -> None:
+    # Regressão SA-01: uma máscara aceita toda background chegava à derivação de qualidade
+    # com mask_area_px == 0 e estourava ZeroDivisionError.
+    frame = scene_frame((100, 100, 3.0))
+    regions = (
+        make_region("region-A", _rect(90, 90, 110, 110)),
+        make_region("region-B", mask_with(640, 480)),
+    )
+
+    membership = _associate(frame, *regions)
+
+    assert [region.region_id for region in membership.regions] == [A]
+    assert membership.skipped == (SkippedRegion(region_id=B, reason=SkipReason.EMPTY_MASK),)
+    assert membership.regions_of(0) == (A,)
+
+
 # --- Spatial observations ---------------------------------------------------
 
 
@@ -439,7 +455,10 @@ def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
             make_region("region-B", rect_mask(640, 480, 140, 90, 260, 110)),
         ]
     )
-    before = [(r, r.region_id, r.mask, r.mask.data if r.mask else None) for r in result.regions]
+    before = [
+        (r, r.region_id, r.mask, r.mask.as_array().tobytes() if r.mask else None)
+        for r in result.regions
+    ]
     copies = [copy.deepcopy(r) for r in result.regions]
 
     membership = associate_regions(resolve_visibility(frame, POLICY), result)
@@ -447,7 +466,8 @@ def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
 
     assert list(result.regions) == copies
     for region, region_id, mask, data in before:
-        assert (region.region_id, region.mask, region.mask.data if region.mask else None) == (
+        pixels = region.mask.as_array().tobytes() if region.mask else None
+        assert (region.region_id, region.mask, pixels) == (
             region_id,
             mask,
             data,

@@ -28,6 +28,8 @@ Um run **interrompido** é um run que nunca chegou a um estado terminal e cujo p
 | `run.lock` | o pid do processo dono, enquanto o run não terminou |
 | `<estágio>/` | o artifact de um estágio **executado** neste run, criado e finalizado atomicamente pelo writer da capability; um estágio reutilizado não tem pasta aqui, é **referenciado** por `ArtifactRef`, nunca copiado |
 
+Os documentos JSON do diário (`effective_config.json`, `plan.json`, `status.json` e `execution.json`) e as entradas do índice de reuso são publicados de forma atômica **e durável**: o conteúdo é sincronizado em disco (`fsync`) antes do `link`/`replace` que lhe dá o nome, e o diretório logo depois, então uma queda de energia não deixa um documento vazio ou truncado com o nome final ([Durabilidade](../../../../docs/ARTIFACTS.md#durabilidade)).
+
 Um run `failed`, `cancelled` ou `blocked` é **histórico**: nunca é modificado depois. Nenhum run sobrescreve outro e uma falha nunca toca em um artifact publicado por um run anterior.
 
 ## Eventos

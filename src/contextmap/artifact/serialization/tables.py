@@ -9,17 +9,19 @@ silently wrong record, and the authoritative lines are what a validator rebuilds
 Every line is a JSON object with a string ``key``; the rest of the object belongs to whoever
 writes the table. Lines are ASCII, with sorted keys and compact separators, so the same records
 always produce the same bytes and no line contains a raw newline. The module reads only the
-files it is given and never writes to them.
+files it is given and never writes to them; it writes a table only to the streams its caller
+opened for it.
 """
 
 from __future__ import annotations
 
+import io
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
@@ -94,20 +96,28 @@ class EncodedTable:
     record_count: int
 
 
-def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
-    """Encode records as a table ordered by key, with its offset index.
+def write_record_table(
+    lines: Iterable[Mapping[str, Any]], *, payload: BinaryIO, index: BinaryIO
+) -> int:
+    """Write records as a table ordered by key, with its offset index, one line at a time.
 
-    The result depends only on the records, not on the order they arrive in.
+    The records are ordered first; then each line is encoded and written before the next one is,
+    so neither the payload nor the index is ever held whole in memory. The bytes depend only on
+    the records, not on the order they arrive in.
 
     Args:
         lines: JSON-safe mappings, each with a non-empty string ``key`` unique in the table.
+        payload: Where the lines go.
+        index: Where the offset index of those lines goes.
 
     Returns:
-        The payload and the index.
+        The number of records.
 
     Raises:
         RecordTableError: If a key is missing, empty or not a string, a key is duplicated
-            (nothing is dropped silently), or a record cannot be encoded as JSON.
+            (nothing is dropped silently), or a record cannot be encoded as JSON. The keys are
+            checked before anything is written; a record JSON cannot represent is found when its
+            line is encoded, after the lines before it were written.
     """
     keyed: list[tuple[str, Mapping[str, Any]]] = []
     for line in lines:
@@ -120,17 +130,39 @@ def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
         if previous == current:
             raise RecordTableError(f"duplicate key {current!r}")
 
-    payload = bytearray()
-    index = bytearray()
+    offset = 0
     for key, line in keyed:
         try:
             encoded = canonical_json_line(line)
         except RecordTableError as error:
             raise RecordTableError(f"record {key!r}: {error}") from error
-        index += canonical_json_line({"key": key, "length": len(encoded), "offset": len(payload)})
-        index += b"\n"
-        payload += encoded + b"\n"
-    return EncodedTable(payload=bytes(payload), index=bytes(index), record_count=len(keyed))
+        index.write(
+            canonical_json_line({"key": key, "length": len(encoded), "offset": offset}) + b"\n"
+        )
+        payload.write(encoded + b"\n")
+        offset += len(encoded) + 1
+    return len(keyed)
+
+
+def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
+    """Encode records as a table ordered by key, with its offset index, in memory.
+
+    The same bytes :func:`write_record_table` writes, for a table small enough to hold whole.
+
+    Args:
+        lines: JSON-safe mappings, each with a non-empty string ``key`` unique in the table.
+
+    Returns:
+        The payload and the index.
+
+    Raises:
+        RecordTableError: As :func:`write_record_table`.
+    """
+    payload, index = io.BytesIO(), io.BytesIO()
+    record_count = write_record_table(lines, payload=payload, index=index)
+    return EncodedTable(
+        payload=payload.getvalue(), index=index.getvalue(), record_count=record_count
+    )
 
 
 def rebuild_index(payload: bytes) -> bytes:
@@ -184,13 +216,23 @@ class RecordTable:
     records. A record is read, and only then parsed, when it is asked for.
     """
 
-    def __init__(self, payload_path: Path, index_path: Path, *, record_count: int) -> None:
+    def __init__(
+        self,
+        payload_path: Path,
+        index_path: Path,
+        *,
+        record_count: int,
+        index_bytes: bytes | None = None,
+    ) -> None:
         """Open a table and verify its index against the payload's size.
 
         Args:
             payload_path: The JSON Lines file.
             index_path: The index of that file.
             record_count: The number of records the manifest declares for the table.
+            index_bytes: The content of ``index_path`` when the caller has already read it (a
+                validator that also compares it with a rebuilt index), so it is not read again;
+                read from ``index_path`` otherwise.
 
         Raises:
             MissingPayloadError: If either file is missing.
@@ -201,7 +243,9 @@ class RecordTable:
             if not path.is_file():
                 raise MissingPayloadError(f"missing file {path.name} of a record table")
         self._path = payload_path
-        entries = _load_index(index_path)
+        entries = _load_index(
+            index_path.read_bytes() if index_bytes is None else index_bytes, index_path.name
+        )
         if len(entries) != record_count:
             raise BrokenIndexError(
                 f"{index_path.name} has {len(entries)} entries but the manifest declares "
@@ -253,8 +297,13 @@ class RecordTable:
             chunk = handle.read(length + 1)
         return self._decode(chunk, key)
 
-    def iter_lines(self) -> Iterator[dict[str, Any]]:
+    def iter_lines(self, payload_bytes: bytes | None = None) -> Iterator[dict[str, Any]]:
         """Read every record once, in file order.
+
+        Args:
+            payload_bytes: The content of the payload file when the caller has already read it
+                (a validator that also rebuilds the index from it), so it is not read again;
+                read from disk, line by line, otherwise.
 
         Returns:
             The parsed lines.
@@ -262,7 +311,9 @@ class RecordTable:
         Raises:
             BrokenIndexError: If a line is not well formed or does not match the index.
         """
-        with self._path.open("rb") as handle:
+        # Os bytes em memória são lidos na mesma sequência de tamanhos que o arquivo.
+        source = self._path.open("rb") if payload_bytes is None else io.BytesIO(payload_bytes)
+        with source as handle:
             for key in self._keys:
                 _, length = self._entries[key]
                 yield self._decode(handle.read(length + 1), key)
@@ -287,36 +338,35 @@ class RecordTable:
         return line
 
 
-def _load_index(index_path: Path) -> list[tuple[str, int, int]]:
-    raw = index_path.read_bytes()
+def _load_index(raw: bytes, index_name: str) -> list[tuple[str, int, int]]:
     if raw and not raw.endswith(b"\n"):
-        raise BrokenIndexError(f"{index_path.name} is not terminated by a newline")
+        raise BrokenIndexError(f"{index_name} is not terminated by a newline")
     entries: list[tuple[str, int, int]] = []
     for number, text in enumerate(raw.split(b"\n")[:-1]):
         try:
             entry = json.loads(text)
         except ValueError as error:
             raise BrokenIndexError(
-                f"entry {number} of {index_path.name} is not valid JSON ({error})"
+                f"entry {number} of {index_name} is not valid JSON ({error})"
             ) from error
         if not isinstance(entry, dict) or entry.keys() != _INDEX_FIELDS:
             raise BrokenIndexError(
-                f"entry {number} of {index_path.name} must have exactly the fields "
+                f"entry {number} of {index_name} must have exactly the fields "
                 f"{sorted(_INDEX_FIELDS)}"
             )
         key, offset, length = entry["key"], entry["offset"], entry["length"]
         if not isinstance(key, str) or not key:
-            raise BrokenIndexError(f"entry {number} of {index_path.name} has an invalid key")
+            raise BrokenIndexError(f"entry {number} of {index_name} has an invalid key")
         for name, value in (("offset", offset), ("length", length)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise BrokenIndexError(
-                    f"entry {number} of {index_path.name} has an invalid {name}: {value!r}"
+                    f"entry {number} of {index_name} has an invalid {name}: {value!r}"
                 )
         entries.append((key, offset, length))
     for (previous, _, _), (current, _, _) in pairwise(entries):
         if previous >= current:
             raise BrokenIndexError(
-                f"the keys of {index_path.name} are not strictly sorted: "
+                f"the keys of {index_name} are not strictly sorted: "
                 f"{current!r} follows {previous!r}"
             )
     return entries

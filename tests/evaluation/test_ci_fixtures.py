@@ -321,8 +321,8 @@ def test_overlapping_masks_in_the_annotation_file_match_the_catalogue() -> None:
     assert isinstance(annotations, RegionAnnotationSet)
 
     first, second = (region.mask for region in ground_truth_regions(annotations.frames[0]))
-    intersection = sum(a and b for a, b in zip(first.data, second.data, strict=True))
-    union = sum(a or b for a, b in zip(first.data, second.data, strict=True))
+    intersection = int(np.count_nonzero(first.as_array() & second.as_array()))
+    union = int(np.count_nonzero(first.as_array() | second.as_array()))
 
     assert (first.area, second.area) == (case.expected["area_a"], case.expected["area_b"])
     assert (intersection, union) == (case.expected["intersection"], case.expected["union"])

@@ -6,7 +6,9 @@ touching the disk, writes into a hidden temporary sibling and publishes with one
 (:class:`~contextmap.shared.AtomicRunDirectory`), so an interrupted write never looks like a
 finished artifact and a finished artifact is never overwritten.
 
-The output is a function of the map: records are ordered by key, every line is canonical and the
+The map is encoded once, and the entity and relation tables, which grow with the map, are written
+line by line and hashed as they are written; only the small documents are held as bytes. The
+output is a function of the map: records are ordered by key, every line is canonical and the
 manifest carries a content identity that ignores the write time. Nothing invalid is dropped
 silently: an inconsistent map is refused whole with the reason. The schema already refuses an
 invalid map when it is built (references, provenance, declared capabilities), so the writer adds
@@ -23,9 +25,10 @@ actually exists upstream. No model, ROS or runtime object ever reaches the files
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from contextmap.artifact.models import ContextMap
 from contextmap.artifact.provenance import ArtifactKind
@@ -71,10 +74,10 @@ from contextmap.artifact.serialization.structural_dependencies import (
 from contextmap.artifact.serialization.tables import (
     document_json,
     encode_entity_relation_index,
-    encode_record_table,
+    write_record_table,
 )
 from contextmap.geometric_mapping import GeometricMapArtifactReader, MapArtifactError
-from contextmap.shared import AtomicRunDirectory, RunDirectoryError, file_entry
+from contextmap.shared import AtomicRunDirectory, RunDirectoryError
 
 
 class ContextMapArtifactWriter:
@@ -124,7 +127,9 @@ class ContextMapArtifactWriter:
                 Relations run was built over a different Entity Resolution run than the one the
                 map also cites, or a ``ContextEntity.source`` or ``ContextRelation`` the map
                 lists does not resolve in the corresponding run.
-            RecordTableError: If a record is not plain JSON.
+            RecordTableError: If a record is not plain JSON. A record of a table is only found
+                while the tables are written: the temporary directory is then discarded and
+                nothing is published.
             UpstreamArtifactError: If an upstream artifact is missing or does not match its own
                 inventory.
             ContextMapArtifactError: If the directory cannot be published.
@@ -133,44 +138,46 @@ class ContextMapArtifactWriter:
             raise ArtifactExistsError(f"the artifact already exists: {self._output_dir}")
         dependencies = self._dependencies(context_map, upstream_locations)
 
+        # O mapa é codificado uma vez só; documentos e tabelas são partes do mesmo registro.
         record = context_map_to_record(context_map)
-        entity_table = encode_record_table(entity_lines(context_map))
-        relation_table = encode_record_table(relation_lines(context_map))
-        traversal_index = encode_entity_relation_index(
-            (str(entity.entity_id) for entity in context_map.entities),
-            (
-                (str(item.relation_id), str(item.subject.entity_id), str(item.object.entity_id))
-                for item in context_map.relations
-            ),
-        )
-        files: dict[str, bytes] = {
+        documents = {
             MAP_METADATA: document_json(record["metadata"]),
             GEOMETRY_REFERENCE: document_json(record["geometry_ref"]),
             LINEAGE: document_json({"upstream_artifacts": record["lineage"]}),
-            ENTITIES: entity_table.payload,
-            ENTITY_INDEX: entity_table.index,
-            RELATIONS: relation_table.payload,
-            RELATION_INDEX: relation_table.index,
-            ENTITY_RELATION_INDEX: traversal_index,
+            ENTITY_RELATION_INDEX: encode_entity_relation_index(
+                (str(entity.entity_id) for entity in context_map.entities),
+                (
+                    (str(item.relation_id), str(item.subject.entity_id), str(item.object.entity_id))
+                    for item in context_map.relations
+                ),
+            ),
         }
         creation = context_map.metadata.creation
-        manifest = create_manifest(
-            context_map_id=str(context_map.context_map_id),
-            schema_version=context_map.schema_version,
-            written_at=self._written_at.isoformat(),
-            code_version=creation.code_version,
-            configuration_fingerprint=creation.configuration_fingerprint,
-            entity_count=entity_table.record_count,
-            relation_count=relation_table.record_count,
-            payloads=_payloads(entity_table.record_count, relation_table.record_count),
-            dependencies=dependencies,
-            file_inventory=[file_entry(path, data) for path, data in files.items()],
-        )
 
         try:
             with AtomicRunDirectory(self._output_dir) as run:
-                for path, data in files.items():
+                for path, data in documents.items():
                     run.write_bytes(path, data)
+                entity_count = _write_table(
+                    run, ENTITIES, ENTITY_INDEX, entity_lines(context_map, record)
+                )
+                relation_count = _write_table(
+                    run, RELATIONS, RELATION_INDEX, relation_lines(context_map, record)
+                )
+                # A identidade de conteúdo cobre o inventário: tamanho e hash vêm da própria
+                # escrita, sem reler nenhum arquivo.
+                manifest = create_manifest(
+                    context_map_id=str(context_map.context_map_id),
+                    schema_version=context_map.schema_version,
+                    written_at=self._written_at.isoformat(),
+                    code_version=creation.code_version,
+                    configuration_fingerprint=creation.configuration_fingerprint,
+                    entity_count=entity_count,
+                    relation_count=relation_count,
+                    payloads=_payloads(entity_count, relation_count),
+                    dependencies=dependencies,
+                    file_inventory=run.inventory(),
+                )
                 run.publish(manifest=encode_manifest(manifest), readme=_render_readme(manifest))
         except RunDirectoryError as error:
             raise ContextMapArtifactError(str(error)) from error
@@ -274,6 +281,17 @@ class ContextMapArtifactWriter:
                 f"the map is expressed in frame {frame!r} but the geometric map "
                 f"{upstream.map_id!r} is in frame {upstream.map_frame!r}"
             )
+
+
+def _write_table(
+    run: AtomicRunDirectory,
+    payload_path: str,
+    index_path: str,
+    lines: Iterable[Mapping[str, Any]],
+) -> int:
+    """Stream one record table and its offset index into the run; return its record count."""
+    with run.open_binary(payload_path) as payload, run.open_binary(index_path) as index:
+        return write_record_table(lines, payload=payload, index=index)
 
 
 def _payloads(entity_count: int, relation_count: int) -> tuple[Payload, ...]:

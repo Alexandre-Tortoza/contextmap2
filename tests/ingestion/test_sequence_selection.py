@@ -1,3 +1,4 @@
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -83,12 +84,63 @@ def test_frame_range_start_beyond_length_raises(reader: SequenceArtifactReader) 
         resolve_selection(reader, FrameRangeSelection(start_frame_index=10, end_frame_index=12))
 
 
+@pytest.fixture
+def empty_reader(tmp_path: Path) -> SequenceArtifactReader:
+    SequenceArtifactWriter(
+        output_dir=tmp_path / "empty",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-empty"),
+    ).finalize()
+    return SequenceArtifactReader(tmp_path / "empty")
+
+
+def test_frame_range_start_beyond_an_empty_sequence_raises(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    with pytest.raises(SequenceSelectionError, match="out of range for 0 observations"):
+        resolve_selection(empty_reader, FrameRangeSelection(start_frame_index=3, end_frame_index=5))
+
+
+def test_frame_range_from_zero_over_an_empty_sequence_is_empty(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    result = resolve_selection(
+        empty_reader, FrameRangeSelection(start_frame_index=0, end_frame_index=10)
+    )
+
+    assert result.observations == ()
+
+
 def test_timestamp_range_selects_within_bounds(reader: SequenceArtifactReader) -> None:
     result = resolve_selection(
         reader, TimestampRangeSelection(clock_id="clock-a", start_seconds=1.0, end_seconds=3.0)
     )
 
     assert [obs.observation_id for obs in result.observations] == ["frame-0001", "frame-0002"]
+
+
+def test_timestamp_range_bounds_compare_exact_nanoseconds(tmp_path: Path) -> None:
+    # Regressão ING-02: em t ~ 1.7e9 s, 200 ns e 300 ns arredondam para o mesmo float (~238 ns);
+    # o limite inferior é esse float, então só a entrada de 300 ns está de fato dentro da faixa.
+    writer = SequenceArtifactWriter(
+        output_dir=tmp_path / "ingestion",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-0001"),
+    )
+    for observation_id, nanoseconds in (("below", 200), ("inside", 300)):
+        image = _image(observation_id, seconds=1_700_000_000)
+        stamp = SourceTimestamp(seconds=1_700_000_000, nanoseconds=nanoseconds, clock_id="clock-a")
+        writer.add_observation(dataclasses.replace(image, timestamp=stamp))
+    writer.finalize()
+    start = 1_700_000_000 + 200e-9
+    assert start == 1_700_000_000 + 300e-9  # os dois colapsam no mesmo float
+
+    result = resolve_selection(
+        SequenceArtifactReader(tmp_path / "ingestion"),
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=start, end_seconds=1.8e9),
+    )
+
+    assert [obs.observation_id for obs in result.observations] == ["inside"]
 
 
 def test_timestamp_range_excludes_mismatched_clock_id(reader: SequenceArtifactReader) -> None:
@@ -131,6 +183,17 @@ def test_empty_frame_range_is_a_valid_empty_result(reader: SequenceArtifactReade
 def test_explicit_ids_selection_rejects_empty_set() -> None:
     with pytest.raises(ValueError, match="must not be empty"):
         ExplicitIdsSelection(observation_ids=frozenset())
+
+
+def test_timestamp_range_rejects_a_zero_width_interval() -> None:
+    # [t, t) não contém nenhum instante: mesma regra de SourceWindow.
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=2.0)
+
+
+def test_timestamp_range_rejects_end_before_start() -> None:
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=1.0)
 
 
 def test_frame_range_rejects_end_before_start() -> None:

@@ -17,6 +17,7 @@ from contextmap.semantic_fusion import (
     GeometryOverlapSupportPolicy,
     build_fusion_supports,
 )
+from contextmap.semantic_fusion import support as support_module
 from contextmap.sensor_association import SpatialObservation
 
 POLICY = GeometryOverlapSupportPolicy(min_geometry_count=3, min_overlap=0.5)
@@ -76,6 +77,17 @@ def test_a_support_summarizes_geometry_time_and_policy() -> None:
     assert support.time_bounds.end == frame_timestamp("frame-0121")
     assert support.provenance.support_policy_id == GEOMETRY_OVERLAP_SUPPORT_POLICY_ID
     assert support.provenance.configuration_fingerprint == POLICY.fingerprint()
+
+
+def test_a_flat_support_keeps_its_centroid_inside_the_degenerate_bounds() -> None:
+    # Regressão SF-01: fsum([0.1] * 3) / 3 == 0.10000000000000002 > 0.1.
+    flat = InMemoryGeometrySource(MAP_ID, {i: (i * 0.1, 0.0, 0.1) for i in range(3)})
+
+    build = _build([_obs("frame-0120", range(3))], source=flat)
+
+    support = build.supports[0]
+    assert support.bounds.maximum_m[2] == 0.1
+    assert support.centroid_m[2] == 0.1
 
 
 def test_each_geometry_element_is_resolved_once_however_many_views_see_it() -> None:
@@ -292,3 +304,91 @@ def test_the_build_rejects_supports_out_of_order() -> None:
 
     with pytest.raises(ValueError, match="supports must be sorted and unique"):
         dataclasses.replace(build, supports=tuple(reversed(build.supports)))
+
+
+# --- SF-03: pares candidatos pelo índice de geometria compartilhada ------------------------
+
+
+def _brute_force_groups(
+    observations: list[SpatialObservation], policy: GeometryOverlapSupportPolicy
+) -> list[tuple[str, ...]]:
+    """Referência de força bruta: Jaccard de todos os pares e componentes conexas."""
+    ordered = sorted(observations, key=lambda item: item.spatial_observation_id)
+    eligible = [item for item in ordered if len(item.geometry_support) >= policy.min_geometry_count]
+    sets = [{ref.geometry_id for ref in item.geometry_support} for item in eligible]
+    root = list(range(len(eligible)))
+
+    def find(index: int) -> int:
+        while root[index] != index:
+            index = root[index]
+        return index
+
+    for left in range(len(eligible)):
+        for right in range(left + 1, len(eligible)):
+            union = len(sets[left] | sets[right])
+            if len(sets[left] & sets[right]) / union >= policy.min_overlap:
+                low, high = sorted((find(left), find(right)))
+                root[high] = low
+    groups: dict[int, list[str]] = {}
+    for index, item in enumerate(eligible):
+        groups.setdefault(find(index), []).append(item.spatial_observation_id)
+    return [tuple(groups[key]) for key in sorted(groups)]
+
+
+def _random_observations(seed: int) -> list[SpatialObservation]:
+    rng = random.Random(seed)
+    observations = []
+    for number in range(30):
+        shape = rng.choice(["range", "range", "subset", "tiny"])
+        if shape == "range":
+            start = rng.randrange(0, 180)
+            indexes: Iterable[int] = range(start, min(200, start + rng.randrange(3, 40)))
+        elif shape == "subset":
+            indexes = sorted(rng.sample(range(200), rng.randrange(3, 30)))
+        else:
+            indexes = range(rng.randrange(0, 199), 200)[:2]
+        frame = rng.choice(FRAMES)
+        observations.append(_obs(frame, indexes, region=f"region-{number:04d}"))
+    return observations
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_the_supports_are_those_of_the_all_pairs_reference(seed: int) -> None:
+    observations = _random_observations(seed)
+
+    build = _build(observations)
+
+    assert _members(build) == _brute_force_groups(observations, POLICY)
+    assert [support.fusion_support_id for support in build.supports] == [
+        f"support-{number:06d}" for number in range(1, len(build.supports) + 1)
+    ]
+    assert {item.spatial_observation_id for item in build.excluded} == {
+        item.spatial_observation_id
+        for item in observations
+        if len(item.geometry_support) < POLICY.min_geometry_count
+    }
+
+
+def test_only_observations_that_share_geometry_are_compared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gate de escala por contador: N observações disjuntas mais um par que se sobrepõe; o
+    # número de pares avaliados segue os pares que se intersectam, não N².
+    evaluated = 0
+    real = support_module._overlap
+
+    def counting(*args: int) -> float:
+        nonlocal evaluated
+        evaluated += 1
+        return real(*args)
+
+    monkeypatch.setattr(support_module, "_overlap", counting)
+    disjoint = [
+        _obs("frame-0120", range(3 * n, 3 * n + 3), region=f"region-{n:04d}") for n in range(60)
+    ]
+    overlapping = _obs("frame-0121", range(0, 3), region="region-overlap")
+
+    build = _build([*disjoint, overlapping])
+
+    assert len(build.supports) == 60
+    assert evaluated == 1

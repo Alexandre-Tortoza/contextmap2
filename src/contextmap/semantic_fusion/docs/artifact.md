@@ -41,7 +41,7 @@ Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl
 
 ## Escrita
 
-`SemanticFusionRunWriter.write(outcomes, excluded=..., warnings=..., runtime=...)` consome os `FusionOutcome` (um suporte e a evidência fundida sobre ele) **como fluxo**, gravando cada registro assim que ele chega (`open_binary`, com hash durante a escrita), então o tamanho do run não é limitado pela memória para os arquivos grandes. O run é publicado de forma atômica ao fim do fluxo.
+`SemanticFusionRunWriter.write(outcomes, excluded=..., warnings=..., runtime=...)` consome os `FusionOutcome` (um suporte e a evidência fundida sobre ele) **como fluxo**, gravando cada registro assim que ele chega (`open_binary`, com hash durante a escrita). Todos os arquivos de `outputs/`, os índices derivados inclusive, são escritos linha a linha (#598): o escritor mantém um outcome por vez mais os agregados de `metrics/` e do manifest. O run é publicado de forma atômica ao fim do fluxo.
 
 O writer recusa, com `FusionRunArtifactError` e sem deixar run visível, quando:
 
@@ -108,6 +108,7 @@ O `summary.json` responde: qual hipótese foi sustentada, por quantos frames fí
 
 ## Limitações
 
-- O escritor mantém em memória as linhas dos índices (proporcionais ao número de observações e de evidências), não a evidência inteira.
+- O escritor não retém linhas de índice, mas os agregados de `metrics/` e do manifest crescem com o run: uma entrada por claim, frame físico, resultado de inferência e identidade de evidência distintos, e quatro inteiros por suporte (para as distribuições). Cada `FusedEvidence` ainda é codificado inteiro, e sob `baseline-evidence-accumulation-v1` cada hipótese lista cada claim do suporte: um suporte com H hipóteses e C claims custa O(H×C) no registro e no índice de hipóteses.
+- Medição da #598 (fixture sintética, H = C = 24 por suporte, `tracemalloc`): com 16, 64 e 256 suportes (9 216, 36 864 e 147 456 linhas no índice de hipóteses; 8,4, 33,5 e 133,9 MiB em `outputs/`), o pico de memória do escritor passou de 13,9, 55,4 e 221,8 MiB para 9,0, 9,2 e 9,8 MiB. Com um único suporte de fan-out alto (H = C = 192, 36 864 linhas) o pico continua em ~60 MiB, dominado pela codificação do próprio `FusedEvidence`; reduzir isso exige mudar a política de listagem de evidência, com nova versão de política e de schema.
 - Cada contribuição repete a sua geometria (como deltas) além da união no suporte; o custo cresce com o número de pontos por região. Uma tabela binária compartilhada, como a de Sensor Association, é uma otimização futura sem consumidor hoje.
 - Não há CLI; a composição das entradas e das runs a montante pertence ao `runtime`.

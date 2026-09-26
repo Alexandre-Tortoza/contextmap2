@@ -168,17 +168,36 @@ class EvaluatedDiscoveryFrame:
 
 @dataclass(frozen=True, slots=True)
 class SegmentationAccuracy:
-    """Ground-truth-dependent region geometry metrics for one annotated frame."""
+    """Ground-truth-dependent region geometry metrics for one annotated frame.
+
+    The IoU, Dice, recall and coverage metrics are normalized by the annotation, so a
+    frame with annotations and no discovered region still measures a real failure
+    (``0.0``). The segmentation rates are normalized by the discovered regions instead:
+    without any, they have no population and are ``None``, never ``0.0``, which would
+    be their best value.
+
+    Attributes:
+        mean_iou: Mean over annotated regions of the best IoU with any prediction.
+        mean_dice: Mean over annotated regions of the best Dice with any prediction.
+        region_recall: Share of annotated regions whose best IoU reaches the threshold.
+        coverage: Share of the annotated union covered by the predicted union.
+        over_segmentation_rate: Excess overlapping predictions per annotated region,
+            over the discovered regions; ``None`` without discovered regions.
+        under_segmentation_rate: Predictions overlapping more than one annotated
+            region, over the discovered regions; ``None`` without discovered regions.
+        duplicate_region_rate: Predictions repeating another's best annotated region,
+            over the discovered regions; ``None`` without discovered regions.
+    """
 
     mean_iou: float
     mean_dice: float
     region_recall: float
     coverage: float
-    over_segmentation_rate: float
-    under_segmentation_rate: float
-    duplicate_region_rate: float
+    over_segmentation_rate: float | None
+    under_segmentation_rate: float | None
+    duplicate_region_rate: float | None
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, float | None]:
         """Return JSON-compatible accuracy metrics."""
         return {
             "mean_iou": self.mean_iou,
@@ -327,7 +346,7 @@ class RegionDiscoveryEvaluator:
             )
         return RegionDiscoveryEvaluationReport(
             schema="contextmap.region-discovery-evaluation/v1",
-            metric_schema_version="1.0.0",
+            metric_schema_version="2.0.0",
             reference_set_version=reference_set.version,
             frame_selection=tuple(frame.frame_id for frame in reference_set.frames),
             run=run,
@@ -526,9 +545,10 @@ def _accuracy_metrics(
         coverage=(
             len(predicted_union & expected_union) / len(expected_union) if expected_union else 0.0
         ),
-        over_segmentation_rate=over_segmented / len(predicted) if predicted else 0.0,
-        under_segmentation_rate=under_segmented / len(predicted) if predicted else 0.0,
-        duplicate_region_rate=duplicate_count / len(predicted) if predicted else 0.0,
+        # Sem predição as taxas não têm população; 0.0 seria o melhor valor possível.
+        over_segmentation_rate=over_segmented / len(predicted) if predicted else None,
+        under_segmentation_rate=under_segmented / len(predicted) if predicted else None,
+        duplicate_region_rate=duplicate_count / len(predicted) if predicted else None,
     )
 
 
@@ -547,7 +567,11 @@ def _region_pixels(region: Region2D) -> set[tuple[int, int]]:
 
 
 def _mask_pixels(mask: InlineMask) -> set[tuple[int, int]]:
-    return {(x, y) for y in range(mask.height) for x in range(mask.width) if mask.value_at(x, y)}
+    import numpy as np
+
+    # Só o primeiro plano vira par (x, y); a imagem inteira não é percorrida em Python.
+    rows, columns = np.nonzero(mask.as_array())
+    return set(zip(columns.tolist(), rows.tolist(), strict=True))
 
 
 def _iou(first: set[tuple[int, int]], second: set[tuple[int, int]]) -> float:

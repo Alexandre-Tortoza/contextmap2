@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from enum import StrEnum
 from math import isfinite
-from typing import TypeAlias, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import ArrayLike, NDArray
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 
@@ -117,33 +121,101 @@ class BoundingBox:
         )
 
 
-@dataclass(frozen=True, slots=True)
 class InlineMask:
-    """Small serialization-friendly row-major binary mask."""
+    """A full-image binary mask: an immutable ``(height, width)`` array of one byte per pixel.
 
-    width: int
-    height: int
-    data: tuple[bool, ...]
+    The pixels are copied once, at construction, into a ``bytes`` buffer the mask owns, and are
+    exposed as read-only NumPy views of it. Neither a view nor anything under it can be made
+    writeable again, so a mask is a value, like the ``tuple[bool, ...]`` it replaced (#593),
+    without one Python object per pixel. :meth:`to_dict` and :meth:`from_dict` keep the
+    serialized form, the flat row-major list of ``0``/``1``, so no artifact changes.
+    """
 
-    def __post_init__(self) -> None:
-        """Validate mask shape and values."""
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError("mask dimensions must be positive")
-        if len(self.data) != self.width * self.height:
-            raise ValueError("mask data length must equal width multiplied by height")
-        if any(type(value) is not bool for value in self.data):
+    __slots__ = ("_buffer", "_pixels")
+    _buffer: bytes
+    _pixels: NDArray[np.bool_]
+
+    def __init__(self, pixels: ArrayLike) -> None:
+        """Copy ``pixels`` into an owned, read-only buffer.
+
+        Args:
+            pixels: The ``(height, width)`` boolean image, row-major.
+
+        Raises:
+            TypeError: If the pixels are not booleans.
+            ValueError: If they are not a two-dimensional image with positive dimensions.
+        """
+        import numpy as np
+
+        array = np.asarray(pixels)
+        if array.dtype != np.bool_:
             raise TypeError("mask data must contain bool values")
+        if array.ndim != 2 or 0 in array.shape:
+            raise ValueError("mask dimensions must be positive")
+        # A comparação devolve booleanos canônicos (um byte 0 ou 1), então dois buffers iguais
+        # significam as mesmas máscaras; o bytes é imutável e ninguém reabilita escrita sobre ele.
+        buffer = np.not_equal(array, False).tobytes()
+        object.__setattr__(self, "_buffer", buffer)
+        object.__setattr__(
+            self, "_pixels", np.frombuffer(buffer, dtype=np.bool_).reshape(array.shape)
+        )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Refuse any change: a mask is a value."""
+        raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        """Refuse any change: a mask is a value."""
+        raise FrozenInstanceError(f"cannot delete field {name!r}")
+
+    def __eq__(self, other: object) -> bool:
+        """Compare dimensions and pixels; the canonical buffers make this ``np.array_equal``."""
+        if not isinstance(other, InlineMask):
+            return NotImplemented
+        return self._pixels.shape == other._pixels.shape and self._buffer == other._buffer
+
+    def __hash__(self) -> int:
+        """Hash dimensions and pixels; ``bytes`` caches its own hash after the first call."""
+        return hash((self._pixels.shape, self._buffer))
+
+    def __repr__(self) -> str:
+        """Summarize the mask without printing its pixels."""
+        return f"InlineMask(width={self.width}, height={self.height}, area={self.area})"
+
+    def __reduce__(self) -> tuple[type[InlineMask], tuple[NDArray[np.bool_]]]:
+        """Rebuild through the constructor, for ``copy`` and ``pickle``."""
+        return (type(self), (self._pixels,))
+
+    @property
+    def width(self) -> int:
+        """Return the image width in pixels."""
+        return int(self._pixels.shape[1])
+
+    @property
+    def height(self) -> int:
+        """Return the image height in pixels."""
+        return int(self._pixels.shape[0])
 
     @property
     def area(self) -> int:
         """Return the number of foreground pixels."""
-        return sum(self.data)
+        import numpy as np
+
+        return int(np.count_nonzero(self._pixels))
+
+    def as_array(self) -> NDArray[np.bool_]:
+        """Return the pixels as a read-only ``(height, width)`` view, without copying them.
+
+        The view is the caller's own object (reshaping it never reaches the mask), and neither
+        it nor its base can be made writeable.
+        """
+        return self._pixels.view()
 
     def value_at(self, x: int, y: int) -> bool:
         """Return whether a pixel is foreground."""
         if not 0 <= x < self.width or not 0 <= y < self.height:
             raise IndexError("mask coordinate outside image bounds")
-        return self.data[y * self.width + x]
+        return bool(self._pixels[y, x])
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible representation."""
@@ -151,12 +223,14 @@ class InlineMask:
             "storage": "inline",
             "width": self.width,
             "height": self.height,
-            "data": [int(value) for value in self.data],
+            "data": list(self._buffer),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> InlineMask:
         """Restore an inline mask from serialized data."""
+        import numpy as np
+
         data = _mapping(value, "inline mask")
         raw_values = data.get("data")
         invalid_values = isinstance(raw_values, list) and any(
@@ -164,14 +238,40 @@ class InlineMask:
         )
         if not isinstance(raw_values, list) or invalid_values:
             raise TypeError("inline mask data must be a list of binary values")
-        return cls(
-            width=_integer(data, "width"),
-            height=_integer(data, "height"),
-            data=tuple(bool(item) for item in raw_values),
-        )
+        width = _integer(data, "width")
+        height = _integer(data, "height")
+        if width <= 0 or height <= 0:
+            raise ValueError("mask dimensions must be positive")
+        if len(raw_values) != width * height:
+            raise ValueError("mask data length must equal width multiplied by height")
+        return cls(np.array(raw_values, dtype=np.bool_).reshape(height, width))
 
 
 MaskGeometry: TypeAlias = InlineMask
+
+
+def mask_bounding_box(mask: InlineMask) -> BoundingBox | None:
+    """Return the tight half-open box of a mask's true pixels.
+
+    Args:
+        mask: The mask, in its own pixel coordinates.
+
+    Returns:
+        The smallest box containing every true pixel, or ``None`` for an empty mask.
+    """
+    import numpy as np
+
+    pixels = mask.as_array()
+    rows = np.flatnonzero(pixels.any(axis=1))
+    if rows.size == 0:
+        return None
+    columns = np.flatnonzero(pixels.any(axis=0))
+    return BoundingBox(
+        x_min=int(columns[0]),
+        y_min=int(rows[0]),
+        x_max=int(columns[-1]) + 1,
+        y_max=int(rows[-1]) + 1,
+    )
 
 
 @dataclass(frozen=True, slots=True)

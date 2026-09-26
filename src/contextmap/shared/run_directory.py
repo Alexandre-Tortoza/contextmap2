@@ -8,6 +8,14 @@ indexes are monotonic per capability and sequence and computed from valid runs
 on disk (a registry file is only a convenience). This module implements those
 rules once. It knows nothing about what a run contains; the owning capability
 decides the files, the manifest fields and what makes a run valid.
+
+Publication is durable as well as atomic: every file and directory of a run is
+forced to stable storage (``fsync``) before the rename that makes it visible,
+and the parent directory right after it. The rename alone only protects against
+a process that dies; without the syncs a power loss could persist the rename
+before the data and leave a published run with empty or truncated files.
+Syncing a directory opens it read-only, which is POSIX behavior (Linux, the
+platform the project runs on).
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -78,11 +87,16 @@ def check_file_inventory(root: Path, inventory: Iterable[FileEntry]) -> list[str
         inventory: The entries the manifest promises.
 
     Returns:
-        Human-readable problems (missing file, size mismatch, hash
-        mismatch); empty means the inventory matches.
+        Human-readable problems (a path that is not inside the run, missing
+        file, size mismatch, hash mismatch); empty means the inventory matches.
+        A path outside the run is reported and never opened.
     """
     problems: list[str] = []
     for entry in inventory:
+        # Um manifest adulterado nunca faz o leitor abrir um arquivo fora do run.
+        if not is_run_relative_path(entry.path):
+            problems.append(f"invalid path in manifest: {entry.path!r}")
+            continue
         file_path = root / entry.path
         if not file_path.is_file():
             problems.append(f"missing file referenced by manifest: {entry.path}")
@@ -134,7 +148,8 @@ class AtomicRunDirectory:
     directory, and only :meth:`publish` renames it to its final path, after
     verifying the inventory. Leaving the block without publishing, or with an
     exception, removes the temporary directory, so the final path never exists
-    half written.
+    half written. Every file and directory reaches stable storage before that
+    rename, so this also holds after a power loss (see :meth:`publish`).
     """
 
     def __init__(self, final_dir: Path) -> None:
@@ -179,6 +194,8 @@ class AtomicRunDirectory:
     def write_bytes(self, relative_path: str, data: bytes, *, contractual: bool = True) -> None:
         """Write a file, recording it in the inventory when it is contractual.
 
+        The file is forced to stable storage (``fsync``) before the call returns.
+
         Args:
             relative_path: Path relative to the run directory.
             data: The file content.
@@ -190,13 +207,14 @@ class AtomicRunDirectory:
         Raises:
             RunDirectoryError: If the path is not a plain relative path inside
                 the run, or the same path was already written.
+            OSError: If the file cannot be written or forced to stable storage.
         """
         _require_relative_path(relative_path)
         if relative_path in self._written:
             raise RunDirectoryError(f"path already written in this run: {relative_path}")
         target = self._tmp_dir / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        _write_synced(target, data)
         self._written.add(relative_path)
         if contractual:
             self._entries[relative_path] = file_entry(relative_path, data)
@@ -207,7 +225,8 @@ class AtomicRunDirectory:
 
         The bytes are hashed and counted as they are written, so the inventory
         entry costs no second read. Use it like :meth:`write_bytes` for payloads
-        that are produced incrementally.
+        that are produced incrementally. The file is forced to stable storage
+        (``fsync``) when the stream is closed.
 
         Args:
             relative_path: Path relative to the run directory.
@@ -220,6 +239,8 @@ class AtomicRunDirectory:
         Raises:
             RunDirectoryError: If the path is not a plain relative path inside
                 the run, or the same path was already written.
+            OSError: If the file cannot be written or forced to stable storage;
+                the run can then no longer be published.
         """
         _require_relative_path(relative_path)
         if relative_path in self._written:
@@ -236,6 +257,7 @@ class AtomicRunDirectory:
                     yield stream
                 finally:
                     stream.close()
+                _sync_file(handle)
         except BaseException:
             # Um arquivo parcial nunca pode ser publicado nem parecer inventariado.
             self._failed_stream = True
@@ -267,10 +289,36 @@ class AtomicRunDirectory:
             raise RunDirectoryError(f"path has not been written in this run: {relative_path}")
         return self._tmp_dir / relative_path
 
+    def inventory(self) -> tuple[FileEntry, ...]:
+        """Return the inventory recorded so far, sorted by path.
+
+        It is exactly what :meth:`publish` adds to the manifest: every contractual file written
+        with :meth:`write_bytes`, and every contractual stream of :meth:`open_binary` once it is
+        closed, with the size and hash counted while it was written. An owner whose manifest
+        depends on the inventory (for example a content identity computed over the file hashes)
+        builds it from here without reading any file again.
+
+        Returns:
+            The entries recorded when this call is made; a stream still open is not among them.
+        """
+        return tuple(sorted(self._entries.values(), key=lambda entry: entry.path))
+
     def publish(self, *, manifest: Mapping[str, Any], readme: str) -> None:
         """Write the manifest, verify the inventory and make the run visible.
 
         The manifest and README are not part of their own inventory.
+
+        Publication is durable: the payloads were forced to stable storage when
+        written, the manifest and README are forced here, then every directory of
+        the run, and only then the run is renamed to its final path, after which
+        the parent directory is forced too. After a power loss the final path
+        either does not exist or holds the complete run.
+
+        Cost: one ``fsync`` per file of the run (paid by :meth:`write_bytes` and
+        :meth:`open_binary` as each file is written), one per directory of the
+        run and one for the parent. Each waits for the storage device, so the
+        cost grows with the number of files and with the data not yet flushed,
+        not with anything the owning capability computes.
 
         Args:
             manifest: Manifest fields from the owning capability; the
@@ -281,12 +329,16 @@ class AtomicRunDirectory:
             RunDirectoryError: If a stream is open or failed, the inventory does
                 not match the files on disk, or the final path appeared in the
                 meantime.
+            OSError: If a file or directory cannot be forced to stable storage.
+                Before the rename the run is not published; when the parent
+                directory fails after it, the run is visible but its durability
+                is not confirmed.
         """
         if self._open_streams:
             raise RunDirectoryError("a stream is still open; close it before publishing the run")
         if self._failed_stream:
             raise RunDirectoryError("a stream failed while writing; the run cannot be published")
-        inventory = sorted(self._entries.values(), key=lambda entry: entry.path)
+        inventory = self.inventory()
         record = {
             **manifest,
             "file_inventory": [
@@ -298,23 +350,76 @@ class AtomicRunDirectory:
                 for entry in inventory
             ],
         }
-        (self._tmp_dir / _MANIFEST_FILENAME).write_text(
-            json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
+        _write_synced(
+            self._tmp_dir / _MANIFEST_FILENAME,
+            json.dumps(record, indent=2, sort_keys=True).encode("utf-8"),
         )
-        (self._tmp_dir / _README_FILENAME).write_text(readme, encoding="utf-8")
+        _write_synced(self._tmp_dir / _README_FILENAME, readme.encode("utf-8"))
 
         problems = check_file_inventory(self._tmp_dir, inventory)
         if problems:
             raise RunDirectoryError(f"internal consistency check failed before publish: {problems}")
         if self._final_dir.exists():
             raise RunDirectoryError(f"run directory already exists: {self._final_dir}")
+        # Os dados já estão no disco; os nomes de cada diretório do run também precisam
+        # estar antes do rename, senão ele pode sobreviver a uma queda sem os arquivos.
+        for directory in self._run_directories():
+            _sync_directory(directory)
         self._tmp_dir.rename(self._final_dir)
         self._published = True
+        _sync_directory(self._final_dir.parent)
+
+    def _run_directories(self) -> list[Path]:
+        """Return every directory of the run: its root and each parent of a written file."""
+        parents = {parent for path in self._written for parent in PurePosixPath(path).parents}
+        return sorted({self._tmp_dir, *(self._tmp_dir / parent for parent in parents)})
+
+
+def is_run_relative_path(relative_path: str) -> bool:
+    """Tell whether a path is a plain relative path that stays inside a run directory.
+
+    Args:
+        relative_path: Path with ``/`` separators, as a manifest or an index records it.
+
+    Returns:
+        ``False`` for an empty path, an absolute path, a path with a ``..`` part or ``.``
+        alone: joining any of them to the run directory could leave it or name it.
+    """
+    path = PurePosixPath(relative_path)
+    return bool(relative_path) and not (
+        path.is_absolute() or ".." in path.parts or path.parts == (".",)
+    )
+
+
+def _write_synced(path: Path, data: bytes) -> None:
+    """Write ``data`` to a new file and force it to stable storage before returning."""
+    with path.open("wb") as handle:
+        handle.write(data)
+        _sync_file(handle)
+
+
+def _sync_file(handle: BinaryIO) -> None:
+    """Flush a file's buffers and force its content to stable storage."""
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _sync_directory(directory: Path) -> None:
+    """Force a directory's entries (the names created or renamed in it) to stable storage.
+
+    Raises:
+        OSError: If the directory cannot be opened or synced; opening a directory
+            read-only to sync it is POSIX and fails on platforms that forbid it.
+    """
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _require_relative_path(relative_path: str) -> None:
-    path = PurePosixPath(relative_path)
-    if not relative_path or path.is_absolute() or ".." in path.parts or path.parts == (".",):
+    if not is_run_relative_path(relative_path):
         raise RunDirectoryError(
             f"expected a relative path inside the run directory, got {relative_path!r}"
         )

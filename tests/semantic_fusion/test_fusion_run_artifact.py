@@ -6,12 +6,14 @@ import sys
 import textwrap
 import typing
 from collections.abc import Iterator
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 from fusion_run_fixtures import (
     LINEAGE,
     RunFixture,
+    make_fan_out_run_fixture,
     make_multi_region_run_fixture,
     make_run_fixture,
 )
@@ -30,6 +32,7 @@ from contextmap.semantic_fusion import (
     SemanticFusionRunReader,
     SemanticFusionRunWriter,
     UncertaintyKind,
+    run_artifact,
 )
 from contextmap.sensor_association import SpatialObservationId
 from contextmap.visual_perception import PerceptionRunId
@@ -300,6 +303,91 @@ def test_skipped_evidence_and_warnings_are_persisted_explicitly(tmp_path: Path) 
     assert manifest.excluded_count == 1
     assert reader.excluded_observations() == [skipped]
     assert reader.manifest.warnings == ("w1", "w2")
+
+
+def _with_excluded() -> RunFixture:
+    fixture = make_run_fixture()
+    spatial_ids = fixture.outcomes[0].support.spatial_observation_ids
+    return dataclasses.replace(
+        fixture,
+        excluded=tuple(
+            ExcludedObservation(
+                spatial_observation_id=spatial_id, geometry_count=1, minimum_geometry_count=3
+            )
+            for spatial_id in spatial_ids[:2]
+        ),
+    )
+
+
+# #598: gravados antes de os índices passarem a ser streamados; o conteúdo não pode mudar.
+_RECORDED_RUNS = {
+    "three-supports": (
+        make_run_fixture,
+        "eca69388196203ed322b86e6e8f7a180f1e81f472385fb80cff9971c6974b53d",
+    ),
+    "multi-region": (
+        make_multi_region_run_fixture,
+        "4439cebf412e9b355ca53333c6df8147307ed4d57a94481fc72fdb8daf0cea90",
+    ),
+    "fan-out": (
+        make_fan_out_run_fixture,
+        "8255ee1d4e50a725e96de925e1bc4d7cc956148b3f5544f8a4727195368b647a",
+    ),
+    "with-excluded": (
+        _with_excluded,
+        "c990907e097d0d9f54ea3fc8674a33dc8290de65c178c520689bb67cbda78329",
+    ),
+    "empty": (
+        lambda: RunFixture(outcomes=(), excluded=()),
+        "ca4dca7e669ad8f18dc9a1d99c96171a62ce9d4118e2f3e54e072bea2215c1f8",
+    ),
+}
+
+
+def _contractual_digest(run_dir: Path) -> str:
+    """Digest of every contractual file and of the manifest apart from its creation time."""
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest.pop("created_at")
+    files = {
+        path.relative_to(run_dir).as_posix(): sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_dir.rglob("*"))
+        if path.is_file() and path.relative_to(run_dir).parts[0] in ("outputs", "metrics")
+    }
+    record = json.dumps({"manifest": manifest, "files": files}, sort_keys=True)
+    return sha256(record.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("case", sorted(_RECORDED_RUNS))
+def test_the_persisted_run_matches_the_recorded_bytes(tmp_path: Path, case: str) -> None:
+    build, recorded = _RECORDED_RUNS[case]
+
+    run_dir = _write(tmp_path, build())
+
+    assert _contractual_digest(run_dir) == recorded
+
+
+def test_the_writer_keeps_no_row_of_the_index_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #598: cada hipótese lista cada claim; manter as linhas custaria H x C em memória.
+    tallies: list[typing.Any] = []
+    original = run_artifact._Tally
+
+    def recording_tally(lineage: FusionRunLineage) -> typing.Any:
+        tally = original(lineage)
+        tallies.append(tally)
+        return tally
+
+    monkeypatch.setattr(run_artifact, "_Tally", recording_tally)
+
+    run_dir = _write(tmp_path, make_fan_out_run_fixture())
+
+    hypothesis_rows = len(_lines(run_dir / "outputs" / "hypothesis-evidence-index.jsonl"))
+    retained = max(
+        len(value) for value in vars(tallies[0]).values() if isinstance(value, list | dict | set)
+    )
+    assert hypothesis_rows == 24 * 24
+    assert retained < hypothesis_rows
 
 
 def test_a_run_without_supports_is_a_valid_explicit_run(tmp_path: Path) -> None:

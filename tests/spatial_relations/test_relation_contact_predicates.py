@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import math
+import random
+import weakref
+from collections import Counter
+from collections.abc import Sequence
+from typing import Any
 
 import pytest
 from relation_builders import entity_ref
+from relation_run_fixture import build_run
 from relation_scene import CONNECTED_POLICY, LATTICE_POLICY, ORIENTED_LATTICE_POLICY, Scene
 
 from contextmap.entity_resolution import ResolvedEntityReference
-from contextmap.geometric_mapping import MapId
+from contextmap.geometric_mapping import GeometryPoint, GeometryReference, GeometrySource, MapId
 from contextmap.semantic_mapping import (
     EntityGeometry,
     GeometryResolutionError,
@@ -33,6 +41,8 @@ from contextmap.spatial_relations import (
     RelationEvidenceStatus,
     RelationPredicate,
     UndeclaredAxisError,
+    contact_predicates,
+    encode_relation_evidence,
     evaluate_contact_candidates,
     evaluate_contact_predicate,
     evaluate_geometric_predicate,
@@ -534,3 +544,257 @@ def test_contact_candidates_are_evaluated_and_geometric_ones_are_left_alone() ->
         (RelationPredicate.ON_TOP_OF, SUPPORTS),
         (RelationPredicate.TOUCHING, SUPPORTS),
     ]
+
+
+# --- scale: equivalence of the candidate evaluation (#601) ---
+
+
+RANDOM_CANDIDATES = CandidatePolicy(
+    predicates=(
+        RelationPredicate.NEXT_TO,
+        RelationPredicate.TOUCHING,
+        RelationPredicate.ON_TOP_OF,
+        RelationPredicate.LEANING_AGAINST,
+    ),
+    proximity_radius_m=0.2,
+    directional_radius_m=1.0,
+)
+
+
+def _jittered_box(
+    rng: random.Random, low: Vector3, high: Vector3, *, spacing: float = 0.1
+) -> list[Vector3]:
+    """A lattice filling a box, each point moved up to 1 cm, so distances are not all on a grid."""
+    axes = []
+    for lower, upper in zip(low, high, strict=True):
+        steps = max(1, round((upper - lower) / spacing))
+        axes.append([lower + (upper - lower) * step / steps for step in range(steps + 1)])
+    return [
+        (x + rng.uniform(-0.01, 0.01), y + rng.uniform(-0.01, 0.01), z + rng.uniform(-0.01, 0.01))
+        for x in axes[0]
+        for y in axes[1]
+        for z in axes[2]
+    ]
+
+
+def random_contact_scene(
+    seed: int,
+) -> tuple[Scene, dict[ResolvedEntityReference, EntityGeometry]]:
+    """A floor and seven crates dropped on it or on each other, some hovering, some sunk."""
+    rng = random.Random(seed)
+    scene = Scene()
+    scene.add_points("e01", _jittered_box(rng, (0.0, 0.0, 0.0), (2.0, 2.0, 0.1)))
+    tops = [0.1]
+    for number in range(2, 9):
+        sx, sy, sz = (rng.uniform(0.2, 0.5) for _ in range(3))
+        x, y = rng.uniform(0.0, 2.0 - sx), rng.uniform(0.0, 2.0 - sy)
+        z = rng.choice(tops) + rng.choice((-0.03, 0.0, 0.0, 0.04, 0.06))
+        scene.add_points(f"e{number:02d}", _jittered_box(rng, (x, y, z), (x + sx, y + sy, z + sz)))
+        tops.append(z + sz)
+    entities = {
+        entity_ref(number): scene.geometry(f"e{number:02d}", policy=ORIENTED_LATTICE_POLICY)
+        for number in range(1, 9)
+    }
+    return scene, entities
+
+
+def _evidence_digest(evidence: Sequence[RelationEvidence]) -> str:
+    """Digest of every evidence record, in the order given."""
+    records = [encode_relation_evidence(item) for item in evidence]
+    return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
+
+
+def _random_contact_digest(seed: int) -> str:
+    scene, entities = random_contact_scene(seed)
+    candidates = generate_relation_candidates(
+        entities, policy=RANDOM_CANDIDATES, conventions=CONVENTIONS
+    )
+    return _evidence_digest(
+        evaluate_contact_candidates(
+            candidates,
+            entities=entities,
+            geometry_source=scene.source(),
+            policy=POLICY,
+            conventions=CONVENTIONS,
+        )
+    )
+
+
+def _fixture_contact_digest() -> str:
+    run = build_run()
+    return _evidence_digest(
+        [item for item in run.evidence if item.channel is RelationEvidenceChannel.CONTACT]
+    )
+
+
+# #601 (SR-03): gravados antes de a grade de contato ser reaproveitada entre candidatos.
+RECORDED_CONTACT_EVIDENCE = {
+    "fixture": "628471baa2a29934fcab44f50ac5804b6e1ea119c5619c7c6a6cb59fe139cd24",
+    "seed-0": "3b0ea1bbe4334f28249f74ba7355e1c419668d511edcca5c265d7cd2ac863f65",
+    "seed-1": "9ee47de01789997659e53dae7194ea16ff780e34a67e9abe962178971fe16ba9",
+    "seed-2": "b258bf0f0d640a603ecc78e2c5b8c7218d8c7abac8fa482c5761cd51f043a143",
+    "seed-3": "e1298c0dd48476aac161720070b3fa05a4a217e91c35b57814ca6f5c2324b43d",
+    "seed-4": "5e1720e156ee5e6a785caedc431ef8fbb9182d1fd81042dd8ffdd4900e469767",
+}
+
+
+@pytest.mark.parametrize("case", sorted(RECORDED_CONTACT_EVIDENCE))
+def test_the_contact_evaluation_matches_the_recorded_evidence(case: str) -> None:
+    digest = (
+        _fixture_contact_digest()
+        if case == "fixture"
+        else _random_contact_digest(int(case.removeprefix("seed-")))
+    )
+    assert digest == RECORDED_CONTACT_EVIDENCE[case]
+
+
+# --- scale: grids built once per object entity (#601) ---
+
+
+GridKey = tuple[frozenset[str], float]
+
+
+def _count_grids(monkeypatch: pytest.MonkeyPatch) -> Counter[GridKey]:
+    """Count every contact grid built, by the points it buckets and the radius it uses."""
+    built: Counter[GridKey] = Counter()
+    build = contact_predicates._contact_grid
+
+    def counting(points: Sequence[GeometryPoint], search_radius_m: float) -> object:
+        built[(frozenset(point.geometry_id for point in points), search_radius_m)] += 1
+        return build(points, search_radius_m)
+
+    monkeypatch.setattr(contact_predicates, "_contact_grid", counting)
+    return built
+
+
+def _crates_on_a_table(count: int) -> tuple[Scene, dict[ResolvedEntityReference, EntityGeometry]]:
+    """``count`` crates resting on one table, far enough apart to never touch each other."""
+    scene = Scene()
+    scene.add_lattice("table", *TABLE, SPACING)
+    for index in range(count):
+        x = 0.1 + 0.4 * index
+        scene.add_lattice(f"crate{index}", (x, 0.5, 0.1), (x + 0.2, 0.7, 0.3), SPACING)
+    entities = {entity_ref(1): scene.geometry("table", policy=LATTICE_POLICY)}
+    for index in range(count):
+        entities[entity_ref(index + 2)] = scene.geometry(f"crate{index}", policy=LATTICE_POLICY)
+    return scene, entities
+
+
+def test_a_shared_object_is_bucketed_once_however_many_candidates_name_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SR-03: a grade do objeto era reconstruída a cada candidato que o nomeia.
+    crates = 5
+    scene, entities = _crates_on_a_table(crates)
+    candidates = generate_relation_candidates(
+        entities,
+        policy=CandidatePolicy(
+            predicates=(RelationPredicate.ON_TOP_OF,),
+            proximity_radius_m=0.2,
+            directional_radius_m=1.0,
+        ),
+        conventions=CONVENTIONS,
+    )
+    built = _count_grids(monkeypatch)
+
+    evidence = evaluate_contact_candidates(
+        candidates,
+        entities=entities,
+        geometry_source=scene.source(),
+        policy=POLICY,
+        conventions=CONVENTIONS,
+    )
+
+    assert [(item.object_entity_ref, item.status) for item in evidence] == [
+        (entity_ref(1), SUPPORTS)
+    ] * crates
+    table = frozenset(str(item.geometry_id) for item in scene.references("table"))
+    assert built == {(table, POLICY.search_radius_m): 1}
+
+
+class TrackedCloud(list[GeometryPoint]):
+    """Resolved points whose lifetime a test can observe with a weak reference."""
+
+
+class TrackedGrid(dict[tuple[int, int, int], Sequence[GeometryPoint]]):
+    """A contact grid whose lifetime a test can observe with a weak reference."""
+
+
+def _shelf(numbers: Sequence[int]) -> tuple[Scene, dict[ResolvedEntityReference, EntityGeometry]]:
+    """Boxes in a row along ``x``, each touching the next, named by ``numbers`` in that order."""
+    scene = Scene()
+    for index in range(len(numbers)):
+        scene.add_lattice(
+            f"box{index}", (0.5 * index, 0.0, 0.0), (0.5 * index + 0.5, 0.5, 0.5), SPACING
+        )
+    entities = {
+        entity_ref(number): scene.geometry(f"box{index}", policy=LATTICE_POLICY)
+        for index, number in enumerate(numbers)
+    }
+    return scene, entities
+
+
+def test_only_the_entities_around_the_sweep_front_stay_resident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SR-03: o cache de pontos nunca evictava, então todas as nuvens ficavam residentes. As
+    # identidades embaralhadas mostram que o limite não depende de como as referências se ordenam.
+    numbers = (5, 2, 8, 1, 7, 3, 6, 4)
+    count = len(numbers)
+    scene, entities = _shelf(numbers)
+    candidates = generate_relation_candidates(
+        entities,
+        policy=CandidatePolicy(
+            predicates=(RelationPredicate.TOUCHING,),
+            proximity_radius_m=0.2,
+            directional_radius_m=1.0,
+        ),
+        conventions=CONVENTIONS,
+    )
+    clouds: list[weakref.ref[TrackedCloud]] = []
+    grids: list[weakref.ref[TrackedGrid]] = []
+    resolve = contact_predicates.resolve_geometry
+    build = contact_predicates._contact_grid
+    measure = contact_predicates._measure_contact
+    resident: list[tuple[int, int]] = []
+
+    def tracked_resolve(
+        references: Sequence[GeometryReference], *, source: GeometrySource
+    ) -> TrackedCloud:
+        cloud = TrackedCloud(resolve(references, source=source))
+        clouds.append(weakref.ref(cloud))
+        return cloud
+
+    def tracked_grid(points: Sequence[GeometryPoint], search_radius_m: float) -> TrackedGrid:
+        grid = TrackedGrid(build(points, search_radius_m))
+        grids.append(weakref.ref(grid))
+        return grid
+
+    def observed_measure(*args: Any) -> Any:
+        resident.append(
+            (
+                sum(ref() is not None for ref in clouds),
+                sum(ref() is not None for ref in grids),
+            )
+        )
+        return measure(*args)
+
+    monkeypatch.setattr(contact_predicates, "resolve_geometry", tracked_resolve)
+    monkeypatch.setattr(contact_predicates, "_contact_grid", tracked_grid)
+    monkeypatch.setattr(contact_predicates, "_measure_contact", observed_measure)
+
+    evidence = evaluate_contact_candidates(
+        candidates,
+        entities=entities,
+        geometry_source=scene.source(),
+        policy=POLICY,
+        conventions=CONVENTIONS,
+    )
+
+    assert [item.status for item in evidence] == [SUPPORTS] * (count - 1)
+    objects = {item.object_entity_ref for item in candidates.candidates}
+    assert (len(clouds), len(grids)) == (count, len(objects))
+    # A varredura segue a fileira: enquanto um par é medido, só as duas caixas dele estão
+    # residentes (pontos e, se já foram objeto, grade), qualquer que seja a ordem das identidades.
+    assert max(clouds for clouds, _ in resident) == 2
+    assert max(grids for _, grids in resident) <= 2

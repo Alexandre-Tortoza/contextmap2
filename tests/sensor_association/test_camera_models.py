@@ -249,6 +249,54 @@ def test_a_pinhole_cannot_project_what_is_beside_or_behind_the_camera() -> None:
     np.testing.assert_allclose(result.depth_m, [-1.0, 0.0, 0.0, 1e-12, 1e-3])
 
 
+def test_a_distorted_pinhole_stops_where_the_distorted_radius_stops_growing() -> None:
+    # d(r (1 + k1 r^2))/dr = 1 + 3 k1 r^2 se anula em r = sqrt(1 / (-3 k1)), cerca de 47,5 graus.
+    k1 = -0.28
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (k1, 0.0, 0.0, 0.0, 0.0)))
+    )
+    limit_deg = math.degrees(math.atan(math.sqrt(1 / (-3 * k1))))
+
+    result = projection.project(_points(_at_angle(limit_deg - 1.0), _at_angle(limit_deg + 1.0)))
+
+    assert result.projectable.tolist() == [True, False]
+    assert np.isnan(result.pixels[1]).all()
+
+
+def test_a_point_beyond_the_fold_never_lands_on_the_principal_point() -> None:
+    """The audit's reproduction: past the fold the radius shrinks back to zero.
+
+    With ``k1 = -0.28`` alone, ``r (1 + k1 r^2)`` returns to zero at ``r = sqrt(1 / 0.28)``,
+    about 62.1 degrees off the axis, so the unguarded polynomial sent that point exactly to the
+    principal point, inside the image.
+    """
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.0, 0.0, 0.0, 0.0)))
+    )
+    folded_deg = math.degrees(math.atan(math.sqrt(1 / 0.28)))
+
+    result = projection.project(_points(_at_angle(folded_deg)))
+
+    assert not result.projectable[0]
+    assert np.isnan(result.pixels).all()
+    assert not projection.in_image(result.pixels)[0]
+
+
+def test_a_distorted_pinhole_gives_no_ray_beyond_its_fold() -> None:
+    """``unproject`` must stay inside the same domain ``project`` accepts.
+
+    With ``k2 > 0`` the distorted radius grows again past the fold, so a pixel beyond the
+    fold's peak has a preimage only on that outer branch; returning it would hand out a ray
+    that ``project`` refuses.
+    """
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.03, 0.0, 0.0, 0.0)))
+    )
+
+    with pytest.raises(ValueError, match="no viewing ray"):
+        projection.unproject(np.array([[CX + 0.9 * FX, CY]]))
+
+
 def test_a_fisheye_stops_where_the_radius_stops_growing_with_the_angle() -> None:
     # d(theta_d)/d(theta) = 1 + 3 k1 theta^2 se anula em theta = sqrt(1 / (-3 k1)).
     projection = camera_projection_for(_entry(_fisheye_model((-0.3, 0.0, 0.0, 0.0))))
@@ -374,6 +422,133 @@ def test_unproject_rejects_pixels_that_are_not_finite() -> None:
 
     with pytest.raises(ValueError, match="finite"):
         projection.unproject(np.array([[float("nan"), 1.0]]))
+
+
+# --- Bound of the ray angle over an image box -------------------------------
+
+_FULL_IMAGE = {"u_bounds": (-0.5, WIDTH - 0.5), "v_bounds": (-0.5, HEIGHT - 0.5)}
+
+
+def _ray_angle(rays: NDArray[np.float64]) -> NDArray[np.float64]:
+    angles: NDArray[np.float64] = np.arctan2(np.hypot(rays[:, 0], rays[:, 1]), rays[:, 2])
+    return angles
+
+
+def _image_border(step_px: float = 0.5) -> NDArray[np.float64]:
+    """Pixel centers along the four edges of the image, corners included."""
+    us = np.arange(0.0, WIDTH - 1.0 + step_px / 2, step_px)
+    vs = np.arange(0.0, HEIGHT - 1.0 + step_px / 2, step_px)
+    edges = [
+        np.column_stack((us, np.zeros_like(us))),
+        np.column_stack((us, np.full_like(us, HEIGHT - 1.0))),
+        np.column_stack((np.zeros_like(vs), vs)),
+        np.column_stack((np.full_like(vs, WIDTH - 1.0), vs)),
+    ]
+    return np.vstack(edges)
+
+
+def test_the_ray_angle_bound_of_an_ideal_pinhole_is_its_farthest_corner() -> None:
+    projection = camera_projection_for(_entry(_pinhole_model()))
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    corner = math.atan(math.hypot(320.5 / FX, 240.5 / FY))
+    assert corner <= bound <= corner + 1e-12
+    # O canto, não a metade do campo de visão horizontal.
+    assert bound > math.atan(320.5 / FX) + 0.1
+
+
+def test_a_radially_distorted_pinhole_is_bounded_by_the_ray_of_its_farthest_corner() -> None:
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.07, 0.0, 0.0, 0.0)))
+    )
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    farthest = float(_ray_angle(projection.unproject(np.array([[-0.5, -0.5]])))[0])
+    assert farthest - 1e-12 <= bound <= farthest + 1e-9
+
+
+def test_a_pinhole_whose_fold_lies_inside_the_image_is_bounded_by_the_fold() -> None:
+    # Com k1 = -0,28 sozinho o raio distorcido chega no máximo a 0,727 antes de dobrar,
+    # e o canto está a 0,81: a imagem alcança a dobra, então o limite é o domínio.
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.0, 0.0, 0.0, 0.0)))
+    )
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    assert bound == pytest.approx(math.atan(math.sqrt(1 / 0.84)), abs=1e-9)
+
+
+def test_a_fisheye_whose_valid_circle_ends_inside_the_image_is_bounded_by_its_domain() -> None:
+    # theta_d cresce até sqrt(1 / 0,9) rad, onde vale 0,703; o canto está a 0,81.
+    projection = camera_projection_for(_entry(_fisheye_model((-0.3, 0.0, 0.0, 0.0))))
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    assert bound == pytest.approx(math.sqrt(1 / 0.9), abs=1e-9)
+
+
+def test_a_unified_model_whose_horizon_is_inside_the_image_is_bounded_by_the_horizon() -> None:
+    wide = MeiCameraModel(
+        width=WIDTH,
+        height=HEIGHT,
+        fx=200.0,
+        fy=200.0,
+        cx=CX,
+        cy=CY,
+        xi=MEI_XI,
+        distortion_coefficients=(0.0, 0.0, 0.0, 0.0),
+    )
+    projection = camera_projection_for(_entry(wide))
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    assert bound == pytest.approx(math.acos(-1 / MEI_XI), abs=1e-9)
+    assert bound > math.pi / 2
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        _pinhole_model(),
+        _pinhole_model(DistortionModel.PLUMB_BOB, PLUMB_BOB),
+        _pinhole_model(DistortionModel.RATIONAL_POLYNOMIAL, RATIONAL),
+        _fisheye_model(),
+        _mei_model(),
+        _mei_model(xi=0.6),
+    ],
+    ids=["pinhole", "plumb_bob", "rational", "fisheye", "mei", "mei-small-xi"],
+)
+def test_no_ray_the_model_sends_into_the_image_exceeds_the_bound(model: CameraModel) -> None:
+    """Sound for every model, tangential terms included, and still close to the border."""
+    projection = camera_projection_for(_entry(model))
+
+    bound = projection.max_ray_angle_rad(**_FULL_IMAGE)
+
+    border = _ray_angle(projection.unproject(_image_border()))
+    assert border.max() <= bound
+    assert bound - border.max() < 0.01
+
+
+def test_the_box_must_be_finite_and_ordered() -> None:
+    projection = camera_projection_for(_entry(_pinhole_model()))
+
+    with pytest.raises(ValueError, match="finite and ordered"):
+        projection.max_ray_angle_rad(u_bounds=(10.0, 0.0), v_bounds=(0.0, 1.0))
+    with pytest.raises(ValueError, match="finite and ordered"):
+        projection.max_ray_angle_rad(u_bounds=(0.0, 1.0), v_bounds=(0.0, float("nan")))
+
+
+def test_the_bound_narrows_with_the_box() -> None:
+    projection = camera_projection_for(_entry(_pinhole_model()))
+
+    full = projection.max_ray_angle_rad(**_FULL_IMAGE)
+    central = projection.max_ray_angle_rad(u_bounds=(219.5, 419.5), v_bounds=(139.5, 339.5))
+
+    assert central == pytest.approx(math.atan(math.hypot(100.5 / FX, 100.5 / FY)), abs=1e-12)
+    assert central < full
 
 
 # --- Pixel domain -----------------------------------------------------------

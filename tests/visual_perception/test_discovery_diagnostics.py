@@ -2,6 +2,7 @@ import json
 from hashlib import sha256
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.ingestion import SourceObservationId
@@ -51,13 +52,14 @@ def _record() -> DiscoveryAuditRecord:
         image_height=3,
         bounding_box=box,
         mask=InlineMask(
-            width=4,
-            height=3,
-            data=tuple(
-                box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
-                for y in range(3)
-                for x in range(4)
-            ),
+            np.array(
+                tuple(
+                    box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
+                    for y in range(3)
+                    for x in range(4)
+                ),
+                dtype=bool,
+            ).reshape(3, 4)
         ),
         provenance=RegionProvenance(
             backend_id="sam3",
@@ -162,7 +164,13 @@ def test_full_level_writes_per_region_mask_and_record(tmp_path: Path) -> None:
 
     region_directory = stage / "debug" / "regions" / "region-0001"
     assert (region_directory / "region.json").is_file()
-    assert (region_directory / "mask.pbm").read_text().startswith("P1\n4 3\n")
+    mask = _record().normalization.regions[0].mask
+    assert mask is not None
+    rows = [
+        " ".join("1" if mask.value_at(x, y) else "0" for x in range(mask.width))
+        for y in range(mask.height)
+    ]
+    assert (region_directory / "mask.pbm").read_text() == "P1\n4 3\n" + "\n".join(rows) + "\n"
 
 
 def test_finalized_stage_is_immutable(tmp_path: Path) -> None:

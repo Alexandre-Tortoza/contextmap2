@@ -382,7 +382,9 @@ class _Context:
 
 
 def _cells(mask: InlineMask) -> frozenset[int]:
-    return frozenset(index for index, value in enumerate(mask.data) if value)
+    import numpy as np
+
+    return frozenset(np.flatnonzero(mask.as_array()).tolist())
 
 
 def _foreground_box(mask: InlineMask) -> Cell | None:
@@ -437,7 +439,7 @@ def _check_frame(item: _Loaded, frame: FrameRegionAnnotation, out: _Findings) ->
         key: object = ("box", box.x_min, box.y_min, box.x_max, box.y_max) if box else None
         foreground: frozenset[int] = frozenset()
         if region.mask is not None:
-            key = ("mask", region.mask.width, region.mask.height, region.mask.data)
+            key = ("mask", region.mask)
             if not sized(region.mask):
                 out.blocker(
                     "mask-size-mismatch",

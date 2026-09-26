@@ -72,6 +72,7 @@ class Ros2BagSourceAdapter:
         self._warnings: list[SourceAdapterWarning] = []
         self._content_hash = _ros_common.StreamingContentHash()
         self._calibration_cache: CalibrationSet | None = None
+        self._calibration_warnings: tuple[SourceAdapterWarning, ...] = ()
         self._calibration_read = False
 
     def capabilities(self) -> SourceAdapterCapabilities:
@@ -108,10 +109,17 @@ class Ros2BagSourceAdapter:
         :meth:`read_calibration`, which is global source metadata read once
         regardless of the window (see :meth:`read_calibration`).
 
-        Yields:
-            One :data:`~contextmap.ingestion.models.SourceObservation` per
+        The preconditions below are checked by the call itself, before the
+        returned iterator is advanced, reading only the bag's topic list and
+        index; decoding starts on the first ``next()``.
+
+        Returns:
+            An iterator over one
+            :data:`~contextmap.ingestion.models.SourceObservation` per
             successfully decoded message within the configured window (the
-            whole bag when none is configured), in bag order.
+            whole bag when none is configured), in bag order. A message
+            whose content cannot be decoded (a ``ValueError`` from decoding)
+            is skipped and reported through :meth:`warnings`.
 
         Raises:
             MissingRequiredTopicError: If a topic named in
@@ -120,19 +128,34 @@ class Ros2BagSourceAdapter:
                 clock does not match this bag's recording-time clock, or it
                 does not overlap the bag's recording-time range at all.
         """
-        available = self._available_topics()
-        self._check_required_topics(available)
-
         topic_kinds = self._configured_topic_kinds()
-        calibration_ids = _ros_common.calibration_ids_by_sensor(self.read_calibration())
-        self._warnings = []
-        self._content_hash = _ros_common.StreamingContentHash()
-        counters: dict[str, int] = {}
-        start_ns, stop_ns = _ros_common.resolve_window_bounds(
-            self._config, open_reader=lambda: Reader(self._config.path), topic_kinds=topic_kinds
-        )
-
+        # Uma abertura para as duas pré-condições: ambas só leem conexões e índice do bag.
         with Reader(self._config.path) as reader:
+            self._check_required_topics(
+                frozenset(connection.topic for connection in reader.connections)
+            )
+            start_ns, stop_ns = _ros_common.resolve_window_bounds(
+                self._config, reader=reader, topic_kinds=topic_kinds
+            )
+        return self._decoded_observations(topic_kinds, start_ns=start_ns, stop_ns=stop_ns)
+
+    def _decoded_observations(
+        self, topic_kinds: dict[str, str], *, start_ns: int | None, stop_ns: int | None
+    ) -> Iterator[SourceObservation]:
+        """Read and decode the configured topics within already validated bounds.
+
+        A generator, so nothing here runs before the first ``next()``: the
+        precondition checks live in :meth:`read_observations`, which calls it.
+        The same open reader serves the calibration scan, when it has not run
+        yet, and the message read.
+        """
+        with Reader(self._config.path) as reader:
+            calibration_ids = _ros_common.calibration_ids_by_sensor(
+                self._cached_calibration(reader)
+            )
+            self._warnings = list(self._calibration_warnings)
+            self._content_hash = _ros_common.StreamingContentHash()
+            counters: dict[str, int] = {}
             connections = [
                 connection for connection in reader.connections if connection.topic in topic_kinds
             ]
@@ -156,7 +179,10 @@ class Ros2BagSourceAdapter:
                         bag_timestamp_nanoseconds=bag_timestamp,
                         calibration_ids=calibration_ids,
                     )
-                except (KeyError, ValueError, AttributeError) as error:
+                # Só ValueError é o erro contratual de "conteúdo não decodificável";
+                # KeyError/AttributeError indicam erro estrutural ou de programação e
+                # devem abortar a leitura em vez de virar um warning por mensagem.
+                except ValueError as error:
                     self._warnings.append(
                         SourceAdapterWarning(topic=topic, message_index=index, reason=str(error))
                     )
@@ -165,6 +191,10 @@ class Ros2BagSourceAdapter:
 
     def warnings(self) -> Sequence[SourceAdapterWarning]:
         """Return warnings from the most recent :meth:`read_observations` call.
+
+        They start with the warnings of the ``camera_info`` calibration that
+        read used (see :meth:`read_calibration`), followed by the skipped
+        messages.
 
         Returns:
             Accumulated warnings, in the order they occurred.
@@ -200,37 +230,77 @@ class Ros2BagSourceAdapter:
         proportional to the window), ``camera_info`` is treated as global,
         source-wide metadata that describes the whole bag, not a per-window
         artifact — see ``docs/adapters.md``. The scan is performed at most
-        once per adapter instance and the result cached, so calling this
-        method again (as ``read_observations()`` does internally, and as the
-        runtime does again afterwards) never re-scans the bag.
+        once per adapter instance and the result cached, shared with
+        ``read_observations()`` (which runs the scan on the reader it already
+        opened for the messages, when it comes first), so calling this method
+        again, as the runtime does afterwards, never re-scans the bag.
+        Identical ``camera_info`` messages are kept once during the scan.
 
         Returns:
             The merged calibration, or ``None`` when neither configuration
             nor the source provides calibration.
         """
+        return self._cached_calibration(reader=None)
+
+    def _cached_calibration(self, reader: Reader | None) -> CalibrationSet | None:
+        """Return the calibration, discovering it on the first call only.
+
+        Args:
+            reader: An open reader of this bag to scan ``camera_info`` with,
+                or ``None`` to open one only if a scan is needed.
+        """
         if not self._calibration_read:
-            self._calibration_cache = self._discover_calibration()
+            self._calibration_cache, self._calibration_warnings = self._discover_calibration(reader)
             self._calibration_read = True
         return self._calibration_cache
 
-    def _discover_calibration(self) -> CalibrationSet | None:
-        """Scan the whole bag's ``camera_info`` topic once; never windowed."""
+    def _discover_calibration(
+        self, reader: Reader | None
+    ) -> tuple[CalibrationSet | None, tuple[SourceAdapterWarning, ...]]:
+        """Scan the whole bag's ``camera_info`` topic once; never windowed.
+
+        ``camera_info`` usually repeats the same calibration on every frame,
+        so an entry is kept only for a content hash not seen yet: memory
+        follows the distinct calibrations, not the message count. A
+        calibration that changes still yields two entries for the sensor,
+        which :func:`~contextmap.ingestion.adapters._ros_common.merge_calibration`
+        rejects.
+
+        Returns:
+            The merged calibration and one warning per conversion note of a
+            kept entry (for example an unrecognized ``distortion_model``),
+            at the index of the ``camera_info`` message it came from.
+        """
         topic = self._config.topics.camera_info
-        discovered: list[CalibrationEntry] = []
-        if topic is not None:
-            with Reader(self._config.path) as reader:
-                connections = [
-                    connection for connection in reader.connections if connection.topic == topic
-                ]
-                for connection, _timestamp, rawdata in reader.messages(connections=connections):
-                    message = self._typestore.deserialize_cdr(rawdata, connection.msgtype)
-                    discovered.append(self._camera_calibration_entry(message, topic))
-        return _ros_common.merge_calibration(self._config.calibration, tuple(discovered))
+        if topic is None:
+            return _ros_common.merge_calibration(self._config.calibration, ()), ()
+        if reader is None:
+            with Reader(self._config.path) as own_reader:
+                return self._discover_calibration(own_reader)
+        discovered: dict[str, CalibrationEntry] = {}
+        warnings: list[SourceAdapterWarning] = []
+        connections = [connection for connection in reader.connections if connection.topic == topic]
+        messages = reader.messages(connections=connections)
+        for index, (connection, _timestamp, rawdata) in enumerate(messages):
+            message = self._typestore.deserialize_cdr(rawdata, connection.msgtype)
+            entry = self._camera_calibration_entry(message, topic)
+            if entry.content_hash in discovered:
+                continue
+            discovered[entry.content_hash] = entry
+            # Toda normalização do CameraInfo supõe algo sobre a fonte: fica visível como warning.
+            warnings.extend(
+                SourceAdapterWarning(topic=topic, message_index=index, reason=conversion)
+                for conversion in entry.provenance.conversions_applied
+            )
+        calibration = _ros_common.merge_calibration(
+            self._config.calibration, tuple(discovered.values())
+        )
+        return calibration, tuple(warnings)
 
     def _camera_calibration_entry(self, message: Any, topic: str) -> CalibrationEntry:
         sensor_id = SensorId(_ros_common.sanitize_topic(self._config.topics.rgb or topic))
         frame_id = FrameId(message.header.frame_id)
-        camera_model = _ros_common.build_camera_model(
+        camera_model, conversions = _ros_common.build_camera_model(
             width=message.width,
             height=message.height,
             k_matrix=message.k,
@@ -250,6 +320,7 @@ class Ros2BagSourceAdapter:
                     "distortion_model": message.distortion_model,
                     "d": [float(value) for value in message.d],
                 },
+                conversions_applied=conversions,
             ),
             content_hash=compute_content_hash(
                 sensor_id=sensor_id, frame_id=frame_id, camera_model=camera_model

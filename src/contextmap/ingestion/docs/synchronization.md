@@ -43,6 +43,7 @@ A decisão é reproduzível a partir do anchor, do domínio temporal, da tolerâ
 1. As observações da modalidade `reference_modality` (configurada) são ordenadas por `(total_nanoseconds, observation_id)` — ordem determinística mesmo com timestamps duplicados.
 2. Cada observação da modalidade de referência vira um **anchor** e recebe um `frame_index` sequencial (0, 1, 2, …).
 3. Para cada outra modalidade, seleciona-se o candidato com menor `|offset|` em relação ao anchor, **entre os que compartilham o `clock_id` do anchor** e cujo `|offset| <= tolerance_nanoseconds`. Não havendo candidato, a associação é `ModalityAssociation(observation=None, offset_nanoseconds=None)` — ausência explícita, nunca um valor sentinela.
+   Empates de `|offset|` — um candidato antes e outro depois do anchor à mesma distância, ou timestamps iguais — vão para o menor `observation_id`, em ordem lexicográfica de string (`"imu-10"` vem antes de `"imu-9"`). Os candidatos de cada modalidade são ordenados **uma vez** por domínio de clock, por `(total_nanoseconds, observation_id)`, e cada anchor os consulta por bisseção: só o primeiro candidato da sequência de timestamps iguais imediatamente anterior e o da imediatamente posterior disputam, o que dá o mesmo resultado da varredura completa em O((A + C) log C) em vez de O(A × C).
 4. Um candidato pode ser selecionado por mais de um anchor (seleção não é exclusiva); isso é intencional e corresponde ao caso comum de uma modalidade de alta frequência (ex.: IMU) sendo consultada por vários anchors de baixa frequência (ex.: câmera).
 5. **Nenhuma interpolação é realizada.** Uma associação é sempre "este candidato, neste offset" ou "nenhum candidato" — nunca um valor interpolado. Uma política de interpolação futura precisaria de um `policy` próprio e documentar explicitamente onde a decisão de interpolar fica registrada; o v0 não a implementa.
 
@@ -51,7 +52,9 @@ A decisão é reproduzível a partir do anchor, do domínio temporal, da tolerâ
 `SynchronizationDiagnostics.decisions` registra uma decisão por `(anchor, modalidade)`, incluindo o candidato escolhido, `offset_nanoseconds` e status (`matched`, `no_candidate`, `clock_id_mismatch` ou `outside_tolerance`). `dropped_events` lista toda observação de uma modalidade não-referência que nunca foi selecionada por nenhum anchor, com o motivo:
 
 - `"clock_id_mismatch"` — nunca compartilhou `clock_id` com nenhum anchor;
-- `"no_anchor_within_tolerance"` — compartilhou `clock_id` com ao menos um anchor, mas nunca foi o candidato mais próximo dentro da tolerância configurada.
+- `"no_anchor_within_tolerance"` — compartilhou `clock_id` com ao menos um anchor, mas nenhum anchor o selecionou: ficou fora da tolerância de todos, havia um candidato mais próximo, ou empatou como o mais próximo e perdeu o desempate por `observation_id`. A razão, portanto, **não** afirma que o evento estava fora da tolerância.
+
+O perdedor de empate não ganha uma razão própria: isso acrescentaria um valor ao vocabulário persistido dos diagnostics de ingestion, uma mudança de schema, por um caso que já é auditável: a decisão do anchor em `decisions` registra o vencedor e o seu `offset_nanoseconds`, e o perdedor tem o mesmo `|offset|` em relação àquele anchor.
 
 ## Exemplo
 
@@ -65,7 +68,7 @@ imu:     t=0.99  t=1.98  t=3.50
 frame_index=0  anchor=image@1.00  imu → imu@0.99 (offset=-10_000_000 ns)
 frame_index=1  anchor=image@2.00  imu → imu@1.98 (offset=-20_000_000 ns)
 
-dropped: imu@3.50 (reason="no_anchor_within_tolerance", nenhum anchor a menos de 0.05s)
+dropped: imu@3.50 (reason="no_anchor_within_tolerance"; neste caso, nenhum anchor a menos de 0.05s)
 ```
 
 ## O que esta issue não define

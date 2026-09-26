@@ -33,7 +33,7 @@ claim semântica. Estruturalmente:
 | `visible_share` | `associated_count / footprint_count` |
 | `occluded_fraction`, `outside_valid_support_fraction` | parcelas da pegada ocluídas ou fora do suporte válido |
 | `temporal_offset_ns` | `pose_ref.time_delta_ns`: a distância do timestamp do frame à pose contribuinte mais próxima (`pose_ref` também guarda o desfecho e a fração de interpolação) |
-| `reprojection` | resíduo contra correspondências de referência **confiáveis**: `reference_id`, contagens (`invalid_count` são as que não puderam ser projetadas), média, mediana, p95 e máximo, em pixels |
+| `reprojection` | resíduo contra correspondências de referência **confiáveis**: `reference_id`, contagens (`invalid_count` são as que o modelo de câmera não projeta; uma que projeta fora da imagem é válida e entra no resíduo), média, mediana, p95 e máximo, em pixels |
 
 ## Ausência explícita
 
