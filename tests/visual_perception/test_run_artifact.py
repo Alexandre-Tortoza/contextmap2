@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -35,6 +36,7 @@ from contextmap.visual_perception import (
     RejectedRegionCandidate,
     RejectionReason,
     RunArtifactError,
+    RunArtifactManifest,
     SceneContext,
     SemanticBackendDiagnostics,
     SemanticClaim,
@@ -295,6 +297,7 @@ def _semantic_execution() -> SemanticInterpretationExecution:
             "scene_context": None,
         }
     )
+    # Como um backend: raw_response_reference fica None, quem o materializa é o writer.
     provenance = SemanticInferenceProvenance(
         backend=replace(
             _PROVENANCE,
@@ -305,9 +308,6 @@ def _semantic_execution() -> SemanticInterpretationExecution:
         task_identity="fake-region",
         prompt_template_id="region/v1",
         output_schema_version="semantic-response/1",
-        raw_response_reference=(
-            "debug/40-semantic-interpretation/region-request-0001/raw-response.txt"
-        ),
     )
     return SemanticInterpretationExecution(
         request=request,
@@ -324,6 +324,67 @@ def _semantic_execution() -> SemanticInterpretationExecution:
             confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
         ),
         diagnostics=SemanticBackendDiagnostics(latency_ms=3.5, input_tokens=10),
+        effective_configuration={"temperature": 0.0},
+    )
+
+
+def _scene_semantic_execution() -> SemanticInterpretationExecution:
+    """A SCENE execution of :func:`_semantic_execution`'s result, as a backend returns it."""
+    region_execution = _semantic_execution()
+    request = SemanticInterpretationRequest(
+        request_id=SemanticRequestId("scene-request-0001"),
+        source_observation_id=SourceObservationId("frame-0001"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0001"),
+        mode=SemanticInterpretationMode.SCENE,
+        visual_views=(
+            SemanticVisualView(
+                view_id="frame-0001-scene",
+                kind=VisualViewKind.FULL_FRAME,
+                payload_reference="outputs/semantic-views/frame-0001-scene.jpg",
+                source_observation_id=SourceObservationId("frame-0001"),
+                sha256=hashlib.sha256(_SEMANTIC_VIEW_PAYLOAD).hexdigest(),
+            ),
+        ),
+        prompt_template_id="scene/v1",
+        requested_output_schema="semantic-response/1",
+        configuration_fingerprint="sha256:config",
+    )
+    raw_response = json.dumps(
+        {
+            "abstained": False,
+            "claims": [
+                {
+                    "hypothesis": "warehouse aisle",
+                    "role": "primary",
+                    "category": None,
+                    "region_kind": None,
+                    "attributes": {},
+                    "confidence": None,
+                }
+            ],
+            "scene_context": {"scene_type": "warehouse"},
+        }
+    )
+    provenance = replace(
+        region_execution.parsed.claims[0].provenance,
+        task_identity="fake-scene",
+        prompt_template_id="scene/v1",
+    )
+    return SemanticInterpretationExecution(
+        request=request,
+        rendered_prompt=render_semantic_prompt(
+            request,
+            SemanticPromptTemplate.default_for(request.mode),
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        ),
+        raw_response=raw_response,
+        parsed=parse_semantic_response(
+            raw_response,
+            request,
+            provenance,
+            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+        ),
+        diagnostics=SemanticBackendDiagnostics(latency_ms=2.5),
         effective_configuration={"temperature": 0.0},
     )
 
@@ -387,6 +448,44 @@ def _abstained_semantic_execution() -> tuple[
     )
 
 
+_EXECUTIONS_STREAM = "outputs/semantic-interpretations.jsonl"
+_FAILURES_STREAM = "outputs/semantic-interpretation-failures.jsonl"
+
+
+def _with_reference(
+    provenance: SemanticInferenceProvenance, reference: str
+) -> SemanticInferenceProvenance:
+    return replace(provenance, raw_response_reference=reference)
+
+
+def _as_persisted_execution(
+    execution: SemanticInterpretationExecution,
+) -> SemanticInterpretationExecution:
+    """The execution as a reader returns it: every provenance names the executions stream."""
+    claims = tuple(
+        replace(claim, provenance=_with_reference(claim.provenance, _EXECUTIONS_STREAM))
+        for claim in execution.parsed.claims
+    )
+    context = execution.parsed.scene_context
+    if context is not None:
+        context = replace(
+            context,
+            provenance=_with_reference(context.provenance, _EXECUTIONS_STREAM),
+            claims=tuple(
+                replace(claim, provenance=_with_reference(claim.provenance, _EXECUTIONS_STREAM))
+                for claim in context.claims
+            ),
+        )
+    return replace(
+        execution, parsed=replace(execution.parsed, claims=claims, scene_context=context)
+    )
+
+
+def _as_persisted_failure(failed: FailedSemanticInterpretation) -> FailedSemanticInterpretation:
+    """The failure as a reader returns it: its provenance names the failures stream."""
+    return replace(failed, provenance=_with_reference(failed.provenance, _FAILURES_STREAM))
+
+
 def _add_semantic_outcome(
     writer: PerceptionRunWriter, execution: SemanticInterpretationExecution
 ) -> None:
@@ -446,7 +545,6 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
 ) -> None:
     execution = _semantic_execution()
     request = execution.request
-    provenance = execution.parsed.claims[0].provenance
 
     writer = _write_run(tmp_path)
     writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
@@ -465,9 +563,13 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
 
     assert manifest.schema_version == "0.6.0"
     run_dir = _run_dir(tmp_path)
-    assert provenance.raw_response_reference is not None
-    raw_path = run_dir / provenance.raw_response_reference
-    assert raw_path.read_text(encoding="utf-8") == execution.raw_response
+    # A referência nomeia o registro contratual que guarda a resposta bruta inline (#619).
+    (record,) = [
+        json.loads(line)
+        for line in (run_dir / _EXECUTIONS_STREAM).read_text(encoding="utf-8").splitlines()
+    ]
+    assert record["raw_response_reference"] == _EXECUTIONS_STREAM
+    assert record["raw_response"] == execution.raw_response
     view_path = run_dir / request.visual_views[0].payload_reference
     assert view_path.read_bytes() == _SEMANTIC_VIEW_PAYLOAD
     view_entry = next(
@@ -477,7 +579,7 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
     )
     assert view_entry.content_hash == f"sha256:{request.visual_views[0].sha256}"
     reopened = PerceptionRunReader(run_dir).list_semantic_executions()
-    assert reopened == [execution]
+    assert reopened == [_as_persisted_execution(execution)]
     assert PerceptionRunReader(run_dir).verify_integrity() == []
 
 
@@ -493,8 +595,212 @@ def test_semantic_canonical_output_remains_reopenable_when_debug_is_disabled(
 
     run_dir = _run_dir(tmp_path)
     assert not (run_dir / "debug/40-semantic-interpretation").exists()
-    assert PerceptionRunReader(run_dir).list_semantic_executions() == [execution]
+    assert PerceptionRunReader(run_dir).list_semantic_executions() == [
+        _as_persisted_execution(execution)
+    ]
     assert PerceptionRunReader(run_dir).verify_integrity() == []
+
+
+def _persisted_raw_response_references(run_dir: Path) -> dict[str, set[object]]:
+    """Every ``raw_response_reference`` value under ``outputs/``, keyed by the file holding it."""
+
+    def collect(value: object, sink: set[object]) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "raw_response_reference":
+                    sink.add(item)
+                else:
+                    collect(item, sink)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, sink)
+
+    found: dict[str, set[object]] = {}
+    for path in sorted((run_dir / "outputs").glob("*.jsonl")):
+        sink: set[object] = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                collect(json.loads(line), sink)
+        if sink:
+            found[str(path.relative_to(run_dir))] = sink
+    return found
+
+
+def _write_semantic_run(tmp_path: Path, debug_level: SemanticDebugLevel) -> RunArtifactManifest:
+    """A region execution, a scene execution of the same result and a rejected response."""
+    region, scene = _semantic_execution(), _scene_semantic_execution()
+    failed = _failed_semantic_interpretation()
+    writer = _write_run(tmp_path, semantic_debug_level=debug_level)
+    writer.add_result(
+        _result(
+            "frame-0001",
+            "run-0001",
+            claims=region.parsed.claims,
+            scene_context=scene.parsed.scene_context,
+        )
+    )
+    for execution in (region, scene):
+        writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+        _add_semantic_outcome(writer, execution)
+    writer.add_failed_semantic_interpretation(failed)
+    return writer.finalize()
+
+
+@pytest.mark.parametrize("debug_level", list(SemanticDebugLevel), ids=lambda level: level.value)
+def test_every_persisted_raw_response_reference_resolves_to_a_contractual_file(
+    tmp_path: Path, debug_level: SemanticDebugLevel
+) -> None:
+    """VP-06: the reference named debug/<request>/raw-response.txt, written only under FULL.
+
+    ``debug/`` is diagnostic only, so no contractual field may point into it at any level: the
+    writer, which knows which stream an attempt lands in, materializes the reference. Claims and
+    the scene context of an execution share its reference; a rejected response names its own
+    stream.
+    """
+    manifest = _write_semantic_run(tmp_path, debug_level)
+
+    run_dir = _run_dir(tmp_path)
+    references = _persisted_raw_response_references(run_dir)
+    assert references == {
+        "outputs/results.jsonl": {_EXECUTIONS_STREAM},
+        _FAILURES_STREAM: {_FAILURES_STREAM},
+        _EXECUTIONS_STREAM: {_EXECUTIONS_STREAM},
+    }
+    inventory = {entry.path for entry in manifest.file_inventory}
+    assert {_EXECUTIONS_STREAM, _FAILURES_STREAM} <= inventory
+    assert (run_dir / _EXECUTIONS_STREAM).is_file()
+    assert (run_dir / _FAILURES_STREAM).is_file()
+    reader = PerceptionRunReader(run_dir)
+    result = reader.list_results()[0]
+    assert result.scene_context is not None
+    shared = {claim.provenance.raw_response_reference for claim in result.claims}
+    shared.add(result.scene_context.provenance.raw_response_reference)
+    shared.update(claim.provenance.raw_response_reference for claim in result.scene_context.claims)
+    assert shared == {_EXECUTIONS_STREAM}
+    (failure,) = reader.list_failed_semantic_interpretations()
+    assert failure.provenance.raw_response_reference == _FAILURES_STREAM
+    assert reader.verify_integrity() == []
+
+
+def test_the_raw_response_stays_a_diagnostic_copy_under_full_debug(tmp_path: Path) -> None:
+    _write_semantic_run(tmp_path, SemanticDebugLevel.FULL)
+
+    run_dir = _run_dir(tmp_path)
+    raw_copy = run_dir / "debug/40-semantic-interpretation/region-request-0001/raw-response.txt"
+    assert raw_copy.read_text(encoding="utf-8") == _semantic_execution().raw_response
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "debug/40-semantic-interpretation/region-request-0001/raw-response.txt",
+        _FAILURES_STREAM,
+    ],
+)
+def test_an_execution_arriving_with_another_raw_response_reference_is_refused(
+    tmp_path: Path, reference: str
+) -> None:
+    """The writer materializes the reference; evidence must arrive without a different one."""
+    execution = _semantic_execution()
+    claim = execution.parsed.claims[0]
+    stamped = replace(claim, provenance=replace(claim.provenance, raw_response_reference=reference))
+    execution = replace(execution, parsed=replace(execution.parsed, claims=(stamped,)))
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+
+    with pytest.raises(RunArtifactError, match="raw_response_reference"):
+        writer.finalize()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_claim_without_a_recorded_execution_cannot_name_a_raw_response(tmp_path: Path) -> None:
+    """No record of this run holds that claim's raw response, so any reference would dangle."""
+    claim = _semantic_execution().parsed.claims[0]
+    orphan = replace(
+        claim, provenance=replace(claim.provenance, raw_response_reference=_EXECUTIONS_STREAM)
+    )
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=(orphan,)))
+
+    with pytest.raises(RunArtifactError, match="raw_response_reference"):
+        writer.finalize()
+
+
+def _rewrite_first_record(path: Path, edit: Callable[[dict[str, Any]], None]) -> None:
+    first, *rest = path.read_text(encoding="utf-8").splitlines()
+    record = json.loads(first)
+    edit(record)
+    path.write_text("".join(f"{line}\n" for line in (json.dumps(record), *rest)), encoding="utf-8")
+
+
+def _debug_reference(record: dict[str, Any]) -> None:
+    record["raw_response_reference"] = "debug/40-semantic-interpretation/r/raw-response.txt"
+    for claim in record["parsed"]["claims"]:
+        claim["provenance"]["raw_response_reference"] = record["raw_response_reference"]
+
+
+def _claim_with_its_own_reference(record: dict[str, Any]) -> None:
+    record["parsed"]["claims"][0]["provenance"]["raw_response_reference"] = _FAILURES_STREAM
+
+
+def _failure_into_debug(record: dict[str, Any]) -> None:
+    record["provenance"]["raw_response_reference"] = "debug/raw-response.txt"
+
+
+@pytest.mark.parametrize(
+    ("stream", "edit", "read"),
+    [
+        pytest.param(
+            _EXECUTIONS_STREAM,
+            _debug_reference,
+            PerceptionRunReader.list_semantic_executions,
+            id="execution-into-debug",
+        ),
+        pytest.param(
+            _EXECUTIONS_STREAM,
+            _claim_with_its_own_reference,
+            PerceptionRunReader.list_semantic_executions,
+            id="claim-not-sharing-its-execution-reference",
+        ),
+        pytest.param(
+            _FAILURES_STREAM,
+            _failure_into_debug,
+            PerceptionRunReader.list_failed_semantic_interpretations,
+            id="failure-into-debug",
+        ),
+    ],
+)
+def test_a_persisted_record_without_its_contractual_reference_is_an_artifact_error(
+    tmp_path: Path,
+    stream: str,
+    edit: Callable[[dict[str, Any]], None],
+    read: Callable[[PerceptionRunReader], object],
+) -> None:
+    _write_semantic_run(tmp_path, SemanticDebugLevel.NONE)
+    run_dir = _run_dir(tmp_path)
+    _rewrite_first_record(run_dir / stream, edit)
+
+    with pytest.raises(RunArtifactError, match="raw_response_reference"):
+        read(PerceptionRunReader(run_dir))
+
+
+def test_a_0_5_0_run_keeps_reading_its_debug_raw_response_references(tmp_path: Path) -> None:
+    """Before 0.6.0 the reference named the debug copy; that is what those runs recorded."""
+    _write_semantic_run(tmp_path, SemanticDebugLevel.NONE)
+    run_dir = _run_dir(tmp_path)
+    _as_pre_audit_run(run_dir)
+    _rewrite_first_record(run_dir / _EXECUTIONS_STREAM, _debug_reference)
+    _rewrite_first_record(run_dir / _FAILURES_STREAM, _failure_into_debug)
+
+    reader = PerceptionRunReader(run_dir)
+
+    assert [str(e.request.request_id) for e in reader.list_semantic_executions()] == [
+        "region-request-0001",
+        "scene-request-0001",
+    ]
+    assert len(reader.list_failed_semantic_interpretations()) == 1
 
 
 def test_finalize_rejects_semantic_execution_without_owning_result(tmp_path: Path) -> None:
@@ -990,7 +1296,7 @@ def test_iter_semantic_executions_streams_instead_of_materializing(tmp_path: Pat
     reader = PerceptionRunReader(_run_dir(tmp_path))
     streamed = reader.iter_semantic_executions()
     assert not isinstance(streamed, list), "iter_semantic_executions() must be lazy"
-    assert list(streamed) == [execution]
+    assert list(streamed) == [_as_persisted_execution(execution)]
 
 
 def _without_raw_response_reference(line: str) -> str:
@@ -1287,7 +1593,7 @@ def test_failed_semantic_interpretations_are_a_first_class_output(tmp_path: Path
     assert reader.verify_integrity() == []
 
     reopened = reader.list_failed_semantic_interpretations()
-    assert reopened == [failed]
+    assert reopened == [_as_persisted_failure(failed)]
     # Contractual: inventoried, so losing it is detected.
     assert any(
         entry.path == "outputs/semantic-interpretation-failures.jsonl"
@@ -1538,10 +1844,17 @@ def _pre_audit_contents(run_dir: Path) -> dict[str, str]:
 def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
     """#611 only adds the audit table: every other file must keep its exact bytes.
 
-    The digests were recorded from the 0.5.0 writer, before the audit existed, except for
-    ``metrics/stage-timings.jsonl`` and the manifest entry that inventories it: since #619 (VP-11)
-    every stage record also carries ``error_type`` and ``error_traceback``, ``null`` for the
-    succeeded stage recorded here. Nothing else in the manifest changed.
+    The digests were recorded from the 0.5.0 writer, before the audit existed, except for two
+    changes of #619, each re-recorded on purpose:
+
+    - VP-11: every record of ``metrics/stage-timings.jsonl`` also carries ``error_type`` and
+      ``error_traceback``, ``null`` for the succeeded stage recorded here.
+    - VP-06: ``raw_response_reference`` names the contractual stream that holds the raw
+      response instead of ``debug/40-semantic-interpretation/region-request-0001/raw-response.txt``.
+      That moves ``outputs/results.jsonl``, both semantic streams and the two debug files that
+      copy the parsed claims; putting the old path back in them reproduces their 0.5.0 bytes.
+
+    The manifest moves only through the inventory entries of those files.
     """
     contents = _pre_audit_contents(_characterized_run(tmp_path))
 
@@ -1554,7 +1867,7 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "8803b582fcc7b66400a0079331c99dcaf98e2350bcec3501ebc64057be4d2fcd"
         ),
         f"{semantic_debug}/region-request-0001/parsed-response.json": (
-            "4da42836be9c59a62f74563b2199a72895c13fdb39c2e4be9b096127a53639e4"
+            "afe404ff6b3ccf97520fb1c2eae3a9e7ad0eccfe95fff003a9d25f34b9b9e8fd"
         ),
         f"{semantic_debug}/region-request-0001/prompt.txt": (
             "1e3b2cd9f6037b2719bdb84c9784c291f999e0ab7b967d0aeb6a75329cd26ad0"
@@ -1566,7 +1879,7 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "d08d77c010881319e950d09842e1c147832a9c48dcc991da8abe8d285d10e58a"
         ),
         f"{semantic_debug}/region-request-0001/semantic-claims.json": (
-            "3a76aab90efea82b060d402400603f27c7e3bc452bf514956153d7f2daa6d52e"
+            "a25405721cb2f1282d40882301a436283ff33ec2be64616b04532c00eff076c2"
         ),
         f"{semantic_debug}/region-request-0002/diagnostics.json": (
             "773266608cbf30e971fc200ebc35ac212ada80a55d3ec0259ba14a3a1c371600"
@@ -1584,7 +1897,7 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "079016ab6ddf9054b6f82f0452d8ab3fb381d720123b4c06dd3796e4738f23e5"
         ),
         "manifest.json (stable part)": (
-            "f47b79899eb493c616a080a387448cbc727ce8004d67e4e387b061b09af60a2f"
+            "ffdee590761bd45fcfa405d6e4ba0a53fe41deb4db3194c2a1eb5ff451f781c1"
         ),
         "metrics/stage-timings.jsonl": (
             "ff75fc1139460aceccc7cc6d72b2f35e9d79f5ec467ce8e4983001ac4d8d3766"
@@ -1602,13 +1915,13 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "a83f82a445bc79e66cf0f99167afc9e99713a4c230d5b63a969e99c0748a2072"
         ),
         "outputs/results.jsonl": (
-            "1e58cc8f229f14e56b149b62da2ced55f82de2e9f6c459f4e055ec4e02080c0e"
+            "65dd02ce1ae395fcca8d7f096dda831307b8dd52312a46ca4e61964a24756d75"
         ),
         "outputs/semantic-interpretation-failures.jsonl": (
-            "672b54900b35a40dd8d68dd4bc5473c0c137c873e4f2e100d1abcdabbb2daf1e"
+            "40738c664182ce71671167ff428e2a1f509f48edab17c0f2235831fe1efcf09b"
         ),
         "outputs/semantic-interpretations.jsonl": (
-            "09c77d8efe71fbbe42482a8a3cbc01d402959e9e97b7bf6e95983b5a66cb40b6"
+            "f0a820caec2d98dc49c2cd2728fca3240411b2ed3d2d14b48724b4c962bb1036"
         ),
         "outputs/semantic-views/crop-0001.jpg": (
             "d19bbf3d505b6b0023eea97255d7e44d52b831e5f2c426e7670e502af0d19334"

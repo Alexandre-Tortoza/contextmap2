@@ -450,9 +450,12 @@ SHA-256 obrigatório e entra no `file_inventory`. Se o request consumir uma
 store. `region_id`, `scene_context_reference` e outputs parseados precisam
 resolver para evidência do run antes de `finalize()`.
 
-A resposta bruta também é materializada no path de debug declarado pela
-provenance. Ela é importante para auditoria, mas o parsing canônico não depende
-do arquivo de debug para existir. O schema atual do run artifact é `0.6.0`;
+A resposta bruta fica inline no registro contratual, e
+`raw_response_reference` nomeia esse registro: o writer o materializa na
+persistência, `outputs/semantic-interpretations.jsonl` para uma execução, suas
+claims e seu contexto de cena, `outputs/semantic-interpretation-failures.jsonl`
+para uma resposta rejeitada. A cópia em `debug/` (nível `full`) é só
+diagnóstico e nenhum campo contratual aponta para ela. O schema atual do run artifact é `0.6.0`;
 o leitor ainda abre `0.5.0` (sem a auditoria de Region Discovery) e rejeita
 versões anteriores na abertura.
 

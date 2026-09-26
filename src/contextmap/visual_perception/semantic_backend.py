@@ -165,7 +165,14 @@ def encode_failed_semantic_interpretation(
 def decode_failed_semantic_interpretation(
     record: dict[str, Any],
 ) -> FailedSemanticInterpretation:
-    """Decode one failed interpretation and verify its recorded response hash."""
+    """Decode one persisted failed interpretation and verify its recorded response hash.
+
+    Raises:
+        KeyError: If a field of the record is missing.
+        ValueError: If the raw response is not a string, or the provenance names no
+            ``raw_response_reference``: a backend leaves it ``None``, and the writer that
+            persists the record always materializes it.
+    """
     from contextmap.visual_perception.models import BackendProvenance
 
     raw_response = record["raw_response"]
@@ -173,6 +180,10 @@ def decode_failed_semantic_interpretation(
         raise ValueError("failed semantic interpretation raw_response must be a string")
     raw_prompt = record["rendered_prompt"]
     raw_provenance = record["provenance"]
+    if not isinstance(raw_provenance["raw_response_reference"], str):
+        raise ValueError(
+            "failed semantic interpretation provenance raw_response_reference must be a string"
+        )
     raw_backend = raw_provenance["backend"]
     raw_diagnostics = record["diagnostics"]
     raw_failure = record["parse_failure"]
@@ -292,7 +303,13 @@ def encode_semantic_execution(
     *,
     raw_response_reference: str,
 ) -> dict[str, Any]:
-    """Encode one semantic execution while keeping raw text in a referenced file."""
+    """Encode one semantic execution as the record persisted under ``raw_response_reference``.
+
+    The raw response is inline in the record; ``raw_response_reference`` names the contractual
+    record that holds it. The run writer materializes that reference, the same one on every claim
+    and on the scene context of the execution, so :func:`decode_semantic_execution` can hold them
+    to it.
+    """
     return {
         "request": encode_semantic_request(execution.request),
         "rendered_prompt": {
@@ -332,15 +349,17 @@ def encode_semantic_execution(
 def decode_semantic_execution(
     record: dict[str, Any],
 ) -> SemanticInterpretationExecution:
-    """Decode one semantic execution and verify its contractual raw response.
+    """Decode one persisted semantic execution and verify its contractual raw response.
 
     Raises:
         KeyError: If a field of the record is missing, ``raw_response_reference`` included:
             the execution does not carry it, but the record contract does.
-        ValueError: If the raw response or its reference is not a string, or the raw response
-            does not match its recorded hash.
+        ValueError: If the raw response or its reference is not a string, the raw response
+            does not match its recorded hash, or a claim or the scene context names another
+            ``raw_response_reference`` than the record.
     """
-    if not isinstance(record["raw_response_reference"], str):
+    raw_response_reference = record["raw_response_reference"]
+    if not isinstance(raw_response_reference, str):
         raise ValueError("semantic execution raw_response_reference must be a string")
     raw_response = record["raw_response"]
     if not isinstance(raw_response, str):
@@ -351,6 +370,32 @@ def decode_semantic_execution(
     raw_prompt = record["rendered_prompt"]
     raw_parsed = record["parsed"]
     raw_diagnostics = record["diagnostics"]
+    parsed = ParsedSemanticResponse(
+        raw_response_sha256=raw_response_sha256,
+        claims=tuple(decode_claim(item) for item in raw_parsed["claims"]),
+        scene_context=(
+            None
+            if raw_parsed["scene_context"] is None
+            else decode_scene_context(raw_parsed["scene_context"])
+        ),
+        abstained=raw_parsed["abstained"],
+        diagnostics=tuple(
+            SemanticParseDiagnostic(code=item["code"], message=item["message"])
+            for item in raw_parsed["diagnostics"]
+        ),
+    )
+    stray = sorted(
+        {
+            repr(provenance.raw_response_reference)
+            for provenance in parsed.provenances()
+            if provenance.raw_response_reference != raw_response_reference
+        }
+    )
+    if stray:
+        raise ValueError(
+            "semantic execution claims and scene context must share the record's "
+            f"raw_response_reference {raw_response_reference!r}, found {', '.join(stray)}"
+        )
     return SemanticInterpretationExecution(
         request=decode_semantic_request(record["request"]),
         rendered_prompt=RenderedSemanticPrompt(
@@ -360,20 +405,7 @@ def decode_semantic_execution(
             fingerprint=raw_prompt["fingerprint"],
         ),
         raw_response=raw_response,
-        parsed=ParsedSemanticResponse(
-            raw_response_sha256=raw_response_sha256,
-            claims=tuple(decode_claim(item) for item in raw_parsed["claims"]),
-            scene_context=(
-                None
-                if raw_parsed["scene_context"] is None
-                else decode_scene_context(raw_parsed["scene_context"])
-            ),
-            abstained=raw_parsed["abstained"],
-            diagnostics=tuple(
-                SemanticParseDiagnostic(code=item["code"], message=item["message"])
-                for item in raw_parsed["diagnostics"]
-            ),
-        ),
+        parsed=parsed,
         diagnostics=SemanticBackendDiagnostics(
             latency_ms=raw_diagnostics["latency_ms"],
             input_tokens=raw_diagnostics["input_tokens"],

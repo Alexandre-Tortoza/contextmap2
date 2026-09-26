@@ -196,6 +196,21 @@ def test_scene_task_text_becomes_one_claim_in_a_scene_context_without_inferred_f
     assert runtime.calls[0][1] == "<DETAILED_CAPTION>"
 
 
+def test_florence2_leaves_the_raw_response_reference_to_the_run_writer() -> None:
+    """#619 (VP-06): the adapter named a debug/ file; where a response lands is not its call."""
+    region_adapter, _ = _adapter("<REGION_TO_CATEGORY>", "fire extinguisher")
+    scene_adapter, _ = _adapter("<DETAILED_CAPTION>", "A hallway with a door.")
+
+    region = region_adapter.interpret(_region_request(region_adapter))
+    scene = scene_adapter.interpret(_scene_request(scene_adapter))
+
+    context = scene.parsed.scene_context
+    assert context is not None
+    provenances = [context.provenance, *(claim.provenance for claim in context.claims)]
+    provenances.extend(claim.provenance for claim in region.parsed.claims)
+    assert {provenance.raw_response_reference for provenance in provenances} == {None}
+
+
 def test_empty_task_text_is_an_explicit_abstention_not_a_fabricated_claim() -> None:
     adapter, _ = _adapter("<REGION_TO_CATEGORY>", "  \n ")
 

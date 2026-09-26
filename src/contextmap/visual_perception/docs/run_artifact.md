@@ -31,7 +31,7 @@ O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele 
     └── 40-semantic-interpretation/<request-id>/
         ├── request.json / prompt.txt / parsed-response.json
         ├── diagnostics.json / semantic-claims.json
-        └── raw-response.txt                             # somente full
+        └── raw-response.txt                             # somente full; só diagnóstico
 ```
 
 ## Fluxo de persistência e leitura
@@ -98,10 +98,19 @@ flowchart LR
 - **`debug/` só existe quando há conteúdo real.** Feature Extraction
   materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava
   diagnostics humanos, `STANDARD` grava request/prompt/parsing/final outputs e
-  `FULL` acrescenta a resposta bruta. `outputs/semantic-interpretations.jsonl`,
+  `FULL` acrescenta uma cópia da resposta bruta. `outputs/semantic-interpretations.jsonl`,
   hashes e outputs canônicos permanecem suficientes para leitura quando debug
   está desabilitado. Campos de credencial conhecidos são redigidos antes de
   qualquer serialização.
+- **Nenhum campo contratual aponta para `debug/` (#619).** `raw_response_reference` é
+  materializado pelo writer na persistência, porque é ele que sabe em que stream cada tentativa
+  cai: uma execução, suas claims e seu `SceneContext` (no registro e em `outputs/results.jsonl`)
+  nomeiam `outputs/semantic-interpretations.jsonl`; uma resposta rejeitada nomeia
+  `outputs/semantic-interpretation-failures.jsonl`. Os dois registros trazem a resposta bruta
+  inline, em qualquer nível de debug. Em memória o backend deixa o campo `None`; `finalize()`
+  recusa evidência que chegue com outra referência e claim sem execução registrada que nomeie
+  alguma, e o leitor recusa num run `0.6.0` um registro cujas claims não compartilham a referência
+  do registro ou cuja referência não nomeia o próprio stream.
 - **`config.yaml`, `lineage.json`, `environment.json`, `events.jsonl` não são escritos no v0.** Nenhum destes tem produtor real ainda (configuração efetiva de backend, lineage de artefatos upstream, ambiente de execução, eventos granulares) — `manifest.json` já cobre a metadata mínima autoritativa (run_id, índice, sequência, seleção, capabilities, contagens). Adicionar esses arquivos vazios/parciais agora seria estrutura sem conteúdo real.
 
 ## Escrita atômica e incremental
@@ -151,15 +160,23 @@ Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`Back
 
 ## Reprodutibilidade do pipeline resolvido (`schema_version` 0.6.0)
 
-O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e, em cada registro de
-`metrics/stage-timings.jsonl`, os campos `error_type` e `error_traceback` do `StageOutcome`
-(`null` fora de `FAILED`; #619). Nenhum outro arquivo muda: resultados, máscaras, features,
-execuções e falhas semânticas e README mantêm os mesmos bytes, e o manifest só muda na versão e nas
-entradas do inventário desses dois arquivos (há um teste de caracterização para isso). Por isso o
-leitor, que não decodifica as métricas, continua abrindo runs `0.5.0`, o schema da v0.1.0, sem
-outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não foi
-registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
-recusadas na abertura.
+O schema `0.6.0` difere do `0.5.0` em três pontos:
+
+- acrescenta `outputs/region-discovery-audit.jsonl` (#611);
+- cada registro de `metrics/stage-timings.jsonl` ganha `error_type` e `error_traceback` do
+  `StageOutcome`, sempre presentes e `null` fora de `FAILED` (#619);
+- `raw_response_reference` nomeia o stream contratual que guarda a resposta bruta
+  (`outputs/semantic-interpretations.jsonl` ou `outputs/semantic-interpretation-failures.jsonl`)
+  em vez da cópia `debug/40-semantic-interpretation/<request-id>/raw-response.txt` (#619). Muda
+  só esse valor, em `outputs/results.jsonl`, nos dois streams semânticos e nas cópias de debug das
+  claims parseadas.
+
+Máscaras, features e README mantêm os mesmos bytes, e o manifest só muda na versão e nas entradas
+do inventário desses arquivos (há um teste de caracterização para isso). Por isso o leitor
+continua abrindo runs `0.5.0`, o schema da v0.1.0: as métricas ele não decodifica, a auditoria de
+Region Discovery ele informa como não registrada (`records_region_discovery_audit()` devolve
+`False`) e a referência à resposta bruta ele lê como foi gravada, sem exigir o stream. Versões
+anteriores continuam recusadas na abertura.
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
 
