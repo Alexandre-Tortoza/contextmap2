@@ -12,6 +12,7 @@ O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele 
 ├── manifest.json                                      # ponto autoritativo
 ├── outputs/
 │   ├── results.jsonl                                   # um PerceptionResult por linha
+│   ├── region-discovery-audit.jsonl                    # passes, rejeições e merges por frame
 │   ├── semantic-interpretations.jsonl                   # execução semântica auditável
 │   ├── semantic-interpretation-failures.jsonl           # resposta observada que não parseou
 │   ├── semantic-views/                                  # pixels exatos enviados ao backend
@@ -37,13 +38,13 @@ O writer grava o run **exatamente** no `output_dir` que o chamador entrega; ele 
 
 ```mermaid
 flowchart LR
-    INPUT["PerceptionResult[] + StageOutcome[]"] --> WRITER["PerceptionRunWriter"]
+    INPUT["PerceptionResult[] + StageOutcome[]<br/>+ RegionDiscoveryAudit[]"] --> WRITER["PerceptionRunWriter"]
     WRITER --> TMP["diretório temporário irmão"]
-    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>outputs/semantic-interpretations.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
+    TMP --> FILES["manifest.json<br/>outputs/results.jsonl<br/>outputs/region-discovery-audit.jsonl<br/>outputs/semantic-interpretations.jsonl<br/>metrics/stage-timings.jsonl<br/>README.md"]
     FILES --> CHECK["checagem interna de consistência<br/>tamanho + hash + ownership"]
     CHECK -->|válido| FINAL["output_dir"]
     FINAL --> READER["PerceptionRunReader"]
-    READER --> RESULT["result() / list_results()"]
+    READER --> RESULT["result() / list_results()<br/>region_discovery_audit()"]
 ```
 
 `manifest.json` e os arquivos inventariados no próprio run formam a fonte de verdade; não existe registro nem índice ao lado do run.
@@ -78,6 +79,21 @@ flowchart LR
   schema, junto com uma política para artifacts anteriores. `occurred_at` é auditoria, não
   identidade de conteúdo: comparação entre runs precisa excluí-lo.
 
+- **As rejeições e os merges de Region Discovery são evidência contratual do run (#611).**
+  `add_region_discovery_audit()` recebe a `RegionDiscoveryAudit` de um frame, e o writer grava
+  `outputs/region-discovery-audit.jsonl`, uma linha por frame: `source_observation_id`,
+  `backend` (a `BackendProvenance` exata), `passes` (cada pass com os diagnostics do backend
+  naquele pass), `pass_rejections`, `normalization_config_digest`, `normalization_rejections` e
+  `merge_decisions`. O formato e a semântica de cada campo estão em
+  [Region Discovery](region-discovery.md#evidência-persistida-a-auditoria-de-cada-frame). A
+  tabela é escrita **sempre**, mesmo vazia, como o stream de falhas semânticas: num run `0.6.0`
+  "nenhum frame auditado" nunca se confunde com "auditoria não registrada". `add_region_discovery_audit()`
+  recusa uma segunda auditoria para a mesma observação, e `finalize()` recusa uma auditoria cuja
+  observação não tenha resultado no run. A auditoria é metadata leve (IDs, motivos, números), então
+  fica em memória até `finalize()`, como as falhas semânticas; nenhum pixel entra nela.
+  `PerceptionRunReader.records_region_discovery_audit()` responde pela versão de schema se o run
+  registrou a auditoria; `iter_region_discovery_audits()` a lê em fluxo e
+  `region_discovery_audit(source_observation_id)` busca a de um frame.
 - **Views semânticas são outputs contratuais.** Cada `SemanticVisualView` possui SHA-256 obrigatório e referencia um arquivo abaixo de `outputs/semantic-views/`. `add_semantic_view_payload()` valida o hash antes de enfileirar os bytes (na persistência; a inferência já verifica o mesmo hash em cada runtime, ver [Integridade das views](semantic-interpretation.md#integridade-das-views-na-inferência)); `finalize()` exige que toda view de toda execução possua payload inventariado e rejeita payloads sem request correspondente.
 - **`debug/` só existe quando há conteúdo real.** Feature Extraction
   materializa previews conforme seu nível. `SemanticDebugLevel.NONE` não grava
@@ -100,6 +116,7 @@ Cada payload pesado é gravado **no momento em que é adicionado**, não em `fin
 | `add_feature_payload()` | o `.npy` em `outputs/features/` | só a metadata da feature |
 | `add_semantic_view_payload()` | os bytes em `outputs/semantic-views/` | só `(sha256, size_bytes)` |
 | `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error` |
+| `add_region_discovery_audit()` | — | a auditoria do frame: IDs, motivos e números, nenhum pixel |
 
 Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **mesma** tupla de `Region2D` com máscaras que `add_result()` recebe, e as métricas de estágio nunca serializam esse `output`: retê-lo guardaria os pixels uma segunda vez.
 
@@ -122,13 +139,21 @@ deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
 
 ## Leitura isolada
 
-`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados e registros de execução contratuais; `debug/` não é dependência de leitura.
+`PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados, a auditoria de Region Discovery e os registros de execução contratuais; `debug/` não é dependência de leitura.
 
 ## `serialization.py`
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
 
-## Reprodutibilidade do pipeline resolvido (`schema_version` 0.5.0)
+## Reprodutibilidade do pipeline resolvido (`schema_version` 0.6.0)
+
+O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e não muda nenhum outro
+arquivo: resultados, máscaras, features, execuções e falhas semânticas, métricas e README mantêm os
+mesmos bytes, e o manifest só muda na versão e na entrada nova do inventário (há um teste de
+caracterização para isso). Por isso o leitor continua abrindo runs `0.5.0`, o schema da v0.1.0,
+sem outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não
+foi registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
+recusadas na abertura.
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.
 

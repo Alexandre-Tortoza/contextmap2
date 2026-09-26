@@ -6,6 +6,15 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 
 ## [Não lançado]
 
+### Alterado
+
+- Schema do `PerceptionRunArtifact` 0.5.0 → 0.6.0: todo run grava `outputs/region-discovery-audit.jsonl`, um registro por frame com os passes de Region Discovery e os diagnostics do backend em cada um, cada candidato rejeitado com o motivo, cada decisão de merge e o digest da configuração de normalização (#611). As rejeições e os merges deixam de se perder ao fim do run. O `PerceptionRunReader` continua abrindo runs 0.5.0 e informa que a auditoria deles não foi registrada, em vez de devolvê-la vazia.
+- Os backends de Region Discovery (SAM2, SAM3 e Florence-2) implementam o novo port `AuditedRegionDiscovery`, cujo `discover_audited()` devolve as regiões canônicas junto com a `RegionDiscoveryAudit` que as explica; o port `RegionDiscovery` não muda. O executor de `visual_perception` do runtime exige esse port, grava a auditoria de cada frame no run e recusa na construção um backend que só devolva regiões (#611).
+
+### Removido
+
+- `RegionDiscoveryEvidenceWriter`, `DiscoveryAuditRecord`, `DebugLevel` e `WrittenDiscoveryEvidence`: o writer de evidência de estágio de Region Discovery não tinha chamador de produção, e a evidência contratual que ele gravava agora faz parte do `PerceptionRunArtifact` (#611).
+
 ## [0.1.0] - 2026-09-25
 
 Primeira release validada da Solution 1. Escopo congelado em [docs/release-v0.1.0.md](docs/release-v0.1.0.md); notas completas, com capacidades validadas e limitações, em [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

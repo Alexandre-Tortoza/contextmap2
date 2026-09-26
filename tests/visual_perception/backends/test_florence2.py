@@ -11,6 +11,7 @@ from mask_cases import BACKEND_SEEDS, GOLDEN, digest, florence2_candidates
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    AuditedRegionDiscovery,
     BoundingBox,
     InlineMask,
     PreparedImage,
@@ -124,6 +125,25 @@ def test_florence2_normalizes_boxes_and_masks_without_semantic_promotion() -> No
     regions = backend.discover(_input().prepared_image)
     assert all(isinstance(region, Region2D) for region in regions)
     assert regions[0].provenance == backend.backend_provenance()
+
+
+def test_florence2_reports_the_audit_of_the_regions_it_discovers() -> None:
+    """#611: the regions of the public port come with the passes, rejections and merges."""
+    config = Florence2Config(
+        checkpoint="microsoft/Florence-2-large",
+        task="<REFERRING_EXPRESSION_SEGMENTATION>",
+        prompt="visible regions",
+    )
+    backend = Florence2RegionDiscovery(config=config, runtime=FakeFlorence2Runtime())
+    image = _input().prepared_image
+
+    audited = backend.discover_audited(image)
+
+    assert isinstance(backend, AuditedRegionDiscovery)
+    assert audited.regions == backend.discover(image)
+    assert audited.audit.source_observation_id == image.source_observation_id
+    assert audited.audit.backend == backend.backend_provenance()
+    assert [discovery_pass.pass_id for discovery_pass in audited.audit.passes] == ["full-frame"]
 
 
 def test_florence2_configuration_requires_explicit_region_task() -> None:

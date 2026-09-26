@@ -21,13 +21,8 @@ from contextmap.visual_perception.dense_region_association import (
     map_box_to_grid_cells,
     pool_region_feature,
 )
-from contextmap.visual_perception.diagnostics import (
-    DebugLevel,
-    DiscoveryAuditRecord,
-    RegionDiscoveryEvidenceWriter,
-    WrittenDiscoveryEvidence,
-)
 from contextmap.visual_perception.discovery import (
+    AuditedRegions,
     BackendDiagnostics,
     BorderPolicy,
     DiscoveryInput,
@@ -36,6 +31,7 @@ from contextmap.visual_perception.discovery import (
     DiscoveryPassConfig,
     DiscoveryRunResult,
     PassKind,
+    RegionDiscoveryAudit,
     TilingConfig,
     build_discovery_passes,
     run_discovery_passes,
@@ -156,6 +152,7 @@ from contextmap.visual_perception.pipeline import (
     validate_pipeline_preset,
 )
 from contextmap.visual_perception.ports import (
+    AuditedRegionDiscovery,
     FeatureExtractor,
     FeatureResolutionEnhancement,
     RegionDiscovery,
@@ -246,6 +243,8 @@ __all__ = [
     "POOLING_POLICY",
     "SEMANTIC_DEBUG_ROOT",
     "ArtifactReference",
+    "AuditedRegionDiscovery",
+    "AuditedRegions",
     "BackendDiagnostics",
     "BackendProvenance",
     "BackendScore",
@@ -255,11 +254,9 @@ __all__ = [
     "ClaimId",
     "CoordinateConvention",
     "CropOperation",
-    "DebugLevel",
     "DenseFeatureDiagnostic",
     "DenseFeatureMap",
     "DenseFeatureSampling",
-    "DiscoveryAuditRecord",
     "DiscoveryInput",
     "DiscoveryOutput",
     "DiscoveryPass",
@@ -318,7 +315,7 @@ __all__ = [
     "RegionAssociationError",
     "RegionCandidate",
     "RegionDiscovery",
-    "RegionDiscoveryEvidenceWriter",
+    "RegionDiscoveryAudit",
     "RegionFeatureDiagnostic",
     "RegionId",
     "RegionPoolingDiagnostics",
@@ -374,7 +371,6 @@ __all__ = [
     "ValidRegion",
     "VisualFeature",
     "VisualViewKind",
-    "WrittenDiscoveryEvidence",
     "assemble_perception_result",
     "box_mask_shape",
     "build_discovery_passes",

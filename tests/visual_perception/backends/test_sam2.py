@@ -10,6 +10,7 @@ from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam2_candidates
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    AuditedRegionDiscovery,
     BoundingBox,
     InlineMask,
     PreparedImage,
@@ -135,6 +136,22 @@ def test_sam2_normalizes_native_proposals_with_complete_provenance() -> None:
     regions = backend.discover(_input().prepared_image)
     assert all(isinstance(region, Region2D) for region in regions)
     assert regions[0].provenance == backend.backend_provenance()
+
+
+def test_sam2_reports_the_audit_of_the_regions_it_discovers() -> None:
+    """#611: the regions of the public port come with the passes, rejections and merges."""
+    backend = Sam2RegionDiscovery(
+        config=Sam2Config(checkpoint="facebook/sam2-hiera-large"), runtime=FakeSam2Runtime()
+    )
+    image = _input().prepared_image
+
+    audited = backend.discover_audited(image)
+
+    assert isinstance(backend, AuditedRegionDiscovery)
+    assert audited.regions == backend.discover(image)
+    assert audited.audit.source_observation_id == image.source_observation_id
+    assert audited.audit.backend == backend.backend_provenance()
+    assert [discovery_pass.pass_id for discovery_pass in audited.audit.passes] == ["full-frame"]
 
 
 def test_sam2_configuration_rejects_invalid_thresholds_and_unknown_values() -> None:

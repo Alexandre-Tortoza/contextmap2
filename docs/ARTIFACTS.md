@@ -209,6 +209,7 @@ O índice contém uma observação canônica por linha; payloads grandes de imag
 ├── manifest.json
 ├── outputs/
 │   ├── results.jsonl
+│   ├── region-discovery-audit.jsonl  # passes, rejeições e merges de cada frame
 │   ├── semantic-interpretations.jsonl
 │   ├── semantic-views/            # bytes exatos fornecidos ao VLM
 │   └── features/                  # opcional em geral; obrigatório se consumido semanticamente
@@ -222,7 +223,7 @@ O índice contém uma observação canônica por linha; payloads grandes de imag
     └── 40-semantic-interpretation/<request-id>/raw-response.txt
 ```
 
-No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `PerceptionRunReader` abre um run usando apenas seu próprio diretório.
+No schema atual, `manifest.json` também persiste `pipeline_preset` e `configuration_digest`. `PerceptionRunReader` abre um run usando apenas seu próprio diretório. O schema atual é `0.6.0`, que acrescentou a auditoria de Region Discovery (ver abaixo); o leitor ainda abre runs `0.5.0`, o schema da v0.1.0, e informa que a auditoria deles não foi registrada.
 
 ### `StateEstimationRunArtifact` atual
 
@@ -406,22 +407,22 @@ O diretório é o artifact canônico; um arquivo compactado seria só transporte
 
 O `ContextMapArtifactReader` abre pelo próprio diretório, lê metadados, entidades e relações um registro por vez e abre a geometria só sob demanda (por `mmap`), sem mutação e sem fallback para `debug/`. O `validate_context_map_artifact` devolve um relatório determinístico legível por máquina, em nível estrutural (`structurally_valid` no máximo) ou completo (hashes, registros, referências, índices reconstruídos e arquivos a montante; só ele responde `verified`). `export_bundle` gera um diretório portátil com a política de fechamento explícita (`core-only`, `core+required`, `core+selected-evidence`). Detalhes: [Layout e formatos](../src/contextmap/artifact/docs/storage-layout.md), [writer](../src/contextmap/artifact/docs/writer.md), [leitor](../src/contextmap/artifact/docs/reader.md), [validação de integridade](../src/contextmap/artifact/docs/integrity-validation.md) e [bundle](../src/contextmap/artifact/docs/bundle.md).
 
-### Evidência auditável de Region Discovery
+### Evidência auditável de Region Discovery dentro do `PerceptionRunArtifact`
 
-Region Discovery possui um writer de evidência de estágio próprio para experimentação, inspeção e avaliação. Ele não cria uma nova identidade de percepção paralela ao `PerceptionRunArtifact`; registra os intermediários e métricas necessários para explicar como `Region2D[]` foi produzido.
+Region Discovery não cria um artifact paralelo. Junto com as regiões canônicas de cada frame, a descoberta canônica devolve a `RegionDiscoveryAudit` que as explica, e o executor de percepção do runtime a entrega ao `PerceptionRunWriter`. A tabela contratual `outputs/region-discovery-audit.jsonl` guarda um registro por frame: os passes e os diagnostics do backend em cada um, cada candidato rejeitado com o motivo (antes e depois da normalização), cada decisão de merge, o digest da `NormalizationConfig` efetiva e a proveniência do backend (#611). Assim, "por que esta proposta sumiu?" tem resposta depois do run.
 
 ```mermaid
 flowchart LR
     PI["PreparedImage"] --> RD["Region Discovery"]
     RD --> REG["Region2D[]"]
-    REG --> PRA["PerceptionResult / PerceptionRunArtifact"]
-    RD --> W["RegionDiscoveryEvidenceWriter"]
-    W --> O["outputs/<br/>regions.jsonl + metrics.json"]
-    W --> M["manifest.json + hashes"]
-    W -. standard/full .-> D["debug/<br/>candidates, passes, overlays, masks"]
+    RD --> AUD["RegionDiscoveryAudit"]
+    REG --> PW["PerceptionRunWriter"]
+    AUD --> PW
+    PW --> R["outputs/results.jsonl"]
+    PW --> A["outputs/region-discovery-audit.jsonl"]
 ```
 
-O diretório de estágio é finalizado atomicamente. `outputs/` e `manifest.json` são contratuais para esse evidence artifact; `debug/` continua não contratual e pode ser descartado sem alterar a semântica de `Region2D`. O layout e os níveis `none|standard|full` estão documentados em [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md).
+A tabela entra no inventário do manifest e é escrita mesmo vazia; a ausência dela só é legítima num run `0.5.0`, e `PerceptionRunReader.records_region_discovery_audit()` distingue "auditado, nada rejeitado" de "nunca auditado". Os IDs de candidato das rejeições e dos merges são os mesmos de `Region2D.contributor_candidate_ids`, então resultado e auditoria se reconciliam. Diagnósticos humanos de Region Discovery (overlays, máscaras por região) não são gravados hoje; o antigo writer de estágio avulso, sem chamador de produção, foi removido. O formato do registro está em [Region Discovery](../src/contextmap/visual_perception/docs/region-discovery.md#evidência-persistida-a-auditoria-de-cada-frame).
 
 ### Feature Extraction dentro do `PerceptionRunArtifact`
 
@@ -449,8 +450,9 @@ resolver para evidência do run antes de `finalize()`.
 
 A resposta bruta também é materializada no path de debug declarado pela
 provenance. Ela é importante para auditoria, mas o parsing canônico não depende
-do arquivo de debug para existir. O schema atual do run artifact é `0.4.0`;
-artifacts `0.3.0` são rejeitados na abertura.
+do arquivo de debug para existir. O schema atual do run artifact é `0.6.0`;
+o leitor ainda abre `0.5.0` (sem a auditoria de Region Discovery) e rejeita
+versões anteriores na abertura.
 
 Detalhes: [Semantic Interpretation](../src/contextmap/visual_perception/docs/semantic-interpretation.md) e [run artifact](../src/contextmap/visual_perception/docs/run_artifact.md).
 
@@ -667,9 +669,10 @@ Contém o resultado contratual consumido downstream.
 Exemplos:
 
 ```text
-PerceptionRunArtifact (schema 0.4.0)
+PerceptionRunArtifact (schema 0.6.0)
 outputs/
 ├── results.jsonl
+├── region-discovery-audit.jsonl     # um registro por frame; sempre presente
 ├── semantic-interpretations.jsonl   # quando houve execução semântica
 ├── semantic-views/                  # views content-addressed consumidas
 └── features/                        # opcional em geral
@@ -836,7 +839,7 @@ Depois de uma queda, o caminho final ou não existe ou contém o run completo. O
 
 O custo é um `fsync` por arquivo e por diretório do run, mais um para o pai; cada um espera o dispositivo de armazenamento, então cresce com o número de arquivos, não com o que a capability calcula. Medido no ambiente de desenvolvimento (ext4 sobre disco virtual), cada `fsync` custou entre 0,5 e 0,8 ms: um run de 5 arquivos pequenos passou de ~1 ms para ~6 ms, um de 200 arquivos pequenos de ~40 ms para ~150–170 ms, e um payload de 100 MiB ficou ~10% mais lento. Sincronizar um diretório exige abri-lo só para leitura, comportamento POSIX (a plataforma do projeto é Linux). Não há alternativa silenciosa: uma sincronização que falha levanta o erro, e um run cujos dados não chegaram ao disco não é publicado.
 
-Os writers com implementação própria (`SequenceArtifactWriter` de Ingestion, o `PerceptionRunArtifact` e a evidência de Region Discovery de Visual Perception) e os documentos de `evaluation` ainda publicam só de forma atômica, sem essa sequência.
+Os writers com implementação própria (`SequenceArtifactWriter` de Ingestion e o `PerceptionRunArtifact` de Visual Perception, que agora também carrega a auditoria de Region Discovery) e os documentos de `evaluation` ainda publicam só de forma atômica, sem essa sequência.
 
 ## Reprodutibilidade
 

@@ -15,6 +15,7 @@ from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam3_candidates
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
+    AuditedRegionDiscovery,
     BoundingBox,
     InlineMask,
     PreparedImage,
@@ -123,6 +124,26 @@ def test_sam3_preserves_strategy_query_and_native_score_semantics() -> None:
     regions = backend.discover(_input().prepared_image)
     assert all(isinstance(region, Region2D) for region in regions)
     assert regions[0].provenance == backend.backend_provenance()
+
+
+def test_sam3_reports_the_audit_of_the_regions_it_discovers() -> None:
+    """#611: the regions of the public port come with the passes, rejections and merges."""
+    config = Sam3Config(
+        checkpoint="facebook/sam3",
+        strategy=Sam3Strategy.TEXT_PROMPT,
+        prompt="all movable items",
+        score_threshold=0.8,
+    )
+    backend = Sam3RegionDiscovery(config=config, runtime=FakeSam3Runtime())
+    image = _input().prepared_image
+
+    audited = backend.discover_audited(image)
+
+    assert isinstance(backend, AuditedRegionDiscovery)
+    assert audited.regions == backend.discover(image)
+    assert audited.audit.source_observation_id == image.source_observation_id
+    assert audited.audit.backend == backend.backend_provenance()
+    assert [discovery_pass.pass_id for discovery_pass in audited.audit.passes] == ["full-frame"]
 
 
 def test_sam3_strategy_configuration_is_explicit() -> None:

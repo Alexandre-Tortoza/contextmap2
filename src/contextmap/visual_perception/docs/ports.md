@@ -53,6 +53,8 @@ O port público permanece `discover(PreparedImage) -> Sequence[Region2D]`. SAM2,
 
 Os tipos adapter-facing são exportados para configuração, diagnóstico e avaliação, mas não alteram a fronteira consumida pelas capabilities downstream. O fluxo completo está em [`region-discovery.md`](region-discovery.md).
 
+`AuditedRegionDiscovery` estende o port com `discover_audited(PreparedImage) -> AuditedRegions`: as mesmas regiões de `discover()` e a `RegionDiscoveryAudit` do frame (passes e diagnostics do backend, rejeições antes e depois da normalização, decisões de merge e digest da `NormalizationConfig`). É o port que o executor de percepção do runtime exige, para gravar essa auditoria no `PerceptionRunArtifact`; SAM2, SAM3 e Florence-2 implementam os dois. Nenhum backend de produção devolve `Region2D` com `is_accepted=False`: a rejeição do caminho canônico está na auditoria.
+
 ## `FeatureExtractor.required_scope()`
 
 Em vez de multiplicar tipos de port por escopo (dense/global/region), um único `FeatureExtractor` declara seu escopo via `required_scope()`. Um extrator dense/global só recebe `image`; um extrator region-scoped também recebe `regions`. Isso evita forçar uma assinatura mandatória `PreparedImage + Region2D[]` em extratores que não precisam de regiões (ex.: DINOv3 dense).
