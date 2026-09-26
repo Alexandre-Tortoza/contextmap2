@@ -2,6 +2,7 @@ from collections.abc import Callable
 from hashlib import sha256
 
 import pytest
+from mask_cases import GOLDEN, REMAP_SEEDS, digest, remap_case
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -22,6 +23,8 @@ from contextmap.visual_perception.discovery import (
     PassKind,
     RegionCandidateDiscovery,
     TilingConfig,
+    _expand_mask,
+    _resize_mask,
     build_discovery_passes,
     run_discovery_passes,
 )
@@ -226,3 +229,15 @@ def test_invalid_tiling_configuration_fails_before_backend_execution(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         factory()
+
+
+@pytest.mark.parametrize("seed", REMAP_SEEDS)
+def test_tile_mask_remapping_matches_the_recorded_behaviour(seed: int) -> None:
+    # #593: resize por vizinho mais próximo e expansão na imagem, registrados antes da troca.
+    mask, (window_width, window_height), (image_width, image_height, x0, y0) = remap_case(seed)
+
+    resized = _resize_mask(mask, window_width, window_height)
+    expanded = _expand_mask(resized, image_width, image_height, x0, y0)
+
+    remapped = {"resized": resized.to_dict(), "expanded": expanded.to_dict()}
+    assert digest(remapped) == GOLDEN["remap"][str(seed)]

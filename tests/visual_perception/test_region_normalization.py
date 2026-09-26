@@ -1,7 +1,17 @@
-from dataclasses import FrozenInstanceError
+import tracemalloc
+from dataclasses import FrozenInstanceError, replace
 from hashlib import sha256
+from typing import Any
 
+import numpy as np
 import pytest
+from mask_cases import (
+    GOLDEN,
+    NORMALIZATION_SEEDS,
+    inline_mask,
+    normalization_case,
+    normalization_digest,
+)
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -16,6 +26,7 @@ from contextmap.visual_perception import (
     RejectionReason,
     ValidRegion,
 )
+from contextmap.visual_perception import normalization as normalization_module
 from contextmap.visual_perception.normalization import (
     MergeKind,
     NormalizationConfig,
@@ -203,3 +214,93 @@ def test_region_budget_is_deterministic_and_configuration_is_provenance_visible(
     assert result.rejected[0].candidate_id == "c"
     assert result.rejected[0].reason is RejectionReason.REGION_BUDGET_EXCEEDED
     assert result.config_digest == config.digest
+
+
+# --- #593: comportamento registrado e gates estruturais ------------------------------------
+
+
+@pytest.mark.parametrize("seed", NORMALIZATION_SEEDS)
+def test_normalization_matches_the_recorded_behaviour(seed: int) -> None:
+    result = normalize_regions(*normalization_case(seed))
+
+    assert normalization_digest(result) == GOLDEN["normalization"][str(seed)]
+
+
+def _vga_candidates(boxes: list[tuple[int, int, int, int]]) -> tuple[RegionCandidate, ...]:
+    candidates = []
+    for index, (x0, y0, x1, y1) in enumerate(boxes):
+        pixels = np.zeros((480, 640), dtype=bool)
+        pixels[y0:y1, x0:x1] = True
+        candidates.append(
+            RegionCandidate(
+                candidate_id=f"candidate-{index:02d}",
+                source_observation_id="frame-1",
+                perception_run_id="run-1",
+                perception_result_id="result-1",
+                image_width=640,
+                image_height=480,
+                mask=inline_mask(pixels),
+                provenance=RegionProvenance(
+                    backend_id="fake",
+                    backend_version="1",
+                    checkpoint="fake-checkpoint",
+                    config_digest="sha256:fake",
+                    discovery_pass_id="full-frame",
+                    native_proposal_id=f"native-{index}",
+                ),
+            )
+        )
+    return tuple(candidates)
+
+
+def _vga_image() -> PreparedImage:
+    return replace(_prepared(), width=640, height=480)
+
+
+# Uma grade 4x3 de retângulos disjuntos de 150x150 numa imagem 640x480 (o cenário da auditoria).
+_GRID = [(x * 160, y * 160, x * 160 + 150, y * 160 + 150) for y in range(3) for x in range(4)]
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: geometry is a pixel set")
+def test_the_normalized_geometry_holds_no_pixel_sets() -> None:
+    annotations = normalization_module._Geometry.__annotations__.values()
+
+    assert not any("frozenset" in str(annotation) for annotation in annotations)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: no bounding-box prefilter")
+def test_only_candidates_whose_boxes_meet_are_compared_pixel_by_pixel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compared = 0
+    real = normalization_module._overlap
+
+    def counting(*args: Any) -> tuple[float, float]:
+        nonlocal compared
+        compared += 1
+        return real(*args)
+
+    monkeypatch.setattr(normalization_module, "_overlap", counting)
+    # A grade disjunta mais um candidato sobre o primeiro retângulo.
+    candidates = _vga_candidates([*_GRID, (10, 10, 140, 140)])
+
+    result = normalize_regions(candidates, _vga_image(), _backend_provenance())
+
+    assert len(result.regions) == 12
+    assert compared == 1
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="#593: pixel sets per candidate")
+def test_normalizing_twelve_vga_masks_keeps_a_bounded_transient_peak() -> None:
+    # Complemento do gate estrutural: o pico de memória transitória, medido por tracemalloc.
+    # Referência medida com pixels em frozenset: >11 MB neste cenário.
+    candidates = _vga_candidates(_GRID)
+    image = _vga_image()
+    tracemalloc.start()
+    try:
+        normalize_regions(candidates, image, _backend_provenance())
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 3_000_000

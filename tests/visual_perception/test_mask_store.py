@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from mask_cases import GOLDEN, MASK_STORE_SEEDS, mask_store_case
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import RegionId
@@ -147,3 +148,23 @@ def test_payload_reference_cannot_escape_the_store_root(tmp_path: Path) -> None:
             source_observation_id=SourceObservationId("frame-0001"),
             mask=_checkerboard_mask(),
         )
+
+
+@pytest.mark.parametrize("seed", MASK_STORE_SEEDS)
+def test_persisted_mask_bytes_match_the_recorded_payload(tmp_path: Path, seed: int) -> None:
+    # #593: o payload empacotado (e seu hash no índice) não muda com a representação em memória.
+    mask = mask_store_case(seed)
+    writer = MaskStoreWriter(tmp_path)
+
+    entry = writer.write(
+        region_id=RegionId("region-0001"),
+        source_observation_id=SourceObservationId("frame-1"),
+        mask=mask,
+    )
+    write_mask_index(tmp_path, writer.entries())
+
+    assert entry.content_hash == GOLDEN["mask_store"][str(seed)]
+    assert (
+        MaskStoreReader.open(tmp_path).load(SourceObservationId("frame-1"), RegionId("region-0001"))
+        == mask
+    )
