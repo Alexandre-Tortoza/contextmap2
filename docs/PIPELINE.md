@@ -391,6 +391,10 @@ O preset global é:
 
 - `canonical/1`: Ingestion → Visual Perception + State Estimation → Geometric Mapping → Sensor Association → Point Representation opcional → Semantic Fusion → Semantic Mapping → Entity Resolution → Spatial Relations → `context_map`. Antes do v0.1.0 sair esta é a única topologia do repositório e continua livre para evoluir até o release; a partir daí, uma mudança de topologia abre uma identidade nova (`canonical/2`, ...) em vez de mudar esta.
 
+## Contexto incremental
+
+A partir da v0.1.1, um mapa contextual pode crescer sem refazer a geometria: uma **fundação espacial** fixa (sequência, trajetória e mapa) recebe execuções de contexto (`ContextRun`, percepção e associação sobre uma seleção de observações), acumuladas numa `ContextBranch`; cada `ContextBuild` congela uma revisão da branch e materializa, da Semantic Fusion ao `ContextMapArtifact`, um snapshot imutável. Só percepção e associação rodam a cada incremento; `state_estimation` e `geometric_mapping` rodam uma vez, na fundação. Ciclo, identidades, CLI e limitações em [runtime-composition.md](runtime-composition.md#contexto-incremental-v011-decisão-de-arquitetura).
+
 ## 0. Runtime & Configuration
 
 **Função.** Transformar configuração declarativa em uma execução reproduzível. Runtime não possui ciência de percepção, geometria, fusão ou relações; ele seleciona implementações, valida dependências, conecta artifacts e registra lifecycle.

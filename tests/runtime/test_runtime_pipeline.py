@@ -177,6 +177,73 @@ class TestCanonicalDag:
         assert [item.source for item in stage.inputs] == ["geometric_mapping"]
 
 
+_FRAMES = {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 10}
+
+
+class TestObservationSelection:
+    """Issue #497: the observation selection is an identity of the stages that apply it."""
+
+    def _plan(self, tmp_path: Path, selection: dict[str, Any] | None) -> PipelinePlan:
+        document = _document()
+        if selection is not None:
+            document["inputs"] = {"observation_selection": selection}
+        return resolve_plan(effective_from(tmp_path, document))
+
+    def test_only_visual_perception_is_observation_scoped(self) -> None:
+        from contextmap.runtime.catalog import CANONICAL_PRESET
+
+        scoped = [stage.stage_id for stage in CANONICAL_PRESET.stages if stage.observation_scoped]
+
+        assert scoped == ["visual_perception"]
+
+    def test_the_selection_reaches_only_the_observation_scoped_stage(self, tmp_path: Path) -> None:
+        plan = self._plan(tmp_path, _FRAMES)
+
+        by_id = {stage.stage_id: stage for stage in plan.stages}
+
+        assert by_id["visual_perception"].observation_selection == _FRAMES
+        assert by_id["state_estimation"].observation_selection is None
+        assert by_id["sensor_association"].observation_selection is None
+
+    def test_the_selection_changes_only_the_scoped_stage_identity(self, tmp_path: Path) -> None:
+        whole = {stage.stage_id: stage.config_digest for stage in self._plan(tmp_path, None).stages}
+        framed = {
+            stage.stage_id: stage.config_digest for stage in self._plan(tmp_path, _FRAMES).stages
+        }
+
+        changed = sorted(stage for stage in whole if whole[stage] != framed[stage])
+        assert changed == ["visual_perception"]
+
+    def test_the_persisted_plan_names_the_selection(self, tmp_path: Path) -> None:
+        document = self._plan(tmp_path, _FRAMES).to_document()
+
+        stages = {stage["stage_id"]: stage for stage in document["stages"]}
+        assert stages["visual_perception"]["observation_selection"] == _FRAMES
+        assert "observation_selection" not in stages["state_estimation"]
+
+    def test_the_executor_receives_the_selection(self, tmp_path: Path) -> None:
+        plan = self._plan(tmp_path, _FRAMES)
+        executors = _executors(plan, [])
+
+        run_plan(
+            plan.scope(targets=["visual_perception"]),
+            executors,
+            environ={},
+            module_available=_ready,
+            provided_runtimes=(
+                "visual_perception.region_discovery",
+                "visual_perception.dense_features",
+                "visual_perception.region_features",
+                "visual_perception.semantic_interpretation",
+            ),
+        )
+
+        (request,) = executors["visual_perception"].requests
+        assert request.observation_selection == _FRAMES
+        (ingestion,) = executors["ingestion"].requests
+        assert ingestion.observation_selection is None
+
+
 class TestPersistedTopology:
     def test_the_plan_document_records_the_topology_identities_and_order(
         self, tmp_path: Path
@@ -394,6 +461,52 @@ class TestStructuralPreflight:
         assert any(
             "Maps" in problem.message and "Frames" in problem.message for problem in report.problems
         )
+
+
+def _provided(stage_id: str, contract: str, name: str) -> ArtifactRef:
+    return ArtifactRef(stage_id=stage_id, contract=contract, artifact_id=name, content_hash=name)
+
+
+class TestSeveralProvidedRuns:
+    """Issue #498: a build supplies the runs of several ContextRuns to one stage."""
+
+    def _upstream(self) -> dict[str, Any]:
+        return {
+            "ingestion": _provided("ingestion", "SequenceArtifact", "seq"),
+            "geometric_mapping": _provided("geometric_mapping", "GeometricMapArtifact", "map"),
+            "visual_perception": (
+                _provided("visual_perception", "PerceptionRunArtifact", "perception-1"),
+                _provided("visual_perception", "PerceptionRunArtifact", "perception-2"),
+            ),
+            "sensor_association": (
+                _provided("sensor_association", "SensorAssociationRunArtifact", "association-1"),
+                _provided("sensor_association", "SensorAssociationRunArtifact", "association-2"),
+            ),
+        }
+
+    def test_several_runs_reach_an_input_that_accepts_them(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+
+        execution = plan.scope(targets=["semantic_fusion"], provided=self._upstream())
+
+        assert not execution.problems
+        assert [ref.artifact_id for ref in execution.reused["sensor_association"]] == [
+            "association-1",
+            "association-2",
+        ]
+
+    def test_several_runs_for_an_input_that_takes_one_are_a_problem(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        upstream = self._upstream()
+        upstream["geometric_mapping"] = (
+            _provided("geometric_mapping", "GeometricMapArtifact", "map-1"),
+            _provided("geometric_mapping", "GeometricMapArtifact", "map-2"),
+        )
+
+        execution = plan.scope(targets=["semantic_fusion"], provided=upstream)
+
+        assert [problem.path for problem in execution.problems] == ["provided.geometric_mapping"]
+        assert "semantic_fusion" in execution.problems[0].message
 
 
 class TestScopeAndExecution:

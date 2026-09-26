@@ -12,12 +12,17 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from chain import canned_perception_results
 
-from contextmap.artifact import ContextMapArtifactReader
+from contextmap.artifact import (
+    ContextMapArtifactReader,
+    ValidationLevel,
+    ValidationStatus,
+    validate_context_map_artifact,
+)
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     ComparisonChannels,
@@ -37,28 +42,46 @@ from contextmap.geometric_mapping import (
 from contextmap.ingestion import (
     CalibrationReferenceId,
     FrameId,
+    FullSequenceSelection,
     ImageObservation,
     SequenceArtifactId,
     SequenceArtifactReader,
     SequenceArtifactWriter,
+    decode_selection,
+    resolve_selection_offsets,
+    selection_identity,
 )
 from contextmap.runtime import (
     ArtifactRef,
+    ContextBranch,
+    ContextBuild,
+    ContextRun,
     ExecutionPlan,
     FileArtifactStore,
+    PipelinePlan,
     ReusePolicy,
     RunJournal,
+    SpatialFoundation,
     StageExecutionError,
     StageRequest,
+    append_to_branch,
+    context_scope,
+    create_branch,
+    plan_context_build,
+    publish_context_build,
+    publish_context_run,
+    read_context_build,
     read_run,
     resolve_effective_config,
     resolve_plan,
+    resolve_spatial_foundation,
     resume_plan,
     run_plan,
 )
 from contextmap.runtime.executors import (
     ContextMapExecutor,
     EntityResolutionExecutor,
+    ExecutorError,
     GeometricMappingExecutor,
     SemanticFusionExecutor,
     SemanticMappingExecutor,
@@ -163,11 +186,25 @@ class _Ingestion:
 
 
 class _Perception:
-    """Test double: publishes canned perception evidence as a real PerceptionRunArtifact."""
+    """Test double: publishes canned perception evidence as a real PerceptionRunArtifact.
+
+    Like the real executor, it perceives only the images of the stage's observation selection
+    (the whole sequence without one) and records that selection.
+    """
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         assert request.output_dir is not None and request.workspace is not None
         (sequence,) = request.inputs["sequence"]
+        reader = SequenceArtifactReader(request.directory_of(sequence))
+        selection = (
+            FullSequenceSelection()
+            if request.observation_selection is None
+            else decode_selection(dict(request.observation_selection))
+        )
+        offsets = set(resolve_selection_offsets(reader, selection))
+        selected = {
+            str(entry.observation_id) for entry in reader.iter_index() if entry.offset in offsets
+        }
         run_id = PerceptionRunId(request.identity())
         writer = PerceptionRunWriter(
             output_dir=request.output_dir,
@@ -175,13 +212,14 @@ class _Perception:
             run_id=run_id,
             run_index=request.run_number(),
             sequence_artifact_id=sequence.artifact_id,
-            selection_id="full-sequence",
+            selection_id=selection_identity(SequenceArtifactId(sequence.artifact_id), selection),
             enabled_capabilities=frozenset({"semantic_interpreter"}),
             pipeline_preset=CANONICAL_PRESET_V1,
             configuration_digest=request.config_digest,
         )
         for result in canned_perception_results(run_id, sequence.artifact_id):
-            writer.add_result(result)
+            if str(result.source_observation_id) in selected:
+                writer.add_result(result)
         manifest = writer.finalize()
         return ArtifactRef(
             stage_id="visual_perception",
@@ -562,3 +600,386 @@ def test_resolution_and_relations_are_derived_from_the_entities_without_rewritin
     assert refs["spatial_relations"].content_hash == inventory_digest(
         relations.manifest.file_inventory
     )
+
+
+class TestFusionOverSeveralContextRuns:
+    """Issue #500: a build fuses the runs of several ContextRuns as separate, correlated evidence.
+
+    The canned perception double answers the same frames for any run, so a second perception run
+    with another configuration is repeated inference over the same physical observations.
+    """
+
+    @staticmethod
+    def _stage(
+        workspace: Path, stage_id: str, inputs: dict[str, list[ArtifactRef]], digest: str
+    ) -> ArtifactRef:
+        request = StageRequest(
+            stage_id=stage_id,
+            inputs={name: tuple(refs) for name, refs in inputs.items()},
+            components={},
+            config_digest=digest,
+            output_dir=workspace / CI_FIXTURE_ID / f"run-{digest[-4:]}" / stage_id,
+            workspace=workspace,
+        )
+        ref: ArtifactRef = _executors()[stage_id].execute(request)
+        return ref
+
+    @staticmethod
+    def _first(tmp_path: Path) -> tuple[Path, dict[str, ArtifactRef]]:
+        effective, execution = _scope(tmp_path)
+        workspace = tmp_path / "ws"
+        _, record = _run(effective, execution, workspace, _executors())
+        return workspace, _outputs(record)
+
+    def _association(
+        self, workspace: Path, refs: dict[str, ArtifactRef], perception: ArtifactRef, digest: str
+    ) -> ArtifactRef:
+        return self._stage(
+            workspace,
+            "sensor_association",
+            {
+                "sequence": [refs["ingestion"]],
+                "perception": [perception],
+                "trajectory": [refs["state_estimation"]],
+                "geometry": [refs["geometric_mapping"]],
+            },
+            digest,
+        )
+
+    def _fuse(
+        self,
+        workspace: Path,
+        refs: dict[str, ArtifactRef],
+        associations: list[ArtifactRef],
+        perceptions: list[ArtifactRef],
+    ) -> ArtifactRef:
+        return self._stage(
+            workspace,
+            "semantic_fusion",
+            {
+                "sequence": [refs["ingestion"]],
+                "association": associations,
+                "perception": perceptions,
+                "geometry": [refs["geometric_mapping"]],
+            },
+            "sha256:fuse",
+        )
+
+    @staticmethod
+    def _counts(workspace: Path, fusion: ArtifactRef) -> dict[str, Any]:
+        path = workspace / str(fusion.location) / "metrics" / "counts.json"
+        counts: dict[str, Any] = json.loads(path.read_text("utf-8"))
+        return counts
+
+    def test_repeated_inference_stays_one_physical_observation_per_frame(
+        self, tmp_path: Path
+    ) -> None:
+        workspace, refs = self._first(tmp_path)
+        perception = self._stage(
+            workspace, "visual_perception", {"sequence": [refs["ingestion"]]}, "sha256:0002"
+        )
+        association = self._association(workspace, refs, perception, "sha256:0002")
+
+        fused = self._fuse(
+            workspace,
+            refs,
+            [refs["sensor_association"], association],
+            [refs["visual_perception"], perception],
+        )
+
+        single = self._counts(workspace, refs["semantic_fusion"])
+        both = self._counts(workspace, fused)
+        assert both["physical_observations"] == single["physical_observations"]
+        assert both["inference_results"] == 2 * single["inference_results"]
+        lineage = SemanticFusionRunReader(workspace / str(fused.location)).manifest.lineage
+        assert set(lineage.association_run_ids) == {
+            refs["sensor_association"].artifact_id,
+            association.artifact_id,
+        }
+        assert set(lineage.perception_run_ids) == {
+            refs["visual_perception"].artifact_id,
+            perception.artifact_id,
+        }
+
+    def test_a_run_reached_through_two_context_runs_is_one_input(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+
+        fused = self._fuse(
+            workspace,
+            refs,
+            [refs["sensor_association"], refs["sensor_association"]],
+            [refs["visual_perception"], refs["visual_perception"]],
+        )
+
+        assert self._counts(workspace, fused) == self._counts(workspace, refs["semantic_fusion"])
+
+    def test_two_associations_of_one_perception_run_are_refused(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+        again = self._association(workspace, refs, refs["visual_perception"], "sha256:0003")
+
+        with pytest.raises(ExecutorError, match="perception run"):
+            self._fuse(
+                workspace,
+                refs,
+                [refs["sensor_association"], again],
+                [refs["visual_perception"]],
+            )
+
+    def test_an_association_of_a_perception_run_left_out_is_refused(self, tmp_path: Path) -> None:
+        workspace, refs = self._first(tmp_path)
+        perception = self._stage(
+            workspace, "visual_perception", {"sequence": [refs["ingestion"]]}, "sha256:0002"
+        )
+        association = self._association(workspace, refs, perception, "sha256:0002")
+
+        with pytest.raises(ExecutorError, match="not an input"):
+            self._fuse(workspace, refs, [association], [refs["visual_perception"]])
+
+
+def _incremental_setup(tmp_path: Path) -> tuple[Path, Any, PipelinePlan, SpatialFoundation]:
+    """Run the CI chain once and validate its sequence, trajectory and map as one foundation."""
+    effective, execution = _scope(tmp_path)
+    workspace = tmp_path / "ws"
+    _, record = _run(effective, execution, workspace, _executors())
+    refs = _outputs(record)
+    foundation = resolve_spatial_foundation(
+        workspace,
+        sequence=refs["ingestion"],
+        state_estimation=refs["state_estimation"],
+        geometry=refs["geometric_mapping"],
+    )
+    return workspace, effective, execution.plan, foundation
+
+
+def _with(effective: Any, changes: dict[str, Any], name: str) -> tuple[Any, PipelinePlan]:
+    """The chain's configuration with ``changes`` merged into its document."""
+    document = json.loads(json.dumps(effective.config.to_document()))
+    for section, values in changes.items():
+        document.setdefault(section, {}).update(values)
+    path = Path(effective.sources[-1].identity).parent / f"{name}.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    changed = resolve_effective_config(files=[path])
+    return changed, resolve_plan(changed)
+
+
+def _context_run(
+    workspace: Path,
+    effective: Any,
+    foundation: SpatialFoundation,
+    selection: dict[str, Any],
+    *,
+    components: dict[str, Any] | None = None,
+) -> ContextRun:
+    """Execute and publish one real ContextRun over ``selection``."""
+    changes: dict[str, Any] = {"inputs": {"observation_selection": selection}}
+    if components is not None:
+        changes["components"] = components
+    context_effective, plan = _with(
+        effective, changes, f"context-{len(list(workspace.rglob('context_run.json')))}"
+    )
+    execution = context_scope(plan, foundation)
+    journal, record = _run(context_effective, execution, workspace, _executors())
+    return publish_context_run(
+        journal.directory,
+        workspace=workspace,
+        foundation=foundation,
+        execution=execution,
+        record=record,
+    )
+
+
+def _build(
+    workspace: Path,
+    effective: Any,
+    plan: PipelinePlan,
+    branch: ContextBranch,
+    *,
+    revision: int | None = None,
+) -> tuple[ContextBuild, Path]:
+    """Freeze ``branch`` (at ``revision``), record the build and materialize its map."""
+    planned = plan_context_build(workspace, branch, plan, code_identity="test", revision=revision)
+    journal = RunJournal.create(workspace, effective, planned.execution)
+    publish_context_build(journal.directory, workspace=workspace, build=planned.build)
+    run_plan(
+        planned.execution,
+        _executors(),
+        environ={},
+        module_available=lambda _name: True,
+        provided_runtimes=PROVIDED,
+        journal=journal,
+    )
+    return planned.build, journal.directory
+
+
+class TestIncrementalBuild:
+    """Issue #499: a ContextBuild materializes its frozen ContextRuns through the real assembler.
+
+    The foundation is the CI chain's own sequence, trajectory and map, validated as one; each
+    ContextRun is a real perception and association run over a different selection; each build
+    runs the real materialization stages and must leave a ContextMapArtifact that verifies.
+    """
+
+    def test_each_build_materializes_a_verified_map_and_leaves_earlier_maps_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        workspace, effective, plan, foundation = _incremental_setup(tmp_path)
+        branch = create_branch(
+            workspace, dataset=CI_FIXTURE_ID, name="incremental", foundation=foundation
+        )
+        first_frames = {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 4}
+        later_frames = {"kind": "frame_range", "start_frame_index": 4, "end_frame_index": 9}
+        branch = append_to_branch(
+            workspace, branch, _context_run(workspace, effective, foundation, first_frames)
+        )
+        first, first_run = _build(workspace, effective, plan, branch, revision=1)
+        first_map = first_run / "context_map"
+        before = {path: path.read_bytes() for path in first_map.rglob("*") if path.is_file()}
+
+        branch = append_to_branch(
+            workspace, branch, _context_run(workspace, effective, foundation, later_frames)
+        )
+        second, second_run = _build(workspace, effective, plan, branch, revision=2)
+
+        assert len(first.context_run_ids) == 1 and len(second.context_run_ids) == 2
+        for directory in (first_map, second_run / "context_map"):
+            report = validate_context_map_artifact(directory, level=ValidationLevel.FULL)
+            assert report.status is ValidationStatus.VERIFIED, report.findings
+        with ContextMapArtifactReader.open(first_map) as reader:
+            first_id = reader.context_map().context_map_id
+        with ContextMapArtifactReader.open(second_run / "context_map") as reader:
+            assert reader.context_map().context_map_id != first_id
+        after = {path: path.read_bytes() for path in first_map.rglob("*") if path.is_file()}
+        assert after == before
+        assert read_context_build(first_run, workspace=workspace) == first
+
+
+def test_a_context_map_that_does_not_verify_fails_its_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #499: the stage validates what it wrote; an invalid map is never a success."""
+    from contextmap.artifact import ValidationReport
+
+    def invalid(path: Path, **_options: Any) -> ValidationReport:
+        report = validate_context_map_artifact(path, level=ValidationLevel.STRUCTURAL)
+        return dataclasses.replace(report, status=ValidationStatus.INVALID)
+
+    monkeypatch.setattr("contextmap.runtime.executors.validate_context_map_artifact", invalid)
+    effective, execution = _scope(tmp_path)
+
+    with pytest.raises(StageExecutionError, match="does not verify"):
+        _run(effective, execution, tmp_path / "ws", _executors())
+
+
+def _scientific_state(build_run: Path) -> dict[str, Any]:
+    """What a build concluded, with every execution-local identity replaced by content.
+
+    Entities are keyed by the geometry they cover (the foundation's, the same for every build);
+    relations by predicate, state and the keys of their entities; fusion by its counts. Run,
+    support, entity and relation ids are execution identities and never compared.
+    """
+    fusion = json.loads((build_run / "semantic_fusion" / "metrics" / "counts.json").read_text())
+    with ContextMapArtifactReader.open(build_run / "context_map") as reader:
+        context_map = reader.context_map()
+    keys = {
+        entity.entity_id: tuple(sorted(str(ref.geometry_id) for ref in entity.geometry_refs))
+        for entity in context_map.entities
+    }
+    return {
+        "fusion": {
+            name: fusion[name]
+            for name in (
+                "supports",
+                "contributions",
+                "hypotheses",
+                "physical_observations",
+                "inference_results",
+                "claims",
+                "evidence_stances",
+                "abstaining_claims",
+            )
+        },
+        "entities": sorted(
+            (
+                keys[entity.entity_id],
+                entity.semantic_state.status.value,
+                tuple(sorted(item.label for item in entity.semantic_state.hypotheses)),
+            )
+            for entity in context_map.entities
+        ),
+        "relations": sorted(
+            (
+                relation.predicate.value,
+                keys[relation.subject.entity_id],
+                keys[relation.object.entity_id],
+                relation.state.value,
+                tuple(sorted(kind.value for kind in relation.uncertainty_kinds)),
+            )
+            for relation in context_map.relations
+        ),
+    }
+
+
+class TestPartitionInvariance:
+    """Issue #501, CI arm: the partition of the observations into ContextRuns is not science.
+
+    Deterministic canned perception over the CI chain's three frames, every other stage real.
+    The real-data arm, over the v0.1.0 reference profile, needs the model stack and a variance
+    protocol for the semantic backend (#580) and is not part of CI.
+    """
+
+    WHOLE: ClassVar[dict[str, Any]] = {
+        "kind": "frame_range",
+        "start_frame_index": 0,
+        "end_frame_index": 9,
+    }
+
+    @staticmethod
+    def _materialize(
+        tmp_path: Path, name: str, selections: list[dict[str, Any]]
+    ) -> tuple[Path, ContextBuild]:
+        (tmp_path / name).mkdir()
+        workspace, effective, plan, foundation = _incremental_setup(tmp_path / name)
+        branch = create_branch(workspace, dataset=CI_FIXTURE_ID, name=name, foundation=foundation)
+        for selection in selections:
+            context = _context_run(workspace, effective, foundation, selection)
+            branch = append_to_branch(workspace, branch, context)
+        build, run = _build(workspace, effective, plan, branch)
+        return run, build
+
+    def test_chunking_the_same_observations_gives_the_same_scientific_state(
+        self, tmp_path: Path
+    ) -> None:
+        whole_run, whole = self._materialize(tmp_path, "whole", [self.WHOLE])
+        chunked_run, chunked = self._materialize(
+            tmp_path,
+            "chunked",
+            [
+                {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 4},
+                {"kind": "frame_range", "start_frame_index": 4, "end_frame_index": 9},
+            ],
+        )
+
+        expected = _scientific_state(whole_run)
+        assert _scientific_state(chunked_run) == expected
+        assert expected["fusion"]["physical_observations"] == 3
+        assert expected["entities"], "the chain must materialize entities to compare"
+        # As identidades de execução diferem, como devem.
+        assert len(whole.context_run_ids) == 1 and len(chunked.context_run_ids) == 2
+        assert whole.identity != chunked.identity
+
+    def test_repeated_inference_adds_results_but_no_physical_observation(
+        self, tmp_path: Path
+    ) -> None:
+        once_run, _ = self._materialize(tmp_path, "once", [self.WHOLE])
+        # [0, 10) cobre os mesmos três frames que [0, 9), sob outra identidade de percepção.
+        twice_run, twice = self._materialize(
+            tmp_path,
+            "twice",
+            [self.WHOLE, {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 10}],
+        )
+
+        once = _scientific_state(once_run)["fusion"]
+        both = _scientific_state(twice_run)["fusion"]
+        assert len(twice.context_run_ids) == 2
+        assert both["physical_observations"] == once["physical_observations"] == 3
+        assert both["inference_results"] == 2 * once["inference_results"]

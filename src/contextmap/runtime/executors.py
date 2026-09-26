@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,9 +42,12 @@ from contextmap.artifact import (
     PolicyRef,
     SourceSequence,
     UpstreamArtifact,
+    ValidationLevel,
+    ValidationStatus,
     artifact_digest,
     assemble_context_map_with_metrics,
     estimator_local_map_frame,
+    validate_context_map_artifact,
     write_context_map_with_metrics,
 )
 from contextmap.entity_resolution import (
@@ -73,12 +76,17 @@ from contextmap.ingestion import (
     ImageEncoding,
     ImageObservation,
     SequenceArtifactReader,
+    SequenceSelection,
+    SequenceSelectionError,
     SourceObservation,
     SourceObservationId,
+    decode_selection,
+    encode_selection,
+    resolve_selection_offsets,
     selection_identity,
     validate_cross_source_clock_plausibility,
 )
-from contextmap.runtime.artifacts import ArtifactRef
+from contextmap.runtime.artifacts import ArtifactRef, inventory_digest
 from contextmap.runtime.catalog import (
     ASSOCIATION,
     CONTEXT_MAP,
@@ -201,22 +209,6 @@ class ExecutorError(ValueError):
     """Raised when a request cannot be served: no directory, or not exactly one run per input."""
 
 
-def inventory_digest(inventory: Sequence[object]) -> str:
-    """Return the content hash of an artifact: the digest of its contractual file inventory.
-
-    Args:
-        inventory: The ``file_inventory`` of a manifest; each entry has ``path`` and
-            ``content_hash``.
-
-    Returns:
-        ``sha256:`` of the canonical JSON of ``{path: content_hash}``. Two artifacts with the same
-        contractual files have the same digest, whatever their names, ids or timestamps.
-    """
-    files = {entry.path: entry.content_hash for entry in inventory}  # type: ignore[attr-defined]
-    text = json.dumps(files, sort_keys=True, separators=(",", ":"))
-    return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
-
-
 def _output(request: StageRequest) -> Path:
     if request.output_dir is None or request.workspace is None:
         raise ExecutorError(
@@ -235,6 +227,28 @@ def _one(request: StageRequest, name: str) -> Path:
     return request.directory_of(refs[0])
 
 
+def _many(request: StageRequest, name: str) -> tuple[Path, ...]:
+    """Return the distinct runs of an input that accepts several, in a deterministic order.
+
+    One run reached twice (through two ContextRuns of a build, say) is one piece of evidence and
+    is read once; two different contents under one identity are refused.
+
+    Raises:
+        ExecutorError: If the input is empty, or names one run with two different contents.
+    """
+    distinct: dict[str, ArtifactRef] = {}
+    for ref in request.inputs.get(name, ()):
+        seen = distinct.setdefault(ref.artifact_id, ref)
+        if seen.content_hash != ref.content_hash:
+            raise ExecutorError(
+                f"input {name!r} of stage {request.stage_id!r} names run {ref.artifact_id!r} "
+                "twice with different content"
+            )
+    if not distinct:
+        raise ExecutorError(f"stage {request.stage_id!r} needs at least one run of {name!r}")
+    return tuple(request.directory_of(distinct[run_id]) for run_id in sorted(distinct))
+
+
 def _optional_one(request: StageRequest, name: str) -> Path | None:
     refs = request.inputs.get(name, ())
     if not refs:
@@ -245,6 +259,46 @@ def _optional_one(request: StageRequest, name: str) -> Path | None:
             f"{len(refs)}: run the runtime once per run instead of choosing one"
         )
     return request.directory_of(refs[0])
+
+
+def _observation_selection(request: StageRequest) -> SequenceSelection:
+    """Decode the observation selection of an observation-scoped stage (issue #497).
+
+    The document must be the canonical form :func:`~contextmap.ingestion.encode_selection`
+    gives the selection it decodes to: fields of another kind, which a merge of configuration
+    layers can leave behind, are refused rather than silently ignored.
+
+    Returns:
+        The selection, or the whole sequence when the stage has none.
+
+    Raises:
+        ExecutorError: If the document is not a selection in canonical form.
+    """
+    document = request.observation_selection
+    if document is None:
+        return FullSequenceSelection()
+    plain = _plain(document)
+    try:
+        selection = decode_selection(plain)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ExecutorError(
+            f"inputs.observation_selection {plain!r} is not a sequence selection: {error}"
+        ) from error
+    canonical = encode_selection(selection)
+    if canonical != plain:
+        raise ExecutorError(
+            f"inputs.observation_selection {plain!r} is not in canonical form; write {canonical!r}"
+        )
+    return selection
+
+
+def _plain(value: Any) -> Any:
+    """Turn a frozen configuration value back into plain JSON containers."""
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain(item) for item in value]
+    return value
 
 
 def _reference(
@@ -503,9 +557,9 @@ class SensorAssociationExecutor:
             outcome = SensorAssociationService().run(
                 SensorAssociationRequest(
                     sequence_artifact_id=sequence.manifest.artifact_id,
-                    selection_id=selection_identity(
-                        sequence.manifest.artifact_id, FullSequenceSelection()
-                    ),
+                    # A associação cobre exatamente os frames da run de percepção: a seleção é a
+                    # dela, nunca uma reconstruída aqui (#497).
+                    selection_id=perception.manifest.selection_id,
                     geometry=geometry.geometry(),
                     trajectory=TrajectoryLookup(trajectory.trajectory()),
                     pose_policy=self._pose_policy,
@@ -565,26 +619,45 @@ class SemanticFusionExecutor:
         self._code_version = code_version
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Fuse the ``association`` run over the ``geometry`` map and reference the fusion run."""
+        """Fuse the ``association`` runs over the ``geometry`` map and reference the fusion run.
+
+        Several association and perception runs (the ContextRuns of one build, issue #500) are
+        fused as separate evidence: Semantic Fusion groups them by physical observation, so
+        repeated inference over one frame never counts as another observation. Each association
+        run must come from perception runs that are inputs of this fusion, and each perception
+        run may be associated once: two associations of one perception run would describe the
+        same regions twice.
+        """
         output = _output(request)
         if request.inputs.get("representation"):
             raise ExecutorError(
                 "the point representation channel is not supported by this executor: "
                 "run the stage without a representation input"
             )
-        association = SensorAssociationRunReader(_one(request, "association"))
-        perception = PerceptionRunReader(_one(request, "perception"))
-        results = {result.result_id: result for result in perception.iter_results()}
-        observations = list(association.observations())
-        described = perception.manifest
-        run = PerceptionRun(
-            run_id=PerceptionRunId(str(described.run_id)),
-            run_index=described.run_index,
-            sequence_artifact_id=str(described.sequence_artifact_id),
-            selection_id=described.selection_id,
-            enabled_capabilities=frozenset(described.enabled_capabilities),
-            backend_provenance={},
+        associations = [SensorAssociationRunReader(path) for path in _many(request, "association")]
+        perceptions = [PerceptionRunReader(path) for path in _many(request, "perception")]
+        runs = tuple(
+            PerceptionRun(
+                run_id=PerceptionRunId(str(described.run_id)),
+                run_index=described.run_index,
+                sequence_artifact_id=str(described.sequence_artifact_id),
+                selection_id=described.selection_id,
+                enabled_capabilities=frozenset(described.enabled_capabilities),
+                backend_provenance={},
+            )
+            for described in (perception.manifest for perception in perceptions)
         )
+        _check_one_association_per_perception(associations, {str(run.run_id) for run in runs})
+        results = {
+            result.result_id: result
+            for perception in perceptions
+            for result in perception.iter_results()
+        }
+        observations = [
+            observation
+            for association in associations
+            for observation in association.observations()
+        ]
         # Pelo índice, não por list_observations(): esta fusão só precisa do timestamp de cada
         # imagem, e decodificar a sequência inteira para isso custava os 2,6 GB de payload do
         # corridor-02 (#514). O índice já carrega identidade, timestamp e modalidade.
@@ -596,7 +669,7 @@ class SemanticFusionExecutor:
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
             source = geometry.geometry()
             grouping = group_by_physical_observation(
-                observations, selected_runs=(run,), acquisition_timestamps=timestamps
+                observations, selected_runs=runs, acquisition_timestamps=timestamps
             )
             build = build_fusion_supports(
                 observations,
@@ -620,21 +693,54 @@ class SemanticFusionExecutor:
                 )
                 for support in build.supports
             )
+            first = associations[0].manifest
             manifest = SemanticFusionRunWriter(
                 output_dir=output,
-                sequence_name=association.manifest.sequence_name,
+                sequence_name=first.sequence_name,
                 run_id=SemanticFusionRunId(request.identity()),
                 run_index=request.run_number(),
                 lineage=FusionRunLineage(
-                    sequence_artifact_id=str(association.manifest.sequence_artifact_id),
+                    sequence_artifact_id=str(first.sequence_artifact_id),
                     geometric_map_id=geometry.manifest.map_id,
-                    association_run_ids=(str(association.manifest.run_id),),
-                    perception_run_ids=(run.run_id,),
+                    association_run_ids=tuple(
+                        sorted(str(association.manifest.run_id) for association in associations)
+                    ),
+                    perception_run_ids=tuple(sorted(run.run_id for run in runs)),
                     point_representation_run_ids=(),
                 ),
                 code_version=self._code_version or "",
             ).write(outcomes, excluded=build.excluded)
         return _reference(request, FUSION, str(manifest.run_id), manifest.file_inventory)
+
+
+def _check_one_association_per_perception(
+    associations: Sequence[SensorAssociationRunReader], perception_runs: set[str]
+) -> None:
+    """Refuse association runs a fusion cannot combine without describing a region twice.
+
+    A spatial observation's identity comes from its perception result and region, not from the
+    association run, so two associations of one perception run would collide; an association of
+    a perception run that is not an input would reference results the fusion cannot see.
+
+    Raises:
+        ExecutorError: If an association comes from a perception run that is not an input, or
+            two associations share a perception run.
+    """
+    associated: dict[str, str] = {}
+    for association in associations:
+        association_run = str(association.manifest.run_id)
+        for perception_run in association.manifest.perception_run_ids:
+            if perception_run not in perception_runs:
+                raise ExecutorError(
+                    f"association run {association_run!r} was built from perception run "
+                    f"{perception_run!r}, which is not an input of this fusion"
+                )
+            other = associated.setdefault(perception_run, association_run)
+            if other != association_run:
+                raise ExecutorError(
+                    f"perception run {perception_run!r} is associated by both {other!r} and "
+                    f"{association_run!r}; a fusion takes one association per perception run"
+                )
 
 
 class SemanticMappingExecutor:
@@ -1058,19 +1164,32 @@ class VisualPerceptionExecutor:
         self._semantic_interpreter = semantic_interpreter
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Process every image observation of the ``sequence`` input and reference the run."""
+        """Process the selected image observations of the ``sequence`` input and reference the run.
+
+        The observation selection is decoded and resolved before anything else, so an invalid
+        one fails before any image is prepared or any backend is called.
+        """
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
+        selection = _observation_selection(request)
+        try:
+            selected = frozenset(resolve_selection_offsets(sequence, selection))
+        except SequenceSelectionError as error:
+            raise ExecutorError(
+                f"inputs.observation_selection does not resolve against sequence "
+                f"{sequence.manifest.artifact_id!r}: {error}"
+            ) from error
 
         def images() -> Iterator[ImageObservation]:
-            """Decodifica uma imagem por vez, guiado pelo índice.
+            """Decodifica uma imagem selecionada por vez, guiado pelo índice.
 
             O laço abaixo consome um frame de cada vez, então materializar a sequência inteira
             custaria os 2,2 GB de RGB do corridor-02 (mais 364 MB de pointcloud e 20781
-            registros de IMU que este estágio nem usa) sem nenhum ganho (#511).
+            registros de IMU que este estágio nem usa) sem nenhum ganho (#511). A seleção é
+            filtrada pelo offset do índice, sem decodificar nada fora dela.
             """
             for entry in sequence.iter_index():
-                if entry.modality != "image":
+                if entry.modality != "image" or entry.offset not in selected:
                     continue
                 observation = sequence.observation_at(entry.offset)
                 if isinstance(observation, ImageObservation):
@@ -1123,9 +1242,7 @@ class VisualPerceptionExecutor:
                 run_id=run_id,
                 run_index=request.run_number(),
                 sequence_artifact_id=sequence.manifest.artifact_id,
-                selection_id=selection_identity(
-                    sequence.manifest.artifact_id, FullSequenceSelection()
-                ),
+                selection_id=selection_identity(sequence.manifest.artifact_id, selection),
                 enabled_capabilities=frozenset(
                     stage.capability
                     for stage in CANONICAL_PRESET_V1.stages
@@ -1450,6 +1567,22 @@ class ContextMapExecutor:
         manifest, _write_metrics = write_context_map_with_metrics(
             result.context_map, output_dir=output, upstream_locations=upstream_locations
         )
+        # A validação completa é do artifact; o estágio só se recusa a publicar como sucesso um
+        # mapa que ela não verifica (#499): um build nunca termina bem sobre um mapa inválido.
+        report = validate_context_map_artifact(
+            output,
+            level=ValidationLevel.FULL,
+            dependency_paths={
+                **upstream_locations,
+                str(sequence.manifest.artifact_id): sequence_dir,
+            },
+        )
+        if report.status is not ValidationStatus.VERIFIED:
+            findings = "; ".join(f"{item.code}: {item.message}" for item in report.findings[:5])
+            raise ExecutorError(
+                f"the context map written to {output} does not verify ({report.status.value}): "
+                f"{findings}"
+            )
         return _reference(
             request, CONTEXT_MAP, str(manifest.context_map_id), manifest.file_inventory
         )

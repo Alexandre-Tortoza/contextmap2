@@ -55,6 +55,31 @@ Resolvem a configuração, derivam o plano, escopam (o pipeline completo, ou os 
 
 Verifica a integridade: em um registro de run (`status.json`), o log de eventos (linha corrompida, lacuna na numeração), a coerência com o status e o digest de cada documento; em um diretório de artifact, cada arquivo do `file_inventory` (existência, tamanho e SHA-256; um caminho que sai do artifact é recusado); em `effective_config.json`, `plan.json` e `execution.json`, a versão de schema e o digest. Sai com `1` se algo falha e nomeia o arquivo ou o problema. Usa só a biblioteca padrão: não importa NumPy, modelo nem ROS.
 
+### `context`
+
+O contexto incremental (#502; decisão em [`runtime-composition.md`](../../../../docs/runtime-composition.md#contexto-incremental-v011-decisão-de-arquitetura)). Cada comando só compõe as APIs do runtime (`foundation_of_run`, `context_scope`, `publish_context_run`, `append_to_branch`, `plan_context_build`, `publish_context_build`); nenhum decide ciência.
+
+```bash
+# um run que produziu (ou recebeu) sequência, trajetória e mapa vira a fundação de uma branch
+contextmap context branch create corredor --from-run run-0001 -c exp.toml --workspace ws
+# cada ContextRun roda percepção e associação sobre inputs.observation_selection
+contextmap context run --branch corredor -c exp.toml --workspace ws \
+  --set 'inputs.observation_selection={"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 500}'
+# um build congela uma revisão e materializa o ContextMap
+contextmap context build --branch corredor --code-identity v0.1.1 -c exp.toml --workspace ws
+contextmap context build --branch corredor --revision 1 --code-identity v0.1.1 -c exp.toml --workspace ws
+# inspeção só lê registros: não carrega modelo nem capability
+contextmap context inspect branch corredor -c exp.toml --workspace ws
+contextmap context inspect run ws/S1/run-0003 --workspace ws
+```
+
+- `branch create NOME --from-run RUN` valida como uma fundação a sequência, a trajetória e o mapa que o registro de execução do run nomeia, produzidos ou recebidos, e grava `branch.json`.
+- `run --branch NOME` escopa o plano aos estágios de contexto com a fundação fornecida (nunca recomputada), executa, publica `context_run.json` e acrescenta a `ContextRun` como a próxima revisão. A saída diz, por estágio de contexto, `produced`, `reused` ou `not selected`.
+- `build --branch NOME [--revision N] [--member ID ...] --code-identity ID` congela a revisão (ou um subconjunto explícito dela), grava `context_build.json` antes do primeiro estágio e roda da fusão até `context_map`. Imprime o `ContextBuildId` e o `ContextMapId`. Sem `--code-identity` é erro de uso: a identidade do build inclui o código que materializa o mapa.
+- `inspect branch NOME [--revision N]` e `inspect run RUN --workspace DIR` só leem JSON.
+
+Os erros de fundação, branch, `ContextRun` e build saem com código `1` e a mensagem do runtime; `--reuse-index`, `--code-identity` e `--force` valem para `run` e `build` como no `run` comum.
+
 ## Erros acionáveis
 
 Todo problema sai com o caminho e o que fazer: perfil desconhecido (lista os conhecidos), configuração inválida (todos os problemas de uma vez), módulo opcional ausente (com a dica de instalação), segredo ausente (pelo nome), seleção incompatível (o que diverge, com os ids), estágio sem capability, estágio sem executor. Com `--json`, uma falha sai como `{"ok": false, "error": ..., "problems": [...]}` na saída padrão.

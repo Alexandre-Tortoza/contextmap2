@@ -383,12 +383,16 @@ CLI / TUI
 src/contextmap/runtime/
 ├── __init__.py            # contrato público
 ├── api.py                 # API pública de aplicação (`Runtime`)
-├── artifacts.py           # `ArtifactRef`, handle de um artifact de estágio
+├── artifacts.py           # `ArtifactRef` e `inventory_digest`, o hash de conteúdo de um artifact
 ├── catalog.py             # stages, pontos de variação, backends e o preset `canonical/1`
 ├── coercion.py            # parâmetros JSON -> configuração da própria capability
 ├── composition.py         # composition root: construção lazy das implementações
 ├── config.py              # configuração efetiva, digest, segredos e disponibilidade
+├── context_branch.py      # ContextBranch: acúmulo explícito de ContextRuns, só por acréscimo
+├── context_build.py       # ContextBuild: entrada congelada de uma materialização
+├── context_run.py         # ContextRun: escopo de contexto sobre a fundação e seu registro imutável
 ├── errors.py              # falhas de composição e do DAG
+├── foundation.py          # fundação espacial: sequência, trajetória e mapa validados juntos
 ├── ingestion_service.py   # serviço público de ingestion
 ├── lifecycle.py           # estados, eventos, falhas, cancelamento e ambiente
 ├── pipeline.py            # plano, escopo, preflight e execução do DAG
@@ -464,3 +468,226 @@ A divisão arquitetural materializada na `dev` é:
 A montagem final (`context_map`/`ContextMapArtifact`) continua planejada e deve ser adicionada junto de seu owner, sem antecipar diretórios ou schemas vazios.
 
 O runtime reutiliza as APIs públicas e artifacts dessas capabilities e não reimplementa seus pipelines internos.
+
+## Contexto incremental (v0.1.1): decisão de arquitetura
+
+Decisão da issue #493, a porta de entrada da milestone v0.1.1. Congela o ciclo de vida incremental **sobre o runtime lançado na v0.1.0**, depois da release (#190) e da evidência do run canônico real (#177). O ciclo está implementado (#494–#502) e validado por evidência de **contrato** no CI (#499, #501). A execução controlada sobre dados reais (#501 com dados reais, #504) e a release (#505) continuam pendentes: nada aqui afirma resultado sobre dados reais.
+
+### Ciclo de vida em uso
+
+```mermaid
+flowchart TD
+    RUN["run-0001: ingestion → state_estimation → geometric_mapping"] -->|"context branch create --from-run"| SF["SpatialFoundation<br/>(foundation_of_run)"]
+    SF --> BR["ContextBranch corredor<br/>branch.json"]
+    BR -->|"context run (S1)"| CR1["ContextRun CR1<br/>run-0002/context_run.json"]
+    BR -->|"context run (S2)"| CR2["ContextRun CR2<br/>run-0003/context_run.json"]
+    CR1 --> R1["revisão 1"]
+    CR2 --> R2["revisão 2"]
+    R1 -->|"context build --revision 1"| CB1["ContextBuild CB1<br/>run-0004/context_build.json"]
+    CB1 --> M1["ContextMapArtifact M1"]
+    R2 -->|"context build"| CB2["ContextBuild CB2<br/>run-0005/context_build.json"]
+    CB2 --> M2["ContextMapArtifact M2"]
+    M1 -. "nunca muda" .- M2
+```
+
+```bash
+contextmap run --stage geometric_mapping -c exp.toml --workspace ws           # a fundação: run-0001
+contextmap context branch create corredor --from-run run-0001 -c exp.toml --workspace ws
+contextmap context run --branch corredor -c exp.toml --workspace ws \
+  --set 'inputs.observation_selection={"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 500}'
+contextmap context build --branch corredor --code-identity v0.1.1 -c exp.toml --workspace ws
+contextmap context run --branch corredor -c exp.toml --workspace ws \
+  --set 'inputs.observation_selection={"kind": "frame_range", "start_frame_index": 500, "end_frame_index": 1000}'
+contextmap context build --branch corredor --code-identity v0.1.1 -c exp.toml --workspace ws
+contextmap context inspect branch corredor -c exp.toml --workspace ws
+```
+
+A mesma sequência pela API: `foundation_of_run` ou `resolve_spatial_foundation`, `create_branch`, `context_scope` e `run_plan`, depois `publish_context_run` e `append_to_branch`; para o build, `plan_context_build`, `publish_context_build` e `run_plan`.
+
+### Distinções que o ciclo mantém
+
+- **Orquestração, não crença.** `SpatialFoundation`, `ContextRun`, `ContextBranch` e `ContextBuild` selecionam e registram evidência; nenhum deles guarda confiança, hipótese fundida ou entidade. Crença continua na Semantic Fusion e na Semantic Mapping, e conhecimento nas relações, dentro dos artifacts das capabilities.
+- **Branch contra build.** A branch cresce por acréscimo; um build congela uma revisão (ou um subconjunto explícito dela) e nunca muda depois.
+- **Build contra `ContextMap`.** O build é a proveniência da materialização; o `ContextMapArtifact` é o produto público, com o schema da v0.1.0 inalterado.
+- **`ContextMapId` é o snapshot.** Não há outro identificador de snapshot.
+- **Inferência repetida não é nova observação.** Várias inferências sobre o mesmo frame são evidência correlacionada de uma observação física; a Semantic Fusion as agrupa por `SourceObservationId`.
+- **Uma sessão só.** Uma fundação é uma sequência e um mapa; juntar sessões exige um modelo de registro/alinhamento que não existe.
+
+### Falha e nova tentativa
+
+- Uma `ContextRun` que falha não publica `context_run.json`: o journal do run (`status.json`, eventos) é o único registro, e a branch não muda. Tentar de novo é um run novo; com `--reuse-index`, o que já foi concluído é reutilizado.
+- Um build grava `context_build.json` antes do primeiro estágio. Se a materialização falha ou o mapa não verifica (validação `FULL` no estágio `context_map`), o run fica `failed` com a entrada congelada registrada e nenhum mapa é dado como sucesso.
+- Acréscimos concorrentes à mesma revisão: só um passa; o outro reabre a branch e acrescenta de novo.
+
+### Garantias validadas por contrato
+
+Na cadeia de CI (todos os estágios reais exceto a percepção, um dublê determinístico que respeita a seleção):
+
+- partir as mesmas observações em uma ou em várias `ContextRun`s dá o mesmo estado científico normalizado: contagens da fusão, entidades pela geometria da fundação que cobrem, com estado semântico e rótulos, e relações (#501);
+- inferência repetida sobre os mesmos frames mantém as observações físicas e soma resultados de inferência (#500, #501);
+- builds de revisões sucessivas materializam mapas que verificam, e o mapa anterior fica byte a byte intacto (#499).
+
+Sobre dados reais, nada disso foi medido ainda: é o escopo de #501 com dados reais e #504, e a variância do backend semântico (#580) precisa de protocolo antes.
+
+### Evidência revisada
+
+- **Custo por estágio** (run canônico real, `experiments/e2e-real-canonical-run-20260923/resource-profile.md`): `state_estimation` + `geometric_mapping` somam 17,9 s de ~1056 s (~1,7%); `visual_perception` levou ~748 s sobre 20 frames e `sensor_association` 3,88 s/frame na trajetória inteira (`experiments/sensor-association-scaling-20260925/`). Fixar a fundação espacial **não** se justifica por tempo, e sim por **comparabilidade de coordenadas**: toda evidência de um mapa contextual tem de estar no mesmo frame, do mesmo mapa. O custo que cresce com a sequência é o de percepção e associação, e é ele que dividir a sequência em execuções de contexto limita.
+- **Reuso** (`runtime/reuse.py`): a chave já usa o hash de **conteúdo** de cada entrada, e uma entrada `multiple` entra como conjunto (`pipeline.py`, `_combined_hash`). Um mapa diferente já invalida quem o consome; o conjunto de runs que entra na fusão já faz parte da chave da fusão.
+- **Seleção de observações**: a Ingestion já define `SequenceSelection` (sequência inteira, faixa de frames, faixa de timestamps, ids explícitos) e `selection_identity(sequence_artifact_id, selection)`, mas todos os executores do runtime fixam `FullSequenceSelection()`, e não há configuração para escolher outra.
+- **Semantic Fusion**: a capability já funde várias runs de percepção e de associação, agrupando por observação física (`SourceObservationId`, `grouping.py`), e distingue observação física de resultado de inferência. O limite de **uma** run por entrada é do `SemanticFusionExecutor` (`_one()`), não da ciência.
+- **Montagem final**: o `ContextMapExecutor` já chama o montador público do artifact (`assemble_context_map_with_metrics`, a variante com métricas de `assemble_context_map`) e grava com `write_context_map_with_metrics`; `ContextMapId` vem da identidade do estágio. O executor exige mapa geométrico sobre a sequência inteira.
+- **Reprodutibilidade**: os estágios de `state_estimation` a `context_map` reproduzem `artifact_id` e hash de conteúdo byte a byte; a interpretação semântica (Qwen) concordou em 32,2% dos claims entre reruns idênticos (#556, #580).
+
+### Modelo
+
+```text
+SpatialFoundation SF  = SequenceArtifact + StateEstimationRun/Trajectory + GeometricMapArtifact
+    │
+    ├── ContextRun CR1  (seleção S1: percepção + associação sobre SF)
+    ├── ContextRun CR2  (seleção S2)
+    │
+ContextBranch B  (SF fixo; membros explícitos, só acréscimo)
+    │  revisão 2 = {CR1, CR2}
+    ▼
+ContextBuild CB1 congela {CR1, CR2} + políticas de jusante
+    └── semantic_fusion → semantic_mapping → entity_resolution → spatial_relations → context_map
+                                                                                   └── ContextMapId M1
+acrescenta CR3 → revisão 3 → ContextBuild CB2 → M2   (CB1 e M1 nunca mudam)
+```
+
+### Conceitos, owner, persistência e identidade
+
+| Conceito | Owner | O que é | Persistência | Identidade |
+|---|---|---|---|---|
+| `SpatialFoundation` | runtime | valor que fixa as três refs (`ArtifactRef`) da fundação, validado pelos leitores públicos | **nenhum artifact próprio**: embutido nos registros de branch e de `ContextRun` | `SpatialFoundationId` = SHA-256 do digest de inventário (`inventory_digest`) de cada um dos três artifacts, calculado pela própria fundação ao validá-los |
+| `ContextRun` | runtime | um run do runtime (`run-NNNN`) que executa os estágios de contexto (`visual_perception`, `sensor_association` e, quando habilitado, `point_representation`) sobre uma fundação e uma seleção | `context_run.json` imutável na raiz do run, publicado **só** quando o run conclui | `ContextRunId` = SHA-256 de `SpatialFoundationId`, do documento canônico da seleção de observações e dos `(stage_id, contrato, content_hash)` das saídas, produzidas ou reutilizadas |
+| `ContextBranch` | runtime | fluxo lógico que acumula `ContextRun`s de **uma** fundação | `branches/<nome>/branch.json` (imutável: nome + fundação) e um registro imutável por acréscimo em `branches/<nome>/members/` | nome da branch (slug, único no dataset); a **revisão** é o número de membros |
+| `ContextBuild` | runtime | um run do runtime que materializa o mapa a partir de um conjunto congelado de `ContextRun`s | `context_build.json` imutável na raiz do run, escrito **antes** do primeiro estágio de jusante | `ContextBuildId` = SHA-256 de `SpatialFoundationId`, `ContextRunId`s em ordem canônica, artifacts fornecidos, `config_digest` de cada estágio que o build executa e `code_identity`; nunca o nome da branch nem a revisão |
+| `ContextMapId` | artifact | identidade final e imutável do snapshot | `ContextMapArtifact` (inalterado) | a de hoje: identidade do estágio `context_map` |
+
+Regras de identidade:
+
+- nenhuma identidade usa caminho, nome de diretório, `run-NNNN` nem relógio. Caminhos e `location` são **localizadores**: ao abrir, o leitor confere que o registro no local tem a identidade esperada;
+- não existe um segundo identificador de snapshot: `ContextMapId` é o snapshot;
+- não existe `context_pipeline_fingerprint`: cada estágio continua com a própria `ReuseKey`;
+- `ContextRunId` depende do **conteúdo** que o run referencia: duas execuções que produzem o mesmo conteúdo são a mesma evidência (a branch recusa o segundo acréscimo), e conteúdo diferente é evidência distinta;
+- `ContextBuildId` depende só do que é conhecido antes da execução, por isso é gravado antes dela: a entrada congelada nunca depende do que o build vier a produzir.
+
+### Fundação espacial
+
+`SpatialFoundation` é validada antes de qualquer trabalho pesado, só com os leitores públicos de Ingestion, State Estimation e Geometric Mapping:
+
+1. o `sequence_artifact_id` do mapa é o da sequência, e o `state_estimation_run_id`/`trajectory_id` do mapa são os da run de State Estimation;
+2. o `map_frame` do mapa é o `reference_frame` da trajetória;
+3. o mapa foi construído sobre a **sequência inteira** (`selection_id` de `FullSequenceSelection`), a mesma restrição que o `ContextMapExecutor` já impõe;
+4. cada ref nomeia o artifact que está no seu local (`artifact_id`), e cada artifact passa na checagem de inventário do próprio leitor; o índice espacial derivado do mapa não é recalculado.
+
+A identidade vem do conteúdo lido, não do `content_hash` que a ref traz: a `SequenceArtifact` tem hoje mais de uma fórmula de hash em uso, e uma sequência idêntica publicada por caminhos diferentes tem de dar a mesma fundação. A fundação não copia geometria, trajetória nem calibração. Geometric Mapping continua podendo gerar mapas parciais para experimentos: eles só não servem de fundação.
+
+Implementada em `runtime/foundation.py` (#494): `resolve_spatial_foundation(workspace, sequence=, state_estimation=, geometry=)` devolve `SpatialFoundation` ou levanta `SpatialFoundationError` com todos os problemas, cada um prefixado pelo papel (`sequence`, `state_estimation`, `geometry`). É o único módulo do runtime, fora da composition root, dos executores e do serviço de ingestion, que lê raízes de capability, e só pelos leitores públicos.
+
+### Seleção de observações de uma `ContextRun`
+
+É a única identidade realmente nova de reuso. A configuração ganha `inputs.observation_selection`, uma `SequenceSelection` codificada com `encode_selection` (padrão: sequência inteira). Implementada em #497:
+
+- vale só para os estágios marcados `observation_scoped` no catálogo, hoje só `visual_perception`. `sensor_association` já cobre exatamente os frames da run de percepção que consome e grava a seleção dela: herda a seleção pelo conteúdo da entrada, sem configuração própria. Os estágios da fundação continuam na sequência inteira;
+- entra no `config_digest` de `visual_perception`, portanto em `StageRequest.identity()` (o `run_id` publicado) e na `ReuseKey`, pelo mecanismo existente, sem campo novo na chave. Sem seleção, o digest é o de antes;
+- é resolvida pela própria Ingestion (`resolve_selection_offsets`), sem decodificar nada fora da seleção, e o executor grava o `selection_id` real em vez de fixar `FullSequenceSelection()`.
+
+Evolução aditiva de configuração: todo documento `0.1.0` continua válido com o mesmo significado. A versão do schema de configuração segue [`versioning.md`](versioning.md), sem camada de compatibilidade.
+
+Implementada em `runtime/context_run.py` (#495):
+
+- `context_scope(plan, foundation)` escopa o plano aos estágios de contexto (`CONTEXT_STAGES`) com a fundação fornecida, nunca recomputada;
+- `publish_context_run(run_directory, workspace=, foundation=, execution=, record=)` publica `context_run.json` a partir do `ExecutionRecord` do run concluído, uma vez só. Recusa estágio fora do contexto, artifact sem hash de conteúdo ou local, e evidência construída sobre artifacts de outra fundação;
+- `read_context_run(run_directory, workspace=)` relê o registro e recusa um registro alterado (a identidade é recalculada) ou copiado para outro run;
+- cada artifact tem disposição `produced` ou `reused`, da decisão de reuso do estágio. A fundação vem embutida (`SpatialFoundation.to_document()`), sem ser revalidada a cada leitura.
+
+### `ContextBranch`
+
+- aceita só `ContextRun`s da mesma `SpatialFoundationId`, e recusa um `ContextRunId` já presente;
+- um acréscimo é um arquivo novo, publicado de forma atômica e **sem sobrescrever**: dois acréscimos concorrentes com a mesma revisão não passam os dois. Nenhum registro existente é alterado;
+- a autoridade são os registros de membro. Revisão e ordem vêm do conteúdo deles, nunca da ordem de listagem do sistema de arquivos; não há índice mutável a reconstruir;
+- a branch é orquestração, não crença: não guarda fusão, confiança nem vencedores.
+
+Implementada em `runtime/context_branch.py` (#496): `create_branch(workspace, dataset=, name=, foundation=)`, `open_branch(...)` e `append_to_branch(workspace, branch, context_run)`. `ContextBranch.revision` é o número de membros, `ContextBranch.at(revisão)` devolve a branch como estava naquela revisão (um acréscimo posterior nunca a altera) e `ContextBranch.context_run_ids` é o conjunto de membros em ordem canônica, independente da ordem dos acréscimos. Abrir uma branch confere que os registros de membro são exatamente as revisões `1..N`. Nenhuma operação de branch lê artifact de capability.
+
+### `ContextBuild`
+
+- a entrada é um subconjunto explícito de uma revisão da branch (por padrão, a revisão inteira); `context_build.json` registra branch e revisão como proveniência e os `ContextRunId`s em ordem canônica (ordenados pelo id);
+- o build fornece ao plano as refs exatas registradas nas `ContextRun`s (`scope(provided=...)`, que passa a aceitar várias refs para uma entrada `multiple`), sem catálogo, sem `latest` e sem varrer diretórios;
+- acrescentar uma run à branch depois nunca altera um build já congelado: o build nomeia seus membros, não uma revisão "atual";
+- o `ContextMapId` final e o sucesso ou falha vêm do registro de execução do run (`execution.json`, `status.json`), sem duplicá-los em `context_build.json`;
+- depois de gravar o mapa, o estágio `context_map` roda `validate_context_map_artifact(..., level=ValidationLevel.FULL)`, a validação que o artifact já possui, e falha se o mapa não sair `VERIFIED` (#499). Na cadeia real de CI, builds de revisões sucessivas de uma branch materializam mapas verificados, e o mapa anterior fica byte a byte intacto depois do seguinte.
+
+Implementado em `runtime/context_build.py` (#498): `plan_context_build(workspace, branch, plan, code_identity=, revision=, context_run_ids=)` reabre cada `ContextRun` selecionada pelo seu registro (tem de ser o membro que a branch nomeia, sobre a mesma fundação), deduplica os artifacts e devolve o `ContextBuild` e a execução escopada até `context_map`. A execução recebe só a sequência e o mapa da fundação (a materialização não consome a trajetória) e as saídas das `ContextRun`s; se ela fosse recomputar algum estágio de contexto ou da fundação, por exemplo `point_representation` habilitado sem nenhuma `ContextRun` que o tenha produzido, o build é recusado. `publish_context_build(run_directory, workspace=, build=)` grava `context_build.json` antes do primeiro estágio, e `read_context_build(...)` recusa um registro alterado ou copiado para outro run. `scope(provided=...)` aceita várias refs por estágio e reporta várias refs chegando a uma entrada que não é `multiple`.
+
+### Fusão sobre várias `ContextRun`s
+
+A ciência continua na Semantic Fusion; a integração (#500) só entrega as entradas certas:
+
+- o `SemanticFusionExecutor` passa a aceitar várias runs de associação e de percepção;
+- a **mesma** ref vinda de duas `ContextRun`s (por exemplo, percepção reutilizada) é deduplicada pela identidade do artifact e entra uma vez;
+- duas runs de associação **diferentes** sobre a mesma run de percepção são recusadas antes da fusão: `SpatialObservationId` não inclui a run de associação e colidiria. Um build tem no máximo uma associação por resultado de percepção;
+- as refs vêm dos registros das `ContextRun`s (`provided`), não de um catálogo, então a regra de concordância de `selection` de `selection.py` (um run inteiro sobre uma única seleção) não se aplica ao build e não muda. O que garante a coerência é a fundação comum: todas as `ContextRun`s do build têm a mesma `SpatialFoundationId`, logo a mesma sequência, calibração e mapa;
+- observação física continua sendo `SourceObservationId`: inferências repetidas sobre um frame são evidência correlacionada, nunca observações independentes.
+
+Implementada em #500: `SemanticFusionExecutor` aceita N runs de `association` e `perception`, lê uma vez um run alcançado duas vezes, recusa uma associação cuja percepção não é entrada da fusão e duas associações da mesma percepção, e grava na linhagem todos os runs fundidos. Na cadeia real de CI, uma segunda percepção sobre os mesmos frames mantém `physical_observations` e dobra `inference_results`.
+
+**Limite da inferência repetida:** a identidade de execução de percepção é função da configuração e das entradas. Duas inferências só são evidência distinta quando algo na configuração difere (backend, modelo, prompt, parâmetro). Repetir a mesma configuração devolve, com reuso, o mesmo artifact. Recomputar à força um backend não determinístico com a mesma identidade é um risco já existente (#556, #580), e v0.1.1 não o resolve.
+
+### Reusar ou implementar
+
+| Necessidade | Já existe na v0.1.0 | Novo na v0.1.1 |
+|---|---|---|
+| reuso por estágio, sensível ao DAG | `ReuseKey`, `ReusePolicy`, `FileArtifactStore`, `ReuseDecision` | nada |
+| invalidar evidência de outra fundação/mapa | hash de conteúdo do mapa nas chaves de quem o consome | nada |
+| invalidar a fusão quando o conjunto de runs muda | hash combinado das entradas `multiple` | nada |
+| mudar só uma política de jusante | invalidação só do estágio e dependentes | nada |
+| seleção de observações | `SequenceSelection`, `selection_identity`, `resolve_selection` (Ingestion) | `inputs.observation_selection`, que entra no `config_digest` de `visual_perception`; a percepção aplica a seleção e a associação grava a da percepção |
+| fusão de várias runs | agrupamento por observação física na Semantic Fusion | executor com N entradas, deduplicação e recusa de associação dupla |
+| upstream explícito | `scope(provided=..., selections=...)` | `provided` com várias refs por estágio |
+| montagem do mapa | `ContextMapExecutor` → `assemble_context_map_with_metrics` → `write_context_map_with_metrics` | nada; validação `FULL` depois de gravar |
+| registro de execução | `RunJournal`, `plan.json`, `execution.json`, `status.json` | `context_run.json`, `context_build.json` (só referências) |
+| agrupamento de execuções | — | `SpatialFoundation` (valor), `ContextBranch` (registros de membro) |
+
+Métricas estruturais: quatro conceitos públicos novos, todos do runtime. Nenhuma identidade duplicada: sem id de snapshot, sem fingerprint global, sem motor de reuso, sem montador e sem artifact de fundação. Os contratos de artifact das capabilities, `ReuseKey` e o schema do `ContextMap` ficam inalterados. Uma execução única e N pedaços se expressam do mesmo jeito (uma ou N `ContextRun`s). Mudar só a política de jusante reusa todo o upstream. A entrada de um build é reconstruída pelos registros, sem inferência por arquivo ou horário.
+
+### Disposição no workspace
+
+```text
+<workspace>/<dataset>/
+├── run-NNNN/                  # runs do runtime, como hoje
+│   ├── context_run.json       # novo: só em run de contexto concluído
+│   └── context_build.json     # novo: só em run de build, antes dos estágios
+└── branches/<nome>/
+    ├── branch.json            # nome + fundação, escrito uma vez
+    └── members/<revisão>.json # um por acréscimo, nunca sobrescrito
+```
+
+Os documentos novos são do runtime e têm `schema_version` próprio, como `plan.json` e as entradas do índice de reuso. Artifacts, runs e configurações da v0.1.0 continuam legíveis sem migração.
+
+### Limitações
+
+- **Uma sessão só:** uma fundação é uma sequência e um mapa. Juntar sessões exige um modelo explícito de registro/alinhamento, fora do escopo.
+- Mais `ContextRun`s não significam mapa melhor: qualidade continua exigindo o reference set (#581).
+- A variância do backend semântico (#580) confunde a comparação de invariância a partição com dados reais. O braço de CI de #501 usa percepção determinística.
+
+### Reconciliação das issues
+
+- **#494:** fundação como valor validado, sem artifact próprio, e mapa sobre a sequência inteira.
+- **#497:** reduzida à seleção de observações entrando na identidade dos estágios de contexto, mais a matriz de invalidação em testes com DAG falso. O resto da lista da issue já é coberto pelo hash de conteúdo das entradas. Vem **antes** de #495, o que desfaz o ciclo #497 ↔ #498.
+- **#495:** registro `context_run.json` e identidade por conteúdo.
+- **#496:** registros de membro imutáveis, sem índice mutável; duplicata recusada.
+- **#498:** congela a entrada antes dos estágios. Funciona com uma `ContextRun` antes de #500.
+- **#500:** remove o limite de uma run do executor de fusão, deduplica refs e recusa duas associações sobre a mesma percepção; a seleção por catálogo não muda.
+- **#499:** integração e testes; o montador já é chamado pelo `ContextMapExecutor`. Soma a validação `FULL` depois de gravar.
+- **#501:** a inferência repetida usa configurações distintas.
+- **#502:** comandos `contextmap context branch create`, `context run`, `context build` e `context inspect`, sobre a CLI existente; `map create` da issue vira `context branch create --from-run RUN`, que valida como fundação a sequência, a trajetória e o mapa do registro de execução de um run (`foundation_of_run`). Implementado; uso em [`cli.md`](../src/contextmap/runtime/docs/cli.md#context).
+- **#503, #504 e #505:** sem mudança de escopo.
+
+Grafo de dependências:
+
+```text
+#493 ─► #494 ─► #497 ─► #495 ─► #496 ─► #498 ─► #500 ─► #499 ─► #501 ─► #502 ─► #503 ─► #504 ─► #505
+```

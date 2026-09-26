@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -95,3 +97,19 @@ def artifact_directory(workspace: Path, ref: ArtifactRef) -> Path:
             "inside the workspace"
         )
     return workspace.joinpath(*parts)
+
+
+def inventory_digest(inventory: Sequence[object]) -> str:
+    """Return the content hash of an artifact: the digest of its contractual file inventory.
+
+    Args:
+        inventory: The ``file_inventory`` of a manifest; each entry has ``path`` and
+            ``content_hash``.
+
+    Returns:
+        ``sha256:`` of the canonical JSON of ``{path: content_hash}``. Two artifacts with the same
+        contractual files have the same digest, whatever their names, ids or timestamps.
+    """
+    files = {entry.path: entry.content_hash for entry in inventory}  # type: ignore[attr-defined]
+    text = json.dumps(files, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"

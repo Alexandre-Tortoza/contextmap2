@@ -20,6 +20,7 @@ from contextmap.ingestion import (
     decode_selection,
     encode_selection,
     resolve_selection,
+    resolve_selection_offsets,
     selection_identity,
 )
 from contextmap.shared import SourceTimestamp
@@ -68,6 +69,20 @@ def test_frame_range_selection_matches_full_sequence_slice(reader: SequenceArtif
     result = resolve_selection(reader, FrameRangeSelection(start_frame_index=1, end_frame_index=3))
 
     assert list(result.observations) == list(full[1:3])
+
+
+def test_the_result_names_the_index_offsets_it_selected(reader: SequenceArtifactReader) -> None:
+    """A consumer filters the selection by index entry (modality, offset) without decoding."""
+    entries = list(reader.iter_index())
+
+    selection = FrameRangeSelection(start_frame_index=1, end_frame_index=3)
+
+    offsets = resolve_selection_offsets(reader, selection)
+
+    assert offsets == tuple(entry.offset for entry in entries[1:3])
+    assert [reader.observation_at(offset) for offset in offsets] == list(
+        resolve_selection(reader, selection).observations
+    )
 
 
 def test_frame_range_end_beyond_length_is_clipped(reader: SequenceArtifactReader) -> None:

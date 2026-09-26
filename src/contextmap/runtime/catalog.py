@@ -149,6 +149,10 @@ class StageDeclaration:
         inputs: Typed inputs, each wired to its producing stage.
         output: Identity of the artifact kind the stage produces.
         intercepts: For an optional stage, the input it inserts itself into.
+        observation_scoped: Whether the stage processes only the observations of
+            ``inputs.observation_selection``, which then takes part in its configuration
+            identity (issue #497). A stage downstream of it inherits the selection through the
+            content of its input, never through configuration.
     """
 
     stage_id: str
@@ -161,6 +165,7 @@ class StageDeclaration:
     inputs: tuple[StageInput, ...] = ()
     output: str | None = None
     intercepts: Interception | None = None
+    observation_scoped: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -425,6 +430,7 @@ CANONICAL_PRESET = RuntimePreset(
             ),
             inputs=(StageInput(name="sequence", contract=SEQUENCE, source="ingestion"),),
             output=PERCEPTION,
+            observation_scoped=True,
         ),
         StageDeclaration(
             stage_id="state_estimation",
