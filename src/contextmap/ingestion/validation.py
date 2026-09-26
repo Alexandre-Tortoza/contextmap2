@@ -27,6 +27,7 @@ from contextmap.ingestion.models import (
     ImageEncoding,
     ImageObservation,
     LidarObservation,
+    PointFieldDataType,
     SourceObservation,
 )
 
@@ -35,6 +36,17 @@ _IMAGE_BYTES_PER_PIXEL: dict[ImageEncoding, int] = {
     ImageEncoding.BGR8: 3,
     ImageEncoding.MONO8: 1,
     ImageEncoding.MONO16: 2,
+}
+
+_POINT_FIELD_SIZE_BYTES: dict[PointFieldDataType, int] = {
+    PointFieldDataType.INT8: 1,
+    PointFieldDataType.UINT8: 1,
+    PointFieldDataType.INT16: 2,
+    PointFieldDataType.UINT16: 2,
+    PointFieldDataType.INT32: 4,
+    PointFieldDataType.UINT32: 4,
+    PointFieldDataType.FLOAT32: 4,
+    PointFieldDataType.FLOAT64: 8,
 }
 
 
@@ -66,6 +78,11 @@ def validate_image_observation(observation: ImageObservation) -> list[str]:
 def validate_lidar_observation(observation: LidarObservation) -> list[str]:
     """Check one LiDAR observation's metadata and point-field layout for consistency.
 
+    Every field must lie entirely inside one point record: its first byte at an offset within
+    ``point_step_bytes`` and its last element ending at or before it
+    (``offset_bytes + size(data_type) * count <= point_step_bytes``), whatever the source's byte
+    order.
+
     Args:
         observation: The LiDAR observation to check.
 
@@ -91,6 +108,10 @@ def validate_lidar_observation(observation: LidarObservation) -> list[str]:
                 f"{observation.observation_id}: duplicate point field name {point_field.name!r}"
             )
         seen_names.add(point_field.name)
+        field_end = (
+            point_field.offset_bytes
+            + _POINT_FIELD_SIZE_BYTES[point_field.data_type] * point_field.count
+        )
         if point_field.offset_bytes < 0 or (
             point_field.offset_bytes >= observation.point_step_bytes
         ):
@@ -98,6 +119,11 @@ def validate_lidar_observation(observation: LidarObservation) -> list[str]:
                 f"{observation.observation_id}: field {point_field.name!r} offset_bytes "
                 f"{point_field.offset_bytes} is out of range for "
                 f"point_step_bytes={observation.point_step_bytes}"
+            )
+        elif field_end > observation.point_step_bytes:
+            problems.append(
+                f"{observation.observation_id}: field {point_field.name!r} ends at byte "
+                f"{field_end}, beyond point_step_bytes={observation.point_step_bytes}"
             )
     return problems
 
