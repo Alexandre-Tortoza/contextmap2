@@ -57,7 +57,16 @@ Uma taxa sem população é `None` (não aplicável), **nunca zero**.
 
 ## Falhas de recuperação
 
-`retrieval_misses` conta, com a razão, os pares que valem e o estágio de candidatos nunca produziu: `excluded:<razão>` (a exclusão registrada, incluindo as de predicados derivados lidas no sentido avaliado do inverso), `skipped_predicate:frame_conventions` ou `pair_not_enumerated_or_predicate_not_selected`. Assim, uma falha de recuperação de candidatos é distinguível de uma falha do predicado geométrico ou da reconciliação.
+`retrieval_misses` conta, com a razão, os pares que valem e o estágio de candidatos nunca produziu. Assim, uma falha de recuperação de candidatos é distinguível de uma falha do predicado geométrico ou da reconciliação. A razão é a primeira que se aplica:
+
+| Razão | Quando |
+| --- | --- |
+| `excluded:<razão>` | O par tem uma exclusão **listada** no run: em `exclusions` ou entre as mais próximas de um resumo. Os predicados derivados são lidos no sentido avaliado do inverso, e o outro sentido do par também é lido: quando os dois sentidos são excluídos, a mesma pré-condição falhou primeiro para ambos (alcance e pegada não dependem do sentido, e lado e contenção só excluem os dois sentidos quando os dois falham nelas). |
+| `excluded_unlisted:<predicado>` | O par não tem exclusão listada, mas o predicado (o avaliado) tem um grupo acima do teto de exclusões ([teto de exclusões](../../spatial_relations/docs/candidates.md#teto-de-exclusões), runs `0.2.0`): o par pode ser uma das exclusões não listadas, ou um par que a varredura nunca enumerou, e o run não permite saber qual. |
+| `skipped_predicate:frame_conventions` | O predicado foi pulado por falta de eixo declarado. |
+| `pair_not_enumerated_or_predicate_not_selected` | Nada acima: o predicado não tem exclusão não listada, então o par **nunca** foi uma exclusão (não foi enumerado, ou o predicado não foi selecionado). |
+
+`unlisted_exclusions` traz, para cada grupo `(predicado, razão)` acima do teto, `count` (todas as exclusões do grupo), `listed`, `unlisted`, `min_gap_m`, `max_gap_m` e o `digest` do run sobre todas elas: é o que ainda se sabe de uma exclusão que o run contou e não listou. Um run `0.1.0` lista toda exclusão, então nunca produz `excluded_unlisted`.
 
 ## Consistência estrutural
 
@@ -65,7 +74,7 @@ Independente de qualquer anotação, o avaliador confere nas relações persisti
 
 ## Reprodutibilidade
 
-O relatório (`SpatialRelationsEvaluationReport`, `to_dict()` em JSON) traz: o run avaliado e a versão do schema do artifact, o run de resolução e o seu digest, o mapa geométrico, a versão da taxonomia, cada política efetiva com id e fingerprint (a partir do manifest), a política de normalização e o número de relações da referência, a versão e o id do avaliador e o `code_version`. `spatial_relations_evaluation_report()` o coloca no envelope comum com as métricas do registro **por predicado** (como estratos, `relations.f1` e `relations.negative_violation.rate`), o digest da configuração e as duas linhagens de entrada; um predicado sem população anotada é `NOT_APPLICABLE`, nunca zero, e sem população nenhuma cada métrica aparece uma vez, sem estrato. O avaliador **não altera** o artifact avaliado.
+O relatório (`SpatialRelationsEvaluationReport`, `to_dict()` em JSON, avaliador na versão `3`) traz: o run avaliado e a versão do schema do artifact, o run de resolução e o seu digest, o mapa geométrico, a versão da taxonomia, cada política efetiva com id e fingerprint (a partir do manifest), a política de normalização e o número de relações da referência, a versão e o id do avaliador e o `code_version`. `spatial_relations_evaluation_report()` o coloca no envelope comum com as métricas do registro **por predicado** (como estratos, `relations.f1` e `relations.negative_violation.rate`), o digest da configuração e as duas linhagens de entrada; um predicado sem população anotada é `NOT_APPLICABLE`, nunca zero, e sem população nenhuma cada métrica aparece uma vez, sem estrato. O avaliador **não altera** o artifact avaliado.
 
 ## Limites conhecidos
 
@@ -73,3 +82,4 @@ O relatório (`SpatialRelationsEvaluationReport`, `to_dict()` em JSON) traz: o r
 - O mapeamento entidade → identidade **vem da avaliação de Entity Resolution** (`IdentityEvaluation`), e não é produzido nem corrigido aqui: uma identidade duplicada ou uma entidade que mistura identidades é uma falha daquela avaliação, reportada e não pontuada como erro de relação.
 - A anotação é de mundo aberto e só cobre alguns pares: a precisão é medida contra os negativos **explícitos**, e as previsões sem anotação ficam contadas à parte.
 - Uma relação cujo par de identidades não foi anotado em nenhuma direção não entra em nenhuma taxa.
+- `excluded_unlisted` não diz a razão exata nem se o par chegou a ser enumerado: só que o run tem exclusões não listadas daquele predicado. A versão `2` do avaliador lia só `exclusions` e daria essas falhas como `pair_not_enumerated_or_predicate_not_selected`.

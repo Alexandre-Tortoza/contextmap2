@@ -65,6 +65,7 @@ temporariamente os estágios legados de cena/região até a construção de
 - `RegionId`/`FeatureId`/`ClaimId` — identidades **locais a um `PerceptionResult`**, nunca identidade persistente de entidade nem comparável entre resultados diferentes sem associação explícita posterior.
 
 - `RegionDiscovery`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticScore`.
+- `AuditedRegionDiscovery`, `AuditedRegions`, `RegionDiscoveryAudit` — Region Discovery que também devolve a auditoria de cada frame (passes e diagnostics do backend, candidatos rejeitados, decisões de merge, digest da normalização); o runtime exige esse port e grava a auditoria no run.
 
 - `execute_stage_graph()`/`assemble_perception_result()` — executor de grafo de estágios e montagem de `PerceptionResult`; `StageDefinition`, `StageOutcome`, `StageStatus`, `StageGraphError`.
 
@@ -80,7 +81,7 @@ temporariamente os estágios legados de cena/região até a construção de
 
 - `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()` — geradores de identidade determinística.
 
-- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui requests/executions semânticos, views content-addressed e resposta bruta auditável; `RunArtifactManifest`.
+- `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui a auditoria de Region Discovery por frame, requests/executions semânticos, views content-addressed e resposta bruta auditável; `RunArtifactManifest`.
 - `FeatureStoreWriter`/`FeatureStoreReader` — persistência, indexação e carregamento sob demanda do payload numérico de um `VisualFeature` (`PerceptionRunWriter.add_feature_payload()`/`PerceptionRunReader.feature_store()`); `FeaturePayloadEntry`, `FeatureStoreError`, `FeaturePayloadIntegrityError`.
 - `FeatureExtractionDiagnostic`/`FeatureDebugLevel` — métricas comuns e debug auditável para features densas, globais e de região; integração por `PerceptionRunWriter.add_feature_diagnostic()`/`add_feature_preview()`.
 - `encode_perception_result()`/`decode_perception_result()` (e equivalentes por tipo) — serialização JSON dos contratos públicos.

@@ -74,9 +74,9 @@ if TYPE_CHECKING:
     from contextmap.spatial_relations import RelationsRunPolicies
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
+        AuditedRegionDiscovery,
         FeatureExtractor,
         PerceptionRunId,
-        RegionDiscovery,
         SemanticInterpreter,
     )
 
@@ -185,7 +185,7 @@ class ComposedRuntime:
         unavailable_stages: Enabled stages skipped because their capability does not
             exist yet, with the reason. Nothing stands in for them.
         source_adapter: Builds the configured source adapter for one ingestion request.
-        region_discovery: Region discovery backend.
+        region_discovery: Region discovery backend, which also reports each frame's audit.
         dense_features: Builds the dense feature extractor once a run scope exists.
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
@@ -219,7 +219,7 @@ class ComposedRuntime:
     stages: tuple[str, ...]
     unavailable_stages: Mapping[str, str] = field(default_factory=dict)
     source_adapter: SourceAdapterFactory | None = None
-    region_discovery: RegionDiscovery | None = None
+    region_discovery: AuditedRegionDiscovery | None = None
     dense_features: FeatureFactory | None = None
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
@@ -536,7 +536,7 @@ def _region_extras() -> dict[str, type[Any]]:
     return {"pass_config": DiscoveryPassConfig, "normalization_config": NormalizationConfig}
 
 
-def _sam2(context: _Context, component_id: str) -> RegionDiscovery:
+def _sam2(context: _Context, component_id: str) -> AuditedRegionDiscovery:
     from contextmap.visual_perception.backends.sam2 import Sam2Config, Sam2RegionDiscovery
 
     config, extras = context.build(component_id, Sam2Config, extras=_region_extras())
@@ -545,7 +545,7 @@ def _sam2(context: _Context, component_id: str) -> RegionDiscovery:
     return Sam2RegionDiscovery(config=config, runtime=runtime, **extras)
 
 
-def _sam3(context: _Context, component_id: str) -> RegionDiscovery:
+def _sam3(context: _Context, component_id: str) -> AuditedRegionDiscovery:
     from contextmap.visual_perception.backends.sam3 import Sam3Config, Sam3RegionDiscovery
 
     config, extras = context.build(component_id, Sam3Config, extras=_region_extras())
@@ -554,7 +554,7 @@ def _sam3(context: _Context, component_id: str) -> RegionDiscovery:
     return Sam3RegionDiscovery(config=config, runtime=runtime, **extras)
 
 
-def _florence2_regions(context: _Context, component_id: str) -> RegionDiscovery:
+def _florence2_regions(context: _Context, component_id: str) -> AuditedRegionDiscovery:
     from contextmap.visual_perception.backends.florence2 import (
         Florence2Config,
         Florence2RegionDiscovery,

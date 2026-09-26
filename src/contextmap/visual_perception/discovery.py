@@ -1,15 +1,17 @@
-"""Backend-neutral discovery passes and deterministic coordinate remapping."""
+"""Backend-neutral discovery passes, deterministic coordinate remapping, and discovery audit."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from math import isfinite
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+from contextmap.ingestion import SourceObservationId
 
 from .models import BackendProvenance, PreparedImage, Region2D
-from .normalization import NormalizationConfig, normalize_regions
+from .normalization import MergeDecision, MergeKind, NormalizationConfig, normalize_regions
 from .region_models import (
     BoundingBox,
     InlineMask,
@@ -19,6 +21,7 @@ from .region_models import (
     RejectionReason,
     mask_bounding_box,
 )
+from .serialization import decode_provenance, encode_provenance
 
 
 class PassKind(StrEnum):
@@ -193,18 +196,144 @@ class DiscoveryRunResult:
     diagnostics: tuple[BackendDiagnostics, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RegionDiscoveryAudit:
+    """How the canonical regions of one frame were decided: every pass, rejection and merge.
+
+    It is the evidence behind the regions, not the regions themselves: accepted regions stay in
+    the ``PerceptionResult`` and name their contributors through ``contributor_candidate_ids``,
+    which are the same candidate ids the rejections and merge decisions use.
+
+    Attributes:
+        source_observation_id: The physical observation the discovery ran on.
+        backend: Exact provenance of the discovery backend that proposed the candidates.
+        passes: Every pass presented to the backend, in execution order.
+        diagnostics: The backend diagnostics of each pass, aligned with ``passes``.
+        pass_rejections: Candidates rejected by a pass-level policy (per-pass budget, internal
+            tile border) before normalization ever saw them.
+        normalization_config_digest: Identity of the effective ``NormalizationConfig``.
+        normalization_rejections: Candidates rejected by normalization, merged duplicates
+            included, in the order normalization decided them.
+        merge_decisions: Every merge, chaining each group to its final representative.
+    """
+
+    source_observation_id: SourceObservationId
+    backend: BackendProvenance
+    passes: tuple[DiscoveryPass, ...]
+    diagnostics: tuple[BackendDiagnostics, ...]
+    pass_rejections: tuple[RejectedRegionCandidate, ...]
+    normalization_config_digest: str
+    normalization_rejections: tuple[RejectedRegionCandidate, ...]
+    merge_decisions: tuple[MergeDecision, ...]
+
+    def __post_init__(self) -> None:
+        """Require one diagnostic record per pass and an identified normalization policy."""
+        if len(self.passes) != len(self.diagnostics):
+            raise ValueError("each discovery pass must have one diagnostic record")
+        if not self.normalization_config_digest:
+            raise ValueError("normalization_config_digest must not be empty")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-compatible audit record, each pass carrying its own diagnostics."""
+        return {
+            "source_observation_id": str(self.source_observation_id),
+            "backend": encode_provenance(self.backend),
+            "passes": [
+                {**discovery_pass.to_dict(), "diagnostics": diagnostics.to_dict()}
+                for discovery_pass, diagnostics in zip(self.passes, self.diagnostics, strict=True)
+            ],
+            "pass_rejections": [rejection.to_dict() for rejection in self.pass_rejections],
+            "normalization_config_digest": self.normalization_config_digest,
+            "normalization_rejections": [
+                rejection.to_dict() for rejection in self.normalization_rejections
+            ],
+            "merge_decisions": [decision.to_dict() for decision in self.merge_decisions],
+        }
+
+    @classmethod
+    def from_dict(cls, record: Mapping[str, Any]) -> RegionDiscoveryAudit:
+        """Restore an audit from :meth:`to_dict`'s record.
+
+        Raises:
+            KeyError: If a field of the record is missing.
+            TypeError: If a field has the wrong shape.
+            ValueError: If a value violates its contract, or the record is not exactly the
+                canonical encoding of the audit it decodes to.
+        """
+        raw_passes = record["passes"]
+        audit = cls(
+            source_observation_id=SourceObservationId(record["source_observation_id"]),
+            backend=decode_provenance(record["backend"]),
+            passes=tuple(
+                DiscoveryPass(
+                    pass_id=item["pass_id"],
+                    kind=PassKind(item["kind"]),
+                    window=BoundingBox.from_dict(item["window"]),
+                    scale=item["scale"],
+                )
+                for item in raw_passes
+            ),
+            diagnostics=tuple(
+                BackendDiagnostics(
+                    duration_ms=item["diagnostics"]["duration_ms"],
+                    proposal_count=item["diagnostics"]["proposal_count"],
+                    warnings=tuple(item["diagnostics"]["warnings"]),
+                    metadata=tuple(
+                        (entry["name"], entry["value"]) for entry in item["diagnostics"]["metadata"]
+                    ),
+                )
+                for item in raw_passes
+            ),
+            pass_rejections=tuple(
+                RejectedRegionCandidate.from_dict(item) for item in record["pass_rejections"]
+            ),
+            normalization_config_digest=record["normalization_config_digest"],
+            normalization_rejections=tuple(
+                RejectedRegionCandidate.from_dict(item)
+                for item in record["normalization_rejections"]
+            ),
+            merge_decisions=tuple(
+                MergeDecision(
+                    representative_candidate_id=item["representative_candidate_id"],
+                    merged_candidate_id=item["merged_candidate_id"],
+                    kind=MergeKind(item["kind"]),
+                    iou=item["iou"],
+                    containment_fraction=item["containment_fraction"],
+                )
+                for item in record["merge_decisions"]
+            ),
+        )
+        # Reencodar e comparar pega de uma vez chave extra ou ausente, tipo trocado e campos
+        # derivados (dimensões de entrada do pass) que não batem com os campos que os definem.
+        if audit.to_dict() != dict(record):
+            raise ValueError("region discovery audit record is not in its canonical encoding")
+        return audit
+
+
+@dataclass(frozen=True, slots=True)
+class AuditedRegions:
+    """The canonical regions of one frame together with the audit that explains them."""
+
+    regions: tuple[Region2D, ...]
+    audit: RegionDiscoveryAudit
+
+
 def discover_canonical_regions(
     prepared_image: PreparedImage,
     backend: RegionCandidateDiscovery,
     *,
     pass_config: DiscoveryPassConfig | None = None,
     normalization_config: NormalizationConfig | None = None,
-) -> tuple[Region2D, ...]:
-    """Execute pass-level discovery and return the one canonical Region2D contract.
+) -> AuditedRegions:
+    """Execute pass-level discovery and normalization, keeping every decision they made.
 
     The core port scopes returned region identities through the eventual
     ``PerceptionResult``. The internal candidate scope used here is deterministic
     and exists only to validate that a single discovery execution is not mixed.
+
+    Returns:
+        The one canonical ``Region2D`` contract, and the audit of the passes, pass-level
+        rejections, normalization rejections and merge decisions that produced it.
     """
     provenance = backend.backend_provenance()
     fingerprint = provenance.configuration_fingerprint or provenance.version
@@ -216,12 +345,25 @@ def discover_canonical_regions(
         perception_result_id=f"{scope}:{prepared_image.source_observation_id}",
         config=pass_config,
     )
-    return normalize_regions(
+    normalization = normalize_regions(
         discovery.candidates,
         prepared_image,
         provenance,
         normalization_config,
-    ).regions
+    )
+    return AuditedRegions(
+        regions=normalization.regions,
+        audit=RegionDiscoveryAudit(
+            source_observation_id=prepared_image.source_observation_id,
+            backend=provenance,
+            passes=discovery.passes,
+            diagnostics=discovery.diagnostics,
+            pass_rejections=discovery.rejected,
+            normalization_config_digest=normalization.config_digest,
+            normalization_rejections=normalization.rejected,
+            merge_decisions=normalization.merge_decisions,
+        ),
+    )
 
 
 def validate_materialized_discovery_image(

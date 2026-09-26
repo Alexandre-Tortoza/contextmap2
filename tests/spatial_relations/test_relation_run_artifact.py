@@ -25,6 +25,7 @@ from relation_run_fixture import (
     build_run,
     write_run,
 )
+from relation_storeroom_fixture import exclusion_ceiling
 
 from contextmap.entity_resolution import EntityResolutionRunId
 from contextmap.geometric_mapping import MapId
@@ -45,6 +46,7 @@ from contextmap.spatial_relations import (  # noqa: F401
     encode_relation,
     encode_relation_decision,
     encode_relation_evidence,
+    generate_relation_candidates,
     run_artifact,
 )
 
@@ -264,14 +266,46 @@ def answers_digest(reader: SpatialRelationsRunReader, run: Run) -> str:
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
 
 
-# #601 (SR-06): gravados antes de o leitor passar a buscar por deslocamento.
-RECORDED_RUN_BYTES = "376ca0ca19756e1ef0b8320dbd77e476dd415b33ac4e9d29012dfe4833ece74e"
+# #601 (SR-06): gravados antes de o leitor passar a buscar por deslocamento. O schema 0.2.0
+# (SR-01) só mudou, neste run, a schema_version do manifest e a chave unlisted_exclusions (zero) de
+# metrics/counts.json, com o inventário que as descreve; as tabelas estão fixadas abaixo.
+RECORDED_RUN_BYTES = "d12a86a75c50385f529467ca9b91aa7bd6b9006c090fd429d510ee956c68aca3"
 RECORDED_READER_ANSWERS = "a2cf3c4b17dcf49e5110ec5c59bf66bae87f18124c37904aeca23da807e8971b"
 
 
 def test_the_persisted_run_matches_the_recorded_bytes(run: Run, tmp_path: Path) -> None:
     _write(run, tmp_path / "relations")
     assert contractual_digest(tmp_path / "relations") == RECORDED_RUN_BYTES
+
+
+# #601 (SR-01): gravados antes do teto de exclusões. Nenhum grupo do fixture passa do teto, então
+# nenhuma tabela de outputs/ pode mudar; só o manifest e as métricas mudam com o schema 0.2.0.
+RECORDED_OUTPUT_TABLES = {
+    "outputs/entity-relation-index.jsonl": (
+        "58dfef4e2e6b528933a0e9d0a848075837b79b2ff727479d4055b44a56d857dd"
+    ),
+    "outputs/relation-candidates.jsonl": (
+        "37ff6b291c4fee6af3cde90e991d789b5ac0895e88c55155e176d93921e1c1ab"
+    ),
+    "outputs/relation-decisions.jsonl": (
+        "f400d13d4582c4bdaebe9df987413507d254fde4db5780df832f92a98fdb4ed5"
+    ),
+    "outputs/relation-evidence.jsonl": (
+        "ce913c16ccbee34e16ae3fd354c35df5a6b340e4302bd0f666bddc7066edefb8"
+    ),
+    "outputs/relations.jsonl": "72e203fa784b0d2adfd29004dfc2608d7f0634f2dbaab5704214a75d9c79ef34",
+}
+
+
+def test_the_tables_below_the_exclusion_ceiling_match_the_recorded_bytes(
+    run: Run, tmp_path: Path
+) -> None:
+    _write(run, tmp_path / "relations")
+    tables = {
+        path: hashlib.sha256((tmp_path / "relations" / path).read_bytes()).hexdigest()
+        for path in RECORDED_OUTPUT_TABLES
+    }
+    assert tables == RECORDED_OUTPUT_TABLES
 
 
 def test_the_reader_gives_the_recorded_answers(run: Run, tmp_path: Path) -> None:
@@ -533,3 +567,44 @@ def test_an_unknown_schema_version_is_refused(run: Run, tmp_path: Path) -> None:
     manifest.write_text(json.dumps(raw))
     with pytest.raises(RelationsRunArtifactError, match="schema_version"):
         SpatialRelationsRunReader(tmp_path / "relations")
+
+
+# --- schema 0.2.0: the exclusion ceiling (#601) ---
+
+
+def test_a_run_is_written_under_schema_0_2_0(run: Run, tmp_path: Path) -> None:
+    # SR-01: o registro de exclusões passou a ter teto, e o schema do artifact muda com ele.
+    assert _write(run, tmp_path / "relations").schema_version == "0.2.0"
+
+
+def test_a_run_of_schema_0_1_0_is_still_read(run: Run, tmp_path: Path) -> None:
+    # Os runs 0.1.0 (entre eles a demo congelada de examples/v0.1.0) listam toda exclusão, o que
+    # o leitor atual lê sem distinção: um conjunto sem grupo resumido.
+    _write(run, tmp_path / "relations")
+    manifest = tmp_path / "relations" / "manifest.json"
+    raw = json.loads(manifest.read_text())
+    raw["schema_version"] = "0.1.0"
+    manifest.write_text(json.dumps(raw))
+
+    reader = SpatialRelationsRunReader(tmp_path / "relations")
+
+    assert reader.manifest.schema_version == "0.1.0"
+    assert reader.candidate_set() == run.candidates
+    assert tuple(reader.iter_relations()) == run.decisions.relations
+
+
+def test_the_counts_record_every_exclusion_and_how_many_are_not_listed(
+    run: Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exclusion_ceiling(monkeypatch, 1)
+    capped = generate_relation_candidates(run.entities, policy=CANDIDATES, conventions=CONVENTIONS)
+    listed = len(capped.exclusions) + sum(len(item.nearest) for item in capped.exclusion_summaries)
+    assert capped.exclusion_summaries
+
+    _write(dataclasses.replace(run, candidates=capped), tmp_path / "relations")
+
+    reader = SpatialRelationsRunReader(tmp_path / "relations")
+    counts = reader.read_record("metrics/counts.json")
+    assert counts["exclusions"] == len(run.candidates.exclusions)
+    assert counts["unlisted_exclusions"] == len(run.candidates.exclusions) - listed > 0
+    assert reader.candidate_set() == capped

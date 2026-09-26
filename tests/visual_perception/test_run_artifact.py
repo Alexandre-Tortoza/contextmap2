@@ -9,20 +9,30 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
+    BackendDiagnostics,
     BackendProvenance,
+    BoundingBox,
     BoundingBox2D,
     ClaimId,
+    DiscoveryPass,
     FailedSemanticInterpretation,
     FeatureId,
     FeatureScope,
     IncompleteRunArtifactError,
+    MergeDecision,
+    MergeKind,
+    NormalizationConfig,
+    PassKind,
     PerceptionResult,
     PerceptionResultId,
     PerceptionRunId,
     PerceptionRunReader,
     PerceptionRunWriter,
     Region2D,
+    RegionDiscoveryAudit,
     RegionId,
+    RejectedRegionCandidate,
+    RejectionReason,
     RunArtifactError,
     SceneContext,
     SemanticBackendDiagnostics,
@@ -423,7 +433,7 @@ def test_semantic_execution_view_and_raw_response_are_persisted_and_reopened(
     )
     manifest = writer.finalize()
 
-    assert manifest.schema_version == "0.5.0"
+    assert manifest.schema_version == "0.6.0"
     run_dir = _run_dir(tmp_path)
     assert provenance.raw_response_reference is not None
     raw_path = run_dir / provenance.raw_response_reference
@@ -1149,7 +1159,7 @@ def test_failed_semantic_interpretations_are_a_first_class_output(tmp_path: Path
     writer.add_failed_semantic_interpretation(failed)
     manifest = writer.finalize()
 
-    assert manifest.schema_version == "0.5.0", "the success contract must not break"
+    assert manifest.schema_version == "0.6.0", "the success contract must not break"
     run_dir = _run_dir(tmp_path)
     reader = PerceptionRunReader(run_dir)
     assert reader.verify_integrity() == []
@@ -1352,3 +1362,319 @@ def test_tracking_is_decided_by_the_manifest_not_by_the_file_on_disk(tmp_path: P
     reader = PerceptionRunReader(run_dir)
     with pytest.raises(RunArtifactError, match="inventoried"):
         reader.tracks_semantic_failures()
+
+
+def _characterized_run(tmp_path: Path) -> Path:
+    """Write a run touching every pre-audit output: masks, features, semantics and timings."""
+    execution = _semantic_execution()
+    failed = _failed_semantic_interpretation()
+    feature = _dense_feature("feature-dense-0001")
+    masked = _masked_result("frame-0001", _full_frame_mask(width=4, height=3))
+    writer = _write_run(tmp_path)
+    writer.add_result(replace(masked, features=(feature,), claims=execution.parsed.claims))
+    writer.add_result(_result("frame-0002", "run-0001"))
+    writer.add_feature_payload(
+        feature,
+        SourceObservationId("frame-0001"),
+        np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32"),
+    )
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+    writer.add_failed_semantic_interpretation(failed)
+    writer.finalize()
+    return _run_dir(tmp_path)
+
+
+def _pre_audit_contents(run_dir: Path) -> dict[str, str]:
+    """SHA-256 of every file a pre-audit run wrote, with the manifest reduced to its stable part.
+
+    ``created_at`` is wall-clock, so it leaves the manifest and the README; ``schema_version`` and
+    the inventory entry of ``outputs/region-discovery-audit.jsonl`` are what #611 adds on purpose.
+    """
+    audit_path = "outputs/region-discovery-audit.jsonl"
+    contents = {
+        str(path.relative_to(run_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_dir.rglob("*"))
+        if path.is_file()
+        and str(path.relative_to(run_dir)) not in {"manifest.json", "README.md", audit_path}
+    }
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    del manifest["created_at"], manifest["schema_version"]
+    manifest["file_inventory"] = [
+        entry for entry in manifest["file_inventory"] if entry["path"] != audit_path
+    ]
+    contents["manifest.json (stable part)"] = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    readme = (run_dir / "README.md").read_text(encoding="utf-8").splitlines()
+    contents["README.md (stable part)"] = hashlib.sha256(
+        "\n".join(line for line in readme if not line.startswith("- Created at:")).encode("utf-8")
+    ).hexdigest()
+    return contents
+
+
+def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
+    """#611 only adds the audit table: every other file must keep its exact bytes.
+
+    The digests were recorded from the 0.5.0 writer, before the audit existed.
+    """
+    contents = _pre_audit_contents(_characterized_run(tmp_path))
+
+    semantic_debug = "debug/40-semantic-interpretation"
+    assert contents == {
+        "README.md (stable part)": (
+            "0863c5f37eef9a97f6624a6b75d3ed5ddeb4a46d1bf55d80859c9014c07608fd"
+        ),
+        f"{semantic_debug}/region-request-0001/diagnostics.json": (
+            "8803b582fcc7b66400a0079331c99dcaf98e2350bcec3501ebc64057be4d2fcd"
+        ),
+        f"{semantic_debug}/region-request-0001/parsed-response.json": (
+            "4da42836be9c59a62f74563b2199a72895c13fdb39c2e4be9b096127a53639e4"
+        ),
+        f"{semantic_debug}/region-request-0001/prompt.txt": (
+            "1e3b2cd9f6037b2719bdb84c9784c291f999e0ab7b967d0aeb6a75329cd26ad0"
+        ),
+        f"{semantic_debug}/region-request-0001/raw-response.txt": (
+            "f0b5f83cde14bedd4abdc7cab53e8c51441720c14ba4f9726c6dab383157b76c"
+        ),
+        f"{semantic_debug}/region-request-0001/request.json": (
+            "d08d77c010881319e950d09842e1c147832a9c48dcc991da8abe8d285d10e58a"
+        ),
+        f"{semantic_debug}/region-request-0001/semantic-claims.json": (
+            "3a76aab90efea82b060d402400603f27c7e3bc452bf514956153d7f2daa6d52e"
+        ),
+        f"{semantic_debug}/region-request-0002/diagnostics.json": (
+            "773266608cbf30e971fc200ebc35ac212ada80a55d3ec0259ba14a3a1c371600"
+        ),
+        f"{semantic_debug}/region-request-0002/parse-failure.json": (
+            "a3031ea5d6becbcb0527dbd6e623f7a1b8199b2b30faabeb3814d29832672ddb"
+        ),
+        f"{semantic_debug}/region-request-0002/prompt.txt": (
+            "1e3b2cd9f6037b2719bdb84c9784c291f999e0ab7b967d0aeb6a75329cd26ad0"
+        ),
+        f"{semantic_debug}/region-request-0002/raw-response.txt": (
+            "f61a27316cdea5e281d848b87d9a077d59a6b2998dea0c52773137f98773741f"
+        ),
+        f"{semantic_debug}/region-request-0002/request.json": (
+            "079016ab6ddf9054b6f82f0452d8ab3fb381d720123b4c06dd3796e4738f23e5"
+        ),
+        "manifest.json (stable part)": (
+            "3eb0f82f5e9542ca430b0c4ad0b89ef25602c4501c4ec21eeaf84a477896144e"
+        ),
+        "metrics/stage-timings.jsonl": (
+            "0a43c0862087740b00dffa4d2160d6fc27c4df2d765d9f6e31c9b58b7c914611"
+        ),
+        "outputs/features/feature-index.jsonl": (
+            "8793dc07b59cd8b3f3976e1f8e122c0eebc1b606849f998e1464394d4ed5f93c"
+        ),
+        "outputs/features/frame-0001/feature-dense-0001.npy": (
+            "e8072b61f5d81a3cc4dc59b9d5e14187b20b5d8a3ddd8e6d0bc5128bda5f27aa"
+        ),
+        "outputs/masks/frame-0001/region-0001.npy": (
+            "4d7f924ebd7fdcc67ba12c379b69285c0df6eece071a00cbc299f590bc86cd2e"
+        ),
+        "outputs/masks/mask-index.jsonl": (
+            "a83f82a445bc79e66cf0f99167afc9e99713a4c230d5b63a969e99c0748a2072"
+        ),
+        "outputs/results.jsonl": (
+            "1e58cc8f229f14e56b149b62da2ced55f82de2e9f6c459f4e055ec4e02080c0e"
+        ),
+        "outputs/semantic-interpretation-failures.jsonl": (
+            "672b54900b35a40dd8d68dd4bc5473c0c137c873e4f2e100d1abcdabbb2daf1e"
+        ),
+        "outputs/semantic-interpretations.jsonl": (
+            "09c77d8efe71fbbe42482a8a3cbc01d402959e9e97b7bf6e95983b5a66cb40b6"
+        ),
+        "outputs/semantic-views/crop-0001.jpg": (
+            "d19bbf3d505b6b0023eea97255d7e44d52b831e5f2c426e7670e502af0d19334"
+        ),
+    }
+
+
+_AUDIT_TABLE = "outputs/region-discovery-audit.jsonl"
+
+
+def _discovery_audit(observation_id: str = "frame-0001") -> RegionDiscoveryAudit:
+    """One frame's audit: a pass, a rejection before and after normalization, and a merge."""
+    return RegionDiscoveryAudit(
+        source_observation_id=SourceObservationId(observation_id),
+        backend=_PROVENANCE,
+        passes=(
+            DiscoveryPass(
+                pass_id="full-frame", kind=PassKind.FULL_FRAME, window=BoundingBox(0, 0, 10, 10)
+            ),
+        ),
+        diagnostics=(
+            BackendDiagnostics(
+                duration_ms=4.5,
+                proposal_count=3,
+                warnings=("slow pass",),
+                metadata=(("raw_proposal_count", 5),),
+            ),
+        ),
+        pass_rejections=(
+            RejectedRegionCandidate(
+                candidate_id="full-frame/p-3",
+                reason=RejectionReason.REGION_BUDGET_EXCEEDED,
+                detail="candidate exceeded configured per-pass budget",
+                discovery_pass_id="full-frame",
+            ),
+        ),
+        normalization_config_digest=NormalizationConfig().digest,
+        normalization_rejections=(
+            RejectedRegionCandidate(
+                candidate_id="full-frame/p-2",
+                reason=RejectionReason.MERGED_DUPLICATE,
+                detail="merged into full-frame/p-1",
+                discovery_pass_id="full-frame",
+            ),
+        ),
+        merge_decisions=(
+            MergeDecision(
+                representative_candidate_id="full-frame/p-1",
+                merged_candidate_id="full-frame/p-2",
+                kind=MergeKind.IOU_DUPLICATE,
+                iou=0.9,
+                containment_fraction=1.0,
+            ),
+        ),
+    )
+
+
+def test_the_region_discovery_audit_is_a_contractual_output_read_by_observation(
+    tmp_path: Path,
+) -> None:
+    """#611: rejections and merges of each frame are recoverable from the finalized run."""
+    first, second = _discovery_audit("frame-0001"), _discovery_audit("frame-0002")
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_result(_result("frame-0002", "run-0001"))
+    writer.add_region_discovery_audit(first)
+    writer.add_region_discovery_audit(second)
+    manifest = writer.finalize()
+
+    assert _AUDIT_TABLE in {entry.path for entry in manifest.file_inventory}
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.verify_integrity() == []
+    assert reader.records_region_discovery_audit() is True
+    assert list(reader.iter_region_discovery_audits()) == [first, second]
+    assert reader.region_discovery_audit(SourceObservationId("frame-0002")) == second
+
+
+def test_every_run_writes_the_audit_table_even_when_nothing_was_audited(tmp_path: Path) -> None:
+    """An empty table means "recorded, nothing to report", never "not recorded"."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    manifest = writer.finalize()
+
+    run_dir = _run_dir(tmp_path)
+    assert (run_dir / _AUDIT_TABLE).read_text(encoding="utf-8") == ""
+    assert _AUDIT_TABLE in {entry.path for entry in manifest.file_inventory}
+    reader = PerceptionRunReader(run_dir)
+    assert reader.records_region_discovery_audit() is True
+    assert list(reader.iter_region_discovery_audits()) == []
+
+
+def test_a_frame_without_an_audit_is_reported_not_invented(tmp_path: Path) -> None:
+    """A frame whose discovery failed has a result but no audit; the lookup says so."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    with pytest.raises(RunArtifactError, match="no region discovery audit"):
+        PerceptionRunReader(_run_dir(tmp_path)).region_discovery_audit(
+            SourceObservationId("frame-0001")
+        )
+
+
+def test_a_second_audit_for_the_same_observation_is_refused(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_region_discovery_audit(_discovery_audit())
+
+    with pytest.raises(RunArtifactError, match="duplicate region discovery audit"):
+        writer.add_region_discovery_audit(_discovery_audit())
+
+
+def test_an_audit_without_a_result_of_the_run_is_refused(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_region_discovery_audit(_discovery_audit("frame-0002"))
+
+    with pytest.raises(RunArtifactError, match="does not resolve to a result"):
+        writer.finalize()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_audits_cannot_be_added_after_finalize(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+
+    with pytest.raises(RunArtifactError, match="after finalize"):
+        writer.add_region_discovery_audit(_discovery_audit())
+
+
+def _as_pre_audit_run(run_dir: Path) -> None:
+    """Rewrite a finalized run as the 0.5.0 writer would have left it: no audit table at all."""
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = "0.5.0"
+    manifest["file_inventory"] = [
+        entry for entry in manifest["file_inventory"] if entry["path"] != _AUDIT_TABLE
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / _AUDIT_TABLE).unlink()
+
+
+def test_a_0_5_0_run_still_opens_and_reports_its_audit_as_not_recorded(tmp_path: Path) -> None:
+    """v0.1.0 shipped 0.5.0 runs: they stay readable, and their missing audit is explicit."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+    run_dir = _run_dir(tmp_path)
+    _as_pre_audit_run(run_dir)
+
+    reader = PerceptionRunReader(run_dir)
+
+    assert reader.manifest.schema_version == "0.5.0"
+    assert reader.verify_integrity() == []
+    assert [str(result.source_observation_id) for result in reader.iter_results()] == ["frame-0001"]
+    assert reader.records_region_discovery_audit() is False
+    with pytest.raises(RunArtifactError, match="not recorded"):
+        reader.iter_region_discovery_audits()
+    with pytest.raises(RunArtifactError, match="not recorded"):
+        reader.region_discovery_audit(SourceObservationId("frame-0001"))
+
+
+def test_a_run_that_lost_its_audit_table_is_corrupt_not_a_0_5_0_run(tmp_path: Path) -> None:
+    """Only the schema version says "not recorded"; a missing table is never reclassified."""
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.finalize()
+    run_dir = _run_dir(tmp_path)
+    (run_dir / _AUDIT_TABLE).unlink()
+
+    with pytest.raises(RunArtifactError, match="missing"):
+        PerceptionRunReader(run_dir).records_region_discovery_audit()
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["file_inventory"] = [
+        entry for entry in manifest["file_inventory"] if entry["path"] != _AUDIT_TABLE
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RunArtifactError, match="does not inventory"):
+        PerceptionRunReader(run_dir).records_region_discovery_audit()
+
+
+def test_an_invalid_audit_record_is_reported_as_an_artifact_error(tmp_path: Path) -> None:
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_region_discovery_audit(_discovery_audit())
+    writer.finalize()
+    run_dir = _run_dir(tmp_path)
+    (run_dir / _AUDIT_TABLE).write_text('{"source_observation_id": "frame-0001"}\n')
+
+    with pytest.raises(RunArtifactError, match="invalid region discovery audit record"):
+        list(PerceptionRunReader(run_dir).iter_region_discovery_audits())

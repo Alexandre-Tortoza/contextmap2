@@ -13,11 +13,11 @@ O escritor recebe **`output_dir`**, o diretório final do artifact. Não existe 
 ├── outputs/                         # dados contratuais
 │   ├── relations.jsonl              # Relation (todos os estados), em ordem canônica
 │   ├── relation-evidence.jsonl      # RelationEvidence de todos os canais, por identidade
-│   ├── relation-candidates.jsonl    # conjunto de candidatos, exclusões e predicados pulados
+│   ├── relation-candidates.jsonl    # candidatos, exclusões, resumos de exclusões e predicados pulados
 │   ├── relation-decisions.jsonl     # uma RelationDecision por relação
 │   └── entity-relation-index.jsonl  # por entidade resolvida: relações como sujeito e como objeto
 ├── metrics/
-│   ├── counts.json                  # contagens por estado, predicado, canal, regra e incerteza
+│   ├── counts.json                  # contagens por estado, predicado, canal, regra, incerteza e exclusões
 │   └── runtime.json                 # só quando quem chamou mediu
 └── debug/                           # opcional; nunca contratual
     └── relations/<relation_id>.json
@@ -60,7 +60,7 @@ Antes do escritor, `RelationsRunPolicies` recusa (`ValueError`) já na construç
 - `relation(id)` lê e decodifica **só o registro pedido** (`seek`/`read`), a partir dos deslocamentos das linhas de `relations.jsonl`, obtidos uma vez por leitor numa passada que lê a identidade de cada linha sem decodificar nenhuma relação (#601);
 - `relations_of(entidade, as_subject=, as_object=)` usa o índice de entidades, carregado uma vez por leitor, e decodifica só as relações da entidade, na ordem canônica da tabela;
 - `iter_relations()` lê a tabela linha a linha e não guarda as relações no leitor; `evidence(id)`, `evidence_of` e `decision` ainda carregam a própria tabela inteira na primeira consulta;
-- `candidate_set()` reconstrói os candidatos, as exclusões com a razão e os predicados pulados;
+- `candidate_set()` reconstrói os candidatos, as exclusões com a razão, os resumos dos grupos de exclusões acima do teto e os predicados pulados;
 - `read_table` e `read_record` só aceitam `outputs/` e `metrics/`: `debug/` nunca é uma fonte válida;
 - `verify_integrity()` compara o inventário com o disco e detecta arquivo ausente, tamanho ou hash diferente;
 - `validate_resolution(leitor_de_resolução)` confere a linhagem contra o `EntityResolutionRunReader` do run de resolução (identidade, versão do schema e digest) e que **toda entidade resolvida** que as relações citam existe nele (`resolved_entity`, sem carregar as demais); devolve os problemas, e vazio significa que tudo bate. Um run que não é o nomeado é reportado sozinho.
@@ -80,6 +80,17 @@ Os deslocamentos não são persistidos: os runs gravados antes (entre eles o de 
 ## Debug
 
 `RelationsRunDebugLevel.NONE` não grava nada além do contratual; `STANDARD` grava, para uma amostra de relações, a relação, a decisão e a evidência completa com todas as medições; `FULL` grava para todas. O conteúdo do `debug/` nunca entra no inventário, então removê-lo não invalida o run, e nenhum consumidor pode depender dele.
+
+## Versões do schema
+
+A `schema_version` escrita é **`0.2.0`**; o leitor abre `0.1.0` e `0.2.0` e recusa qualquer outra.
+
+| Versão | O que muda |
+| --- | --- |
+| `0.1.0` | `relation-candidates.jsonl` lista **toda** exclusão de todo par enumerado; `counts.json` → `exclusions` é o número delas. |
+| `0.2.0` | Um grupo `(predicado, razão)` com mais de 32 exclusões lista só as 32 mais próximas, dentro de um registro `exclusion_summary` (`predicate`, `reason`, `count`, `min_gap_m`, `max_gap_m`, `digest` e `nearest`, as listadas em ordem de distância) que resume todas ([teto de exclusões](candidates.md#teto-de-exclusões)); os grupos menores continuam como registros `exclusion`, byte a byte como em `0.1.0`. `counts.json` → `exclusions` conta todas, listadas ou não, e `unlisted_exclusions` as que não estão listadas. |
+
+Um run `0.1.0` (como o de `examples/v0.1.0/`) é lido como um conjunto sem nenhum grupo resumido; nada mais difere entre os dois layouts, então essa é a única ramificação de compatibilidade. Um consumidor que precisa saber se uma exclusão ficou de fora do registro lê os resumos, como faz o avaliador de relações (`excluded_unlisted`).
 
 ## Limites conhecidos
 

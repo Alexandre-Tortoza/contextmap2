@@ -78,7 +78,7 @@ flowchart TD
 
         VP_ASM["assemble_perception_result()<br/>somente stages SUCCEEDED"]
         VP_RESULT["PerceptionResult"]
-        VP_STORE["PerceptionRunWriter<br/>MaskStore + FeatureStore + semantic views<br/>stage outcomes + diagnostics"]
+        VP_STORE["PerceptionRunWriter<br/>MaskStore + FeatureStore + semantic views<br/>auditoria de Region Discovery<br/>stage outcomes + diagnostics"]
         PERC["PerceptionRunArtifact"]
 
         ING_SEL --> VP_IMG --> VP_MAT --> VP_PREP
@@ -481,6 +481,7 @@ O custo pode vir de lugares diferentes:
 | Máscara deslocada depois de tile/resize | `visual_perception/discovery.py` e o remapeamento para coordenadas globais |
 | Muitas regiões duplicadas | `visual_perception/normalization.py`, IoU, containment e merge |
 | Regiões filtradas inesperadamente | `NormalizationConfig`, valid/exclusion regions e filtros de área |
+| Proposta que sumiu de um frame já processado | `outputs/region-discovery-audit.jsonl` do run (`PerceptionRunReader.region_discovery_audit()`): rejeição, motivo e merge de cada candidato |
 | Artifact grande ou escrita lenta das máscaras | `visual_perception/mask_store.py` e `run_artifact.py`, não o backend de discovery |
 
 Backends produzem `RegionCandidate`; a normalização comum valida geometria, aplica constraints, deduplica, limita budget e congela `Region2D`. Scores nativos permanecem com semântica própria e nunca viram confidence universal.

@@ -32,6 +32,7 @@ from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
 )
+from contextmap.visual_perception.discovery import RegionDiscoveryAudit
 from contextmap.visual_perception.embedding_space import embedding_space_fingerprint
 from contextmap.visual_perception.feature_diagnostics import (
     DenseFeatureDiagnostic,
@@ -85,16 +86,27 @@ if TYPE_CHECKING:
 
     from contextmap.visual_perception.pipeline import PipelinePreset
 
-SCHEMA_VERSION = "0.5.0"
-"""Perception run artifact schema version written and understood by this module.
+SCHEMA_VERSION = "0.6.0"
+"""Perception run artifact schema version written by this module.
 
-Bumped to ``0.5.0`` when a region's mask stopped being inlined as a JSON
-pixel array in ``outputs/results.jsonl`` and moved to a compact,
-lazily-loaded ``outputs/masks/`` store referenced by ``mask_reference``
-(#378; see ``docs/run_artifact.md``). Bumped to ``0.4.0`` when canonical
-semantic evidence and execution audit records changed the persisted
-result and output contracts. This is a pre-1.0 schema, so no
-compatibility reader for historical manifests is kept.
+Bumped to ``0.6.0`` when every run started carrying the audit of its region
+discovery in ``outputs/region-discovery-audit.jsonl`` (#611): passes and
+per-pass backend diagnostics, rejected candidates, merge decisions and the
+normalization config digest, one record per frame. Bumped to ``0.5.0`` when a
+region's mask stopped being inlined as a JSON pixel array in
+``outputs/results.jsonl`` and moved to a compact, lazily-loaded
+``outputs/masks/`` store referenced by ``mask_reference`` (#378; see
+``docs/run_artifact.md``). Bumped to ``0.4.0`` when canonical semantic
+evidence and execution audit records changed the persisted result and output
+contracts. This is a pre-1.0 schema; the only older version still read is
+:data:`_PRE_AUDIT_SCHEMA_VERSION`.
+"""
+
+_PRE_AUDIT_SCHEMA_VERSION = "0.5.0"
+"""The schema v0.1.0 shipped, still opened: it is 0.6.0 without the region discovery audit.
+
+Nothing else differs, so reading it needs no branch beyond reporting that its audit was never
+recorded (:meth:`PerceptionRunReader.records_region_discovery_audit`).
 """
 
 _MANIFEST_FILENAME = "manifest.json"
@@ -103,6 +115,7 @@ _RESULTS_FILENAME = "outputs/results.jsonl"
 _METRICS_FILENAME = "metrics/stage-timings.jsonl"
 _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
 _SEMANTIC_FAILURES_FILENAME = "outputs/semantic-interpretation-failures.jsonl"
+_REGION_DISCOVERY_AUDIT_FILENAME = "outputs/region-discovery-audit.jsonl"
 _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
 _MASKS_DIRNAME = "outputs/masks"
@@ -258,6 +271,7 @@ class PerceptionRunWriter:
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
+        self._region_discovery_audits: dict[SourceObservationId, RegionDiscoveryAudit] = {}
         self._finalized = False
 
     def add_result(self, result: PerceptionResult) -> None:
@@ -432,6 +446,30 @@ class PerceptionRunWriter:
         # identidade e de evidencia de entrada que valem para as execucoes bem-sucedidas.
         self._semantic_failures.append(failed)
 
+    def add_region_discovery_audit(self, audit: RegionDiscoveryAudit) -> None:
+        """Record how one frame's canonical regions were decided, to be written by :meth:`finalize`.
+
+        The audit (passes and their backend diagnostics, rejected candidates, merge decisions and
+        the normalization config digest) is persisted in ``outputs/region-discovery-audit.jsonl``,
+        one record per frame. It is light metadata, never pixels, so it is kept until
+        :meth:`finalize` like the semantic failures.
+
+        Args:
+            audit: The audit the canonical region discovery reported for one frame.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`, or if this run already carries an
+                audit for the same ``source_observation_id``.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add region discovery audits after finalize()")
+        if audit.source_observation_id in self._region_discovery_audits:
+            raise RunArtifactError(
+                "duplicate region discovery audit in perception run: "
+                f"{audit.source_observation_id!r}"
+            )
+        self._region_discovery_audits[audit.source_observation_id] = audit
+
     def add_feature_payload(
         self,
         feature: VisualFeature,
@@ -499,7 +537,9 @@ class PerceptionRunWriter:
             RunArtifactError: If already finalized, if a run already
                 exists at ``output_dir``, if a queued feature payload or a
                 ``SUCCEEDED``/``WARNING`` feature diagnostic does not describe
-                exactly one feature of this run's results, or if writing fails.
+                exactly one feature of this run's results, if a region
+                discovery audit names an observation without a result in this
+                run, or if writing fails.
         """
         if self._finalized:
             raise RunArtifactError("writer already finalized")
@@ -511,6 +551,7 @@ class PerceptionRunWriter:
             self._validate_semantic_execution_materialization()
             self._validate_failed_semantic_interpretations()
             self._validate_semantic_view_payloads()
+            self._validate_region_discovery_audits()
 
             self._ensure_staging()
             manifest = self._write_contents()
@@ -814,6 +855,15 @@ class PerceptionRunWriter:
         if unused:
             raise RunArtifactError(f"semantic view payloads are not referenced: {unused!r}")
 
+    def _validate_region_discovery_audits(self) -> None:
+        """Require every audit to explain the regions of a result this run actually persisted."""
+        for source_observation_id in self._region_discovery_audits:
+            if source_observation_id not in self._source_observation_ids:
+                raise RunArtifactError(
+                    "region discovery audit does not resolve to a result of this run: "
+                    f"source_observation_id={source_observation_id!r}"
+                )
+
     def _write_mask_index(self, file_entries: list[RunArtifactFileEntry]) -> None:
         """Index the masks already persisted by :meth:`_persist_result_masks`.
 
@@ -935,6 +985,20 @@ class PerceptionRunWriter:
             file_entries.append(
                 _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
             )
+
+        # Também escrito SEMPRE, mesmo vazio: num run 0.6.0 a tabela existe e está inventariada,
+        # então "nenhum frame auditado" nunca se confunde com "auditoria não registrada", que só
+        # a versão de schema 0.5.0 declara.
+        audit_content = "".join(
+            f"{json.dumps(audit.to_dict(), sort_keys=True)}\n"
+            for audit in self._region_discovery_audits.values()
+        )
+        audit_path = self._tmp_dir / _REGION_DISCOVERY_AUDIT_FILENAME
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text(audit_content, encoding="utf-8")
+        file_entries.append(
+            _file_entry(_REGION_DISCOVERY_AUDIT_FILENAME, audit_content.encode("utf-8"))
+        )
 
         if self._feature_store is not None:
             feature_store_root = self._tmp_dir / _FEATURES_DIRNAME
@@ -1149,6 +1213,92 @@ class PerceptionRunReader:
         """Return persisted semantic requests, prompts, responses, and diagnostics."""
         return list(self.iter_semantic_executions())
 
+    def records_region_discovery_audit(self) -> bool:
+        """Whether this run recorded the audit of its region discovery at all.
+
+        Decided by the schema version, not by what happens to be on disk: a ``0.5.0`` run
+        predates the audit, and every later run inventories
+        ``outputs/region-discovery-audit.jsonl``, even empty. A consumer needs that to tell
+        "audited, nothing rejected" from "never audited", which otherwise both read as empty.
+
+        Raises:
+            RunArtifactError: If a run of the current schema does not inventory the table or
+                the file is gone. That is a corrupted artifact; reporting it as a ``0.5.0`` one
+                would turn corruption into backward compatibility.
+        """
+        if self._manifest.schema_version == _PRE_AUDIT_SCHEMA_VERSION:
+            return False
+        inventoried = any(
+            entry.path == _REGION_DISCOVERY_AUDIT_FILENAME
+            for entry in self._manifest.file_inventory
+        )
+        if not inventoried:
+            raise RunArtifactError(
+                f"run artifact schema {self._manifest.schema_version} does not inventory its "
+                f"region discovery audit: {_REGION_DISCOVERY_AUDIT_FILENAME}"
+            )
+        if not (self._root / _REGION_DISCOVERY_AUDIT_FILENAME).is_file():
+            raise RunArtifactError(
+                "run inventoried its region discovery audit but the file is missing: "
+                f"{_REGION_DISCOVERY_AUDIT_FILENAME}"
+            )
+        return True
+
+    def iter_region_discovery_audits(self) -> Iterator[RegionDiscoveryAudit]:
+        """Stream the audit of each frame whose region discovery ran, in the order it was written.
+
+        A frame whose region discovery failed has a result but no audit; the failure itself is
+        in ``metrics/stage-timings.jsonl``.
+
+        Raises:
+            RunArtifactError: Here, if this run never recorded the audit (see
+                :meth:`records_region_discovery_audit`); while iterating, if a record is invalid.
+        """
+        if not self.records_region_discovery_audit():
+            raise RunArtifactError(
+                f"the region discovery audit was not recorded: run artifact schema "
+                f"{_PRE_AUDIT_SCHEMA_VERSION} predates it"
+            )
+        return self._read_region_discovery_audits()
+
+    def _read_region_discovery_audits(self) -> Iterator[RegionDiscoveryAudit]:
+        """Decode ``outputs/region-discovery-audit.jsonl`` one record at a time."""
+        audit_path = self._root / _REGION_DISCOVERY_AUDIT_FILENAME
+        with audit_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    yield RegionDiscoveryAudit.from_dict(json.loads(stripped))
+                except (ValueError, KeyError, TypeError) as error:
+                    raise RunArtifactError(
+                        f"invalid region discovery audit record: {error}"
+                    ) from error
+
+    def region_discovery_audit(
+        self, source_observation_id: SourceObservationId
+    ) -> RegionDiscoveryAudit:
+        """Return how this run's region discovery decided the regions of one observation.
+
+        Args:
+            source_observation_id: The observation to look up.
+
+        Returns:
+            Its passes, backend diagnostics, rejected candidates, merge decisions and
+            normalization config digest.
+
+        Raises:
+            RunArtifactError: If this run never recorded the audit, or has no audit for that
+                observation (its region discovery failed, or it was never processed).
+        """
+        for audit in self.iter_region_discovery_audits():
+            if audit.source_observation_id == source_observation_id:
+                return audit
+        raise RunArtifactError(
+            f"no region discovery audit for source_observation_id={source_observation_id!r}"
+        )
+
     def result(self, source_observation_id: SourceObservationId) -> PerceptionResult:
         """Return this run's result for one physical observation.
 
@@ -1309,7 +1459,7 @@ def _load_manifest(run_dir: Path) -> RunArtifactManifest:
 
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     schema_version = raw.get("schema_version")
-    if schema_version != SCHEMA_VERSION:
+    if schema_version not in {SCHEMA_VERSION, _PRE_AUDIT_SCHEMA_VERSION}:
         raise RunArtifactError(f"unsupported run artifact schema_version: {schema_version!r}")
 
     return RunArtifactManifest(

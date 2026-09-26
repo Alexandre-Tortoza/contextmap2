@@ -1718,6 +1718,199 @@ class TestCompositionFailuresReachPreflight:
         }
 
 
+def _perception_request(workspace: Path, *, width: int, height: int) -> Any:
+    """Publish a one-frame ``bgr8`` sequence and build the ``visual_perception`` request over it."""
+    from contextmap.ingestion import (
+        FrameId,
+        ImageEncoding,
+        ImageObservation,
+        SensorId,
+        SequenceArtifactId,
+        SequenceArtifactWriter,
+        SourceObservationId,
+        SourceProvenance,
+    )
+    from contextmap.runtime import ArtifactRef
+    from contextmap.runtime.executors import inventory_digest
+    from contextmap.runtime.pipeline import StageRequest
+    from contextmap.shared import SourceTimestamp
+
+    with SequenceArtifactWriter(
+        output_dir=workspace / "corridor-02" / "run-0001" / "ingestion",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-0001"),
+    ) as writer:
+        writer.add_observation(
+            ImageObservation(
+                observation_id=SourceObservationId("frame-0000"),
+                sensor_id=SensorId("camera_1"),
+                frame_id=FrameId("camera_1_optical"),
+                timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:header"),
+                provenance=SourceProvenance(source_type="fixture", source_path="fixtures/images"),
+                width=width,
+                height=height,
+                encoding=ImageEncoding.BGR8,
+                data=bytes([10, 20, 30] * (width * height)),
+            )
+        )
+        manifest = writer.finalize()
+    sequence_ref = ArtifactRef(
+        stage_id="ingestion",
+        contract="SequenceArtifact",
+        artifact_id=str(manifest.artifact_id),
+        content_hash=inventory_digest(manifest.file_inventory),
+        location="corridor-02/run-0001/ingestion",
+    )
+    return StageRequest(
+        stage_id="visual_perception",
+        inputs={"sequence": (sequence_ref,)},
+        components={},
+        config_digest="sha256:test",
+        output_dir=workspace / "corridor-02" / "run-0001" / "visual_perception",
+        workspace=workspace,
+    )
+
+
+class _FakePillowImage:
+    """The few Pillow image operations the perception executor performs, over a NumPy array."""
+
+    def __init__(self, pixels: Any) -> None:
+        self._pixels = pixels
+
+    def save(self, path: Path) -> None:
+        import numpy as np
+
+        with open(path, "wb") as handle:
+            np.save(handle, self._pixels)
+
+    def convert(self, mode: str) -> _FakePillowImage:
+        return self
+
+    def crop(self, box: tuple[int, int, int, int]) -> _FakePillowImage:
+        left, top, right, bottom = box
+        return _FakePillowImage(self._pixels[top:bottom, left:right])
+
+
+@pytest.fixture
+def fake_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for ``PIL.Image``, which ``.[dev]`` does not install, so the executor still runs.
+
+    The executor only materializes the prepared image and the semantic views through it; neither
+    is what the tests using this fixture examine.
+    """
+    import sys
+    import types
+
+    import numpy as np
+
+    module = types.ModuleType("PIL.Image")
+    module.__dict__.update(
+        fromarray=lambda pixels, mode=None: _FakePillowImage(pixels),
+        open=lambda path: _FakePillowImage(np.load(path)),
+    )
+    monkeypatch.setitem(sys.modules, "PIL.Image", module)
+
+
+def _audited_without_rejections(image: Any, regions: list[Any], backend: Any) -> Any:
+    """Report hand-built regions as a frame whose discovery rejected and merged nothing."""
+    from contextmap.visual_perception import (
+        AuditedRegions,
+        NormalizationConfig,
+        RegionDiscoveryAudit,
+    )
+
+    return AuditedRegions(
+        regions=tuple(regions),
+        audit=RegionDiscoveryAudit(
+            source_observation_id=image.source_observation_id,
+            backend=backend,
+            passes=(),
+            diagnostics=(),
+            pass_rejections=(),
+            normalization_config_digest=NormalizationConfig().digest,
+            normalization_rejections=(),
+            merge_decisions=(),
+        ),
+    )
+
+
+class _NoFeatures:
+    """A feature extractor of one scope that extracts nothing: features are not under test."""
+
+    def __init__(self, scope: Any) -> None:
+        self._scope = scope
+
+    def backend_provenance(self) -> Any:
+        from contextmap.visual_perception import BackendProvenance
+
+        return BackendProvenance(
+            backend_id=f"fake_{self._scope.value}_feature_extractor",
+            capability="feature_extractor",
+            provider="fake",
+            model="fake",
+            version="0.1",
+        )
+
+    def required_scope(self) -> Any:
+        return self._scope
+
+    def extract(self, image: Any, regions: Any = ()) -> list[Any]:
+        return []
+
+
+class _AbstainingSemanticInterpreter:
+    """Answers every real ``interpret()`` request with an abstention: semantics are not tested."""
+
+    def backend_provenance(self) -> Any:
+        from contextmap.visual_perception import BackendProvenance
+
+        return BackendProvenance(
+            backend_id="fake_semantic_interpreter",
+            capability="semantic_interpreter",
+            provider="fake",
+            model="fake",
+            version="0.1",
+        )
+
+    def interpret(self, request: Any) -> object:
+        import json
+
+        from contextmap.visual_perception import (
+            SemanticBackendDiagnostics,
+            SemanticConfidencePolicy,
+            SemanticInferenceProvenance,
+            SemanticInterpretationExecution,
+            SemanticPromptTemplate,
+            parse_semantic_response,
+            render_semantic_prompt,
+        )
+
+        raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
+        provenance = SemanticInferenceProvenance(
+            backend=self.backend_provenance(),
+            task_identity=f"fake-{request.mode.value}",
+            prompt_template_id=request.prompt_template_id,
+            output_schema_version=request.requested_output_schema,
+        )
+        return SemanticInterpretationExecution(
+            request=request,
+            rendered_prompt=render_semantic_prompt(
+                request,
+                SemanticPromptTemplate.default_for(request.mode),
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            ),
+            raw_response=raw_response,
+            parsed=parse_semantic_response(
+                raw_response,
+                request,
+                provenance,
+                confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+            ),
+            diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+            effective_configuration={"backend": "fake"},
+        )
+
+
 class TestComposeVisualPerceptionExecutor:
     """#507: ``visual_perception`` gets a real, wired ``VisualPerceptionExecutor``.
 
@@ -1838,6 +2031,11 @@ class TestComposeVisualPerceptionExecutor:
                         provenance=self.backend_provenance(),
                     )
                 ]
+
+            def discover_audited(self, image: PreparedImage) -> Any:
+                return _audited_without_rejections(
+                    image, self.discover(image), self.backend_provenance()
+                )
 
         class _FakeFeatureExtractor:
             def __init__(self, scope: FeatureScope) -> None:
@@ -2100,6 +2298,11 @@ class TestComposeVisualPerceptionExecutor:
                     )
                 ]
 
+            def discover_audited(self, image: PreparedImage) -> Any:
+                return _audited_without_rejections(
+                    image, self.discover(image), self.backend_provenance()
+                )
+
         class _FakeDenseFeatureExtractor:
             def backend_provenance(self) -> BackendProvenance:
                 return BackendProvenance(
@@ -2273,6 +2476,125 @@ class TestComposeVisualPerceptionExecutor:
         assert len(results) == 1
         assert len(results[0].regions) == 1
         assert len(results[0].features) == 2  # one dense + one AlphaCLIP region feature
+
+    @pytest.mark.usefixtures("fake_pillow")
+    def test_the_run_artifact_keeps_every_discovery_rejection_and_merge(
+        self, tmp_path: Path
+    ) -> None:
+        """#611: what the canonical discovery rejected and merged survives the run.
+
+        The real SAM2 adapter runs over a fake SDK runtime that proposes the same mask twice, so
+        normalization merges the second proposal into the first. Only the surviving region used
+        to reach the artifact: the rejection and the merge decision were lost with the run.
+        """
+        import json
+
+        import numpy as np
+
+        from contextmap.ingestion import SourceObservationId
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception import (
+            FeatureScope,
+            InlineMask,
+            MergeKind,
+            NormalizationConfig,
+            PerceptionRunReader,
+            RejectionReason,
+        )
+        from contextmap.visual_perception.backends.sam2 import (
+            Sam2Config,
+            Sam2NativeProposal,
+            Sam2RegionDiscovery,
+        )
+        from contextmap.visual_perception.discovery import DiscoveryInput
+
+        class _SameMaskTwice:
+            def predict(
+                self, discovery_input: DiscoveryInput, config: Sam2Config
+            ) -> tuple[Sam2NativeProposal, ...]:
+                width = discovery_input.discovery_pass.input_width
+                height = discovery_input.discovery_pass.input_height
+                return tuple(
+                    Sam2NativeProposal(
+                        proposal_id=proposal_id,
+                        box=(0.0, 0.0, float(width), float(height)),
+                        mask=InlineMask(np.ones((height, width), dtype=bool)),
+                        predicted_iou=0.9,
+                        stability_score=0.9,
+                    )
+                    for proposal_id in ("sam2-a", "sam2-b")
+                )
+
+        discovery = Sam2RegionDiscovery(
+            config=Sam2Config(checkpoint="facebook/sam2-hiera-large"), runtime=_SameMaskTwice()
+        )
+        executor = VisualPerceptionExecutor(
+            region_discovery=discovery,
+            dense_features=lambda _scope: _NoFeatures(FeatureScope.DENSE),
+            region_features=lambda _scope: _NoFeatures(FeatureScope.REGION),
+            semantic_interpreter=_AbstainingSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+        request = _perception_request(tmp_path / "ws", width=4, height=3)
+
+        executor.execute(request)
+
+        run_dir = request.output_dir
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert "outputs/region-discovery-audit.jsonl" in {
+            entry["path"] for entry in manifest["file_inventory"]
+        }, "the discovery audit never reached the run artifact"
+        reader = PerceptionRunReader(run_dir)
+        assert reader.verify_integrity() == []
+        assert reader.records_region_discovery_audit() is True
+        audit = reader.region_discovery_audit(SourceObservationId("frame-0000"))
+        assert audit.backend == discovery.backend_provenance()
+        assert [
+            (rejection.candidate_id, rejection.reason, rejection.detail)
+            for rejection in audit.normalization_rejections
+        ] == [
+            (
+                "full-frame/sam2-b",
+                RejectionReason.MERGED_DUPLICATE,
+                "merged into full-frame/sam2-a",
+            )
+        ]
+        assert [
+            (decision.representative_candidate_id, decision.merged_candidate_id, decision.kind)
+            for decision in audit.merge_decisions
+        ] == [("full-frame/sam2-a", "full-frame/sam2-b", MergeKind.IOU_DUPLICATE)]
+        assert audit.normalization_config_digest == NormalizationConfig().digest
+        assert [discovery_pass.pass_id for discovery_pass in audit.passes] == ["full-frame"]
+        assert [diagnostics.proposal_count for diagnostics in audit.diagnostics] == [2]
+        assert audit.pass_rejections == ()
+        # A região sobrevivente nomeia os dois contribuintes: auditoria e resultado se reconciliam.
+        (region,) = reader.result(SourceObservationId("frame-0000")).regions
+        assert region.contributor_candidate_ids == ("full-frame/sam2-a", "full-frame/sam2-b")
+
+    def test_a_region_discovery_backend_that_cannot_report_its_audit_is_refused(self) -> None:
+        """#611: the canonical path never runs a discovery whose rejections it cannot persist."""
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception import BackendProvenance, FeatureScope
+
+        class _RegionsOnly:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_region_discovery",
+                    capability="region_discovery",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def discover(self, image: Any) -> list[Any]:
+                return []
+
+        with pytest.raises(TypeError, match="discover_audited"):
+            VisualPerceptionExecutor(
+                region_discovery=_RegionsOnly(),  # type: ignore[arg-type]
+                dense_features=lambda _scope: _NoFeatures(FeatureScope.DENSE),
+                region_features=lambda _scope: _NoFeatures(FeatureScope.REGION),
+                semantic_interpreter=_AbstainingSemanticInterpreter(),  # type: ignore[arg-type]
+            )
 
 
 def test_composition_does_not_load_a_model_or_import_a_heavy_sdk(tmp_path: Path) -> None:
