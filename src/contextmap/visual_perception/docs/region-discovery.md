@@ -272,7 +272,9 @@ lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
 move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
-chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões.
+chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões;
+um frame sem detecções devolve zero regiões (`box_count=0`, `polygon_count=0`), como SAM2 e SAM3,
+e não falha o estágio.
 Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser
 permanecem metadata de descoberta.
 

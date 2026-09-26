@@ -387,8 +387,8 @@ def _parse_task_result(
             )
         )
 
-    if not regions:
-        raise ValueError("Florence-2 task parser returned no box or polygon geometry")
+    # Zero regiões é resultado legítimo de Region Discovery (#380), como no SAM2/SAM3: um frame
+    # sem nada detectável sai vazio e auditável pelos contadores, não como falha do estágio.
     return Florence2NativeOutput(
         regions=tuple(regions),
         parsing_diagnostics=(
