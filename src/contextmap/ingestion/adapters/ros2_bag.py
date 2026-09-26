@@ -111,7 +111,9 @@ class Ros2BagSourceAdapter:
         Yields:
             One :data:`~contextmap.ingestion.models.SourceObservation` per
             successfully decoded message within the configured window (the
-            whole bag when none is configured), in bag order.
+            whole bag when none is configured), in bag order. A message
+            whose content cannot be decoded (a ``ValueError`` from decoding)
+            is skipped and reported through :meth:`warnings`.
 
         Raises:
             MissingRequiredTopicError: If a topic named in
@@ -156,7 +158,10 @@ class Ros2BagSourceAdapter:
                         bag_timestamp_nanoseconds=bag_timestamp,
                         calibration_ids=calibration_ids,
                     )
-                except (KeyError, ValueError, AttributeError) as error:
+                # Só ValueError é o erro contratual de "conteúdo não decodificável";
+                # KeyError/AttributeError indicam erro estrutural ou de programação e
+                # devem abortar a leitura em vez de virar um warning por mensagem.
+                except ValueError as error:
                     self._warnings.append(
                         SourceAdapterWarning(topic=topic, message_index=index, reason=str(error))
                     )

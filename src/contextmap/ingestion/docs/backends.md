@@ -31,7 +31,9 @@ Decodifica `sensor_msgs/Image` (RGB), `sensor_msgs/PointCloud2` (LiDAR), `sensor
 
 ### Erros vs. warnings
 
-Tópico obrigatório (`required_topics`) ausente do bag → `MissingRequiredTopicError`, antes de qualquer observação ser produzida. Mensagem individual malformada ou com encoding/tipo de campo não suportado (`KeyError`/`ValueError`/`AttributeError` durante a decodificação) → registrada via `SourceAdapterWarning` e pulada; o restante da leitura continua.
+Tópico obrigatório (`required_topics`) ausente do bag → `MissingRequiredTopicError`, antes de qualquer observação ser produzida. Mensagem individual com conteúdo inválido — encoding de imagem não suportado, `PointField.datatype` fora de 1–8, layout de linha/stride inconsistente — levanta `ValueError` durante a decodificação e é registrada via `SourceAdapterWarning` e pulada; o restante da leitura continua. A `reason` do warning é a mensagem semântica do decoder (por exemplo, `unsupported PointField datatype 9 for field 'intensity'; supported datatypes are 1-8`), nunca só o valor cru que falhou.
+
+`ValueError` é a única exceção contratual de "mensagem não decodificável" (issue #605). `KeyError`/`AttributeError` durante a decodificação — mensagem estruturalmente incompatível com o kind configurado (por exemplo, um tipo de mensagem ausente do typestore em um tópico configurado) ou erro de programação — **não** viram warning: propagam de `read_observations()` com o traceback original e abortam o run, em vez de pular todas as mensagens do tópico e completar "com sucesso" com zero observações.
 
 ### Fixtures de teste
 

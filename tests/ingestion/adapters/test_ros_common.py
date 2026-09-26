@@ -120,6 +120,37 @@ def test_decode_lidar_removes_row_padding_and_normalizes_field_byte_order() -> N
     assert observation.provenance.raw_metadata["byte_order_normalized"] is True
 
 
+def test_decode_lidar_rejects_unknown_point_field_datatype_with_semantic_error() -> None:
+    message = SimpleNamespace(
+        header=_header(),
+        width=1,
+        height=1,
+        point_step=8,
+        row_step=8,
+        fields=[
+            SimpleNamespace(name="x", offset=0, datatype=7, count=1),
+            SimpleNamespace(name="intensity", offset=4, datatype=9, count=1),
+        ],
+        is_bigendian=False,
+        is_dense=True,
+        data=np.zeros(8, dtype=np.uint8),
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        _ros_common.decode_lidar(
+            message,
+            observation_id=_OBSERVATION_ID,
+            sensor_id=_SENSOR_ID,
+            timestamp=_TIMESTAMP,
+            provenance=_PROVENANCE,
+        )
+
+    reason = str(excinfo.value)
+    assert "'intensity'" in reason
+    assert "datatype 9" in reason
+    assert "1-8" in reason
+
+
 def test_decode_imu_preserves_each_available_covariance() -> None:
     vector = SimpleNamespace(x=1.0, y=2.0, z=3.0)
     quaternion = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)

@@ -28,6 +28,7 @@ from contextmap.ingestion import (
     SynchronizationConfig,
     synchronize,
 )
+from contextmap.ingestion.adapters import _ros_common
 from contextmap.ingestion.adapters.ros1_bag import Ros1BagSourceAdapter
 from contextmap.ingestion.calibration import (
     FisheyeCameraModel,
@@ -66,6 +67,7 @@ def _build_bag(
     imu_orientation_available: bool = True,
     include_bad_image: bool = False,
     include_changed_camera_info: bool = False,
+    include_unsupported_point_field: bool = False,
 ) -> None:
     types = _TS.types
     with Writer(path) as writer:
@@ -151,6 +153,23 @@ def _build_bag(
             is_dense=True,
         )
         _write(lidar_conn, writer, pointcloud_msg, 1_000_000_000)
+
+        if include_unsupported_point_field:
+            unsupported_pointcloud_msg = types["sensor_msgs/msg/PointCloud2"](
+                header=_header(2, "velodyne"),
+                height=1,
+                width=1,
+                fields=[
+                    point_field(name="x", offset=0, datatype=7, count=1),
+                    point_field(name="intensity", offset=4, datatype=9, count=1),
+                ],
+                is_bigendian=False,
+                point_step=8,
+                row_step=8,
+                data=np.zeros(8, dtype=np.uint8),
+                is_dense=True,
+            )
+            _write(lidar_conn, writer, unsupported_pointcloud_msg, 2_000_000_000)
 
         orientation_covariance: Any = np.zeros(9, dtype=np.float64)
         if not imu_orientation_available:
@@ -376,6 +395,54 @@ def test_unsupported_encoding_becomes_a_warning_not_a_crash(tmp_path: Path) -> N
     assert len(observations) == 1
     assert len(adapter.warnings()) == 1
     assert "encoding" in adapter.warnings()[0].reason
+
+
+def test_unsupported_point_field_datatype_becomes_a_readable_warning(tmp_path: Path) -> None:
+    path = tmp_path / "with_unsupported_point_field.bag"
+    _build_bag(path, include_unsupported_point_field=True)
+    config = SourceAdapterConfig(
+        source_type="ros1_bag", path=str(path), topics=SourceTopicMapping(lidar="/velodyne_points")
+    )
+    adapter = Ros1BagSourceAdapter(config)
+
+    observations = list(adapter.read_observations())
+
+    assert len(observations) == 1
+    assert len(adapter.warnings()) == 1
+    warning = adapter.warnings()[0]
+    assert warning.topic == "/velodyne_points"
+    assert warning.message_index == 1
+    assert "'intensity'" in warning.reason
+    assert "datatype 9" in warning.reason
+
+
+@pytest.mark.parametrize(
+    "structural_error",
+    [
+        AttributeError("'PointCloud2' object has no attribute 'fields'"),
+        KeyError("fields"),
+    ],
+    ids=["attribute_error", "key_error"],
+)
+def test_structural_decode_error_propagates_instead_of_becoming_a_warning(
+    bag_path: Path, monkeypatch: pytest.MonkeyPatch, structural_error: Exception
+) -> None:
+    def raise_structural_error(*args: Any, **kwargs: Any) -> Any:
+        raise structural_error
+
+    monkeypatch.setattr(_ros_common, "decode_lidar", raise_structural_error)
+    config = SourceAdapterConfig(
+        source_type="ros1_bag",
+        path=str(bag_path),
+        topics=SourceTopicMapping(lidar="/velodyne_points"),
+    )
+    adapter = Ros1BagSourceAdapter(config)
+
+    with pytest.raises(type(structural_error)) as excinfo:
+        list(adapter.read_observations())
+
+    assert excinfo.value is structural_error
+    assert adapter.warnings() == ()
 
 
 def test_same_adapter_processes_a_different_bag_via_configuration_only(tmp_path: Path) -> None:
