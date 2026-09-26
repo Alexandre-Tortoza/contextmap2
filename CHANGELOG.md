@@ -6,6 +6,18 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Contexto incremental (v0.1.1):** `SpatialFoundation` (`resolve_spatial_foundation`, `foundation_of_run`), `ContextRun` (`context_scope`, `publish_context_run`, `read_context_run`), `ContextBranch` (`create_branch`, `open_branch`, `append_to_branch`) e `ContextBuild` (`plan_context_build`, `publish_context_build`, `read_context_build`), com identidades por conteúdo e registros imutáveis no workspace.
+- **Seleção de observações:** `inputs.observation_selection` na configuração, aplicada por `visual_perception` e parte da identidade do estágio; `resolve_selection_offsets` na Ingestion.
+- **Fusão de várias runs:** `SemanticFusionExecutor` funde os runs de percepção e associação das `ContextRun`s de um build; `scope(provided=...)` aceita várias refs por estágio.
+- **CLI:** `contextmap context branch create`, `context run`, `context build` e `context inspect`.
+
+### Alterado
+
+- O estágio `context_map` valida o artifact que escreve no nível `FULL` e falha se ele não verificar.
+- `sensor_association` registra a seleção da run de percepção que consome.
+
 ## [0.1.0] - 2026-09-25
 
 Primeira release validada da Solution 1. Escopo congelado em [docs/release-v0.1.0.md](docs/release-v0.1.0.md); notas completas, com capacidades validadas e limitações, em [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).
