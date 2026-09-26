@@ -117,6 +117,9 @@ _DEBUG_RELATION_LIMIT = 20
 
 _T = TypeVar("_T")
 
+_EntityRelations = dict[ResolvedEntityReference, tuple[set[str], set[str]]]
+"""The identities of the relations of each entity: as subject, then as object."""
+
 
 class RelationsRunArtifactError(Exception):
     """Base class for Spatial Relations run artifact read/write failures."""
@@ -542,7 +545,8 @@ class SpatialRelationsRunReader:
         """
         self._root = run_dir
         self._manifest = _load_manifest(run_dir)
-        self._relations: dict[RelationId, Relation] | None = None
+        self._relation_lines: dict[RelationId, tuple[int, int]] | None = None
+        self._relations_by_entity: _EntityRelations | None = None
         self._evidence: dict[RelationEvidenceId, RelationEvidence] | None = None
         self._decisions: dict[RelationId, RelationDecision] | None = None
         self._index: list[dict[str, Any]] | None = None
@@ -553,16 +557,20 @@ class SpatialRelationsRunReader:
         return self._manifest
 
     def iter_relations(self) -> Iterator[Relation]:
-        """Iterate every relation, in canonical order."""
-        yield from self._load_relations().values()
+        """Iterate every relation, in canonical order, reading the table line by line."""
+        with (self._root / _RELATIONS).open("rb") as handle:
+            for line in handle:
+                if line.rstrip(b"\r\n"):
+                    yield _decode(_json_line(line, _RELATIONS), decode_relation, "relation")
 
     def relation(self, relation_id: RelationId) -> Relation:
-        """Look a relation up by identity.
+        """Look a relation up by identity, decoding only its own record.
 
         Raises:
             KeyError: If the run has no such relation.
+            RelationsRunArtifactError: If the table is malformed.
         """
-        return self._load_relations()[relation_id]
+        return self._read_relation(self._relation_offsets()[relation_id])
 
     def iter_evidence(self) -> Iterator[RelationEvidence]:
         """Iterate every evidence record, sorted by identity."""
@@ -602,6 +610,8 @@ class SpatialRelationsRunReader:
     ) -> tuple[Relation, ...]:
         """The relations a resolved entity takes part in, using the entity index.
 
+        Only the relations of the entity are read and decoded, each from its own record.
+
         Args:
             entity: A resolved entity reference.
             as_subject: Include the relations where it is the subject.
@@ -610,17 +620,12 @@ class SpatialRelationsRunReader:
         Returns:
             The relations in canonical order; empty when the entity takes part in none.
         """
-        wanted = encode_resolved_entity_reference(entity)
-        ids: set[str] = set()
-        for row in self._load_index():
-            if row["entity_ref"] == wanted:
-                if as_subject:
-                    ids.update(row["as_subject"])
-                if as_object:
-                    ids.update(row["as_object"])
-        return tuple(
-            item for item in self._load_relations().values() if str(item.relation_id) in ids
-        )
+        as_subject_ids, as_object_ids = self._entity_relations().get(entity, (set(), set()))
+        ids = (as_subject_ids if as_subject else set()) | (as_object_ids if as_object else set())
+        offsets = self._relation_offsets()
+        # A ordem canônica é a da tabela: ordenar pelo deslocamento a preserva.
+        lines = sorted(offsets[RelationId(item)] for item in ids if RelationId(item) in offsets)
+        return tuple(self._read_relation(line) for line in lines)
 
     def candidate_set(self) -> RelationCandidateSet:
         """Rebuild the candidates, the exclusions with their reasons and the skipped predicates."""
@@ -699,14 +704,55 @@ class SpatialRelationsRunReader:
                 )
         return tuple(issues)
 
-    def _load_relations(self) -> dict[RelationId, Relation]:
-        if self._relations is None:
-            rows = self._read_rows(_RELATIONS)
-            self._relations = {
-                item.relation_id: item
-                for item in (_decode(r, decode_relation, "relation") for r in rows)
-            }
-        return self._relations
+    def _relation_offsets(self) -> dict[RelationId, tuple[int, int]]:
+        """Where each relation's record lies in the table: its byte offset and length.
+
+        Built once per reader by a single pass over the table that reads each record's identity
+        and decodes no relation. The artifact persists no offset index: the runs written before
+        this reader existed have none and must stay readable, so the reader derives it.
+        """
+        if self._relation_lines is None:
+            lines: dict[RelationId, tuple[int, int]] = {}
+            offset = 0
+            with (self._root / _RELATIONS).open("rb") as handle:
+                for line in handle:
+                    if line.rstrip(b"\r\n"):
+                        record = _json_line(line, _RELATIONS)
+                        try:
+                            lines[RelationId(record["relation_id"])] = (offset, len(line))
+                        except (KeyError, TypeError) as error:
+                            raise RelationsRunArtifactError(
+                                f"malformed relation: record without a relation_id ({error})"
+                            ) from error
+                    offset += len(line)
+            self._relation_lines = lines
+        return self._relation_lines
+
+    def _read_relation(self, line: tuple[int, int]) -> Relation:
+        """Read and decode the one relation record at ``(offset, length)`` of the table."""
+        offset, length = line
+        with (self._root / _RELATIONS).open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read(length)
+        if len(data) != length:
+            raise RelationsRunArtifactError(
+                f"{_RELATIONS} is truncated: {length} bytes expected at {offset}, found {len(data)}"
+            )
+        return _decode(_json_line(data, _RELATIONS), decode_relation, "relation")
+
+    def _entity_relations(self) -> _EntityRelations:
+        """The relation identities of every entity of the index, as subject and as object."""
+        if self._relations_by_entity is None:
+            by_entity: _EntityRelations = {}
+            for row in self._load_index():
+                reference = _decode(
+                    row["entity_ref"], decode_resolved_entity_reference, "entity index row"
+                )
+                as_subject, as_object = by_entity.setdefault(reference, (set(), set()))
+                as_subject.update(row["as_subject"])
+                as_object.update(row["as_object"])
+            self._relations_by_entity = by_entity
+        return self._relations_by_entity
 
     def _load_evidence(self) -> dict[RelationEvidenceId, RelationEvidence]:
         if self._evidence is None:
@@ -899,6 +945,14 @@ def _decode(source: Any, decoder: Callable[[Any], _T], what: str) -> _T:
         return decoder(source)
     except (ValueError, KeyError, TypeError) as error:
         raise RelationsRunArtifactError(f"malformed {what}: {error}") from error
+
+
+def _json_line(line: bytes, relative_path: str) -> Any:
+    """Parse one JSON Lines record, refusing a malformed one as ``_read_rows`` does."""
+    try:
+        return json.loads(line)
+    except ValueError as error:
+        raise RelationsRunArtifactError(f"malformed table {relative_path}: {error}") from error
 
 
 def _lines(records: Any) -> str:
