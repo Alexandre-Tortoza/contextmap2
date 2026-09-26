@@ -260,7 +260,7 @@ Mesmo que esse import funcione tecnicamente, ele acopla o consumidor ao layout i
 
 ## API pública do runtime
 
-O runtime segue a mesma regra da raiz pública. Um frontend (CLI, TUI) importa somente de `contextmap.runtime`, em particular `Runtime` e os contratos que ele devolve (`RuntimeStatus`, `RuntimeCapability`, `ResolvedPipelinePlan`, `RuntimePreflightReport`, `RuntimeExecutionResult`, `RuntimeRunRecord` e os demais), e nunca os módulos internos do runtime, um backend concreto ou uma capability.
+O runtime segue a mesma regra da raiz pública. Um frontend (CLI, TUI) importa somente de `contextmap.runtime`, em particular `Runtime` e os contratos que ele devolve (`RuntimeStatus`, `RuntimeCapability`, `ResolvedPipelinePlan`, `RuntimePreflightReport`, `RuntimeExecutionResult`, `RuntimeRunRecord` e os demais), e nunca os módulos internos do runtime, um backend concreto ou uma capability. A única exceção é a verificação de um `ContextMapArtifact` pela CLI (`validate` e `inspect artifact`), que o entrega ao validador público de `contextmap.artifact` (import tardio, issue #603): quem decide se o mapa é válido é o dono do artifact, não o runtime.
 
 `runtime/api.py` depende apenas da biblioteca padrão e do próprio runtime, nenhum módulo do runtime depende de biblioteca de UI e os contratos públicos não expõem tipos ROS nem de backend (`tests/architecture/test_runtime_boundaries.py`). Um teste de consumidor exercita a API usando apenas imports públicos. Detalhes em [API pública do runtime](../src/contextmap/runtime/docs/api.md).
 

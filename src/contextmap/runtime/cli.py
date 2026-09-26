@@ -112,6 +112,10 @@ _SUMMARY_KEYS = (
     "debug_level",
     "code_version",
 )
+# Literal, e não `contextmap.artifact.ARTIFACT_TYPE`: decidir o ramo não pode importar a
+# capability, que só é carregada quando o manifest é de fato de um ContextMapArtifact.
+_CONTEXT_MAP_ARTIFACT_TYPE = "context_map"
+_CONTEXT_MAP_SUMMARY_KEYS = ("context_map_id", "content_identity")
 
 
 class _UsageError(Exception):
@@ -324,6 +328,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "validate", help="check the integrity of an artifact directory or a runtime document"
     )
     _path_argument(validate)
+    validate.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "for a context map artifact, run the full level of its validator (every hash, "
+            "record, reference, rebuilt index and upstream file) instead of the structural one"
+        ),
+    )
     validate.set_defaults(handler=_validate)
     return parser
 
@@ -956,7 +968,7 @@ def _inspect_artifact(session: _Session) -> int:
 
 
 def _validate(session: _Session) -> int:
-    examined = _examine(session.args.path)
+    examined = _examine(session.args.path, full=session.args.full)
     integrity = examined["integrity"]
     lines = [f"{examined['path']}: {'ok' if integrity['ok'] else 'FAILED'}"]
     lines.extend(_integrity_lines(integrity)[1:])
@@ -964,14 +976,19 @@ def _validate(session: _Session) -> int:
     return EXIT_OK if integrity["ok"] else EXIT_FAILED
 
 
-def _examine(path: Path) -> dict[str, Any]:
-    """Inspect an artifact directory or a runtime document with standard-library tools only."""
+def _examine(path: Path, *, full: bool = False) -> dict[str, Any]:
+    """Inspect an artifact directory or a runtime document.
+
+    Only a ContextMapArtifact goes beyond the standard library: it is also handed to the
+    artifact capability's own validator, at the full level when ``full`` is set and at the
+    structural one otherwise. Every other path has a single level of checks.
+    """
     if not path.exists():
         raise _Failure(f"{path} does not exist")
     if path.is_dir() and (path / "status.json").is_file():
         return _examine_run(path)
     if path.is_dir():
-        return _examine_manifest(path)
+        return _examine_manifest(path, full=full)
     if path.name == "effective_config.json":
         return _examine_document(path, "effective-config", _read_config_summary)
     if path.name in {"plan.json", "execution.json"}:
@@ -1019,7 +1036,7 @@ def _examine_run(directory: Path) -> dict[str, Any]:
     }
 
 
-def _examine_manifest(root: Path) -> dict[str, Any]:
+def _examine_manifest(root: Path, *, full: bool) -> dict[str, Any]:
     manifest_path = root / _MANIFEST
     problems: list[str] = []
     summary: dict[str, Any] = {}
@@ -1032,11 +1049,15 @@ def _examine_manifest(root: Path) -> dict[str, Any]:
             manifest = None
             problems.append(f"cannot read {_MANIFEST}: {error}")
         if isinstance(manifest, dict):
-            summary = {key: manifest[key] for key in _SUMMARY_KEYS if key in manifest}
+            context_map = manifest.get("artifact_type") == _CONTEXT_MAP_ARTIFACT_TYPE
+            keys = _SUMMARY_KEYS + (_CONTEXT_MAP_SUMMARY_KEYS if context_map else ())
+            summary = {key: manifest[key] for key in keys if key in manifest}
             inventory = _inventory(manifest.get("file_inventory"), problems)
             summary["files"] = len(inventory)
             summary["total_bytes"] = sum(entry.size_bytes for entry in inventory)
             problems.extend(check_file_inventory(root, inventory))
+            if context_map:
+                problems.extend(_context_map_findings(root, full=full))
         elif manifest is not None:
             problems.append(f"{_MANIFEST} is not a JSON object")
     return {
@@ -1045,6 +1066,33 @@ def _examine_manifest(root: Path) -> dict[str, Any]:
         "summary": summary,
         "integrity": {"ok": not problems, "problems": problems},
     }
+
+
+def _context_map_findings(root: Path, *, full: bool) -> list[str]:
+    """Validate a ContextMapArtifact with the artifact capability's own validator.
+
+    The artifact capability owns what makes its map valid; the CLI only picks the level and
+    reports the findings, each named by its stable code. Only errors are problems: a warning
+    (optional evidence that is not there, a file outside the inventory) does not stop the map
+    from being trusted, so it never fails the command.
+
+    Args:
+        root: The artifact directory.
+        full: Run ``ValidationLevel.FULL`` instead of the default ``STRUCTURAL``.
+
+    Returns:
+        One problem per error finding of the report.
+    """
+    # Import tardio: importar a CLI não carrega capability nenhuma, só este ramo a usa.
+    from contextmap.artifact import Severity, ValidationLevel, validate_context_map_artifact
+
+    level = ValidationLevel.FULL if full else ValidationLevel.STRUCTURAL
+    report = validate_context_map_artifact(root, level=level)
+    return [
+        f"{finding.code}: {finding.message}"
+        for finding in report.findings
+        if finding.severity is Severity.ERROR
+    ]
 
 
 def _inventory(raw: object, problems: list[str]) -> list[FileEntry]:

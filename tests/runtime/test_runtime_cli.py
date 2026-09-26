@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from runtime_context_maps import written_context_map
 from runtime_documents import selected_document
 from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory as fake_factory
@@ -917,6 +919,69 @@ class TestArtifactInspectionAndValidation:
 
         assert code == 1
         assert "nowhere" in out + err
+
+
+class TestContextMapValidation:
+    """``validate`` delegates a ContextMapArtifact to the artifact capability's validator."""
+
+    def test_a_hand_edited_manifest_with_a_coherent_inventory_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        _, root = written_context_map(tmp_path)
+        assert cli("validate", str(root))[0] == 0
+
+        manifest = root / "manifest.json"
+        record = json.loads(manifest.read_text("utf-8"))
+        identity = record["content_identity"]
+        record["content_identity"] = identity[:-1] + ("1" if identity[-1] == "0" else "0")
+        manifest.write_text(json.dumps(record), encoding="utf-8")
+        code, out, err = cli("validate", str(root))
+
+        assert code == 1
+        assert "manifest.identity_mismatch" in out + err
+
+    def test_the_summary_names_the_map_and_its_content_identity(self, tmp_path: Path) -> None:
+        _, root = written_context_map(tmp_path)
+        manifest = json.loads((root / "manifest.json").read_text("utf-8"))
+
+        code, out, _ = cli("inspect", "artifact", str(root))
+        assert code == 0
+        assert f"context_map_id: {manifest['context_map_id']}" in out
+        assert f"content_identity: {manifest['content_identity']}" in out
+
+        code, out, _ = cli("validate", str(root), "--json")
+        summary = _json(out)["summary"]
+        assert code == 0
+        assert summary["context_map_id"] == manifest["context_map_id"]
+        assert summary["content_identity"] == manifest["content_identity"]
+
+    def test_full_verification_is_opt_in_and_finds_what_the_structural_level_cannot(
+        self, tmp_path: Path
+    ) -> None:
+        world, root = written_context_map(tmp_path)
+        # O dano fica num arquivo do mapa geométrico a montante: o inventário do próprio mapa
+        # continua íntegro e o nível estrutural só localiza a dependência, sem ler seus arquivos.
+        payload = world.geometry_dir / "outputs" / "geometry.bin"
+        data = bytearray(payload.read_bytes())
+        data[10] ^= 0xFF
+        payload.write_bytes(bytes(data))
+
+        assert cli("validate", str(root))[0] == 0
+        code, out, err = cli("validate", str(root), "--full")
+
+        assert code == 1
+        assert "dependency.upstream_damaged" in out + err
+
+    def test_a_warning_of_the_validator_does_not_fail_the_artifact(self, tmp_path: Path) -> None:
+        world, root = written_context_map(tmp_path)
+        # Evidência opcional ausente: o validador a reporta como aviso e o mapa segue válido.
+        shutil.rmtree(world.fusion_dir)
+
+        for flags in ((), ("--full",)):
+            code, out, _ = cli("validate", str(root), *flags, "--json")
+
+            assert code == 0, flags
+            assert _json(out)["integrity"] == {"ok": True, "problems": []}
 
 
 class TestThinness:
