@@ -190,21 +190,23 @@ class PipelinePlan:
         self,
         *,
         targets: Iterable[str] | None = None,
-        provided: Mapping[str, ArtifactRef] | None = None,
+        provided: Mapping[str, ArtifactRef | Sequence[ArtifactRef]] | None = None,
         selections: ResolvedSelections | None = None,
     ) -> ExecutionPlan:
         """Select what one execution runs.
 
         A target pulls in the stages it transitively depends on, except those whose
         artifacts are explicitly supplied: an existing immutable artifact is used instead
-        of recomputed. Supply them either as ``provided`` (one exact artifact per stage) or
-        as ``selections`` (the resolved run selection, which can hold several runs of a
-        stage). Nothing is inferred; a supplied artifact that is not needed, or of the wrong
-        kind, and every problem of the selection is reported by preflight.
+        of recomputed. Supply them either as ``provided`` (exact artifacts per stage) or
+        as ``selections`` (the resolved run selection). Either can hold several runs of a
+        stage, but only for an input declared ``multiple``. Nothing is inferred; a supplied
+        artifact that is not needed, or of the wrong kind, several runs for an input that
+        takes one, and every problem of the selection are reported by preflight.
 
         Args:
             targets: Stages to produce, or ``None`` for the complete pipeline.
-            provided: Existing artifacts by the stage that produced them.
+            provided: Existing artifacts by the stage that produced them: one, or several
+                distinct runs kept as separate evidence.
             selections: The resolved run selection, with its lineage checked.
 
         Returns:
@@ -223,7 +225,10 @@ class PipelinePlan:
             problems.extend(selections.problems)
             origin = "selections"
         elif provided is not None:
-            supplied = {stage_id: (ref,) for stage_id, ref in provided.items()}
+            supplied = {
+                stage_id: (refs,) if isinstance(refs, ArtifactRef) else tuple(refs)
+                for stage_id, refs in provided.items()
+            }
         by_id = {stage.stage_id: stage for stage in self.stages}
         valid: dict[str, tuple[ArtifactRef, ...]] = {}
         for stage_id, refs in supplied.items():
@@ -278,6 +283,20 @@ class PipelinePlan:
                 continue
             need.add(stage_id)
             stack.extend(item.source for item in by_id[stage_id].inputs)
+        # A seleção por catálogo já confere a cardinalidade em resolve_selections().
+        for stage_id in sorted(need) if origin == "provided" else ():
+            for item in by_id[stage_id].inputs:
+                runs = valid.get(item.source, ())
+                if len(runs) > 1 and not item.multiple:
+                    problems.append(
+                        ConfigProblem(
+                            path=f"{origin}.{item.source}",
+                            message=(
+                                f"{len(runs)} runs are supplied, but stage {stage_id!r} "
+                                f"consumes one run of input {item.name!r}"
+                            ),
+                        )
+                    )
         for stage_id in valid:
             if stage_id not in reused_used:
                 problems.append(
