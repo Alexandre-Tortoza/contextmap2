@@ -250,6 +250,30 @@ class InlineMask:
 MaskGeometry: TypeAlias = InlineMask
 
 
+def mask_bounding_box(mask: InlineMask) -> BoundingBox | None:
+    """Return the tight half-open box of a mask's true pixels.
+
+    Args:
+        mask: The mask, in its own pixel coordinates.
+
+    Returns:
+        The smallest box containing every true pixel, or ``None`` for an empty mask.
+    """
+    import numpy as np
+
+    pixels = mask.as_array()
+    rows = np.flatnonzero(pixels.any(axis=1))
+    if rows.size == 0:
+        return None
+    columns = np.flatnonzero(pixels.any(axis=0))
+    return BoundingBox(
+        x_min=int(columns[0]),
+        y_min=int(rows[0]),
+        x_max=int(columns[-1]) + 1,
+        y_max=int(rows[-1]) + 1,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BackendScore:
     """A backend-native score with its own named semantics."""

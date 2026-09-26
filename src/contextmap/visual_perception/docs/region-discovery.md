@@ -192,6 +192,8 @@ metadados do pass sem produzir o crop/resize correspondente falha explicitamente
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
+Um candidato só-máscara (sem `bounding_box`) é testado pela caixa justa dos pixels verdadeiros da
+máscara; uma máscara vazia não toca borda nenhuma (#596).
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.
 
 ## Validação da imagem materializada

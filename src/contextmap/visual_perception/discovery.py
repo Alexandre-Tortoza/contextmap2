@@ -17,6 +17,7 @@ from .region_models import (
     RegionCandidate,
     RejectedRegionCandidate,
     RejectionReason,
+    mask_bounding_box,
 )
 
 
@@ -455,9 +456,23 @@ def _reject_for_internal_border(
     prepared_image: PreparedImage,
     policy: BorderPolicy,
 ) -> bool:
-    if policy is BorderPolicy.KEEP or candidate.bounding_box is None:
+    """Decide whether a pass-local candidate is truncated by an internal tile border.
+
+    A mask-only candidate is judged by the tight box of its true pixels, so the
+    policy applies whatever geometry the backend delivered.
+
+    Returns:
+        ``True`` only under ``REJECT_INTERNAL_BORDER`` when the candidate reaches an
+        edge of the pass that is not an edge of the prepared image.
+    """
+    if policy is BorderPolicy.KEEP:
         return False
     box = candidate.bounding_box
+    if box is None and candidate.mask is not None:
+        # Candidato só-máscara (#596): a extensão vem dos pixels; máscara vazia não toca borda.
+        box = mask_bounding_box(candidate.mask)
+    if box is None:
+        return False
     window = discovery_pass.window
     touches_left = box.x_min <= 0 and window.x_min > 0
     touches_top = box.y_min <= 0 and window.y_min > 0
