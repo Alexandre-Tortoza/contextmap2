@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from math import isfinite
 from time import perf_counter
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ..discovery import (
     BackendDiagnostics,
@@ -28,6 +28,10 @@ from ..region_models import (
     RegionCandidate,
     RegionProvenance,
 )
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
 
 _REGION_TASKS = frozenset(
     {
@@ -95,7 +99,7 @@ class Florence2NativeRegion:
     proposal_id: str
     box: tuple[float, float, float, float]
     score: float | None
-    mask: tuple[bool, ...] | None = None
+    mask: InlineMask | None = None
     parsed_text: str | None = None
     metadata: tuple[tuple[str, JsonScalar], ...] = ()
 
@@ -291,16 +295,12 @@ class Florence2RegionDiscovery:
         height: int,
     ) -> RegionCandidate:
         """Convert one parsed Florence region without semantic promotion."""
-        import numpy as np
-
-        mask = None
-        if region.mask is not None:
-            if len(region.mask) != width * height:
-                raise ValueError(
-                    f"Florence-2 proposal {region.proposal_id} mask length must match "
-                    "discovery pass dimensions"
-                )
-            mask = InlineMask(np.array(region.mask, dtype=np.bool_).reshape(height, width))
+        mask = region.mask
+        if mask is not None and (mask.width, mask.height) != (width, height):
+            raise ValueError(
+                f"Florence-2 proposal {region.proposal_id} mask dimensions must match "
+                "discovery pass dimensions"
+            )
 
         score = None
         if region.score is not None:
@@ -402,8 +402,10 @@ def _parse_task_result(
 
 def _rasterize_polygons(
     value: object, *, width: int, height: int
-) -> tuple[tuple[bool, ...], tuple[float, float, float, float]]:
+) -> tuple[InlineMask, tuple[float, float, float, float]]:
     """Rasterize Florence polygon coordinates at pixel centers without SDK objects."""
+    import numpy as np
+
     raw = _required_sequence(value, "polygon region")
     if raw and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in raw):
         contour_values: Sequence[object] = (raw,)
@@ -423,26 +425,34 @@ def _rasterize_polygons(
     x_values = [point[0] for contour in contours for point in contour]
     y_values = [point[1] for contour in contours for point in contour]
     box = (min(x_values), min(y_values), max(x_values), max(y_values))
-    mask = tuple(
-        any(_point_in_polygon(x + 0.5, y + 0.5, contour) for contour in contours)
-        for y in range(height)
-        for x in range(width)
-    )
-    return mask, box
+    mask = np.zeros((height, width), dtype=np.bool_)
+    for contour in contours:
+        mask |= _contour_interior(contour, width=width, height=height)
+    return InlineMask(mask), box
 
 
-def _point_in_polygon(x: float, y: float, contour: tuple[tuple[float, float], ...]) -> bool:
-    """Return whether a pixel center lies inside one polygon contour."""
-    inside = False
+def _contour_interior(
+    contour: tuple[tuple[float, float], ...], *, width: int, height: int
+) -> NDArray[np.bool_]:
+    """Return the pixels whose centre lies inside one contour, by the even-odd rule.
+
+    A horizontal ray from each pixel centre crosses an edge when the edge spans the centre's row;
+    the crossing abscissa depends on the row only, so each edge flips, in the rows it spans, every
+    pixel left of it. The arithmetic is the per-pixel test's, in float64, so the result is too.
+    """
+    import numpy as np
+
+    centres_x = np.arange(width) + 0.5
+    centres_y = np.arange(height) + 0.5
+    inside = np.zeros((height, width), dtype=np.bool_)
     previous_x, previous_y = contour[-1]
     for current_x, current_y in contour:
-        crosses_y = (current_y > y) != (previous_y > y)
-        if crosses_y:
-            boundary_x = (previous_x - current_x) * (y - current_y) / (
+        rows = np.flatnonzero((current_y > centres_y) != (previous_y > centres_y))
+        if rows.size:
+            boundary_x = (previous_x - current_x) * (centres_y[rows] - current_y) / (
                 previous_y - current_y
             ) + current_x
-            if x < boundary_x:
-                inside = not inside
+            inside[rows] ^= centres_x[None, :] < boundary_x[:, None]
         previous_x, previous_y = current_x, current_y
     return inside
 

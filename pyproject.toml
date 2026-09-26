@@ -129,12 +129,14 @@ addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 # Os testes não são pacotes: os builders de Semantic Fusion, Semantic Mapping e Point Representation,
 # que Entity Resolution reutiliza para construir entidades e runs reais, ficam importáveis pelo
-# nome do módulo.
+# nome do módulo, assim como os cenários de máscara de Visual Perception que os testes de
+# backends/ reutilizam.
 pythonpath = [
   "tests/semantic_fusion",
   "tests/semantic_mapping",
   "tests/point_representation",
   "tests/entity_resolution",
+  "tests/visual_perception",
 ]
 
 [tool.coverage.run]

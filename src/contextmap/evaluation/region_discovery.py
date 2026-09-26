@@ -547,7 +547,11 @@ def _region_pixels(region: Region2D) -> set[tuple[int, int]]:
 
 
 def _mask_pixels(mask: InlineMask) -> set[tuple[int, int]]:
-    return {(x, y) for y in range(mask.height) for x in range(mask.width) if mask.value_at(x, y)}
+    import numpy as np
+
+    # Só o primeiro plano vira par (x, y); a imagem inteira não é percorrida em Python.
+    rows, columns = np.nonzero(mask.as_array())
+    return set(zip(columns.tolist(), rows.tolist(), strict=True))
 
 
 def _iou(first: set[tuple[int, int]], second: set[tuple[int, int]]) -> float:

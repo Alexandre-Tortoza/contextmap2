@@ -39,6 +39,12 @@ dimensões e pixels. Não há acesso a uma tupla de pixels: quem consome a másc
 `area` ou `value_at()`. `to_dict()`/`from_dict()` mantêm a forma serializada (lista plana de 0/1
 em ordem de linha), então nenhum artifact muda.
 
+Os backends produzem a máscara direto da saída nativa, sem uma lista Python por pixel: a
+segmentação do SAM2 é lida como array; os logits do SAM3 saem do tensor para a CPU em float64 (exato
+para float32, float16 e bfloat16) e são comparados com `mask_threshold` em float64, como sempre foram;
+os polígonos do Florence-2 são rasterizados pela regra par-ímpar no centro do pixel, aresta por aresta,
+com a mesma aritmética do teste ponto a ponto.
+
 A normalização trabalha sobre o recorte da máscara na caixa justa dos seus pixels (uma view) e só
 compara pixel a pixel duas propostas cujas caixas se encontram. Com os dois limiares de merge
 positivos, propostas de caixas disjuntas têm IoU e contenção 0 e não podem se fundir; com um limiar
