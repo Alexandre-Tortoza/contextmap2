@@ -13,7 +13,7 @@ generate_relation_candidates(
 ```
 
 - `entities`: `Mapping[ResolvedEntityReference, EntityGeometry]` de **um** artifact de resolução (misturar artifacts levanta `ValueError`). A ordem de inserção é irrelevante.
-- `CandidatePolicy` (sem valores padrão): os predicados a gerar (únicos, cada um avaliado diretamente; um derivado como `BELOW` é recusado, seleciona-se o inverso), `proximity_radius_m` e `directional_radius_m`. O alcance direcional é separado porque "acima" e "à frente de" alcançam muito mais que "ao lado de". Os dois alcances devem cobrir as tolerâncias de distância dos avaliadores; se não cobrirem, uma relação verdadeira pode se perder antes de ser medida, e essa perda é uma falha de recuperação de candidatos, medida à parte da qualidade dos predicados.
+- `CandidatePolicy` (sem valores padrão): os predicados a gerar (únicos, cada um avaliado diretamente; um derivado como `BELOW` é recusado, seleciona-se o inverso), `proximity_radius_m` e `directional_radius_m`. O alcance direcional é separado porque "acima" e "à frente de" alcançam muito mais que "ao lado de". Os dois alcances devem cobrir as tolerâncias de distância dos avaliadores; se não cobrirem, uma relação verdadeira pode se perder antes de ser medida. A política sozinha não conhece os avaliadores, então essa premissa é verificada onde as políticas do run se encontram (ver [coerência com os avaliadores](#coerência-entre-alcance-e-tolerâncias-dos-avaliadores)); uma perda que ainda reste é uma falha de recuperação de candidatos, medida à parte da qualidade dos predicados.
 - `FrameConventions`: um predicado cujo eixo não foi declarado é **pulado e reportado** (`SkippedPredicate`, uma vez por execução, não por par); geometria em outro frame ou de outro mapa levanta `IncompatibleFrameError`.
 - `RelationCandidateSet`: `candidates`, `exclusions` (com a razão), `skipped_predicates`, `entity_count`, `pairs_not_enumerated` e a proveniência (`CANDIDATE_POLICY_ID = "bounds-neighborhood-candidates-v1"`, fingerprint da política, versão da taxonomia, frame, mapa geométrico e fingerprint das convenções).
 
@@ -39,6 +39,18 @@ Cada uma é uma condição **necessária** para que o avaliador correspondente *
 O eixo de 2 e 3 é o `up_axis` (`ABOVE`, `ON_TOP_OF`) ou o `forward_axis` (`IN_FRONT_OF`) declarados em `FrameConventions`. `LEANING_AGAINST` só exige proximidade: uma tábua encostada numa parede tem seção transversal adjacente, não sobreposta, e a compatibilidade de orientação é evidência dos avaliadores, não filtro de candidatos.
 
 `bounds_gap_m` é a distância euclidiana entre as faces mais próximas (`0` se as caixas se sobrepõem ou se tocam) e fica registrada no candidato e na exclusão.
+
+## Coerência entre alcance e tolerâncias dos avaliadores
+
+Uma pré-condição que falha descarta o par antes de qualquer avaliador medi-lo. Se o alcance de proximidade for menor que uma tolerância de um avaliador, pares que ele aceitaria são excluídos com uma razão tecnicamente correta, e o run parece bem-sucedido com relações faltando. Por isso `RelationsRunPolicies`, o único ponto em que a política de candidatos e as dos avaliadores coexistem, recusa na construção (`ValueError`) um `proximity_radius_m` que não cubra, **só para os avaliadores presentes**:
+
+| Avaliador | Condição | Por quê |
+| --- | --- | --- |
+| geométrico | `next_to_max_gap_m <= proximity_radius_m` | `NEXT_TO` aceita vão até `next_to_max_gap_m`; acima do alcance o par vira `BEYOND_PROXIMITY_RADIUS` |
+| geométrico | `2 * containment_slack_m <= proximity_radius_m` | `INSIDE` tolera `containment_slack_m` além de **cada** face, então o sujeito pode exceder a extensão do objeto em `2 * containment_slack_m` num eixo; acima do alcance o par vira `CONTAINMENT_IMPOSSIBLE` |
+| contato | `contact_distance_m + contact_tolerance_m <= proximity_radius_m` | é o raio de busca do canal de contato (`search_radius_m`), e o vão entre os limites nunca passa da distância entre dois pontos das entidades |
+
+A mensagem nomeia cada parâmetro envolvido, seu valor e as relações que seriam perdidas, e lista todas as violações de uma vez. Os limites são inclusivos, e um canal ausente (`geometric`/`contact` `None`) não tem tolerância a cobrir. A soma do contato é comparada com o mesmo arredondamento de ponto flutuante que o avaliador usa: um alcance decimalmente igual à soma pode ser recusado quando a soma em ponto flutuante passa dele (a mensagem mostra o valor exato). O alcance direcional e as pré-condições de pegada e de lado não são verificados aqui. No runtime, a recusa é reportada no componente `spatial_relations.candidate`.
 
 ## Escala
 

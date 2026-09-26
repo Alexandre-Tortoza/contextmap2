@@ -1118,13 +1118,28 @@ def _compose_semantic_mapping(context: _Context) -> dict[str, object]:
 def _compose_spatial_relations(context: _Context) -> dict[str, object]:
     from contextmap.spatial_relations import RelationsRunPolicies
 
-    policies = RelationsRunPolicies(
-        frame_conventions=_construct(context, "spatial_relations.frame_conventions"),
-        candidate=_construct(context, "spatial_relations.candidate"),
-        geometry_summary=_construct(context, "spatial_relations.geometry_summary"),
-        geometric=_construct_optional(context, "spatial_relations.geometric_predicate"),
-        contact=_construct_optional(context, "spatial_relations.contact_predicate"),
-    )
+    frame_conventions = _construct(context, "spatial_relations.frame_conventions")
+    candidate = _construct(context, "spatial_relations.candidate")
+    geometry_summary = _construct(context, "spatial_relations.geometry_summary")
+    geometric = _construct_optional(context, "spatial_relations.geometric_predicate")
+    contact = _construct_optional(context, "spatial_relations.contact_predicate")
+    try:
+        policies = RelationsRunPolicies(
+            frame_conventions=frame_conventions,
+            candidate=candidate,
+            geometry_summary=geometry_summary,
+            geometric=geometric,
+            contact=contact,
+        )
+    except ValueError as error:
+        # A regra de coerência é de spatial_relations; aqui a recusa só é atribuída ao
+        # componente cujo alcance não cobre as tolerâncias, para o preflight apontá-lo.
+        component_id = "spatial_relations.candidate"
+        raise BackendConfigurationError(
+            component_id,
+            context.component(component_id).backend or "",
+            [f"proximity_radius_m: {error}"],
+        ) from error
     return {"spatial_relations_policies": policies}
 
 
