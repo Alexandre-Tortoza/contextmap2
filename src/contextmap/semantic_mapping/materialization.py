@@ -70,6 +70,15 @@ class MaterializationInputError(ValueError):
     """Raised when the selection given to the service is inconsistent as a whole."""
 
 
+class EntityContractError(ValueError):
+    """Raised when parts that are each valid do not form an entity together.
+
+    Only :class:`~contextmap.semantic_mapping.models.Entity`'s own validation, which checks
+    the parts against each other, is reported this way; a ``ValueError`` raised while
+    building a part is not a contract violation of the candidate and propagates.
+    """
+
+
 class RejectionReason(Enum):
     """Why a selected candidate could not become an entity.
 
@@ -77,7 +86,8 @@ class RejectionReason(Enum):
         EMPTY_GEOMETRY_SUPPORT: The candidate has no 3D support.
         UNRESOLVABLE_GEOMETRY: Its geometry references cannot be resolved against the map.
         INVALID_TEMPORAL_EVIDENCE: Its temporal evidence is missing or inconsistent.
-        INVALID_ENTITY: Its parts do not satisfy the entity contract.
+        INVALID_ENTITY: Its parts, each valid, do not satisfy the entity contract together
+            (:class:`EntityContractError`).
     """
 
     EMPTY_GEOMETRY_SUPPORT = "empty_geometry_support"
@@ -232,6 +242,9 @@ def materialize_entities(
     Raises:
         MaterializationInputError: If a support is selected twice, or a support was built over
             another map than the fusion run's lineage or the geometry source.
+        ValueError: Any error other than the four a candidate is rejected for (its geometry
+            support is empty or unresolvable, its temporal evidence is invalid, or its parts
+            break the entity contract) propagates: it is a defect, never a rejection.
     """
     selected = sorted(outcomes, key=lambda item: item.support.fusion_support_id)
     _require_coherent_selection(selected, fusion_manifest, geometry)
@@ -261,7 +274,7 @@ def materialize_entities(
             rejections.append(_rejection(outcome, RejectionReason.UNRESOLVABLE_GEOMETRY, error))
         except TemporalEvidenceError as error:
             rejections.append(_rejection(outcome, RejectionReason.INVALID_TEMPORAL_EVIDENCE, error))
-        except ValueError as error:
+        except EntityContractError as error:
             rejections.append(_rejection(outcome, RejectionReason.INVALID_ENTITY, error))
     return EntityMaterialization(
         semantic_map_id=semantic_map_id,
@@ -303,17 +316,25 @@ def _materialize(
     provenance: EntityProvenance,
 ) -> Entity:
     support, evidence = outcome.support, outcome.evidence
-    return Entity(
-        entity_id=entity_id_for(fusion_support_id=support.fusion_support_id),
-        semantic_map_id=semantic_map_id,
-        geometry=summarize_geometry(
-            support.geometry_support, source=geometry, policy=policy.geometry
-        ),
-        semantic_state=semantic_state_from_fused_evidence(evidence),
-        evidence=evidence_links_from_fused_evidence(evidence, manifest=fusion_manifest),
-        temporal_state=summarize_temporal_state(evidence.physical_observation_groups),
-        provenance=provenance,
+    # As partes são construídas fora do try: um ValueError delas é defeito e propaga.
+    geometry_summary = summarize_geometry(
+        support.geometry_support, source=geometry, policy=policy.geometry
     )
+    semantic_state = semantic_state_from_fused_evidence(evidence)
+    evidence_links = evidence_links_from_fused_evidence(evidence, manifest=fusion_manifest)
+    temporal_state = summarize_temporal_state(evidence.physical_observation_groups)
+    try:
+        return Entity(
+            entity_id=entity_id_for(fusion_support_id=support.fusion_support_id),
+            semantic_map_id=semantic_map_id,
+            geometry=geometry_summary,
+            semantic_state=semantic_state,
+            evidence=evidence_links,
+            temporal_state=temporal_state,
+            provenance=provenance,
+        )
+    except ValueError as error:
+        raise EntityContractError(str(error)) from error
 
 
 def _rejection(
