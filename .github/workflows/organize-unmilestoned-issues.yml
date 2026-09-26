@@ -41,9 +41,9 @@ jobs:
                   -f description="$description" \
                   --jq '.number'
               )"
-              echo "created milestone #$milestone_number: $title"
+              echo "created milestone #$milestone_number: $title" >&2
             else
-              echo "using milestone #$milestone_number: $title"
+              echo "using milestone #$milestone_number: $title" >&2
             fi
 
             printf '%s' "$milestone_number"
