@@ -72,6 +72,7 @@ class Ros2BagSourceAdapter:
         self._warnings: list[SourceAdapterWarning] = []
         self._content_hash = _ros_common.StreamingContentHash()
         self._calibration_cache: CalibrationSet | None = None
+        self._calibration_warnings: tuple[SourceAdapterWarning, ...] = ()
         self._calibration_read = False
 
     def capabilities(self) -> SourceAdapterCapabilities:
@@ -152,7 +153,7 @@ class Ros2BagSourceAdapter:
             calibration_ids = _ros_common.calibration_ids_by_sensor(
                 self._cached_calibration(reader)
             )
-            self._warnings = []
+            self._warnings = list(self._calibration_warnings)
             self._content_hash = _ros_common.StreamingContentHash()
             counters: dict[str, int] = {}
             connections = [
@@ -190,6 +191,10 @@ class Ros2BagSourceAdapter:
 
     def warnings(self) -> Sequence[SourceAdapterWarning]:
         """Return warnings from the most recent :meth:`read_observations` call.
+
+        They start with the warnings of the ``camera_info`` calibration that
+        read used (see :meth:`read_calibration`), followed by the skipped
+        messages.
 
         Returns:
             Accumulated warnings, in the order they occurred.
@@ -245,11 +250,13 @@ class Ros2BagSourceAdapter:
                 or ``None`` to open one only if a scan is needed.
         """
         if not self._calibration_read:
-            self._calibration_cache = self._discover_calibration(reader)
+            self._calibration_cache, self._calibration_warnings = self._discover_calibration(reader)
             self._calibration_read = True
         return self._calibration_cache
 
-    def _discover_calibration(self, reader: Reader | None) -> CalibrationSet | None:
+    def _discover_calibration(
+        self, reader: Reader | None
+    ) -> tuple[CalibrationSet | None, tuple[SourceAdapterWarning, ...]]:
         """Scan the whole bag's ``camera_info`` topic once; never windowed.
 
         ``camera_info`` usually repeats the same calibration on every frame,
@@ -258,20 +265,37 @@ class Ros2BagSourceAdapter:
         calibration that changes still yields two entries for the sensor,
         which :func:`~contextmap.ingestion.adapters._ros_common.merge_calibration`
         rejects.
+
+        Returns:
+            The merged calibration and one warning per conversion note of a
+            kept entry (for example an unrecognized ``distortion_model``),
+            at the index of the ``camera_info`` message it came from.
         """
         topic = self._config.topics.camera_info
         if topic is None:
-            return _ros_common.merge_calibration(self._config.calibration, ())
+            return _ros_common.merge_calibration(self._config.calibration, ()), ()
         if reader is None:
             with Reader(self._config.path) as own_reader:
                 return self._discover_calibration(own_reader)
         discovered: dict[str, CalibrationEntry] = {}
+        warnings: list[SourceAdapterWarning] = []
         connections = [connection for connection in reader.connections if connection.topic == topic]
-        for connection, _timestamp, rawdata in reader.messages(connections=connections):
+        messages = reader.messages(connections=connections)
+        for index, (connection, _timestamp, rawdata) in enumerate(messages):
             message = self._typestore.deserialize_cdr(rawdata, connection.msgtype)
             entry = self._camera_calibration_entry(message, topic)
-            discovered.setdefault(entry.content_hash, entry)
-        return _ros_common.merge_calibration(self._config.calibration, tuple(discovered.values()))
+            if entry.content_hash in discovered:
+                continue
+            discovered[entry.content_hash] = entry
+            # Toda normalização do CameraInfo supõe algo sobre a fonte: fica visível como warning.
+            warnings.extend(
+                SourceAdapterWarning(topic=topic, message_index=index, reason=conversion)
+                for conversion in entry.provenance.conversions_applied
+            )
+        calibration = _ros_common.merge_calibration(
+            self._config.calibration, tuple(discovered.values())
+        )
+        return calibration, tuple(warnings)
 
     def _camera_calibration_entry(self, message: Any, topic: str) -> CalibrationEntry:
         sensor_id = SensorId(_ros_common.sanitize_topic(self._config.topics.rgb or topic))

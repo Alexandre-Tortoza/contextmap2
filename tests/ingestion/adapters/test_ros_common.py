@@ -323,3 +323,18 @@ def test_build_camera_model_records_how_equidistant_coefficients_were_normalized
     (conversion,) = conversions
     assert f"got {len(coefficients)}" in conversion
     assert note in conversion
+
+
+def test_build_camera_model_records_the_fallback_for_an_unrecognized_distortion_model() -> None:
+    model, conversions = _ros_common.build_camera_model(
+        width=1280,
+        height=720,
+        k_matrix=_K_MATRIX,
+        distortion_model_name="kannala_brandt",
+        distortion_coefficients=(),
+    )
+
+    assert model.distortion_coefficients == ()
+    (conversion,) = conversions
+    assert "'kannala_brandt'" in conversion
+    assert "none" in conversion

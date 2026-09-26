@@ -566,8 +566,9 @@ def build_camera_model(
         or zero-filled to its four coefficients (with a note), otherwise a
         :class:`~contextmap.ingestion.calibration.PinholeCameraModel`
         (falling back to :attr:`DistortionModel.NONE` for an unrecognized
-        model name, leaving validation to catch the resulting
-        inconsistency rather than raising here).
+        model name, with a note naming it, and leaving validation to catch
+        a resulting coefficient-count inconsistency rather than raising
+        here).
     """
     fx = float(k_matrix[0])
     fy = float(k_matrix[4])
@@ -598,7 +599,16 @@ def build_camera_model(
             distortion_coefficients=(k1, k2, k3, k4),
         ), conversions
 
-    distortion_model = PINHOLE_DISTORTION_MODEL_MAP.get(distortion_model_name, DistortionModel.NONE)
+    coefficients = tuple(float(value) for value in distortion_coefficients)
+    distortion_model = PINHOLE_DISTORTION_MODEL_MAP.get(distortion_model_name)
+    pinhole_conversions: tuple[str, ...] = ()
+    if distortion_model is None:
+        # Com D=[], o fallback seria indistinguível de uma câmera sem distorção: fica registrado.
+        distortion_model = DistortionModel.NONE
+        pinhole_conversions = (
+            f"unrecognized distortion_model {distortion_model_name!r}: fell back to none "
+            f"with the {len(coefficients)} coefficient(s) of D as given",
+        )
     return PinholeCameraModel(
         width=width,
         height=height,
@@ -607,8 +617,8 @@ def build_camera_model(
         cx=cx,
         cy=cy,
         distortion_model=distortion_model,
-        distortion_coefficients=tuple(float(value) for value in distortion_coefficients),
-    ), ()
+        distortion_coefficients=coefficients,
+    ), pinhole_conversions
 
 
 class StreamingContentHash:

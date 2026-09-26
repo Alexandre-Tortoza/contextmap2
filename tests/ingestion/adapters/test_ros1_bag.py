@@ -794,3 +794,24 @@ def test_equidistant_coefficients_that_are_not_four_leave_a_conversion_note(
     assert isinstance(entry.camera_model, FisheyeCameraModel)
     (conversion,) = entry.provenance.conversions_applied
     assert f"got {len(coefficients)}" in conversion
+
+
+def test_an_unrecognized_distortion_model_is_reported_as_a_warning(tmp_path: Path) -> None:
+    # Com D=[], o fallback para "none" seria indistinguível de uma câmera sem distorção.
+    path = tmp_path / "unknown_model.bag"
+    _build_bag(path, distortion_model="kannala_brandt", distortion_coefficients_override=())
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    list(adapter.read_observations())
+
+    (warning,) = adapter.warnings()
+    assert warning.topic == "/camera/camera_info"
+    assert warning.message_index == 0
+    assert "'kannala_brandt'" in warning.reason
+    calibration = adapter.read_calibration()
+    assert calibration is not None
+    (entry,) = calibration.entries.values()
+    assert isinstance(entry.camera_model, PinholeCameraModel)
+    assert tuple(entry.provenance.conversions_applied) == (warning.reason,)

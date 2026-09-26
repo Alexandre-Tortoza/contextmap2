@@ -93,7 +93,7 @@ source:
 ## Erros vs. warnings
 
 - **Erro** (`MissingRequiredTopicError`, `InvalidSourceWindowError`, ambos `SourceAdapterError`): interrompe a leitura — tópico obrigatório ausente, ou janela que não pode ser honrada. Mensagem estruturalmente incompatível com o kind configurado (`KeyError`/`AttributeError` na decodificação) também interrompe a leitura, propagando a exceção original (ver [`backends.md`](backends.md)); não existe um erro dedicado para "mensagem não suportada".
-- **Warning** (`SourceAdapterWarning`, acumulado e devolvido por `warnings()`): mensagem cujo conteúdo não pode ser decodificado (`ValueError` do decoder) e que foi pulada, mas não impede o restante da leitura. Nunca silenciosamente descartada sem rastro — sempre aparece em `warnings()` com `topic`/`message_index`/`reason`.
+- **Warning** (`SourceAdapterWarning`, acumulado e devolvido por `warnings()`): mensagem cujo conteúdo não pode ser decodificado (`ValueError` do decoder) e que foi pulada, mas não impede o restante da leitura; nos adapters ROS, também cada normalização aplicada ao `camera_info` descoberto (ver [`backends.md`](backends.md)). Nunca silenciosamente descartada sem rastro — sempre aparece em `warnings()` com `topic`/`message_index`/`reason`.
 
 ## Capacidades
 
