@@ -85,6 +85,31 @@ def test_matches_nearest_candidate_within_tolerance() -> None:
     assert first_imu_decision.offset_nanoseconds == -10_000_000
 
 
+@pytest.mark.parametrize(
+    ("winner_seconds", "loser_seconds"),
+    [(1.01, 0.99), (1.01, 1.01)],
+    ids=["symmetric_offsets", "equal_timestamps"],
+)
+def test_a_tie_goes_to_the_smallest_observation_id_and_the_loser_is_dropped(
+    winner_seconds: float, loser_seconds: float
+) -> None:
+    # O empate em |offset| é decidido por observation_id, não pela ordem de entrada nem pelo sinal.
+    observations: list[SourceObservation] = [
+        _imu("imu-b", loser_seconds),
+        _image("frame-0001", 1.00),
+        _imu("imu-a", winner_seconds),
+    ]
+    config = SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=50_000_000)
+
+    groups, diagnostics = synchronize(observations, config=config)
+
+    assert _observation_id(groups[0].associations["imu"]) == "imu-a"
+    assert [
+        (str(event.observation.observation_id), event.reason)
+        for event in diagnostics.dropped_events
+    ] == [("imu-b", "no_anchor_within_tolerance")]
+
+
 def test_missing_modality_is_explicit_none_not_dropped_silently() -> None:
     observations = [_image("frame-0001", 1.00)]
     config = SynchronizationConfig(reference_modality="image", tolerance_nanoseconds=50_000_000)
