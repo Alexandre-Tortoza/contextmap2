@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from math import ceil, floor, isfinite
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from contextmap.ingestion import SourceObservationId
 
@@ -33,6 +33,17 @@ class MergeKind(StrEnum):
     CONTAINMENT = "containment"
 
 
+class MergeRepresentativePolicy(StrEnum):
+    """Versioned rules that elect whose geometry a merge group freezes into its Region2D.
+
+    ``LARGEST_AREA`` elects the member with the largest ``area_pixels`` and breaks ties by the
+    smaller ``candidate_id``. Backend scores are never a criterion: they are not comparable
+    across backends.
+    """
+
+    LARGEST_AREA = "largest_area_v1"
+
+
 @dataclass(frozen=True, slots=True)
 class NormalizationConfig:
     """Explicit geometric policies applied before Region2D geometry freeze."""
@@ -44,6 +55,7 @@ class NormalizationConfig:
     duplicate_iou_threshold: float = 0.8
     containment_threshold: float = 0.95
     maximum_regions: int | None = None
+    merge_representative_policy: MergeRepresentativePolicy = MergeRepresentativePolicy.LARGEST_AREA
 
     def __post_init__(self) -> None:
         """Validate policy ranges before any candidate is processed."""
@@ -64,6 +76,11 @@ class NormalizationConfig:
                 raise ValueError(f"{name} must be between zero and one")
         if self.maximum_regions is not None and self.maximum_regions <= 0:
             raise ValueError("maximum_regions must be positive when configured")
+        if not isinstance(self.merge_representative_policy, MergeRepresentativePolicy):
+            raise ValueError(
+                "merge_representative_policy must be one of "
+                f"{', '.join(policy.value for policy in MergeRepresentativePolicy)}"
+            )
 
     @property
     def digest(self) -> str:
@@ -76,6 +93,7 @@ class NormalizationConfig:
             "duplicate_iou_threshold": self.duplicate_iou_threshold,
             "containment_threshold": self.containment_threshold,
             "maximum_regions": self.maximum_regions,
+            "merge_representative_policy": self.merge_representative_policy.value,
         }
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return f"sha256:{sha256(serialized.encode()).hexdigest()}"
@@ -83,7 +101,13 @@ class NormalizationConfig:
 
 @dataclass(frozen=True, slots=True)
 class MergeDecision:
-    """Record why one proposal contributed to another canonical region."""
+    """Record why one proposal contributed to another canonical region.
+
+    The pair is the one compared, named after that merge's election: ``merged_candidate_id`` is
+    whichever of the two lost the representation, the incoming proposal or the previous
+    representative. The decisions of one group therefore chain to its final representative, and
+    ``iou``/``containment_fraction`` (both symmetric) always describe the recorded pair.
+    """
 
     representative_candidate_id: str
     merged_candidate_id: str
@@ -143,6 +167,13 @@ class _Geometry:
 
 @dataclass(slots=True)
 class _RegionGroup:
+    """One canonical region being formed.
+
+    ``representative`` is the member the merge-representative policy has elected so far: later
+    candidates are compared against its geometry, and only its geometry is frozen. Every member,
+    the representative included, stays in ``contributors`` in processing order.
+    """
+
     representative: _Geometry
     contributors: list[RegionCandidate]
 
@@ -234,10 +265,16 @@ def normalize_regions(
             continue
         group, kind, iou, containment = match
         group.contributors.append(geometry.candidate)
+        # A eleição vem antes do registro: quem perde a representação é o incorporado, e a
+        # decisão e a rejeição nomeiam o par já resolvido. IoU e contenção são simétricos.
+        incorporated = geometry
+        if _elects(config.merge_representative_policy, geometry, group.representative):
+            incorporated, group.representative = group.representative, geometry
+        representative_id = group.representative.candidate.candidate_id
         merge_decisions.append(
             MergeDecision(
-                representative_candidate_id=group.representative.candidate.candidate_id,
-                merged_candidate_id=geometry.candidate.candidate_id,
+                representative_candidate_id=representative_id,
+                merged_candidate_id=incorporated.candidate.candidate_id,
                 kind=kind,
                 iou=iou,
                 containment_fraction=containment,
@@ -245,9 +282,9 @@ def normalize_regions(
         )
         rejected.append(
             _reject(
-                geometry.candidate,
+                incorporated.candidate,
                 RejectionReason.MERGED_DUPLICATE,
-                f"merged into {group.representative.candidate.candidate_id}",
+                f"merged into {representative_id}",
             )
         )
 
@@ -411,6 +448,20 @@ def _find_duplicate(
         if containment >= config.containment_threshold:
             return group, MergeKind.CONTAINMENT, iou, containment
     return None
+
+
+def _elects(policy: MergeRepresentativePolicy, challenger: _Geometry, incumbent: _Geometry) -> bool:
+    """Return whether ``challenger`` takes the representation of ``incumbent``'s group."""
+    if policy is MergeRepresentativePolicy.LARGEST_AREA:
+        return _largest_area_rank(challenger) < _largest_area_rank(incumbent)
+    assert_never(policy)
+
+
+def _largest_area_rank(geometry: _Geometry) -> tuple[float, str]:
+    """Order members by ``largest_area_v1``: the smallest rank represents the group."""
+    # O empate fica com o menor candidate_id: é a ordem de processamento, então um empate
+    # nunca troca o representante e o resultado não depende da ordem de entrada.
+    return -geometry.area_pixels, geometry.candidate.candidate_id
 
 
 def _boxes_meet(geometry: _Geometry, representative: _Geometry) -> bool:
