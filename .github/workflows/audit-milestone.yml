@@ -1,0 +1,55 @@
+name: Audit milestone bootstrap
+
+# Execução única: cria a milestone "Audit Hardening" e associa o tracker #579
+# e todas as sub-issues dele. Idempotente: reexecutar não duplica a milestone.
+on:
+  push:
+    branches:
+      - ci/579-audit-milestone
+    paths:
+      - .github/workflows/audit-milestone.yml
+
+permissions:
+  issues: write
+
+jobs:
+  milestone:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Create milestone and assign audit issues
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const title = 'Audit Hardening';
+            const description =
+              'Fix the verified findings of the 2026-09 full technical audit: reproduced crashes, ' +
+              'reuse identity, measured hot paths, contract hardening, and the scientific ' +
+              'validation blockers of v0.1.0. Tracker: #579.';
+            const tracker = 579;
+
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner, repo, state: 'all', per_page: 100,
+            });
+            let milestone = milestones.find((m) => m.title === title);
+            if (!milestone) {
+              milestone = (await github.rest.issues.createMilestone({ owner, repo, title, description })).data;
+              core.info(`created milestone #${milestone.number}`);
+            } else {
+              core.info(`milestone #${milestone.number} already exists`);
+            }
+
+            const subIssues = await github.paginate(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+              { owner, repo, issue_number: tracker, per_page: 100 },
+            );
+            const numbers = [tracker, ...subIssues.map((issue) => issue.number)];
+            for (const issue_number of numbers) {
+              await github.rest.issues.update({ owner, repo, issue_number, milestone: milestone.number });
+            }
+            core.info(`assigned ${numbers.length} issues to milestone #${milestone.number}`);
+            await core.summary
+              .addHeading(`Milestone #${milestone.number}: ${title}`)
+              .addRaw(`Assigned ${numbers.length} issues: ${numbers.join(', ')}`)
+              .write();
