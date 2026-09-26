@@ -40,12 +40,16 @@ occlusion rule compares:
     occluded. Among the **retained** candidates it therefore never drops geometry the full map
     associated -- geometry the policy excluded is of course no longer associated, which is the
     declared change to the evaluated population -- but it does mean the range policy redefines
-    the *support* population, not only the evaluated one.
+    the *support* population, not only the evaluated one. It can also **add** evidence: a less
+    occluded element is a visible one, and a visible element inside a region's mask is
+    ``ASSOCIATED``, so a region's spatial observation can name geometry the full map rejected
+    as occluded -- a false positive, not merely a different support.
 
     The regime is reachable only with a coarse grid. A measured probe put the smallest
     window reach that made it fire at about 24 px, against the 12 px of the corridor-02
     run's ``cell_size_px=4, neighborhood_radius_cells=2``; that is a probe, not a proven
-    bound. ``test_candidate_equivalence.py`` pins both behaviours.
+    bound. ``test_candidate_equivalence.py`` pins both behaviours, the pinhole one down to the
+    spatial observation.
 
 The declared difference is therefore the evaluated population -- elements beyond
 ``max_range_m`` are not evaluated, and the per-frame counts say so -- plus, for an

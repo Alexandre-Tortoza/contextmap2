@@ -13,6 +13,7 @@ import math
 
 import numpy as np
 import pytest
+from perception_builders import make_region, make_result, rect_mask
 from projection_builders import (
     CAMERA_CALIBRATION_ID,
     UNBOUNDED_CANDIDATES,
@@ -36,6 +37,7 @@ from contextmap.sensor_association import (
     camera_projection_for,
 )
 from contextmap.sensor_association.frame_projection import FrameProjection
+from contextmap.sensor_association.membership import associate_regions, build_spatial_observations
 from contextmap.sensor_association.visibility import resolve_visibility
 from contextmap.shared import Vector3
 
@@ -385,6 +387,48 @@ def test_a_pinhole_camera_can_lose_the_support_that_came_from_a_neighbouring_cel
 
     assert baseline == VisibilityState.OCCLUDED.value
     assert culled == VisibilityState.VISIBLE_UNASSIGNED.value
+
+
+def _evidence_of_retained(*, max_range_m: float | None) -> tuple[str, bool]:
+    """The retained element's state and whether a region's evidence names it, on a pinhole.
+
+    The region's mask covers only the retained element's pixel, as a segmentation of the
+    surface it lies on would.
+    """
+    scene = [map_point_for_camera_point(_RETAINED), map_point_for_camera_point(_EXCLUDED)]
+    frame = project_frame(scene, candidate_policy=CandidateGeometryPolicy(max_range_m=max_range_m))
+    resolution = resolve_visibility(frame, _COARSE)
+    rows, found = frame.rows_for(np.array([0]))
+    assert bool(found[0]), "o ponto retido deve estar sempre na população avaliada"
+    row = int(rows[0])
+    u, v = (int(np.floor(c + 0.5)) for c in frame.prepared_pixels[row])
+    region = make_region("region-retained", rect_mask(640, 480, u - 2, v - 2, u + 3, v + 3))
+    membership = associate_regions(resolution, make_result([region]))
+    (observation,) = build_spatial_observations(
+        membership, configuration_fingerprint=None, code_version=None
+    )
+    state = resolution.correspondence(
+        row,
+        visible_state=VisibilityState.ASSOCIATED
+        if membership.regions_of(row)
+        else VisibilityState.VISIBLE_UNASSIGNED,
+    ).visibility
+    return state.value, frame.map_reference(row) in observation.geometry_support
+
+
+def test_support_that_pinhole_culling_frees_can_become_associated_evidence() -> None:
+    """The caveat carried one step further, from occlusion to membership.
+
+    The element culling makes less occluded is visible, and a visible element inside a region's
+    mask is ``ASSOCIATED``: the region's spatial observation names geometry that the full map
+    rejected as occluded. On a pinhole the range policy can therefore *add* evidence, a false
+    positive, and not only redefine the support population.
+    """
+    baseline = _evidence_of_retained(max_range_m=None)
+    culled = _evidence_of_retained(max_range_m=_ADVERSARIAL_RANGE_M)
+
+    assert baseline == (VisibilityState.OCCLUDED.value, False)
+    assert culled == (VisibilityState.ASSOCIATED.value, True)
 
 
 def test_the_occlusion_grid_of_the_real_run_is_too_fine_for_that_pair_to_interact() -> None:
