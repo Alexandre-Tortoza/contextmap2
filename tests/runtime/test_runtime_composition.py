@@ -281,7 +281,11 @@ class TestCanonicalComposition:
         document = selected_document()
         document["components"]["visual_perception"]["region_discovery"] = {
             "backend": "florence2",
-            "florence2": {"checkpoint": "microsoft/Florence-2-x", "task": "<OD>"},
+            "florence2": {
+                "checkpoint": "microsoft/Florence-2-x",
+                "model_version": "1.0",
+                "task": "<OD>",
+            },
         }
 
         composed = _compose(tmp_path, document=document)
@@ -587,6 +591,7 @@ class TestExplicitFailures:
         document = selected_document()
         document["components"]["visual_perception"]["region_discovery"]["sam3"] = {
             "checkpoint": "x",
+            "model_version": "3.0",
             "strategy": "text_prompt",
         }
 
@@ -2526,7 +2531,8 @@ class TestComposeVisualPerceptionExecutor:
                 )
 
         discovery = Sam2RegionDiscovery(
-            config=Sam2Config(checkpoint="facebook/sam2-hiera-large"), runtime=_SameMaskTwice()
+            config=Sam2Config(checkpoint="facebook/sam2-hiera-large", model_version="2.1"),
+            runtime=_SameMaskTwice(),
         )
         executor = VisualPerceptionExecutor(
             region_discovery=discovery,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -31,6 +31,7 @@ from ..region_models import (
     RegionCandidate,
     RegionProvenance,
 )
+from ._model_placement import verify_model_placement
 
 if TYPE_CHECKING:
     import numpy as np
@@ -51,11 +52,15 @@ _REGION_TASKS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class Florence2Config:
-    """Effective configuration for Florence-2 region discovery only."""
+    """Effective configuration for Florence-2 region discovery only.
+
+    ``model_version`` has no default: it enters provenance and the digest, so a run never
+    records a placeholder instead of the checkpoint version that produced it.
+    """
 
     checkpoint: str
     task: str
-    model_version: str = "unknown"
+    model_version: str
     device: str = "cpu"
     precision: str = "float32"
     prompt: str | None = None
@@ -136,13 +141,17 @@ class Florence2Runtime(Protocol):
 class _ModelInputs(Protocol):
     """Device-transfer surface of Transformers model inputs."""
 
-    def to(self, device: str) -> Mapping[str, object]:
-        """Move tensors to the explicitly configured device."""
+    def to(self, device: str, dtype: object) -> Mapping[str, object]:
+        """Move tensors to the configured device, casting floating ones to ``dtype``."""
         ...
 
 
 class _Florence2Model(Protocol):
     """Minimum Transformers Florence-2 generation surface."""
+
+    def parameters(self) -> Iterator[object]:
+        """Yield the loaded weights, whose device and dtype the runtime verifies."""
+        ...
 
     def generate(self, **kwargs: object) -> object:
         """Generate native output token ids."""
@@ -185,17 +194,27 @@ class TransformersFlorence2Runtime:
     def predict(
         self, discovery_input: DiscoveryInput, config: Florence2Config
     ) -> Florence2NativeOutput:
-        """Generate and parse one configured Florence-2 region task."""
+        """Generate and parse one configured Florence-2 region task.
+
+        Raises:
+            ValueError: If the model's parameters are not on ``config.device`` or not in
+                ``config.precision``, if the generation settings duplicate a model input,
+                or if the parser output is not structured region output.
+        """
+        model_dtype = verify_model_placement(
+            self._model, device=config.device, precision=config.precision, backend="Florence-2"
+        )
         width = discovery_input.discovery_pass.input_width
         height = discovery_input.discovery_pass.input_height
         task_prompt = f"{config.task}{config.prompt or ''}"
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
+        # Os pixel_values saem do processor em float32: seguem o dtype verificado do modelo.
         inputs = self._processor(
             text=task_prompt,
             images=image,
             return_tensors="pt",
-        ).to(config.device)
+        ).to(config.device, model_dtype)
         generation_settings = dict(config.generation_settings)
         conflicts = set(inputs).intersection(generation_settings)
         if conflicts:

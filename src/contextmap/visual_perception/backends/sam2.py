@@ -30,14 +30,19 @@ from ..region_models import (
     RegionCandidate,
     RegionProvenance,
 )
+from ._model_placement import verify_model_placement
 
 
 @dataclass(frozen=True, slots=True)
 class Sam2Config:
-    """Effective configuration for one SAM2 Region Discovery adapter."""
+    """Effective configuration for one SAM2 Region Discovery adapter.
+
+    ``model_version`` has no default: it enters provenance and the digest, so a run never
+    records a placeholder instead of the checkpoint version that produced it.
+    """
 
     checkpoint: str
-    model_version: str = "unknown"
+    model_version: str
     device: str = "cpu"
     precision: str = "float32"
     predicted_iou_threshold: float = 0.0
@@ -137,7 +142,15 @@ class Sam2AutomaticMaskRuntime:
         The optional dependency remains inside this infrastructure module. The
         supplied loader must materialize the configured discovery pass as an HWC
         uint8 image accepted by SAM2.
+
+        Raises:
+            ValueError: If the model's parameters are not on ``config.device`` or not
+                in ``config.precision`` (this runtime applies no autocast), or if the
+                automatic mask settings duplicate a field this runtime owns.
         """
+        verify_model_placement(
+            model, device=config.device, precision=config.precision, backend="SAM2"
+        )
         settings = dict(config.automatic_mask_settings)
         reserved = {"model", "pred_iou_thresh", "stability_score_thresh", "output_mode"}
         conflicts = reserved.intersection(settings)

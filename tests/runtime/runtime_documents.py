@@ -31,7 +31,12 @@ def selected_document() -> dict[str, Any]:
             "visual_perception": {
                 "region_discovery": {
                     "backend": "sam3",
-                    "sam3": {"checkpoint": "sam3-x", "strategy": "text_prompt", "prompt": "chair"},
+                    "sam3": {
+                        "checkpoint": "sam3-x",
+                        "model_version": "3.0",
+                        "strategy": "text_prompt",
+                        "prompt": "chair",
+                    },
                 },
                 "dense_features": {
                     "backend": "dinov3",

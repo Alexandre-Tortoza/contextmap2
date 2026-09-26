@@ -17,6 +17,7 @@ point_representation = true
 backend = "sam3"
 [components.visual_perception.region_discovery.sam3]
 checkpoint = "..."
+model_version = "..."         # obrigatório: entra na provenance e no digest
 
 [components.visual_perception.region_discovery.florence2]   # bloco de outro backend: ignorado
 checkpoint = "..."

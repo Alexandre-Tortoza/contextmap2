@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from fakes import FakeLoadedModel
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam3_candidates
 
 from contextmap.ingestion import SourceObservationId
@@ -166,6 +167,7 @@ def test_sam3_reports_the_audit_of_the_regions_it_discovers() -> None:
     """#611: the regions of the public port come with the passes, rejections and merges."""
     config = Sam3Config(
         checkpoint="facebook/sam3",
+        model_version="3.0",
         strategy=Sam3Strategy.TEXT_PROMPT,
         prompt="all movable items",
         score_threshold=0.8,
@@ -184,15 +186,16 @@ def test_sam3_reports_the_audit_of_the_regions_it_discovers() -> None:
 
 def test_sam3_strategy_configuration_is_explicit() -> None:
     with pytest.raises(ValueError, match="requires a prompt"):
-        Sam3Config(checkpoint="sam3", strategy=Sam3Strategy.TEXT_PROMPT)
+        Sam3Config(checkpoint="sam3", model_version="3.0", strategy=Sam3Strategy.TEXT_PROMPT)
     with pytest.raises(ValueError, match="does not consume a text prompt"):
         Sam3Config(
             checkpoint="sam3",
+            model_version="3.0",
             strategy=Sam3Strategy.AUTOMATIC,
             prompt="hidden architectural default",
         )
     with pytest.raises(ValueError, match="score_threshold"):
-        Sam3Config(checkpoint="sam3", score_threshold=-0.1)
+        Sam3Config(checkpoint="sam3", model_version="3.0", score_threshold=-0.1)
 
 
 def test_sam3_does_not_fall_back_when_configured_runtime_fails() -> None:
@@ -201,7 +204,7 @@ def test_sam3_does_not_fall_back_when_configured_runtime_fails() -> None:
             raise RuntimeError("configured strategy is unavailable")
 
     backend = Sam3RegionDiscovery(
-        config=Sam3Config(checkpoint="sam3", strategy=Sam3Strategy.AUTOMATIC),
+        config=Sam3Config(checkpoint="sam3", model_version="3.0", strategy=Sam3Strategy.AUTOMATIC),
         runtime=FailingRuntime(),
     )
 
@@ -218,6 +221,8 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
             return self._value
 
     class ImageProcessor:
+        model = FakeLoadedModel()
+
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
 
@@ -256,6 +261,7 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
     )
     config = Sam3Config(
         checkpoint="facebook/sam3",
+        model_version="3.0",
         strategy=Sam3Strategy.TEXT_PROMPT,
         prompt="movable item",
         score_threshold=0.7,
@@ -277,6 +283,8 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
 
 def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallback() -> None:
     class UnusedProcessor:
+        model = FakeLoadedModel()
+
         def set_image(self, image: object) -> object:
             raise AssertionError("unsupported strategy must fail before inference")
 
@@ -290,7 +298,7 @@ def test_official_sam3_runtime_rejects_an_unimplemented_strategy_without_fallbac
         processor=UnusedProcessor(),
         image_loader=lambda discovery_input: object(),
     )
-    config = Sam3Config(checkpoint="sam3", strategy=Sam3Strategy.AUTOMATIC)
+    config = Sam3Config(checkpoint="sam3", model_version="3.0", strategy=Sam3Strategy.AUTOMATIC)
 
     with pytest.raises(ValueError, match="supports only text_prompt"):
         runtime.predict(_input(), config)
@@ -390,8 +398,9 @@ def test_sam3_empty_masks_are_rejected_explicitly_by_normalization() -> None:
 class RecordingProcessor:
     """Official-processor stand-in that records call order into a shared event list."""
 
-    def __init__(self, events: list[str]) -> None:
+    def __init__(self, events: list[str], *, model: object | None = None) -> None:
         self._events = events
+        self.model = model or FakeLoadedModel("cuda:0")
 
     def set_image(self, image: object) -> object:
         self._events.append("image")
@@ -420,6 +429,7 @@ class RecordingContext:
 def _text_prompt_config(precision: str) -> Sam3Config:
     return Sam3Config(
         checkpoint="facebook/sam3",
+        model_version="3.0",
         device="cuda:0",
         precision=precision,
         strategy=Sam3Strategy.TEXT_PROMPT,
@@ -429,9 +439,12 @@ def _text_prompt_config(precision: str) -> Sam3Config:
 
 def test_sam3_precision_must_be_a_supported_inference_precision() -> None:
     with pytest.raises(ValueError, match="precision"):
-        Sam3Config(checkpoint="sam3", precision="int8")
+        Sam3Config(checkpoint="sam3", model_version="3.0", precision="int8")
     for precision in ("float32", "float16", "bfloat16"):
-        assert Sam3Config(checkpoint="sam3", precision=precision).precision == precision
+        assert (
+            Sam3Config(checkpoint="sam3", model_version="3.0", precision=precision).precision
+            == precision
+        )
 
 
 def test_official_sam3_runtime_runs_the_sdk_inside_the_configured_inference_context() -> None:
@@ -501,6 +514,7 @@ class InferenceModeRecordingProcessor:
 
     def __init__(self, torch: InferenceModeTorch) -> None:
         self._torch = torch
+        self.model = FakeLoadedModel("cuda:0")
         self.inference_mode: list[bool] = []
 
     def set_image(self, image: object) -> object:
@@ -527,6 +541,25 @@ def test_official_sam3_runtime_runs_the_sdk_in_torch_inference_mode(
 
     assert processor.inference_mode == [True, True, True]
     assert not fake_torch.is_inference_mode_enabled()
+
+
+def test_sam3_configuration_requires_an_explicit_model_version() -> None:
+    with pytest.raises(TypeError, match="model_version"):
+        Sam3Config(checkpoint="facebook/sam3")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:1"])
+def test_official_sam3_runtime_rejects_a_model_on_another_device(device: str) -> None:
+    events: list[str] = []
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events, model=FakeLoadedModel(device, "float32")),
+        image_loader=_materialized_image,
+    )
+
+    with pytest.raises(ValueError, match="device 'cuda:0'"):
+        runtime.predict(_input(), _text_prompt_config("bfloat16"))
+
+    assert events == []
 
 
 @pytest.mark.parametrize("seed", BACKEND_SEEDS)
@@ -566,6 +599,8 @@ def test_sam3_tensor_masks_are_detached_to_the_cpu_in_double_precision() -> None
     logits[0, 0, 1, 1:4] = 0.9
 
     class Processor:
+        model = FakeLoadedModel()
+
         def set_image(self, image: object) -> object:
             return {}
 

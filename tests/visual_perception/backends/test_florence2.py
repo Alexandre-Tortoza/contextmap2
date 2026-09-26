@@ -10,6 +10,7 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+from fakes import FakeLoadedModel
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, florence2_candidates
 
 from contextmap.ingestion import SourceObservationId
@@ -163,6 +164,7 @@ def test_florence2_reports_the_audit_of_the_regions_it_discovers() -> None:
     """#611: the regions of the public port come with the passes, rejections and merges."""
     config = Florence2Config(
         checkpoint="microsoft/Florence-2-large",
+        model_version="1.0",
         task="<REFERRING_EXPRESSION_SEGMENTATION>",
         prompt="visible regions",
     )
@@ -180,11 +182,13 @@ def test_florence2_reports_the_audit_of_the_regions_it_discovers() -> None:
 
 def test_florence2_configuration_requires_explicit_region_task() -> None:
     with pytest.raises(ValueError, match="task"):
-        Florence2Config(checkpoint="florence", task="")
+        Florence2Config(checkpoint="florence", model_version="1.0", task="")
     with pytest.raises(ValueError, match="box_threshold"):
-        Florence2Config(checkpoint="florence", task="region", box_threshold=2.0)
+        Florence2Config(
+            checkpoint="florence", model_version="1.0", task="region", box_threshold=2.0
+        )
     with pytest.raises(ValueError, match="region-producing task"):
-        Florence2Config(checkpoint="florence", task="<CAPTION>")
+        Florence2Config(checkpoint="florence", model_version="1.0", task="<CAPTION>")
 
 
 def test_florence2_invalid_native_mask_fails_with_parsing_context() -> None:
@@ -204,7 +208,9 @@ def test_florence2_invalid_native_mask_fails_with_parsing_context() -> None:
             )
 
     backend = Florence2RegionDiscovery(
-        config=Florence2Config(checkpoint="florence", task="<REGION_PROPOSAL>"),
+        config=Florence2Config(
+            checkpoint="florence", model_version="1.0", task="<REGION_PROPOSAL>"
+        ),
         runtime=InvalidRuntime(),
     )
 
@@ -216,14 +222,17 @@ class ModelInputs(dict[str, object]):
     def __init__(self) -> None:
         super().__init__({"input_ids": "ids", "pixel_values": "pixels"})
         self.devices: list[str] = []
+        self.dtypes: list[object] = []
 
-    def to(self, device: str) -> ModelInputs:
+    def to(self, device: str, dtype: object = None) -> ModelInputs:
         self.devices.append(device)
+        self.dtypes.append(dtype)
         return self
 
 
-class FlorenceModel:
-    def __init__(self) -> None:
+class FlorenceModel(FakeLoadedModel):
+    def __init__(self, device: str = "cpu", precision: str = "float32") -> None:
+        super().__init__(device, precision)
         self.received: list[dict[str, object]] = []
 
     def generate(self, **kwargs: object) -> object:
@@ -260,7 +269,7 @@ def test_official_florence2_runtime_executes_and_parses_region_boxes() -> None:
             "scores": [0.83],
         }
     )
-    model = FlorenceModel()
+    model = FlorenceModel("cuda:0")
     runtime = TransformersFlorence2Runtime(
         model=model,
         processor=processor,
@@ -268,6 +277,7 @@ def test_official_florence2_runtime_executes_and_parses_region_boxes() -> None:
     )
     config = Florence2Config(
         checkpoint="florence-community/Florence-2-base",
+        model_version="1.0",
         task="<REGION_PROPOSAL>",
         device="cuda:0",
         generation_settings=(("max_new_tokens", 128), ("num_beams", 3)),
@@ -308,6 +318,7 @@ def test_official_florence2_runtime_rasterizes_parsed_polygons() -> None:
     )
     config = Florence2Config(
         checkpoint="florence-community/Florence-2-base",
+        model_version="1.0",
         task="<REFERRING_EXPRESSION_SEGMENTATION>",
         prompt="movable item",
     )
@@ -330,7 +341,9 @@ def test_zero_florence2_detections_are_a_valid_empty_result() -> None:
         processor=FlorenceProcessor({"bboxes": [], "labels": []}),
         image_loader=_materialized_image,
     )
-    config = Florence2Config(checkpoint="florence-community/Florence-2-base", task="<OD>")
+    config = Florence2Config(
+        checkpoint="florence-community/Florence-2-base", model_version="1.0", task="<OD>"
+    )
 
     native = runtime.predict(_input(), config)
     output = Florence2RegionDiscovery(config=config, runtime=runtime).discover_candidates(_input())
@@ -363,7 +376,9 @@ def test_official_florence2_runtime_generates_in_torch_inference_mode(
         image_loader=_materialized_image,
     )
 
-    runtime.predict(_input(), Florence2Config(checkpoint="florence-2", task="<OD>"))
+    runtime.predict(
+        _input(), Florence2Config(checkpoint="florence-2", model_version="1.0", task="<OD>")
+    )
 
     assert model.inference_mode == [True]
     assert not fake_torch.is_inference_mode_enabled()
@@ -384,9 +399,63 @@ def test_official_florence2_runtime_without_torch_fails_explicitly(
     )
 
     with pytest.raises(RuntimeError, match="requires torch inference_mode"):
-        runtime.predict(_input(), Florence2Config(checkpoint="florence-2", task="<OD>"))
+        runtime.predict(
+            _input(), Florence2Config(checkpoint="florence-2", model_version="1.0", task="<OD>")
+        )
 
     assert model.received == []
+
+
+def test_florence2_configuration_requires_an_explicit_model_version() -> None:
+    with pytest.raises(TypeError, match="model_version"):
+        Florence2Config(checkpoint="florence-2", task="<OD>")  # type: ignore[call-arg]
+
+
+def _placed_config(*, precision: str = "float32") -> Florence2Config:
+    return Florence2Config(
+        checkpoint="florence-community/Florence-2-base",
+        task="<OD>",
+        model_version="1.0",
+        device="cuda:0",
+        precision=precision,
+    )
+
+
+@pytest.mark.parametrize(
+    ("placement", "message"),
+    [
+        (("cpu", "float32"), "device 'cuda:0'"),
+        (("cuda:0", "bfloat16"), "precision 'float32'"),
+    ],
+)
+def test_official_florence2_runtime_rejects_a_model_placed_unlike_the_configuration(
+    placement: tuple[str, str], message: str
+) -> None:
+    model = FlorenceModel(*placement)
+    processor = FlorenceProcessor({"bboxes": [], "labels": []})
+    runtime = TransformersFlorence2Runtime(
+        model=model, processor=processor, image_loader=_materialized_image
+    )
+
+    with pytest.raises(ValueError, match=message):
+        runtime.predict(_input(), _placed_config())
+
+    assert processor.calls == []
+    assert model.received == []
+
+
+def test_official_florence2_runtime_casts_inputs_to_the_verified_model_dtype() -> None:
+    processor = FlorenceProcessor({"bboxes": [], "labels": []})
+    runtime = TransformersFlorence2Runtime(
+        model=FlorenceModel("cuda:0", "float16"),
+        processor=processor,
+        image_loader=_materialized_image,
+    )
+
+    runtime.predict(_input(), _placed_config(precision="float16"))
+
+    assert processor.inputs.devices == ["cuda:0"]
+    assert processor.inputs.dtypes == ["torch.float16"]
 
 
 @pytest.mark.parametrize("seed", BACKEND_SEEDS)
