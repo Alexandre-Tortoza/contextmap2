@@ -86,7 +86,6 @@ from contextmap.ingestion.source_adapter import (
     SourceAdapterWarning,
     SourceTopicMapping,
     SourceWindow,
-    UnsupportedSourceMessageError,
 )
 from contextmap.ingestion.synchronization import (
     DroppedEvent,
@@ -187,7 +186,6 @@ __all__ = [
     "TimestampCorrectionDiagnostics",
     "TimestampPolicy",
     "TimestampRangeSelection",
-    "UnsupportedSourceMessageError",
     "apply_timestamp_policy",
     "camera_model_kind",
     "compute_configuration_hash",
