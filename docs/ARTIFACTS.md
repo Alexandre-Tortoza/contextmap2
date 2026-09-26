@@ -38,24 +38,27 @@ O canonical pipeline usa filesystem local como storage primário. O workspace é
 ```text
 workspace/
 ├── <dataset>/                       # a sequência física (`inputs.sequence`), por exemplo `corridor-02`
-│   └── <run>/                       # um run do runtime: `run-NNNN`
-│       ├── effective_config.json    # ┐
-│       ├── plan.json                # │ o diário do run, na raiz do run
-│       ├── status.json              # │ (ver "Registros de execução do runtime")
-│       ├── events.jsonl             # │
-│       ├── execution.json           # │
-│       ├── run.lock                 # ┘
-│       ├── ingestion/               # ┐
-│       ├── visual_perception/       # │
-│       ├── state_estimation/        # │
-│       ├── geometric_mapping/       # │ um diretório por estágio executado,
-│       ├── sensor_association/      # │ com o id do estágio da runtime
-│       ├── point_representation/    # │ (opcional)
-│       ├── semantic_fusion/         # │
-│       ├── semantic_mapping/        # │
-│       ├── entity_resolution/       # │
-│       ├── spatial_relations/       # │
-│       └── context_map/             # ┘ o `ContextMapArtifact` (capability `artifact`)
+│   ├── <run>/                       # um run do runtime: `run-NNNN`
+│   │   ├── effective_config.json    # ┐
+│   │   ├── plan.json                # │ o diário do run, na raiz do run
+│   │   ├── status.json              # │ (ver "Registros de execução do runtime")
+│   │   ├── events.jsonl             # │
+│   │   ├── execution.json           # │
+│   │   ├── run.lock                 # ┘
+│   │   ├── context_run.json         # registro de uma ContextRun concluída (contexto incremental)
+│   │   ├── context_build.json       # entrada congelada de um ContextBuild, antes dos estágios
+│   │   ├── ingestion/               # ┐
+│   │   ├── visual_perception/       # │
+│   │   ├── state_estimation/        # │
+│   │   ├── geometric_mapping/       # │ um diretório por estágio executado,
+│   │   ├── sensor_association/      # │ com o id do estágio da runtime
+│   │   ├── point_representation/    # │ (opcional)
+│   │   ├── semantic_fusion/         # │
+│   │   ├── semantic_mapping/        # │
+│   │   ├── entity_resolution/       # │
+│   │   ├── spatial_relations/       # │
+│   │   └── context_map/             # ┘ o `ContextMapArtifact` (capability `artifact`)
+│   └── branches/<nome>/             # uma ContextBranch: `branch.json` e `members/<revisão>.json`
 ├── experiments/                     # relatórios e manifests de avaliação, fora de qualquer run
 └── tmp/                             # conteúdo efêmero
 ```
@@ -68,6 +71,7 @@ Regras do layout:
 - **Não há contadores nem registros por capability.** Não existem `runs/<capability>/<sequência>/run-NNNN__...` nem `runs.json`: o único índice de runs é a própria listagem dos diretórios `<dataset>/run-NNNN` (`Runtime.list_runs()`).
 - **Um artifact nunca é modificado depois de finalizado**, e um run reexecutado é outro `run-NNNN`.
 - `tmp/` nunca é dependência contratual de um artifact válido, e o debug de um artifact nunca é dependência de outro estágio.
+- **Os registros do contexto incremental são do runtime, não de uma capability.** `context_run.json`, `context_build.json` e `branches/` só referenciam artifacts por `ArtifactRef` e identidade de conteúdo; nunca copiam evidência, e o `ContextMapArtifact` continua sendo o único produto público. Ver [runtime-composition.md](runtime-composition.md#contexto-incremental-v011-decisão-de-arquitetura).
 
 ### `experiments/`
 

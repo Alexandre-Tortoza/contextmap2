@@ -471,7 +471,63 @@ O runtime reutiliza as APIs públicas e artifacts dessas capabilities e não rei
 
 ## Contexto incremental (v0.1.1): decisão de arquitetura
 
-Decisão da issue #493, a porta de entrada da milestone v0.1.1. Congela o ciclo de vida incremental **sobre o runtime lançado na v0.1.0**, depois da release (#190) e da evidência do run canônico real (#177). Nada aqui está implementado ainda: esta seção diz o que as issues #494–#505 implementam e o que elas **não** podem criar.
+Decisão da issue #493, a porta de entrada da milestone v0.1.1. Congela o ciclo de vida incremental **sobre o runtime lançado na v0.1.0**, depois da release (#190) e da evidência do run canônico real (#177). O ciclo está implementado (#494–#502) e validado por evidência de **contrato** no CI (#499, #501). A execução controlada sobre dados reais (#501 com dados reais, #504) e a release (#505) continuam pendentes: nada aqui afirma resultado sobre dados reais.
+
+### Ciclo de vida em uso
+
+```mermaid
+flowchart TD
+    RUN["run-0001: ingestion → state_estimation → geometric_mapping"] -->|"context branch create --from-run"| SF["SpatialFoundation<br/>(foundation_of_run)"]
+    SF --> BR["ContextBranch corredor<br/>branch.json"]
+    BR -->|"context run (S1)"| CR1["ContextRun CR1<br/>run-0002/context_run.json"]
+    BR -->|"context run (S2)"| CR2["ContextRun CR2<br/>run-0003/context_run.json"]
+    CR1 --> R1["revisão 1"]
+    CR2 --> R2["revisão 2"]
+    R1 -->|"context build --revision 1"| CB1["ContextBuild CB1<br/>run-0004/context_build.json"]
+    CB1 --> M1["ContextMapArtifact M1"]
+    R2 -->|"context build"| CB2["ContextBuild CB2<br/>run-0005/context_build.json"]
+    CB2 --> M2["ContextMapArtifact M2"]
+    M1 -. "nunca muda" .- M2
+```
+
+```bash
+contextmap run --stage geometric_mapping -c exp.toml --workspace ws           # a fundação: run-0001
+contextmap context branch create corredor --from-run run-0001 -c exp.toml --workspace ws
+contextmap context run --branch corredor -c exp.toml --workspace ws \
+  --set 'inputs.observation_selection={"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 500}'
+contextmap context build --branch corredor --code-identity v0.1.1 -c exp.toml --workspace ws
+contextmap context run --branch corredor -c exp.toml --workspace ws \
+  --set 'inputs.observation_selection={"kind": "frame_range", "start_frame_index": 500, "end_frame_index": 1000}'
+contextmap context build --branch corredor --code-identity v0.1.1 -c exp.toml --workspace ws
+contextmap context inspect branch corredor -c exp.toml --workspace ws
+```
+
+A mesma sequência pela API: `foundation_of_run` ou `resolve_spatial_foundation`, `create_branch`, `context_scope` e `run_plan`, depois `publish_context_run` e `append_to_branch`; para o build, `plan_context_build`, `publish_context_build` e `run_plan`.
+
+### Distinções que o ciclo mantém
+
+- **Orquestração, não crença.** `SpatialFoundation`, `ContextRun`, `ContextBranch` e `ContextBuild` selecionam e registram evidência; nenhum deles guarda confiança, hipótese fundida ou entidade. Crença continua na Semantic Fusion e na Semantic Mapping, e conhecimento nas relações, dentro dos artifacts das capabilities.
+- **Branch contra build.** A branch cresce por acréscimo; um build congela uma revisão (ou um subconjunto explícito dela) e nunca muda depois.
+- **Build contra `ContextMap`.** O build é a proveniência da materialização; o `ContextMapArtifact` é o produto público, com o schema da v0.1.0 inalterado.
+- **`ContextMapId` é o snapshot.** Não há outro identificador de snapshot.
+- **Inferência repetida não é nova observação.** Várias inferências sobre o mesmo frame são evidência correlacionada de uma observação física; a Semantic Fusion as agrupa por `SourceObservationId`.
+- **Uma sessão só.** Uma fundação é uma sequência e um mapa; juntar sessões exige um modelo de registro/alinhamento que não existe.
+
+### Falha e nova tentativa
+
+- Uma `ContextRun` que falha não publica `context_run.json`: o journal do run (`status.json`, eventos) é o único registro, e a branch não muda. Tentar de novo é um run novo; com `--reuse-index`, o que já foi concluído é reutilizado.
+- Um build grava `context_build.json` antes do primeiro estágio. Se a materialização falha ou o mapa não verifica (validação `FULL` no estágio `context_map`), o run fica `failed` com a entrada congelada registrada e nenhum mapa é dado como sucesso.
+- Acréscimos concorrentes à mesma revisão: só um passa; o outro reabre a branch e acrescenta de novo.
+
+### Garantias validadas por contrato
+
+Na cadeia de CI (todos os estágios reais exceto a percepção, um dublê determinístico que respeita a seleção):
+
+- partir as mesmas observações em uma ou em várias `ContextRun`s dá o mesmo estado científico normalizado: contagens da fusão, entidades pela geometria da fundação que cobrem, com estado semântico e rótulos, e relações (#501);
+- inferência repetida sobre os mesmos frames mantém as observações físicas e soma resultados de inferência (#500, #501);
+- builds de revisões sucessivas materializam mapas que verificam, e o mapa anterior fica byte a byte intacto (#499).
+
+Sobre dados reais, nada disso foi medido ainda: é o escopo de #501 com dados reais e #504, e a variância do backend semântico (#580) precisa de protocolo antes.
 
 ### Evidência revisada
 
