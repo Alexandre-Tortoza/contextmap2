@@ -354,6 +354,8 @@ class SensorAssociationRunTransaction:
         self._observation_count = 0
         self._observations_without_support = 0
         self._failed_frame_count = 0
+        self._range_limit_candidate_support_count = 0
+        self._min_range_slack_m: float | None = None
         self._finding_counts: dict[str, int] = {}
         self._state_counts: dict[str, int] = {}
         self._dense_sources: dict[str, dict[str, dict[str, Any]]] = {}
@@ -554,6 +556,14 @@ class SensorAssociationRunTransaction:
             1 for observation in frame.observations if not observation.geometry_support
         )
         self._failed_frame_count += int(frame.diagnostics.failed)
+        count = frame.diagnostics.range_limit_candidate_support_count
+        if count is not None:
+            self._range_limit_candidate_support_count += count
+        slack = frame.diagnostics.min_range_slack_m
+        if slack is not None:
+            self._min_range_slack_m = (
+                slack if self._min_range_slack_m is None else min(self._min_range_slack_m, slack)
+            )
         for finding in frame.diagnostics.findings:
             code = finding.code.value
             self._finding_counts[code] = self._finding_counts.get(code, 0) + 1
@@ -587,6 +597,11 @@ class SensorAssociationRunTransaction:
             "observation_count": self._observation_count,
             "observations_without_support": self._observations_without_support,
             "state_counts": dict(self._state_counts),
+            # Sem limite de alcance não se aplica: nulo, nunca zero.
+            "range_limit_candidate_support_count": None
+            if outcome.candidate_policy.max_range_m is None
+            else self._range_limit_candidate_support_count,
+            "min_range_slack_m": self._min_range_slack_m,
             "rejected_frames": [
                 {
                     "source_observation_id": str(rejected.source_observation_id),

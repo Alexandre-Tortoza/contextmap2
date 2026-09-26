@@ -92,6 +92,24 @@ class RawToPreparedTransform:
         prepared: NDArray[Any] = edges - 0.5
         return prepared
 
+    def raw_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Return the closed box of the raw image that the prepared image covers.
+
+        The prepared image covers the edges ``[0, size)`` on each axis; undoing every step
+        about the pixel edges carries them back to the raw image. Every raw pixel whose
+        prepared pixel lies inside the prepared image lies inside this box.
+
+        Returns:
+            ``((u_min, u_max), (v_min, v_max))`` in raw pixel-center coordinates.
+        """
+        low = (0.0, 0.0)
+        high = (float(self.prepared_size[0]), float(self.prepared_size[1]))
+        for step in reversed(self.steps):
+            # e_in = e_out / escala + origem; a escala é sempre positiva e preserva a ordem.
+            low = _undo_step(step, low)
+            high = _undo_step(step, high)
+        return ((low[0] - 0.5, high[0] - 0.5), (low[1] - 0.5, high[1] - 0.5))
+
     def in_prepared_image(self, prepared_pixels: NDArray[Any]) -> NDArray[Any]:
         """Tell which prepared pixels fall inside ``[-0.5, size - 0.5)`` on both axes.
 
@@ -108,6 +126,14 @@ class RawToPreparedTransform:
         u, v = pixels[:, 0], pixels[:, 1]
         inside: NDArray[Any] = (u >= -0.5) & (u < width - 0.5) & (v >= -0.5) & (v < height - 0.5)
         return inside
+
+
+def _undo_step(step: ImageTransformStep, edges: tuple[float, float]) -> tuple[float, float]:
+    """Carry one edge coordinate back through a step: ``e_in = e_out / scale + offset``."""
+    return (
+        edges[0] / step.scale[0] + step.offset_px[0],
+        edges[1] / step.scale[1] + step.offset_px[1],
+    )
 
 
 def raw_to_prepared_transform(

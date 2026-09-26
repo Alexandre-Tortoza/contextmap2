@@ -34,7 +34,7 @@ Uma `SpatialObservation` é **evidência**: registra o que foi observado nesta e
 - **Pertencimento à máscara** de `Region2D`, índices região↔geometria, estatísticas de suporte versionadas e a montagem dos `SpatialObservation` ([`membership.md`](membership.md)).
 - **Amostragem de features densas** (`DenseFeatureMap` nativo ou melhorado, mais próxima e bilinear, por índices e pesos) ([`dense_sampling.md`](dense_sampling.md)).
 - **Qualidade da observação**: o contrato `ObservationQuality` e a derivação de suas medidas ([`quality.md`](quality.md)).
-- **Diagnósticos** de calibração, reprojeção e alinhamento temporal, com achados explícitos, referência confiável e varredura de deslocamento temporal ([`diagnostics.md`](diagnostics.md)).
+- **Diagnósticos** de calibração, reprojeção e alinhamento temporal, com achados explícitos, referência confiável e varredura de deslocamento temporal, e do suporte que o corte de alcance pode afetar ([`diagnostics.md`](diagnostics.md)).
 - **Serviço e artifact de run**: `SensorAssociationService`, que projeta os candidatos de cada frame e o entrega a um `FrameSink` antes de soltá-lo, canais de features densas distintos e o `SensorAssociationRunArtifact` imutável, escrito frame a frame, com tabelas colunares compactas, linhagem e evidência de depuração ([`artifact.md`](artifact.md)).
 
 A **validação** lê o artifact pela API pública e produz relatórios estratificados

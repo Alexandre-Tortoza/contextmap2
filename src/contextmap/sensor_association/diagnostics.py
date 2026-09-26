@@ -54,8 +54,14 @@ from contextmap.visual_perception import PreparedImage
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-DIAGNOSTICS_DEFINITIONS_VERSION = "association-diagnostics-v2"
+DIAGNOSTICS_DEFINITIONS_VERSION = "association-diagnostics-v3"
 """Versioned identity of the diagnostic definitions in this module.
+
+``v3`` (#612): a frame reports ``range_limit_candidate_support_count``, the associated support
+whose optical-axis depth reaches ``max_range_m * cos(theta_max)``, and ``min_range_slack_m``, the
+smallest ``max_range_m - range`` over that support; both are ``None`` without a range limit.
+They make observable the regime where culling on an ``OPTICAL_AXIS`` camera can free, and so
+associate, support the full map occludes.
 
 ``v2`` (#562): a frame's trusted reference now carries a
 :class:`ReprojectionAttempt` with an explicit :class:`ReprojectionOutcome`, so a missing
@@ -66,6 +72,9 @@ evaluated population rather than the declared one. The identity moves because th
 changed, not because the code did: two runs whose diagnostics mean different things must never
 share it.
 """
+
+_DEPTH_FLOOR_ULPS = 4
+"""ULPs of ``max_range_m`` the depth floor is lowered by, so rounding can only add candidates."""
 
 _NONE_PROJECTS = "no evaluated trusted reference correspondence could be projected"
 _NOT_EVALUATED = (
@@ -476,6 +485,19 @@ class FrameDiagnostics:
         visible_count: Points that are supported and not occluded.
         visible_depth_m: Depth of the visible points, when there are any.
         membership: The region membership summary, when membership was evaluated.
+        range_limit_candidate_support_count: Associated support whose optical-axis depth
+            ``z`` is at least ``max_range_m * cos(theta_max)``, with ``theta_max`` the frame's
+            :attr:`~FrameProjection.max_ray_angle_rad`. An element the range cut excludes and
+            that lands in the prepared image, where every occluder lands, is farther than
+            ``max_range_m`` at an angle within ``theta_max``, so its ``z`` is above that
+            floor, and it can only have hidden support deeper than itself: zero
+            is **conclusive**, no associated support lies where the cut could have changed
+            its occlusion. A non-zero value only counts candidates; it does not say those
+            points are near ``max_range_m`` or were affected. ``None`` when the frame has no
+            range limit or membership was not evaluated -- not applicable, never zero.
+        min_range_slack_m: Smallest ``max_range_m - range`` over the associated support, in
+            meters; auxiliary to the count, which it does not replace. ``None`` when there is
+            no range limit or no associated support.
         reprojection: Residual against a trusted reference, when one was measured.
         reprojection_attempt: What the frame did with its trusted reference, always present
             and always counted, so a missing residual is still an explainable, countable fact
@@ -504,6 +526,8 @@ class FrameDiagnostics:
     visible_count: int
     visible_depth_m: ValueSummary | None
     membership: MembershipStatistics | None
+    range_limit_candidate_support_count: int | None
+    min_range_slack_m: float | None
     reprojection: ReprojectionStatistics | None
     reprojection_attempt: ReprojectionAttempt
     dense_sampling: tuple[DenseSamplingSummary, ...]
@@ -561,6 +585,8 @@ class FrameDiagnostics:
                 else dataclasses.asdict(self.visible_depth_m),
             },
             "membership": None if self.membership is None else dataclasses.asdict(self.membership),
+            "range_limit_candidate_support_count": self.range_limit_candidate_support_count,
+            "min_range_slack_m": self.min_range_slack_m,
             "reprojection": None
             if self.reprojection is None
             else dataclasses.asdict(self.reprojection),
@@ -693,6 +719,7 @@ def diagnose_frame(
             median=float(np.median(depth)),
             maximum=float(depth.max()),
         )
+    candidate_support, range_slack = _range_limit_support(frame, membership)
 
     return FrameDiagnostics(
         definitions_version=DIAGNOSTICS_DEFINITIONS_VERSION,
@@ -715,6 +742,8 @@ def diagnose_frame(
         visible_count=resolution.visible_count,
         visible_depth_m=visible_depth,
         membership=None if membership is None else membership.statistics(),
+        range_limit_candidate_support_count=candidate_support,
+        min_range_slack_m=range_slack,
         reprojection=reprojection,
         reprojection_attempt=attempt,
         dense_sampling=tuple(_dense_summary(samples) for samples in dense_samples),
@@ -795,6 +824,37 @@ def _reprojection_findings(
             )
         )
     return findings
+
+
+def _range_limit_support(
+    frame: FrameProjection, membership: FrameMembership | None
+) -> tuple[int | None, float | None]:
+    """Count the associated support the range cut could affect, and its smallest range slack.
+
+    An element the cut excludes has ``range > max_range_m``; if it lands in the prepared image,
+    its angle to the axis is at most ``theta_max``, so its ``z`` is above
+    ``max_range_m * cos(theta_max)``. Occlusion only hides what is deeper than its support, so
+    only associated support at or beyond that floor could have been hidden by an excluded
+    element. The floor has no physical margin: a margin would leave support between the floor
+    and the floor plus the margin uncounted, and a zero would stop being conclusive. It is only
+    lowered by a few ULPs, so that rounding can add candidates and never remove one.
+
+    Returns:
+        ``(count, slack)``: ``(None, None)`` without a range limit or membership, and a
+        ``None`` slack when no support is associated.
+    """
+    import numpy as np
+
+    max_range_m = frame.candidates.policy.max_range_m
+    if max_range_m is None or membership is None:
+        return None, None
+    associated = np.unique(membership.point_indices)
+    if associated.size == 0:
+        return 0, None
+    floor = max_range_m * math.cos(frame.max_ray_angle_rad)
+    tolerance = _DEPTH_FLOOR_ULPS * math.ulp(max_range_m)
+    count = int((frame.camera_depth_m[associated] >= floor - tolerance).sum())
+    return count, float(max_range_m - frame.camera_range_m[associated].max())
 
 
 def _window_offset_ns(timestamp: SourceTimestamp, bounds: TimeBounds) -> int | None:

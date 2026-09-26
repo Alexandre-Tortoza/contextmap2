@@ -36,6 +36,7 @@ from contextmap.sensor_association.diagnostics import (
     DiagnosticTolerances,
     FindingCode,
     FindingSeverity,
+    FrameDiagnostics,
     ReprojectionAttempt,
     ReprojectionOutcome,
     TrustedCorrespondences,
@@ -149,6 +150,99 @@ def test_the_state_counts_and_the_membership_summary_partition_the_points() -> N
     assert diagnostics.visible_count == 1
     assert diagnostics.membership is not None
     assert diagnostics.membership.associated_count == 1
+
+
+# --- Support the range cut could affect -------------------------------------
+
+_LIMIT_M = 10.0
+_WITHIN_LIMIT = CandidateGeometryPolicy(max_range_m=_LIMIT_M)
+
+
+def _diagnose_regions(
+    frame: FrameProjection, *boxes: tuple[int, int, int, int]
+) -> FrameDiagnostics:
+    resolution = resolve_visibility(frame, POLICY)
+    regions = [
+        make_region(f"region-{index}", rect_mask(640, 480, *box)) for index, box in enumerate(boxes)
+    ]
+    membership = associate_regions(resolution, make_result(regions))
+    return diagnose_frame(resolution, tolerances=NO_TOLERANCE, membership=membership)
+
+
+def _depth_floor(frame: FrameProjection) -> float:
+    return _LIMIT_M * math.cos(frame.max_ray_angle_rad)
+
+
+def test_the_diagnostics_version_moves_with_the_range_limit_definitions() -> None:
+    assert DIAGNOSTICS_DEFINITIONS_VERSION == "association-diagnostics-v3"
+
+
+def test_without_a_range_limit_the_range_limit_diagnostics_do_not_apply() -> None:
+    frame = scene_frame((100, 100, 3.0), (300, 200, 8.0))
+
+    diagnostics = _diagnose_regions(frame, (90, 90, 110, 110), (290, 190, 310, 210))
+
+    # Não aplicável não é zero: sem corte de alcance não há região que ele possa afetar.
+    assert diagnostics.range_limit_candidate_support_count is None
+    assert diagnostics.min_range_slack_m is None
+    record = diagnostics.to_record()
+    assert record["range_limit_candidate_support_count"] is None
+    assert record["min_range_slack_m"] is None
+
+
+def test_only_associated_support_at_or_beyond_the_depth_floor_is_a_candidate() -> None:
+    frame = project_frame(
+        [
+            map_point_for_pixel(100, 100, 3.0),  # associada, rasa: não conta
+            map_point_for_pixel(300, 200, 8.0),  # associada, além do piso: conta
+            map_point_for_pixel(500, 400, 9.0),  # visível fora de toda máscara: não conta
+            map_point_for_pixel(100, 100, 8.5),  # atrás da primeira, ocluída: não conta
+        ],
+        candidate_policy=_WITHIN_LIMIT,
+    )
+    floor = _depth_floor(frame)
+    assert frame.camera_depth_m[0] < floor <= frame.camera_depth_m[1]
+    assert frame.camera_depth_m[3] >= floor and frame.camera_depth_m[2] >= floor
+
+    diagnostics = _diagnose_regions(frame, (90, 90, 110, 110), (290, 190, 310, 210))
+
+    assert diagnostics.range_limit_candidate_support_count == 1
+    assert diagnostics.min_range_slack_m == pytest.approx(_LIMIT_M - frame.camera_range_m[1])
+    record = diagnostics.to_record()
+    assert record["range_limit_candidate_support_count"] == 1
+    assert record["min_range_slack_m"] == pytest.approx(_LIMIT_M - frame.camera_range_m[1])
+
+
+def test_support_exactly_at_the_depth_floor_counts_with_no_margin_above_it() -> None:
+    reference = project_frame([map_point_for_pixel(320, 240, 1.0)], candidate_policy=_WITHIN_LIMIT)
+    floor = _depth_floor(reference)
+    frame = project_frame(
+        [map_point_for_camera_point((0.0, 0.0, floor))], candidate_policy=_WITHIN_LIMIT
+    )
+    below = project_frame(
+        [map_point_for_camera_point((0.0, 0.0, floor * (1 - 1e-9)))],
+        candidate_policy=_WITHIN_LIMIT,
+    )
+
+    at_floor = _diagnose_regions(frame, (310, 230, 330, 250))
+    under_floor = _diagnose_regions(below, (310, 230, 330, 250))
+
+    assert at_floor.range_limit_candidate_support_count == 1
+    assert under_floor.range_limit_candidate_support_count == 0
+
+
+def test_a_zero_count_is_a_measured_fact_and_differs_from_not_applicable() -> None:
+    shallow = project_frame([map_point_for_pixel(100, 100, 3.0)], candidate_policy=_WITHIN_LIMIT)
+    empty = project_frame([map_point_for_pixel(500, 400, 3.0)], candidate_policy=_WITHIN_LIMIT)
+
+    with_support = _diagnose_regions(shallow, (90, 90, 110, 110))
+    without_support = _diagnose_regions(empty, (90, 90, 110, 110))
+
+    assert with_support.range_limit_candidate_support_count == 0
+    assert with_support.min_range_slack_m == pytest.approx(_LIMIT_M - shallow.camera_range_m[0])
+    # Sem suporte associado a contagem é zero e conclusiva; a folga não tem sobre o que medir.
+    assert without_support.range_limit_candidate_support_count == 0
+    assert without_support.min_range_slack_m is None
 
 
 # --- Reprojection, only against trusted references --------------------------

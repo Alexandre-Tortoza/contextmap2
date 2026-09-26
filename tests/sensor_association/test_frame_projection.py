@@ -254,6 +254,22 @@ def test_a_point_cropped_away_is_outside_the_prepared_image_though_inside_the_ra
     assert frame.audit(0).stage is ProjectionStage.OUTSIDE_IMAGE
 
 
+def test_the_frame_bounds_the_ray_angle_over_its_prepared_image() -> None:
+    camera = camera_projection_for(make_calibration().entries[CAMERA_CALIBRATION_ID])
+
+    full = _project(_projector())
+    cropped = _project(_projector(), make_prepared_image(CROP_THEN_RESIZE))
+
+    assert full.max_ray_angle_rad == camera.max_ray_angle_rad(
+        u_bounds=(-0.5, 639.5), v_bounds=(-0.5, 479.5)
+    )
+    # Só o que cai na imagem preparada pode ocluir: o corte estreita o limite.
+    assert cropped.max_ray_angle_rad == camera.max_ray_angle_rad(
+        u_bounds=(99.5, 499.5), v_bounds=(49.5, 349.5)
+    )
+    assert cropped.max_ray_angle_rad < full.max_ray_angle_rad
+
+
 def projector_camera_in_image(raw_pixels: np.ndarray) -> bool:  # type: ignore[type-arg]
     camera: CameraProjection = camera_projection_for(
         make_calibration().entries[CAMERA_CALIBRATION_ID]

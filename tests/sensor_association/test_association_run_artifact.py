@@ -23,6 +23,7 @@ from run_builders import (
 import contextmap.sensor_association as sensor_association
 from contextmap.geometric_mapping import MapId, geometry_id_for
 from contextmap.sensor_association import (
+    CandidateGeometryPolicy,
     IncompleteRunArtifactError,
     RunArtifactError,
     SensorAssociationDebugLevel,
@@ -375,7 +376,7 @@ def test_the_frame_records_keep_the_projection_visibility_and_diagnostics(tmp_pa
     assert projection[0]["calibration_ref"]["camera_model_kind"] == "pinhole"
     assert visibility[0]["state_counts"]["occluded"] == 1
     assert visibility[0]["membership"]["associated_count"] == 3
-    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v2"
+    assert diagnostics[0]["definitions_version"] == "association-diagnostics-v3"
     assert diagnostics[0]["findings"] == []
 
 
@@ -391,6 +392,30 @@ def test_the_summary_aggregates_the_run_and_lists_the_rejected_frames(tmp_path: 
     assert reader.manifest.rejected_frame_count == 1
     assert summary["observation_count"] == 2
     assert summary["state_counts"]["occluded"] == 1
+
+
+def test_the_summary_totals_the_range_limit_diagnostics_over_the_frames(tmp_path: Path) -> None:
+    # Com 3,5 m o ponto de fundo (alcance 8,7 m) sai; as três associadas, a z = 3 m, ficam além
+    # do piso 3,5 * cos(theta_max), cerca de 2,73 m, nos dois frames.
+    written = _write(tmp_path, make_request(candidates=CandidateGeometryPolicy(max_range_m=3.5)))
+    frames = [frame.diagnostics for frame in written.frames]
+
+    summary = written.reader.read_record("metrics/summary.json")
+
+    assert [d.range_limit_candidate_support_count for d in frames] == [3, 3]
+    assert summary["range_limit_candidate_support_count"] == 6
+    slacks = [d.min_range_slack_m for d in frames]
+    assert all(slack is not None for slack in slacks)
+    assert summary["min_range_slack_m"] == pytest.approx(min(s for s in slacks if s is not None))
+
+
+def test_without_a_range_limit_the_summary_says_the_diagnostics_do_not_apply(
+    tmp_path: Path,
+) -> None:
+    summary = _write(tmp_path, _request()).reader.read_record("metrics/summary.json")
+
+    assert summary["range_limit_candidate_support_count"] is None
+    assert summary["min_range_slack_m"] is None
 
 
 # --- Immutability, atomicity and integrity ----------------------------------

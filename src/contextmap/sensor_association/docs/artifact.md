@@ -57,10 +57,12 @@ O writer grava o artifact **exatamente** no `output_dir` que o chamador entrega;
 │   └── dense-feature-cells.bin            # índices e pesos das células (se houver canais)
 ├── metrics/                               # contratual
 │   ├── frame-diagnostics.jsonl            # FrameDiagnostics por frame, com os achados
-│   ├── summary.json                       # agregados e frames rejeitados
+│   ├── summary.json                       # agregados, corte de alcance e frames rejeitados
 │   └── runtime.json                       # somente quando o tempo foi medido
 └── debug/                                 # nunca contratual
 ```
+
+`metrics/summary.json` soma `range_limit_candidate_support_count` sobre os frames e guarda o menor `min_range_slack_m`; ambos são `null` quando o run não tem limite de alcance, nunca `0` (ver [`diagnostics.md`](diagnostics.md)).
 
 Não existem `config.yaml`, `lineage.json`, `environment.json` nem `events.jsonl` separados: a configuração efetiva e a linhagem ficam no `manifest.json`, e os achados, em `metrics/frame-diagnostics.jsonl`. Criar arquivos sem produtor real violaria YAGNI, o critério dos outros artifacts.
 

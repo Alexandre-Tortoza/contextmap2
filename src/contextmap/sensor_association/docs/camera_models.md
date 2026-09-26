@@ -23,6 +23,7 @@ flowchart LR
 | `project(points_camera_m)` | `PixelProjection` para `(N, 3)` pontos finitos, em metros |
 | `unproject(pixels)` | `(N, 3)` raios unitários para `(N, 2)` pixels finitos |
 | `in_image(pixels)` | máscara de pixels dentro da extensão da imagem crua |
+| `max_ray_angle_rad(u_bounds=, v_bounds=)` | cota superior do ângulo com o eixo óptico de todo raio do domínio que cai numa caixa fechada de pixels crus |
 
 `PixelProjection` guarda `pixels` `(N, 2)`, `projectable` `(N,)`, `depth_m` (`z` com sinal no frame óptico), `range_m` (distância do centro óptico) e a `CameraIdentity` que a produziu, então todo resultado carrega a proveniência da calibração. Os arrays são revalidados: `projectable` é verdadeiro exatamente onde o pixel é finito.
 
@@ -65,6 +66,28 @@ O ponto sobre o eixo negativo, por exemplo, **não** vira o ponto principal em M
 No pinhole distorcido, o termo radial leva o raio sem distorção `r` a `r·radial(r)`. Além do primeiro zero de `d(r·radial)/dr` dois raios compartilham o mesmo raio distorcido e o polinômio dobra de volta: com `k1 = −0,28` sozinho, um ponto a 62,1° do eixo cairia exatamente no ponto principal, dentro da imagem. `r_max` é derivado no construtor pela mesma técnica do `θ_max` do fisheye (varredura do ângulo com o eixo, `r = tan θ`, refinada por bisseção), e os pontos além dele são não projetáveis. O pinhole sem distorção não tem esse limite.
 
 Os termos tangenciais e a distorção do MEI são confiados dentro do domínio. Uma calibração cujo polinômio do MEI dobra antes é um problema de calibração, que os diagnósticos de reprojeção expõem; a projeção não tenta adivinhá-lo.
+
+## Ângulo máximo de raio sobre uma caixa de pixels
+
+`max_ray_angle_rad(u_bounds=, v_bounds=)` devolve `θ_max`, uma cota **superior** do ângulo com o eixo óptico de todo raio do domínio de visão que o modelo manda para dentro da caixa. É o que o diagnóstico de corte de alcance (ver [`diagnostics.md`](diagnostics.md)) usa para limitar o ângulo de qualquer ponto que caia na imagem preparada; por isso ela só pode errar para cima. **Não** é a metade do campo de visão horizontal: é o ângulo do raio mais afastado que a caixa inteira alcança, cantos incluídos.
+
+A derivação é a mesma para os três modelos:
+
+1. **O canto mais distante.** O plano normalizado é uma escala alinhada aos eixos dos pixels (`x = (u − cx)/fx`, `y = (v − cy)/fy`), então o ponto da caixa mais distante do ponto principal nesse plano é um canto; `ρ` é o raio normalizado (distorcido) desse canto. Todo raio que cai na caixa tem raio distorcido `≤ ρ`.
+2. **Uma cota inferior do raio por ângulo.** Para cada ângulo `θ`, `g(θ)` é um limite inferior do raio distorcido de todo raio a esse ângulo, qualquer que seja o azimute. O termo tangencial OpenCV `t` satisfaz `|t| ≤ c·r²` com `c = hypot(|p1| + 3|p2|, 3|p1| + |p2|)`, e pela desigualdade triangular:
+
+   | Modelo | `g(θ)` | Domínio `[0, θ_dom]` |
+   | --- | --- | --- |
+   | Pinhole ideal | `tan θ` (exato) | `θ_dom = 90°` |
+   | Pinhole distorcido | `r·abs(radial(r)) − c·r²`, `r = tan θ` | `θ_dom = atan(r_max)`, a dobra radial (ou `90°`) |
+   | Fisheye | `θ_d(θ)` (exato: Kannala-Brandt não tem termo tangencial) | `θ_dom = θ_max`, o primeiro zero de `dθ_d/dθ` (ou `π`) |
+   | MEI | `m·abs(1 + k1 m² + k2 m⁴) − c·m²`, `m = sin θ / (cos θ + xi)` | `θ_dom = acos(−min(xi, 1/xi))`, o horizonte |
+
+3. **O maior ângulo compatível.** `θ_max = sup{θ ∈ [0, θ_dom] : g(θ) ≤ ρ}`: um raio mais inclinado que isso teria raio distorcido maior que o de qualquer ponto da caixa, e fora do domínio não há raio. Quando a caixa alcança o limite do domínio (o canto está além do círculo válido do fisheye, do horizonte do MEI ou da dobra do pinhole), `θ_max = θ_dom`.
+
+Sem termo tangencial (`p1 = p2 = 0`, e sempre no fisheye) `g` é o raio exato e crescente no domínio, então `θ_max` é exatamente o ângulo do raio do canto mais distante, cortado no domínio. Com termo tangencial a cota é um pouco mais larga (cerca de `0,1°` nas calibrações de teste). O supremo é achado por varredura do ângulo, com a resolução dos limites de domínio, e bisseção que guarda a ponta **externa**, mais 4 ULPs: o arredondamento só alarga a cota. A única suposição é a da varredura: uma `g` não monótona (termo tangencial, ou o polinômio do MEI que dobra dentro do horizonte) que descesse abaixo de `ρ` estritamente entre duas amostras não seria vista.
+
+**Onde a cota degenera.** Quando o polinômio radial de um pinhole não domina o tangencial em raios grandes (por exemplo, só `p1`/`p2` não nulos), o próprio modelo manda raios a quase 90° para dentro da imagem: o termo tangencial cancela o radial perto de `r = 1/(3|p|)` e o ponto dobra de volta para perto do ponto principal. O domínio atual não tem limite para essa dobra tangencial, então `θ_max = 90°`. A cota continua correta para o modelo implementado; só deixa de ser informativa.
 
 ## Raio inverso e pixels sem raio
 
