@@ -312,6 +312,21 @@ inferência anterior, nunca truth.
   sobre execuções reais de Qwen e Gemini (runtimes/clients fake na CI): o canal
   `scene_context` vem do request, e o template é o mesmo nos dois braços.
 
+## Política de request resolvida (#544)
+
+`SemanticRequestPolicy` reúne o que molda todos os requests semânticos de um run: o
+prompt de cada modo interpretado (`SemanticModePrompt`: `template_id` e schema de saída;
+um modo sem prompt não é interpretado e nunca recebe um padrão), a `SemanticViewPolicy`
+e o interruptor `region_scene_context`. `SemanticRequestPolicy.from_prompt_policy()` a
+resolve a partir da `SemanticPromptPolicy` e da política de views de um intérprete que
+segue instruções; o Florence-2 recebe o prompt nativo da task só no modo que ela serve.
+`to_document()` registra todas as escolhas (inclusive as regras das views) sob a versão
+`semantic-request-policy/1`, e `fingerprint()` é o SHA-256 desse documento: seleções
+equivalentes têm a mesma identidade, e mudar prompt, views, ordem das views ou contexto a
+muda. `check_request_policy_supported()` recusa, antes de qualquer inferência, uma política
+que o intérprete declara não consumir. O backend, o modelo e o orçamento visual continuam
+configuração do backend, fora da política.
+
 ## Materialização e persistência
 
 `assemble_perception_result()` recebe explicitamente os ids dos stages que

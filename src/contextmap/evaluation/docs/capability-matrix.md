@@ -1,6 +1,6 @@
 # Matriz de capacidades e compatibilidade (#522)
 
-`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.1.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
+`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.2.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
 
 A matriz descreve composições experimentais admissíveis; ela **não** escolhe um pipeline canônico. Um modelo só ocupa vários papéis por contratos de evidência explícitos de cada capability: geometria, hipótese semântica e crença persistente nunca se fundem só porque saem da mesma inferência.
 
@@ -55,7 +55,7 @@ Comparar operações de grupos diferentes (por exemplo, caixa × máscara numa m
 | 3. grounding/refinamento | LocateAnything → refinamento SAM2 (`planned`, #568) × SAM3 texto; caixa sem máscara → associação é `incompatible` |
 | 4. features densas/de região | `dense_visual_features`; amostragem 2D→3D ainda `planned` |
 | 5. intérprete semântico | Qwen × Gemini × Eagle 2.5 no mesmo grupo; Florence-2 à parte |
-| 6–9. prompt, views, contexto, orçamento | controles `supported`: `prompt_policy`, `view_policy` (#524, em todo intérprete semântico; o Florence-2 só aceita uma view que a região preenche), `prompt_policy.region_scene_context` (#529, Qwen e Gemini; o Eagle 2.5 e o Florence-2 não aceitam contexto de cena) e orçamentos visuais (`min_pixels`/`max_pixels` do Qwen, tiles do Eagle 2.5); política de requisição unificada (#544) `planned` |
+| 6–9. prompt, views, contexto, orçamento | controles `supported`: `prompt_policy`, `view_policy` (#524, em todo intérprete semântico; o Florence-2 só aceita uma view que a região preenche), `prompt_policy.region_scene_context` (#529, Qwen e Gemini; o Eagle 2.5 e o Florence-2 não aceitam contexto de cena) e orçamentos visuais (`min_pixels`/`max_pixels` do Qwen, tiles do Eagle 2.5); a política de requisição resolvida (#544) é a união desses controles, com uma identidade (`SemanticRequestPolicy.fingerprint()`, resolvida só da configuração por `resolve_semantic_request_policy`) |
 | 10–11. composições e confirmação downstream | as arestas `supported` até Semantic Fusion |
 
 ## Achados que as fases seguintes precisam saber

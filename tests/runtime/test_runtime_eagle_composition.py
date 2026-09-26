@@ -16,11 +16,10 @@ from runtime_documents import (
 from contextmap.runtime.composition import (
     ComposedRuntime,
     RuntimeProvider,
-    SemanticRequestPrompt,
     compose,
 )
 from contextmap.runtime.errors import BackendConfigurationError, BackendRuntimeMissingError
-from contextmap.visual_perception import SemanticInterpretationMode
+from contextmap.visual_perception import SemanticModePrompt
 from contextmap.visual_perception.backends.eagle2_5 import (
     EagleSemanticConfig,
     EagleSemanticInterpreter,
@@ -114,14 +113,12 @@ def test_requests_name_the_configured_prompt_policy(tmp_path: Path) -> None:
 
     composed = _compose(tmp_path, _eagle_document(prompt_policy=policy))
 
-    assert composed.semantic_prompts == {
-        SemanticInterpretationMode.SCENE: SemanticRequestPrompt(
-            template_id="scene/v1", output_schema="semantic-response/1"
-        ),
-        SemanticInterpretationMode.REGION: SemanticRequestPrompt(
-            template_id="region-abstention/v1", output_schema="semantic-response/1"
-        ),
-    }
+    request_policy = composed.semantic_request_policy
+    assert request_policy is not None
+    assert (request_policy.scene, request_policy.region) == (
+        SemanticModePrompt(template_id="scene/v1", output_schema="semantic-response/1"),
+        SemanticModePrompt(template_id="region-abstention/v1", output_schema="semantic-response/1"),
+    )
 
 
 @pytest.mark.parametrize(

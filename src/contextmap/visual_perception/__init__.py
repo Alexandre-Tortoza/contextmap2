@@ -240,6 +240,12 @@ from contextmap.visual_perception.semantic_prompt import (
     parse_semantic_response,
     render_semantic_prompt,
 )
+from contextmap.visual_perception.semantic_request_policy import (
+    SEMANTIC_REQUEST_POLICY_VERSION,
+    SemanticModePrompt,
+    SemanticRequestPolicy,
+    check_request_policy_supported,
+)
 from contextmap.visual_perception.semantic_requests import (
     SemanticFeatureReference,
     SemanticInterpretationMode,
@@ -290,6 +296,7 @@ __all__ = [
     "SCENE_CONTEXT_RENDERING",
     "SEMANTIC_DEBUG_ROOT",
     "SEMANTIC_PROMPT_TEMPLATES",
+    "SEMANTIC_REQUEST_POLICY_VERSION",
     "SEMANTIC_VIEW_POLICY_VERSION",
     "ArtifactReference",
     "BackendDiagnostics",
@@ -415,6 +422,7 @@ __all__ = [
     "SemanticInterpretationRequest",
     "SemanticInterpreter",
     "SemanticInterpreterCapabilities",
+    "SemanticModePrompt",
     "SemanticParseDiagnostic",
     "SemanticParseFailure",
     "SemanticPromptPolicy",
@@ -422,6 +430,7 @@ __all__ = [
     "SemanticRegionKind",
     "SemanticRequestId",
     "SemanticRequestMetadata",
+    "SemanticRequestPolicy",
     "SemanticResponseParseError",
     "SemanticScore",
     "SemanticScoreType",
@@ -447,6 +456,7 @@ __all__ = [
     "assemble_perception_result",
     "box_mask_shape",
     "build_discovery_passes",
+    "check_request_policy_supported",
     "check_view_policy_supported",
     "claim_id_for",
     "decode_embedding_space",

@@ -472,7 +472,7 @@ _SCORING_LIMITATIONS = (
     "another scorer's values (#530 evaluates it)",
 )
 
-CAPABILITY_MATRIX_VERSION = "1.1.0"
+CAPABILITY_MATRIX_VERSION = "1.2.0"
 """Version of :data:`CAPABILITY_MATRIX`; a changed entry is a new version."""
 
 CAPABILITY_MATRIX = CapabilityMatrix(
@@ -1118,10 +1118,10 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             input_evidence=("PreparedImage", "Region2D"),
             output_evidence=("SemanticVisualView (sha256)",),
             geometry=Geometry.NONE,
-            prompt_controls=(_planned("request_policy", 544),),
             provenance=(
                 "SemanticVisualView(kind, payload_reference, sha256, region_id, construction)",
                 "SemanticViewPolicy.fingerprint() (semantic-views/1)",
+                "SemanticRequestPolicy.fingerprint() (semantic-request-policy/1, #544)",
             ),
             limitations=(
                 "the ordered views come from the semantic backend's view_policy (#524): one "
@@ -1157,7 +1157,6 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                         if mode == "region" and accepts_scene_context
                         else ()
                     ),
-                    _planned("request_policy", 544),
                 ),
                 model_controls=model_controls,
                 provenance=_INTERPRETATION_PROVENANCE,

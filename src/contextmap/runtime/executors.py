@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,7 +94,6 @@ from contextmap.runtime.composition import (
     FeatureBuildScope,
     FeatureFactory,
     RegionGroundingPlan,
-    SemanticRequestPrompt,
 )
 from contextmap.runtime.pipeline import StageRequest
 from contextmap.semantic_fusion import (
@@ -181,8 +180,9 @@ from contextmap.visual_perception import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreter,
+    SemanticModePrompt,
     SemanticRequestId,
-    SemanticViewPolicy,
+    SemanticRequestPolicy,
     SourceImage,
     StageOutcome,
     StageStatus,
@@ -767,13 +767,12 @@ class _LegacySemanticInterpreterBridge:
         interpreter: SemanticInterpreter,
         run_id: PerceptionRunId,
         view_root: Path,
-        prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt],
-        view_policy: SemanticViewPolicy,
+        policy: SemanticRequestPolicy,
     ) -> None:
-        """Bind the bridge to the interpreter, the run, its view directory and its policies."""
+        """Bind the bridge to the interpreter, the run, its view directory and request policy."""
         self._interpreter = interpreter
-        self._prompts = prompts
-        self._view_policy = view_policy
+        self._policy = policy
+        self._view_policy = policy.views
         self._run_id = run_id
         self._view_root = view_root
         provenance = interpreter.backend_provenance()
@@ -844,14 +843,14 @@ class _LegacySemanticInterpreterBridge:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(item.payload)
 
-    def _prompt(self, mode: SemanticInterpretationMode) -> SemanticRequestPrompt:
+    def _prompt(self, mode: SemanticInterpretationMode) -> SemanticModePrompt:
         """Return the prompt policy composed for ``mode``; a missing one is never defaulted.
 
         Raises:
             ExecutorError: If no prompt policy was composed for ``mode`` (Florence-2 serves
                 exactly one mode, for example).
         """
-        prompt = self._prompts.get(mode)
+        prompt = self._policy.prompt_for(mode)
         if prompt is None:
             raise ExecutorError(
                 f"no semantic prompt policy was composed for {mode.value} requests; the "
@@ -947,7 +946,7 @@ class _LegacySemanticInterpreterBridge:
         for region in regions:
             # Consultado por região, como antes: um frame sem regiões não exige política.
             prompt = self._prompt(SemanticInterpretationMode.REGION)
-            context = self._conditioning(image) if prompt.scene_context else None
+            context = self._conditioning(image) if self._policy.region_scene_context else None
             views = materialize_region_views(
                 pixels,
                 source_observation_id=image.source_observation_id,
@@ -1127,8 +1126,7 @@ class VisualPerceptionExecutor:
         dense_features: FeatureFactory,
         region_features: FeatureFactory,
         semantic_interpreter: SemanticInterpreter,
-        semantic_prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt],
-        semantic_view_policy: SemanticViewPolicy,
+        semantic_request_policy: SemanticRequestPolicy,
         region_grounding: RegionGroundingPlan | None = None,
     ) -> None:
         """Bind the executor to the composed backends of the canonical preset.
@@ -1143,17 +1141,15 @@ class VisualPerceptionExecutor:
             dense_features: Builds the dense feature extractor for one run.
             region_features: Builds the region feature extractor for one run.
             semantic_interpreter: Semantic interpretation backend.
-            semantic_prompts: Prompt policy every semantic request of each mode names (#542).
-            semantic_view_policy: Views every semantic request carries, and how they are
-                built from the prepared image (#524).
+            semantic_request_policy: Prompt of each mode (#542), ordered views (#524) and
+                scene-context switch (#529) every semantic request follows (#544).
             region_grounding: Prompt-conditioned grounding backend and its queries, if composed.
         """
         self._region_discovery = region_discovery
         self._dense_features = dense_features
         self._region_features = region_features
         self._semantic_interpreter = semantic_interpreter
-        self._semantic_prompts = semantic_prompts
-        self._semantic_view_policy = semantic_view_policy
+        self._semantic_request_policy = semantic_request_policy
         self._region_grounding = region_grounding
 
     def execute(self, request: StageRequest) -> ArtifactRef:
@@ -1203,8 +1199,7 @@ class VisualPerceptionExecutor:
                 interpreter=self._semantic_interpreter,
                 run_id=run_id,
                 view_root=scratch,
-                prompts=self._semantic_prompts,
-                view_policy=self._semantic_view_policy,
+                policy=self._semantic_request_policy,
             )
             # Um backend de grounding por run: o runtime empacotado carrega o modelo uma vez,
             # na primeira pergunta, e resolve as imagens preparadas no diretório de rascunho.

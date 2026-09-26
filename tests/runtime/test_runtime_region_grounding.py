@@ -18,7 +18,6 @@ from runtime_documents import effective_from, selected_document
 from contextmap.runtime.composition import (
     RegionGroundingPlan,
     RuntimeProvider,
-    SemanticRequestPrompt,
     compose,
     compose_executors,
 )
@@ -37,6 +36,8 @@ from contextmap.visual_perception import (
     RegionGroundingCapabilities,
     RegionGroundingExecution,
     RegionGroundingRequest,
+    SemanticPromptPolicy,
+    SemanticRequestPolicy,
     SemanticViewPolicy,
     VisualViewKind,
 )
@@ -326,7 +327,6 @@ def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
         SemanticConfidencePolicy,
         SemanticInferenceProvenance,
         SemanticInterpretationExecution,
-        SemanticInterpretationMode,
         VisualFeature,
         parse_semantic_response,
         render_semantic_prompt,
@@ -425,15 +425,10 @@ def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
         dense_features=lambda _scope: _NoFeatures(FeatureScope.DENSE),  # type: ignore[arg-type]
         region_features=lambda _scope: _NoFeatures(FeatureScope.REGION),  # type: ignore[arg-type]
         semantic_interpreter=_AbstainingInterpreter(),  # type: ignore[arg-type]
-        semantic_prompts={
-            SemanticInterpretationMode.SCENE: SemanticRequestPrompt(
-                template_id="scene/v1", output_schema="semantic-response/1"
-            ),
-            SemanticInterpretationMode.REGION: SemanticRequestPrompt(
-                template_id="region/v1", output_schema="semantic-response/1"
-            ),
-        },
-        semantic_view_policy=SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,)),
+        semantic_request_policy=SemanticRequestPolicy.from_prompt_policy(
+            SemanticPromptPolicy(scene="scene/v1", region="region/v1"),
+            views=SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,)),
+        ),
         region_grounding=RegionGroundingPlan(queries=queries, factory=factory),  # type: ignore[arg-type]
     )
 

@@ -63,6 +63,16 @@ A request to Florence-2 names ``"<TASK_PROMPT_POLICY>:<task>"`` as its prompt te
 the recorded prompt is the text the model actually consumed.
 """
 
+
+TASK_OUTPUT_SCHEMA = SEMANTIC_RESPONSE_SCHEMA
+"""The output schema :data:`TASK_ENVELOPE_POLICY` produces from the task text."""
+
+
+def task_prompt_template_id(task: str) -> str:
+    """Return the task-native prompt policy a Florence-2 request of ``task`` names."""
+    return f"{TASK_PROMPT_POLICY}:{task}"
+
+
 _WHOLE_VIEW_REGION = "<loc_0><loc_0><loc_999><loc_999>"
 _LOCATION_TOKEN = re.compile(r"<loc_\d+>")
 _PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
@@ -261,8 +271,8 @@ class Florence2SemanticInterpreter:
         self.configuration_fingerprint = (
             "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         )
-        self.prompt_template_id = f"{TASK_PROMPT_POLICY}:{config.task}"
-        self.output_schema_version = SEMANTIC_RESPONSE_SCHEMA
+        self.prompt_template_id = task_prompt_template_id(config.task)
+        self.output_schema_version = TASK_OUTPUT_SCHEMA
         # O prompt nativo depende só da task configurada, nunca do request: renderizado uma vez.
         task_prompt = f"{config.task}{self._task.task_input}"
         self._rendered_prompt = RenderedSemanticPrompt(

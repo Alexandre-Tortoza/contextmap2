@@ -25,7 +25,6 @@ from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
     RuntimeProvider,
-    SemanticRequestPrompt,
     composable_backends,
     compose,
     compose_executors,
@@ -51,6 +50,9 @@ from contextmap.visual_perception import (
     FeatureScope,
     PerceptionRunId,
     SemanticInterpretationMode,
+    SemanticModePrompt,
+    SemanticPromptPolicy,
+    SemanticRequestPolicy,
     SemanticViewPolicy,
     VisualViewKind,
 )
@@ -349,11 +351,12 @@ class TestCanonicalComposition:
 SCENE = SemanticInterpretationMode.SCENE
 REGION_MODE = SemanticInterpretationMode.REGION
 _TIGHT_CROP_VIEWS = SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,))
+_CANONICAL_POLICY = SemanticRequestPolicy.from_prompt_policy(
+    SemanticPromptPolicy(scene="scene/v1", region="region/v1"), views=_TIGHT_CROP_VIEWS
+)
 _CANONICAL_PROMPTS = {
-    SCENE: SemanticRequestPrompt(template_id="scene/v1", output_schema="semantic-response/1"),
-    REGION_MODE: SemanticRequestPrompt(
-        template_id="region/v1", output_schema="semantic-response/1"
-    ),
+    SCENE: SemanticModePrompt(template_id="scene/v1", output_schema="semantic-response/1"),
+    REGION_MODE: SemanticModePrompt(template_id="region/v1", output_schema="semantic-response/1"),
 }
 
 
@@ -407,14 +410,14 @@ class TestSemanticPromptPolicy:
 
         composed = _compose(tmp_path, document=document)
 
-        assert composed.semantic_prompts == {
-            SCENE: SemanticRequestPrompt(
-                template_id="scene/v1", output_schema="semantic-response/1"
-            ),
-            REGION_MODE: SemanticRequestPrompt(
+        policy = composed.semantic_request_policy
+        assert policy is not None
+        assert (policy.scene, policy.region) == (
+            SemanticModePrompt(template_id="scene/v1", output_schema="semantic-response/1"),
+            SemanticModePrompt(
                 template_id="region-abstention/v1", output_schema="semantic-response/1"
             ),
-        }
+        )
 
     def test_qwen_and_gemini_consume_the_same_backend_neutral_policy(self, tmp_path: Path) -> None:
         policy = {"scene": "scene/v1", "region": "region-abstention/v1"}
@@ -428,7 +431,7 @@ class TestSemanticPromptPolicy:
             tmp_path, document=_gemini_document(policy), environ={"GEMINI_API_KEY": "k"}
         )
 
-        assert from_qwen.semantic_prompts == from_gemini.semantic_prompts
+        assert from_qwen.semantic_request_policy == from_gemini.semantic_request_policy
 
     def test_the_prompt_policy_varies_without_touching_the_backend_identity(
         self, tmp_path: Path
@@ -441,7 +444,7 @@ class TestSemanticPromptPolicy:
         ] = {"scene": "scene/v1", "region": "region-abstention/v1"}
         alternative = _compose(tmp_path, document=document)
 
-        assert canonical.semantic_prompts != alternative.semantic_prompts
+        assert canonical.semantic_request_policy != alternative.semantic_request_policy
         assert canonical.semantic_interpreter is not None
         assert alternative.semantic_interpreter is not None
         assert (
@@ -491,12 +494,13 @@ class TestSemanticPromptPolicy:
     ) -> None:
         composed = _compose(tmp_path, document=_florence2_document())
 
-        assert composed.semantic_prompts == {
-            REGION_MODE: SemanticRequestPrompt(
-                template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
-                output_schema="semantic-response/1",
-            )
-        }
+        policy = composed.semantic_request_policy
+        assert policy is not None
+        assert policy.scene is None
+        assert policy.region == SemanticModePrompt(
+            template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
+            output_schema="semantic-response/1",
+        )
 
     def test_florence2_reports_that_it_cannot_consume_a_free_form_policy(
         self, tmp_path: Path
@@ -520,9 +524,9 @@ class TestSemanticPromptPolicy:
             environ={},
         )
 
-        prompts = executors["visual_perception"]._semantic_prompts  # type: ignore[attr-defined]
-        assert prompts[REGION_MODE].template_id == "region-abstention/v1"
-        assert prompts[SCENE].template_id == "scene/v1"
+        policy = executors["visual_perception"]._semantic_request_policy  # type: ignore[attr-defined]
+        assert policy.region.template_id == "region-abstention/v1"
+        assert policy.scene.template_id == "scene/v1"
 
 
 class TestSemanticViewPolicy:
@@ -556,7 +560,8 @@ class TestSemanticViewPolicy:
 
         composed = _compose(tmp_path, document=document)
 
-        assert composed.semantic_view_policy == SemanticViewPolicy(
+        assert composed.semantic_request_policy is not None
+        assert composed.semantic_request_policy.views == SemanticViewPolicy(
             region_views=(
                 VisualViewKind.MASKED_SUBJECT,
                 VisualViewKind.TIGHT_CROP,
@@ -609,8 +614,8 @@ class TestSemanticViewPolicy:
 
         composed = _compose(tmp_path, document=document)
 
-        assert composed.semantic_view_policy is not None
-        assert [kind.value for kind in composed.semantic_view_policy.region_views] == [
+        assert composed.semantic_request_policy is not None
+        assert [kind.value for kind in composed.semantic_request_policy.views.region_views] == [
             "masked_subject"
         ]
 
@@ -626,7 +631,7 @@ class TestSemanticViewPolicy:
             environ={},
         )
 
-        policy = executors["visual_perception"]._semantic_view_policy  # type: ignore[attr-defined]
+        policy = executors["visual_perception"]._semantic_request_policy.views  # type: ignore[attr-defined]
         assert [kind.value for kind in policy.region_views] == ["masked_subject", "tight_crop"]
 
 
@@ -2132,8 +2137,7 @@ class TestComposeVisualPerceptionExecutor:
             dense_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.DENSE),  # type: ignore[arg-type]
             region_features=lambda _scope: _FakeFeatureExtractor(FeatureScope.REGION),  # type: ignore[arg-type]
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
-            semantic_prompts=_CANONICAL_PROMPTS,
-            semantic_view_policy=_TIGHT_CROP_VIEWS,
+            semantic_request_policy=_CANONICAL_POLICY,
         )
 
         workspace = tmp_path / "ws"
@@ -2409,8 +2413,7 @@ class TestComposeVisualPerceptionExecutor:
             dense_features=lambda _scope: _FakeDenseFeatureExtractor(),  # type: ignore[arg-type]
             region_features=composed.region_features,
             semantic_interpreter=_FakeSemanticInterpreter(),  # type: ignore[arg-type]
-            semantic_prompts=_CANONICAL_PROMPTS,
-            semantic_view_policy=_TIGHT_CROP_VIEWS,
+            semantic_request_policy=_CANONICAL_POLICY,
         )
 
         workspace = tmp_path / "ws"
@@ -2575,8 +2578,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             interpreter=self._fake_interpreter(),
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
-            prompts=_CANONICAL_PROMPTS,
-            view_policy=_TIGHT_CROP_VIEWS,
+            policy=_CANONICAL_POLICY,
         )
         bridge.bind(writer)  # type: ignore[arg-type]
 
@@ -2651,8 +2653,7 @@ class TestSemanticBridgeStreamsItsEvidence:
             interpreter=_RejectingInterpreter(),  # type: ignore[arg-type]
             run_id=PerceptionRunId("run-0001"),
             view_root=tmp_path,
-            prompts=_CANONICAL_PROMPTS,
-            view_policy=_TIGHT_CROP_VIEWS,
+            policy=_CANONICAL_POLICY,
         )
         bridge.bind(_RecordingWriter())  # type: ignore[arg-type]
 
@@ -2761,14 +2762,16 @@ class _PayloadWriter:
 def _semantic_bridge(
     tmp_path: Path,
     *,
-    prompts: dict[SemanticInterpretationMode, SemanticRequestPrompt] | None = None,
+    prompts: dict[SemanticInterpretationMode, SemanticModePrompt] | None = None,
     view_policy: Any = None,
+    scene_context: bool = False,
     interpreter: Any = None,
 ) -> tuple[Any, list[Any], _PayloadWriter]:
     from contextmap.runtime.executors import _LegacySemanticInterpreterBridge
     from contextmap.visual_perception import SemanticViewPolicy, VisualViewKind
 
     wrapped = interpreter or TestSemanticBridgeStreamsItsEvidence._fake_interpreter()
+    selected = _CANONICAL_PROMPTS if prompts is None else prompts
     requests: list[Any] = []
 
     class _Recording:
@@ -2784,11 +2787,15 @@ def _semantic_bridge(
         interpreter=_Recording(),  # type: ignore[arg-type]
         run_id=PerceptionRunId("run-0001"),
         view_root=tmp_path,
-        prompts=_CANONICAL_PROMPTS if prompts is None else prompts,
-        view_policy=(
-            SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,))
-            if view_policy is None
-            else view_policy
+        policy=SemanticRequestPolicy(
+            views=(
+                SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,))
+                if view_policy is None
+                else view_policy
+            ),
+            scene=selected.get(SCENE),
+            region=selected.get(REGION_MODE),
+            region_scene_context=scene_context,
         ),
     )
     bridge.bind(writer)  # type: ignore[arg-type]
@@ -2805,10 +2812,10 @@ class TestSemanticBridgeNamesTheSelectedPromptPolicy:
         bridge, requests, _ = _semantic_bridge(
             tmp_path,
             prompts={
-                SCENE: SemanticRequestPrompt(
+                SCENE: SemanticModePrompt(
                     template_id="scene/v1", output_schema="semantic-response/1"
                 ),
-                REGION_MODE: SemanticRequestPrompt(
+                REGION_MODE: SemanticModePrompt(
                     template_id="region-abstention/v1", output_schema="semantic-response/1"
                 ),
             },
@@ -2835,7 +2842,7 @@ class TestSemanticBridgeNamesTheSelectedPromptPolicy:
         bridge, requests, _ = _semantic_bridge(
             tmp_path,
             prompts={
-                REGION_MODE: SemanticRequestPrompt(
+                REGION_MODE: SemanticModePrompt(
                     template_id="florence2-task-prompt/1:<REGION_TO_CATEGORY>",
                     output_schema="semantic-response/1",
                 )
@@ -3030,13 +3037,11 @@ class TestSceneContextConditioning:
         return _Fake()
 
     @staticmethod
-    def _prompts(*, conditioned: bool) -> dict[SemanticInterpretationMode, SemanticRequestPrompt]:
+    def _prompts() -> dict[SemanticInterpretationMode, SemanticModePrompt]:
         return {
             SCENE: _CANONICAL_PROMPTS[SCENE],
-            REGION_MODE: SemanticRequestPrompt(
-                template_id="region-scene-context/v1",
-                output_schema="semantic-response/1",
-                scene_context=conditioned,
+            REGION_MODE: SemanticModePrompt(
+                template_id="region-scene-context/v1", output_schema="semantic-response/1"
             ),
         }
 
@@ -3045,7 +3050,10 @@ class TestSceneContextConditioning:
     ) -> None:
         _without_pillow(monkeypatch)
         bridge, requests, _ = _semantic_bridge(
-            tmp_path, prompts=self._prompts(conditioned=True), interpreter=self._interpreter()
+            tmp_path,
+            prompts=self._prompts(),
+            scene_context=True,
+            interpreter=self._interpreter(),
         )
         image, region = _prepared_image_and_region(tmp_path)
 
@@ -3065,7 +3073,10 @@ class TestSceneContextConditioning:
     ) -> None:
         _without_pillow(monkeypatch)
         bridge, requests, _ = _semantic_bridge(
-            tmp_path, prompts=self._prompts(conditioned=False), interpreter=self._interpreter()
+            tmp_path,
+            prompts=self._prompts(),
+            scene_context=False,
+            interpreter=self._interpreter(),
         )
         image, region = _prepared_image_and_region(tmp_path)
 
@@ -3082,7 +3093,10 @@ class TestSceneContextConditioning:
 
         _without_pillow(monkeypatch)
         bridge, requests, _ = _semantic_bridge(
-            tmp_path, prompts=self._prompts(conditioned=True), interpreter=self._interpreter()
+            tmp_path,
+            prompts=self._prompts(),
+            scene_context=True,
+            interpreter=self._interpreter(),
         )
         image, region = _prepared_image_and_region(tmp_path)
 
@@ -3103,9 +3117,8 @@ class TestSceneContextConditioning:
 
         composed = _compose(tmp_path, document=document)
 
-        assert composed.semantic_prompts is not None
-        assert composed.semantic_prompts[REGION_MODE].scene_context
-        assert not composed.semantic_prompts[SCENE].scene_context
+        assert composed.semantic_request_policy is not None
+        assert composed.semantic_request_policy.region_scene_context
 
     def test_conditioning_with_a_template_that_cannot_render_it_is_refused(
         self, tmp_path: Path
