@@ -100,8 +100,10 @@ A convenção inicial é `pixel_xy_top_left`:
 - largura e altura descrevem o espaço da imagem preparada;
 - máscaras inline usam ordem row-major e exatamente `width * height` valores.
 
-Geometria fora dos limites da imagem é inválida. Remapeamentos de crop, resize ou tile devem
-ocorrer antes da criação da região canônica e permanecer registrados em provenance.
+Geometria fora dos limites da imagem é inválida: `RegionCandidate` e, quando conhece
+`image_width`/`image_height`, `Region2D` recusam uma bounding box que passe da imagem (#619).
+Remapeamentos de crop, resize ou tile devem ocorrer antes da criação da região canônica e
+permanecer registrados em provenance.
 
 ## Scores
 

@@ -195,11 +195,14 @@ class Region2D:
     coordinate_convention: CoordinateConvention = CoordinateConvention.PIXEL_XY_TOP_LEFT
 
     def __post_init__(self) -> None:
-        """Validate rejection metadata is consistent with ``is_accepted``.
+        """Validate rejection metadata, image space, and geometry.
 
         Raises:
             ValueError: If ``rejection_reason`` is set while
-                ``is_accepted`` is ``True``.
+                ``is_accepted`` is ``True``, if the image dimensions are
+                partial or not positive, if ``bounding_box`` extends past
+                the image when its dimensions are known, or if the
+                area, contributor ids, or inline mask are invalid.
         """
         if self.is_accepted and self.rejection_reason is not None:
             raise ValueError("rejection_reason must be None when is_accepted is True")
@@ -211,6 +214,20 @@ class Region2D:
             and (self.image_width <= 0 or self.image_height <= 0)
         ):
             raise ValueError("region image dimensions must be positive")
+        # Mesma regra de RegionCandidate: a caixa é semiaberta, então tocar a borda é válido.
+        if (
+            self.image_width is not None
+            and self.image_height is not None
+            and (
+                self.bounding_box.x_max > self.image_width
+                or self.bounding_box.y_max > self.image_height
+            )
+        ):
+            raise ValueError(
+                "bounding box extends outside the region image: "
+                f"x_max={self.bounding_box.x_max}, y_max={self.bounding_box.y_max} for a "
+                f"{self.image_width}x{self.image_height} image"
+            )
         if self.area_pixels is not None and (
             not isfinite(self.area_pixels) or self.area_pixels <= 0
         ):
