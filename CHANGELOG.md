@@ -6,6 +6,10 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 
 ## [Não lançado]
 
+### Alterado
+
+- Schema do pedido de ingestão: `ingestion_request 0.1.0 → 0.2.0`. A correção de timestamp `constant_offset` passa a ser gravada como `offset_nanoseconds` inteiro, em vez de `offset_seconds` em ponto flutuante, para que o documento reconstrua exatamente a mesma correção (#618).
+
 ## [0.1.0] - 2026-09-25
 
 Primeira release validada da Solution 1. Escopo congelado em [docs/release-v0.1.0.md](docs/release-v0.1.0.md); notas completas, com capacidades validadas e limitações, em [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).

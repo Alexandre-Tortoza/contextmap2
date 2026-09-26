@@ -78,8 +78,12 @@ from contextmap.runtime.lifecycle import (
 )
 from contextmap.runtime.pipeline import StageRequest
 
-INGESTION_REQUEST_SCHEMA_VERSION = "0.1.0"
-"""Version of the request document."""
+INGESTION_REQUEST_SCHEMA_VERSION = "0.2.0"
+"""Version of the request document.
+
+``0.2.0`` (#618): a ``constant_offset`` timestamp correction is written as integer
+``offset_nanoseconds`` instead of float ``offset_seconds``.
+"""
 
 SourceAdapterFactory = Callable[[SourceAdapterConfig], SourceAdapter]
 """Builds the configured source adapter for one request; the composition root provides it."""
