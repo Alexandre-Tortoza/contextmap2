@@ -172,9 +172,11 @@ class Sam3ImageProcessorRuntime:
         Args:
             processor: Official image processor already built around the model.
             image_loader: Materializes the exact image of one discovery pass.
-            autocast: Builds the context the SDK runs in for one configuration.
-                Defaults to ``torch.autocast`` for ``float16`` and ``bfloat16`` and to
-                no context for ``float32``; tests inject a recording context.
+            autocast: Builds the precision context the SDK runs in for one
+                configuration. Defaults to ``torch.autocast`` for ``float16`` and
+                ``bfloat16`` and to no context for ``float32``; tests inject a
+                recording context. The SDK calls always run inside
+                ``torch.inference_mode()`` as well, whatever the precision.
         """
         self._processor = processor
         self._image_loader = image_loader
@@ -189,7 +191,7 @@ class Sam3ImageProcessorRuntime:
 
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
-        with self._autocast(config):
+        with _torch_inference_mode(), self._autocast(config):
             state = self._processor.set_image(image)
             state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
             if state is None:
@@ -351,6 +353,15 @@ class Sam3RegionDiscovery:
             ),
             native_metadata=native_metadata,
         )
+
+
+def _torch_inference_mode() -> AbstractContextManager[object]:
+    """Return ``torch.inference_mode()``, so the SDK calls never record autograd state."""
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError("SAM3 inference requires torch inference_mode; install torch") from error
+    return cast(AbstractContextManager[object], torch.inference_mode())
 
 
 def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:

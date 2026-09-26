@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from contextlib import nullcontext
+import sys
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
-from types import SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,41 @@ from contextmap.visual_perception.region_models import RejectionReason
 class MaterializedImage:
     size: tuple[int, int]
     token: tuple[str, str]
+
+
+class InferenceModeTorch(ModuleType):
+    """Fake torch whose inference-mode switch the fake SDK reads, as it would read the real one."""
+
+    float16 = "torch.float16"
+    bfloat16 = "torch.bfloat16"
+
+    def __init__(self) -> None:
+        super().__init__("torch")
+        self._inference_mode = False
+        self.autocasts: list[dict[str, object]] = []
+
+    def is_inference_mode_enabled(self) -> bool:
+        return self._inference_mode
+
+    @contextmanager
+    def inference_mode(self) -> Iterator[None]:
+        previous, self._inference_mode = self._inference_mode, True
+        try:
+            yield
+        finally:
+            self._inference_mode = previous
+
+    def autocast(self, **kwargs: object) -> AbstractContextManager[None]:
+        self.autocasts.append(kwargs)
+        return nullcontext()
+
+
+@pytest.fixture(autouse=True)
+def fake_torch(monkeypatch: pytest.MonkeyPatch) -> InferenceModeTorch:
+    """The official runtime always enters ``torch.inference_mode()``; torch itself is optional."""
+    torch = InferenceModeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    return torch
 
 
 def _materialized_image(discovery_input: DiscoveryInput) -> MaterializedImage:
@@ -419,11 +455,9 @@ def test_official_sam3_runtime_runs_the_sdk_inside_the_configured_inference_cont
     assert events == ["enter", "image", "threshold", "prompt", "exit"]
 
 
-def test_official_sam3_runtime_float32_needs_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
-    def unavailable(name: str) -> object:
-        raise AssertionError(f"float32 inference must not import {name}")
-
-    monkeypatch.setattr(sam3_module, "import_module", unavailable)
+def test_official_sam3_runtime_float32_runs_without_autocast(
+    fake_torch: InferenceModeTorch,
+) -> None:
     events: list[str] = []
     runtime = Sam3ImageProcessorRuntime(
         processor=RecordingProcessor(events), image_loader=_materialized_image
@@ -432,26 +466,67 @@ def test_official_sam3_runtime_float32_needs_no_torch(monkeypatch: pytest.Monkey
     runtime.predict(_input(), _text_prompt_config("float32"))
 
     assert events == ["image", "threshold", "prompt"]
+    assert fake_torch.autocasts == []
 
 
 def test_official_sam3_runtime_default_context_is_torch_autocast(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_torch: InferenceModeTorch,
 ) -> None:
-    calls: list[dict[str, object]] = []
-
-    def autocast(**kwargs: object) -> object:
-        calls.append(kwargs)
-        return nullcontext()
-
-    fake_torch = SimpleNamespace(autocast=autocast, bfloat16="torch.bfloat16")
-    monkeypatch.setattr(sam3_module, "import_module", lambda name: fake_torch)
     runtime = Sam3ImageProcessorRuntime(
         processor=RecordingProcessor([]), image_loader=_materialized_image
     )
 
     runtime.predict(_input(), _text_prompt_config("bfloat16"))
 
-    assert calls == [{"device_type": "cuda", "dtype": "torch.bfloat16"}]
+    assert fake_torch.autocasts == [{"device_type": "cuda", "dtype": "torch.bfloat16"}]
+
+
+def test_official_sam3_runtime_without_torch_fails_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(name: str) -> object:
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(sam3_module, "import_module", unavailable)
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor([]), image_loader=_materialized_image
+    )
+
+    with pytest.raises(RuntimeError, match="requires torch inference_mode"):
+        runtime.predict(_input(), _text_prompt_config("float32"))
+
+
+class InferenceModeRecordingProcessor:
+    """Official-processor stand-in that records whether each SDK call ran in inference mode."""
+
+    def __init__(self, torch: InferenceModeTorch) -> None:
+        self._torch = torch
+        self.inference_mode: list[bool] = []
+
+    def set_image(self, image: object) -> object:
+        self.inference_mode.append(self._torch.is_inference_mode_enabled())
+        return {}
+
+    def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+        self.inference_mode.append(self._torch.is_inference_mode_enabled())
+        return state
+
+    def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+        self.inference_mode.append(self._torch.is_inference_mode_enabled())
+        return {"boxes": [], "scores": [], "masks": []}
+
+
+@pytest.mark.parametrize("precision", ["float32", "bfloat16"])
+def test_official_sam3_runtime_runs_the_sdk_in_torch_inference_mode(
+    precision: str, fake_torch: InferenceModeTorch
+) -> None:
+    processor = InferenceModeRecordingProcessor(fake_torch)
+    runtime = Sam3ImageProcessorRuntime(processor=processor, image_loader=_materialized_image)
+
+    runtime.predict(_input(), _text_prompt_config(precision))
+
+    assert processor.inference_mode == [True, True, True]
+    assert not fake_torch.is_inference_mode_enabled()
 
 
 @pytest.mark.parametrize("seed", BACKEND_SEEDS)

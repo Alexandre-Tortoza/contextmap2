@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from hashlib import sha256
+from importlib import import_module
 from math import isfinite
 from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, cast
@@ -199,7 +201,8 @@ class TransformersFlorence2Runtime:
         if conflicts:
             names = ", ".join(sorted(conflicts))
             raise ValueError(f"Florence-2 generation settings duplicate model inputs: {names}")
-        generated_ids = self._model.generate(**inputs, **generation_settings)
+        with _torch_inference_mode():
+            generated_ids = self._model.generate(**inputs, **generation_settings)
         decoded = self._processor.batch_decode(generated_ids, skip_special_tokens=False)
         if len(decoded) != 1:
             raise ValueError("Florence-2 runtime expects exactly one decoded result per image")
@@ -349,6 +352,17 @@ class Florence2RegionDiscovery:
             ),
             native_metadata=native_metadata,
         )
+
+
+def _torch_inference_mode() -> AbstractContextManager[object]:
+    """Return ``torch.inference_mode()``, so ``generate`` never records autograd state."""
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Florence-2 inference requires torch inference_mode; install torch"
+        ) from error
+    return cast(AbstractContextManager[object], torch.inference_mode())
 
 
 def _parse_task_result(

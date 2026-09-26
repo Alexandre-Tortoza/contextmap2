@@ -265,10 +265,12 @@ real específica; selecionar uma delas não aciona comportamento alternativo.
 
 A `precision` de `Sam3Config` (`float32`, `float16` ou `bfloat16`; qualquer outro valor é rejeitado
 na configuração) é a precisão com que a inferência realmente roda: o runtime executa as chamadas do
-SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem contexto para `float32`. O modelo de
+SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem autocast para `float32`. O modelo de
 imagem oficial do SAM3 só executa sob autocast `bfloat16`; com `float32` o SDK falha com
-`mat1 and mat2 must have the same dtype`. O contexto é injetável (`autocast=`), então os testes não
-precisam de torch, e `float32` nunca importa torch (issue #338).
+`mat1 and mat2 must have the same dtype`. O contexto de precisão é injetável (`autocast=`), então os
+testes registram a ordem das chamadas sem torch real (issue #338). Em qualquer precisão, as
+chamadas do SDK rodam também dentro de `torch.inference_mode()`, sem depender de o SDK desligar o
+autograd por conta própria; sem torch instalado, a inferência falha explicitamente (#617).
 
 ### Geometria das propostas SAM3
 
@@ -299,7 +301,8 @@ port e outro adapter, mesmo que a composition root possa compartilhar o
 lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
-move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
+move inputs para o device configurado, executa `generate` dentro de `torch.inference_mode()` (#617),
+mantém os tokens especiais no decode e
 chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões;
 um frame sem detecções devolve zero regiões (`box_count=0`, `polygon_count=0`), como SAM2 e SAM3,
 e não falha o estágio.

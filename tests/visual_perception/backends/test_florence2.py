@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -18,6 +22,7 @@ from contextmap.visual_perception import (
     Region2D,
     RegionDiscovery,
 )
+from contextmap.visual_perception.backends import florence2 as florence2_module
 from contextmap.visual_perception.backends.florence2 import (
     Florence2Config,
     Florence2NativeOutput,
@@ -32,6 +37,33 @@ from contextmap.visual_perception.discovery import DiscoveryInput, DiscoveryPass
 class MaterializedImage:
     size: tuple[int, int]
     token: tuple[str, str]
+
+
+class InferenceModeTorch(ModuleType):
+    """Fake torch whose inference-mode switch the fake model reads, as it reads the real one."""
+
+    def __init__(self) -> None:
+        super().__init__("torch")
+        self._inference_mode = False
+
+    def is_inference_mode_enabled(self) -> bool:
+        return self._inference_mode
+
+    @contextmanager
+    def inference_mode(self) -> Iterator[None]:
+        previous, self._inference_mode = self._inference_mode, True
+        try:
+            yield
+        finally:
+            self._inference_mode = previous
+
+
+@pytest.fixture(autouse=True)
+def fake_torch(monkeypatch: pytest.MonkeyPatch) -> InferenceModeTorch:
+    """The official runtime always enters ``torch.inference_mode()``; torch itself is optional."""
+    torch = InferenceModeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    return torch
 
 
 def _materialized_image(discovery_input: DiscoveryInput) -> MaterializedImage:
@@ -308,6 +340,53 @@ def test_zero_florence2_detections_are_a_valid_empty_result() -> None:
     assert output.candidates == ()
     assert output.diagnostics.proposal_count == 0
     assert dict(output.diagnostics.metadata)["box_count"] == 0
+
+
+class InferenceModeRecordingModel(FlorenceModel):
+    def __init__(self, torch: InferenceModeTorch) -> None:
+        super().__init__()
+        self._torch = torch
+        self.inference_mode: list[bool] = []
+
+    def generate(self, **kwargs: object) -> object:
+        self.inference_mode.append(self._torch.is_inference_mode_enabled())
+        return super().generate(**kwargs)
+
+
+def test_official_florence2_runtime_generates_in_torch_inference_mode(
+    fake_torch: InferenceModeTorch,
+) -> None:
+    model = InferenceModeRecordingModel(fake_torch)
+    runtime = TransformersFlorence2Runtime(
+        model=model,
+        processor=FlorenceProcessor({"bboxes": [], "labels": []}),
+        image_loader=_materialized_image,
+    )
+
+    runtime.predict(_input(), Florence2Config(checkpoint="florence-2", task="<OD>"))
+
+    assert model.inference_mode == [True]
+    assert not fake_torch.is_inference_mode_enabled()
+
+
+def test_official_florence2_runtime_without_torch_fails_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(name: str) -> object:
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(florence2_module, "import_module", unavailable)
+    model = FlorenceModel()
+    runtime = TransformersFlorence2Runtime(
+        model=model,
+        processor=FlorenceProcessor({"bboxes": [], "labels": []}),
+        image_loader=_materialized_image,
+    )
+
+    with pytest.raises(RuntimeError, match="requires torch inference_mode"):
+        runtime.predict(_input(), Florence2Config(checkpoint="florence-2", task="<OD>"))
+
+    assert model.received == []
 
 
 @pytest.mark.parametrize("seed", BACKEND_SEEDS)
