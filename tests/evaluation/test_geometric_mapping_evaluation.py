@@ -144,6 +144,7 @@ def test_a_correct_mapping_is_numerically_exact_and_globally_consistent(tmp_path
     assert report.overlap.pooled_residual_m.maximum <= 1e-9
     assert report.overlap.inconsistent_fraction == 0.0
     # Bordas e cantos não formam um plano local e ficam sem correspondência.
+    assert report.overlap.overlap_fraction is not None
     assert 0.6 < report.overlap.overlap_fraction < 1.0
 
 
@@ -367,6 +368,21 @@ def test_coherence_is_off_when_no_pair_is_requested(tmp_path: Path) -> None:
     assert _evaluate(_correct(tmp_path), protocol=protocol).overlap is None
 
 
+def test_overlap_without_any_candidate_pair_is_unmeasured_not_zero(tmp_path: Path) -> None:
+    # Com lag igual ao número de scans não há par candidato: nenhum ponto foi consultado,
+    # e 0.0 leria "nenhum ponto tem contraparte", o pior overlap possível.
+    protocol = dataclasses.replace(PROTOCOL, adjacent_scan_lag=SCAN_COUNT)
+
+    report = _evaluate(_correct(tmp_path), protocol=protocol)
+
+    assert report.overlap is not None and report.overlap.pairs == ()
+    assert report.overlap.pooled_residual_m is None
+    assert report.overlap.inconsistent_fraction is None
+    assert report.overlap.overlap_fraction is None
+    encoded = json.loads(json.dumps(encode_geometric_mapping_report(report)))
+    assert encoded["overlap"]["overlap_fraction"] is None
+
+
 def test_overlap_is_measured_between_temporally_adjacent_scans(tmp_path: Path) -> None:
     report = _evaluate(_correct(tmp_path))
 
@@ -390,7 +406,7 @@ def test_points_beyond_the_correspondence_radius_are_not_counted_as_residuals(
 
     report = _evaluate(reader, protocol=protocol, expected_points=())
 
-    assert report.overlap is not None
+    assert report.overlap is not None and report.overlap.overlap_fraction is not None
     assert report.overlap.overlap_fraction < 0.5
 
 
@@ -570,7 +586,7 @@ def test_the_report_carries_the_identities_needed_to_reproduce_it(tmp_path: Path
     plan = make_plan()
     report = _evaluate(write_run(tmp_path, plan))
 
-    assert report.evaluator_version
+    assert report.evaluator_version == "2"
     assert report.run_id == "run-0001" and report.map_id == f"{SEQUENCE}--run-0001"
     assert report.sequence_artifact_id == SEQUENCE_ID
     assert report.selection_id == plan.selection_id

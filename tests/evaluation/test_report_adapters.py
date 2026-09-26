@@ -85,7 +85,12 @@ def _run() -> EvaluationRunDescriptor:
 
 
 def _frame(
-    name: str, iou: float | None, *, runtime_ms: float, memory_mb: float | None
+    name: str,
+    iou: float | None,
+    *,
+    runtime_ms: float,
+    memory_mb: float | None,
+    duplicate_rate: float | None = 0.1,
 ) -> FrameEvaluation:
     accuracy = (
         None
@@ -95,9 +100,9 @@ def _frame(
             mean_dice=iou,
             region_recall=iou / 2,
             coverage=iou,
-            over_segmentation_rate=0.0,
-            under_segmentation_rate=0.0,
-            duplicate_region_rate=0.1,
+            over_segmentation_rate=None if duplicate_rate is None else 0.0,
+            under_segmentation_rate=None if duplicate_rate is None else 0.0,
+            duplicate_region_rate=duplicate_rate,
         )
     )
     return FrameEvaluation(
@@ -187,6 +192,38 @@ def test_unannotated_frames_are_not_applicable_never_zero() -> None:
     assert all(item.value is None for item in quality.values())
     peak = _by_metric(lifted.performance_metrics)["runtime.peak_memory"]
     assert peak.status is MetricStatus.UNSUPPORTED
+
+
+def test_a_frame_without_discovered_regions_is_outside_the_duplicate_rate_population() -> None:
+    report = _region_report(
+        _frame("frame-a", 0.8, runtime_ms=10.0, memory_mb=None),
+        _frame("frame-b", 0.0, runtime_ms=10.0, memory_mb=None, duplicate_rate=None),
+    )
+
+    lifted = region_discovery_evaluation_report(
+        report, registry=REGISTRY, reference_set=_reference()
+    )
+
+    quality = _by_metric(lifted.quality_metrics)
+    duplicate = quality["region.duplicate_rate.mean"]
+    assert duplicate.value == pytest.approx(0.1) and duplicate.sample_count == 1
+    assert quality["region.iou.mean"].sample_count == 2
+
+
+def test_duplicate_rate_is_not_applicable_when_no_annotated_frame_discovered_a_region() -> None:
+    report = _region_report(
+        _frame("frame-a", 0.0, runtime_ms=10.0, memory_mb=None, duplicate_rate=None)
+    )
+
+    lifted = region_discovery_evaluation_report(
+        report, registry=REGISTRY, reference_set=_reference()
+    )
+
+    quality = _by_metric(lifted.quality_metrics)
+    duplicate = quality["region.duplicate_rate.mean"]
+    assert duplicate.status is MetricStatus.NOT_APPLICABLE and duplicate.value is None
+    assert quality["region.iou.mean"].status is MetricStatus.VALUE
+    assert quality["region.iou.mean"].value == 0.0
 
 
 def _semantic_context() -> SemanticEvaluationContext:

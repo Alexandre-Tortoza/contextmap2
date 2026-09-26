@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-EVALUATOR_VERSION = "1"
+EVALUATOR_VERSION = "2"
 """Bumped whenever a metric's definition changes, so reports stay comparable."""
 
 # Amostragem para tornar a comparação com a referência tratável; as contagens são reportadas.
@@ -386,7 +386,9 @@ class ScanOverlapReport:
         ghost_residual_m: The residual above which a correspondence is flagged.
         pairs: The measured pairs.
         pooled_residual_m: Distribution of every correspondence's residual.
-        overlap_fraction: Share of all query points with a counterpart.
+        overlap_fraction: Share of all query points with a counterpart, or ``None`` when
+            no query point was sampled (no candidate pair): nothing measured is not an
+            overlap of zero.
         inconsistent_fraction: Share of all correspondences above the ghost threshold.
         by_motion_correction: The residuals split by the earlier scan's correction state.
     """
@@ -396,7 +398,7 @@ class ScanOverlapReport:
     ghost_residual_m: float
     pairs: tuple[ScanOverlapPair, ...]
     pooled_residual_m: DistributionSummary | None
-    overlap_fraction: float
+    overlap_fraction: float | None
     inconsistent_fraction: float | None
     by_motion_correction: tuple[CorrectionGroupOverlap, ...]
 
@@ -944,7 +946,7 @@ def _overlap_report(
         ghost_residual_m=protocol.ghost_residual_m,
         pairs=tuple(pairs),
         pooled_residual_m=summarize_distribution(residuals),
-        overlap_fraction=len(residuals) / samples_total if samples_total else 0.0,
+        overlap_fraction=len(residuals) / samples_total if samples_total else None,
         inconsistent_fraction=None
         if not residuals
         else sum(1 for value in residuals if value > protocol.ghost_residual_m) / len(residuals),
