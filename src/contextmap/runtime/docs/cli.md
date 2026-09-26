@@ -67,7 +67,7 @@ Códigos de saída: `0` sucesso; `1` pedido entendido, mas não atendível (conf
 
 ## Fronteira
 
-A CLI não faz rede, não abre dashboard e não usa "todos os runs". Importar `contextmap.runtime.cli` não carrega SDK pesado (torch, transformers, rosbags, NumPy); um teste garante isso. A única capability que a CLI importa é a raiz pública de `contextmap.artifact`, e só dentro do ramo do `ContextMapArtifact` de `validate` e `inspect artifact` (`tests/architecture/test_runtime_boundaries.py`).
+A CLI não faz rede, não abre dashboard e não usa "todos os runs". Importar `contextmap.runtime.cli` não carrega SDK pesado (torch, transformers, rosbags, NumPy); um teste garante isso. A única capability que a CLI importa é a raiz pública de `contextmap.artifact`, e só dentro do ramo do `ContextMapArtifact` de `validate` e `inspect artifact`. A exceção é da função `_context_map_findings`, não do módulo: o mesmo import em qualquer outro ponto da CLI é violação (`tests/architecture/test_runtime_boundaries.py`).
 
 ## Executores
 
