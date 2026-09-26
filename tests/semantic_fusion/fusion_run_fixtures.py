@@ -180,10 +180,46 @@ def make_multi_region_run_fixture() -> RunFixture:
     return RunFixture(outcomes=outcomes, excluded=parts.excluded)
 
 
+def make_fan_out_run_fixture(*, frames: int = 8, labels_per_frame: int = 3) -> RunFixture:
+    """One support whose every hypothesis lists every claim: ``frames * labels_per_frame`` of each.
+
+    Every frame sees the same geometry with labels no other frame uses, so the baseline
+    policy lists each of the ``H = C`` claims under each of the ``H`` hypotheses.
+    """
+    views = [
+        View(
+            "run-a",
+            f"frame-{frame:04d}",
+            tuple(
+                ClaimSpec(f"label-{frame:04d}-{index}", confidence=0.5)
+                for index in range(labels_per_frame)
+            ),
+            geometry=range(0, 20),
+        )
+        for frame in range(frames)
+    ]
+    parts = build_scenario_parts(views, geometry_points=1_000)
+    outcomes = tuple(
+        FusionOutcome(
+            support=support,
+            evidence=accumulate_baseline_evidence(
+                support,
+                observations=parts.observations,
+                grouping=parts.grouping,
+                perception_results=parts.results,
+                code_version="test",
+            ),
+        )
+        for support in parts.supports
+    )
+    return RunFixture(outcomes=outcomes, excluded=parts.excluded)
+
+
 __all__ = [
     "LINEAGE",
     "POLICY",
     "RunFixture",
+    "make_fan_out_run_fixture",
     "make_multi_region_run_fixture",
     "make_perception_run",
     "make_run_fixture",

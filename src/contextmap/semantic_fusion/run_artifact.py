@@ -25,11 +25,12 @@ import json
 import statistics
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, NewType, TypeVar
+from typing import Any, BinaryIO, NewType, TypeVar
 
 from contextmap.geometric_mapping import MapId
 from contextmap.point_representation import PointRepresentationRunId
@@ -86,6 +87,16 @@ _COUNTS = "metrics/counts.json"
 _DISTRIBUTIONS = "metrics/distributions.json"
 _PAYLOAD = "metrics/payload.json"
 _RUNTIME = "metrics/runtime.json"
+
+_STREAMED_OUTPUTS = (
+    _SUPPORTS,
+    _EVIDENCE,
+    _SUPPORT_INDEX,
+    _HYPOTHESIS_INDEX,
+    _GROUPS,
+    _CONTRIBUTION_INDEX,
+    _EXCLUDED,
+)
 
 _DEBUG_SUPPORT_LIMIT = 20
 """Supports that get debug evidence at the ``standard`` level; ``full`` covers all of them."""
@@ -235,8 +246,12 @@ class SemanticFusionRunManifest:
 class SemanticFusionRunWriter:
     """Builds an immutable Semantic Fusion run artifact on the local filesystem.
 
-    Outcomes are streamed to disk as they are produced, so the run is not bounded by memory,
-    and the run is published atomically when the stream ends.
+    Outcomes are streamed to disk as they are produced: every ``outputs/`` file, the derived
+    indexes included, is written line by line, so the writer holds one outcome at a time plus
+    the run-level aggregates behind ``metrics/`` and the manifest (one entry per distinct claim,
+    physical observation, inference result and evidence identity, and four integers per
+    support). A single support's ``FusedEvidence`` is still encoded whole. The run is published
+    atomically when the stream ends.
     """
 
     def __init__(
@@ -301,72 +316,63 @@ class SemanticFusionRunWriter:
         tally = _Tally(self._lineage)
         try:
             with AtomicRunDirectory(self._final_dir) as run:
-                self._stream(run, outcomes, tally)
-                excluded_records = [_encode_excluded(item) for item in excluded]
-                self._write_tables(run, tally, excluded_records)
-                self._write_metrics(run, tally, excluded_records, warnings, runtime)
+                self._stream(run, outcomes, excluded, tally)
+                self._write_metrics(run, tally, warnings, runtime)
                 run.publish(
-                    manifest=self._manifest_record(tally, excluded_records, warnings),
-                    readme=self._render_readme(tally, excluded_records),
+                    manifest=self._manifest_record(tally, warnings),
+                    readme=self._render_readme(tally),
                 )
         except RunDirectoryError as error:
             raise FusionRunArtifactError(str(error)) from error
         return _load_manifest(self._final_dir)
 
     def _stream(
-        self, run: AtomicRunDirectory, outcomes: Iterable[FusionOutcome], tally: _Tally
+        self,
+        run: AtomicRunDirectory,
+        outcomes: Iterable[FusionOutcome],
+        excluded: Iterable[ExcludedObservation],
+        tally: _Tally,
     ) -> None:
-        with (
-            run.open_binary(_SUPPORTS) as supports_out,
-            run.open_binary(_EVIDENCE) as evidence_out,
-        ):
-            support_offset = evidence_offset = 0
+        with ExitStack() as stack:
+            out = {
+                path: _JsonLinesOut(stack.enter_context(run.open_binary(path)))
+                for path in _STREAMED_OUTPUTS
+            }
             for outcome in outcomes:
                 tally.check(outcome)
-                support_line = _line(encode_fusion_support(outcome.support)) + b"\n"
-                evidence_line = _line(encode_fused_evidence(outcome.evidence)) + b"\n"
-                # O stream não expõe posição: os deslocamentos são contados aqui.
-                tally.add(
-                    outcome,
-                    support_offset=support_offset,
-                    support_length=len(support_line) - 1,
-                    evidence_offset=evidence_offset,
-                    evidence_length=len(evidence_line) - 1,
+                support_offset, support_length = out[_SUPPORTS].write(
+                    encode_fusion_support(outcome.support)
                 )
-                supports_out.write(support_line)
-                evidence_out.write(evidence_line)
-                support_offset += len(support_line)
-                evidence_offset += len(evidence_line)
+                evidence_offset, evidence_length = out[_EVIDENCE].write(
+                    encode_fused_evidence(outcome.evidence)
+                )
+                tally.add(outcome)
+                out[_SUPPORT_INDEX].write(
+                    _support_index_row(
+                        outcome,
+                        support_offset=support_offset,
+                        support_length=support_length,
+                        evidence_offset=evidence_offset,
+                        evidence_length=evidence_length,
+                    )
+                )
+                out[_GROUPS].write_all(_group_rows(outcome))
+                out[_CONTRIBUTION_INDEX].write_all(_contribution_rows(outcome))
+                out[_HYPOTHESIS_INDEX].write_all(_hypothesis_rows(outcome))
                 self._write_debug(run, outcome, tally.support_count)
-        tally.supports_bytes = support_offset
-        tally.evidence_bytes = evidence_offset
-        tally.output_sizes[_SUPPORTS] = tally.supports_bytes
-        tally.output_sizes[_EVIDENCE] = tally.evidence_bytes
-
-    def _write_tables(
-        self, run: AtomicRunDirectory, tally: _Tally, excluded: list[dict[str, Any]]
-    ) -> None:
-        tables = {
-            _SUPPORT_INDEX: tally.support_rows,
-            _HYPOTHESIS_INDEX: tally.hypothesis_rows,
-            _GROUPS: tally.group_rows,
-            _CONTRIBUTION_INDEX: tally.contribution_rows,
-            _EXCLUDED: excluded,
-        }
-        for path, rows in tables.items():
-            text = "".join(_line(row).decode() + "\n" for row in rows)
-            run.write_text(path, text)
-            tally.output_sizes[path] = len(text.encode())
+            for item in excluded:
+                out[_EXCLUDED].write(_encode_excluded(item))
+                tally.excluded_count += 1
+        tally.output_sizes.update((path, lines.size) for path, lines in out.items())
 
     def _write_metrics(
         self,
         run: AtomicRunDirectory,
         tally: _Tally,
-        excluded: list[dict[str, Any]],
         warnings: Sequence[str],
         runtime: Mapping[str, float | int | None] | None,
     ) -> None:
-        run.write_text(_COUNTS, _json(tally.counts(len(excluded), len(warnings))))
+        run.write_text(_COUNTS, _json(tally.counts(tally.excluded_count, len(warnings))))
         run.write_text(_DISTRIBUTIONS, _json(tally.distributions()))
         sizes = dict(sorted(tally.output_sizes.items()))
         run.write_text(_PAYLOAD, _json({"files": sizes, "total_bytes": sum(sizes.values())}))
@@ -409,9 +415,7 @@ class SemanticFusionRunWriter:
                 contractual=False,
             )
 
-    def _manifest_record(
-        self, tally: _Tally, excluded: list[dict[str, Any]], warnings: Sequence[str]
-    ) -> dict[str, Any]:
+    def _manifest_record(self, tally: _Tally, warnings: Sequence[str]) -> dict[str, Any]:
         lineage = self._lineage
         return {
             "run_id": str(self._run_id),
@@ -442,7 +446,7 @@ class SemanticFusionRunWriter:
                 "supports": tally.support_count,
                 "fused_evidence": tally.support_count,
                 "contributions": tally.contribution_count,
-                "excluded_observations": len(excluded),
+                "excluded_observations": tally.excluded_count,
             },
             "warnings": list(warnings),
             "debug_level": self._debug_level.value,
@@ -450,7 +454,7 @@ class SemanticFusionRunWriter:
             "created_at": datetime.now(UTC).isoformat(),
         }
 
-    def _render_readme(self, tally: _Tally, excluded: list[dict[str, Any]]) -> str:
+    def _render_readme(self, tally: _Tally) -> str:
         return (
             f"# Semantic fusion run {self._run_index:04d}\n"
             "\n"
@@ -458,7 +462,7 @@ class SemanticFusionRunWriter:
             f"- Geometric map: `{self._lineage.geometric_map_id}`\n"
             f"- Fusion policy: `{tally.fusion_policy_id}`\n"
             f"- Supports: {tally.support_count}, contributions: {tally.contribution_count}, "
-            f"excluded observations: {len(excluded)}\n"
+            f"excluded observations: {tally.excluded_count}\n"
             "\n"
             "Contractual data is in `outputs/` and `metrics/`; `debug/` is human evidence and no "
             "downstream stage may depend on it. Fused evidence is belief in formation: every "
@@ -634,19 +638,17 @@ class SemanticFusionRunReader:
 
 
 class _Tally:
-    """Checks the outcomes as they stream and collects what the tables and metrics need."""
+    """Checks the outcomes as they stream and aggregates what the metrics and manifest need.
+
+    It keeps no row of the ``outputs/`` tables: those are written as each outcome arrives.
+    """
 
     def __init__(self, lineage: FusionRunLineage) -> None:
         self._lineage = lineage
         self.support_count = 0
         self.contribution_count = 0
-        self.supports_bytes = 0
-        self.evidence_bytes = 0
+        self.excluded_count = 0
         self.output_sizes: dict[str, int] = {}
-        self.support_rows: list[dict[str, Any]] = []
-        self.hypothesis_rows: list[dict[str, Any]] = []
-        self.group_rows: list[dict[str, Any]] = []
-        self.contribution_rows: list[dict[str, Any]] = []
         self.identities: dict[str, set[str]] = {}
         self.grouping_policy_id: str | None = None
         self.support_policy_id: str | None = None
@@ -734,16 +736,8 @@ class _Tally:
                 f"different policy or configuration than the rest of the run: one run keeps one"
             )
 
-    def add(
-        self,
-        outcome: FusionOutcome,
-        *,
-        support_offset: int,
-        support_length: int,
-        evidence_offset: int,
-        evidence_length: int,
-    ) -> None:
-        support, evidence = outcome.support, outcome.evidence
+    def add(self, outcome: FusionOutcome) -> None:
+        evidence = outcome.evidence
         self.support_count += 1
         self.contribution_count += len(evidence.contributions)
         self._hypotheses += len(evidence.hypotheses)
@@ -763,61 +757,17 @@ class _Tally:
         counts["inference_results_per_support"].append(evidence.inference_result_count)
         counts["contributions_per_support"].append(len(evidence.contributions))
         counts["hypotheses_per_support"].append(len(evidence.hypotheses))
-
-        self.support_rows.append(
-            {
-                "fusion_support_id": str(support.fusion_support_id),
-                "fused_evidence_id": str(evidence.fused_evidence_id),
-                "support_offset": support_offset,
-                "support_length": support_length,
-                "evidence_offset": evidence_offset,
-                "evidence_length": evidence_length,
-                "spatial_observation_ids": [str(item) for item in support.spatial_observation_ids],
-                "physical_observation_ids": [
-                    str(g.physical_observation_id) for g in evidence.physical_observation_groups
-                ],
-            }
-        )
-        for group in evidence.physical_observation_groups:
-            self.group_rows.append(
-                {
-                    "fusion_support_id": str(support.fusion_support_id),
-                    "physical_observation_id": str(group.physical_observation_id),
-                    "acquisition_timestamp": group.acquisition_timestamp.to_record(),
-                    "spatial_observation_ids": [str(i) for i in group.spatial_observation_ids],
-                    "perception_result_ids": [str(i) for i in group.perception_result_ids],
-                    "perception_run_ids": [str(i) for i in group.perception_run_ids],
-                }
-            )
-        for item in evidence.contributions:
-            self._claims_total += len(item.claim_refs)
-            self.contribution_rows.append(
-                {
-                    "contribution_id": str(item.contribution_id),
-                    "fusion_support_id": str(support.fusion_support_id),
-                    "spatial_observation_id": str(item.spatial_observation_id),
-                    "physical_observation_id": str(item.physical_observation_id),
-                    "perception_result_id": str(item.perception_result_id),
-                    "perception_run_id": str(item.perception_run_id),
-                    "region_id": str(item.region_id),
-                    "claim_ids": [str(ref.claim_id) for ref in item.claim_refs],
-                    "geometry_count": len(item.geometry_support),
-                    "has_observation_quality": item.observation_quality is not None,
-                }
-            )
-        self._add_hypotheses(outcome)
+        self._claims_total += sum(len(item.claim_refs) for item in evidence.contributions)
+        self._add_hypotheses(evidence)
         self._add_uncertainty(evidence)
         if evidence.uncertainty:
             self._supports_with_uncertainty += 1
         for channel in evidence.channels:
             self.identities.setdefault(channel.channel.value, set()).update(channel.identities)
 
-    def _add_hypotheses(self, outcome: FusionOutcome) -> None:
-        support, evidence = outcome.support, outcome.evidence
-        contributions = {item.contribution_id: item for item in evidence.contributions}
+    def _add_hypotheses(self, evidence: FusedEvidence) -> None:
         for hypothesis in evidence.hypotheses:
             for item in hypothesis.evidence:
-                contribution = contributions[item.contribution_id]
                 self._stances[item.stance.value] += 1
                 key = (str(item.contribution_id), str(item.claim_id))
                 confidence = next(
@@ -830,22 +780,6 @@ class _Tally:
                 )
                 if item.stance is EvidenceStance.ABSTAINING:
                     self._abstaining.add(key)
-                self.hypothesis_rows.append(
-                    {
-                        "fusion_support_id": str(support.fusion_support_id),
-                        "fused_evidence_id": str(evidence.fused_evidence_id),
-                        "hypothesis_id": str(hypothesis.hypothesis_id),
-                        "label": hypothesis.label,
-                        "contribution_id": str(item.contribution_id),
-                        "claim_id": str(item.claim_id),
-                        "stance": item.stance.value,
-                        "role": item.role.value,
-                        "physical_observation_id": str(contribution.physical_observation_id),
-                        "perception_result_id": str(contribution.perception_result_id),
-                        "perception_run_id": str(contribution.perception_run_id),
-                        "spatial_observation_id": str(contribution.spatial_observation_id),
-                    }
-                )
 
     def _add_uncertainty(self, evidence: FusedEvidence) -> None:
         for record in evidence.uncertainty:
@@ -893,6 +827,105 @@ class _Tally:
 
     def distributions(self) -> dict[str, Any]:
         return {name: _distribution(values) for name, values in self._per_support.items()}
+
+
+class _JsonLinesOut:
+    """One streamed JSON Lines file of the run, with the byte count its readers index by."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+        self.size = 0
+
+    def write(self, record: Mapping[str, Any]) -> tuple[int, int]:
+        """Append one record.
+
+        Returns:
+            The record's byte offset and its length without the line break.
+        """
+        line = _line(record)
+        # O stream não expõe posição: o deslocamento é contado aqui.
+        offset = self.size
+        self._stream.write(line + b"\n")
+        self.size += len(line) + 1
+        return offset, len(line)
+
+    def write_all(self, records: Iterable[Mapping[str, Any]]) -> None:
+        """Append every record, in order."""
+        for record in records:
+            self.write(record)
+
+
+def _support_index_row(
+    outcome: FusionOutcome,
+    *,
+    support_offset: int,
+    support_length: int,
+    evidence_offset: int,
+    evidence_length: int,
+) -> dict[str, Any]:
+    support, evidence = outcome.support, outcome.evidence
+    return {
+        "fusion_support_id": str(support.fusion_support_id),
+        "fused_evidence_id": str(evidence.fused_evidence_id),
+        "support_offset": support_offset,
+        "support_length": support_length,
+        "evidence_offset": evidence_offset,
+        "evidence_length": evidence_length,
+        "spatial_observation_ids": [str(item) for item in support.spatial_observation_ids],
+        "physical_observation_ids": [
+            str(g.physical_observation_id) for g in evidence.physical_observation_groups
+        ],
+    }
+
+
+def _group_rows(outcome: FusionOutcome) -> Iterator[dict[str, Any]]:
+    for group in outcome.evidence.physical_observation_groups:
+        yield {
+            "fusion_support_id": str(outcome.support.fusion_support_id),
+            "physical_observation_id": str(group.physical_observation_id),
+            "acquisition_timestamp": group.acquisition_timestamp.to_record(),
+            "spatial_observation_ids": [str(i) for i in group.spatial_observation_ids],
+            "perception_result_ids": [str(i) for i in group.perception_result_ids],
+            "perception_run_ids": [str(i) for i in group.perception_run_ids],
+        }
+
+
+def _contribution_rows(outcome: FusionOutcome) -> Iterator[dict[str, Any]]:
+    for item in outcome.evidence.contributions:
+        yield {
+            "contribution_id": str(item.contribution_id),
+            "fusion_support_id": str(outcome.support.fusion_support_id),
+            "spatial_observation_id": str(item.spatial_observation_id),
+            "physical_observation_id": str(item.physical_observation_id),
+            "perception_result_id": str(item.perception_result_id),
+            "perception_run_id": str(item.perception_run_id),
+            "region_id": str(item.region_id),
+            "claim_ids": [str(ref.claim_id) for ref in item.claim_refs],
+            "geometry_count": len(item.geometry_support),
+            "has_observation_quality": item.observation_quality is not None,
+        }
+
+
+def _hypothesis_rows(outcome: FusionOutcome) -> Iterator[dict[str, Any]]:
+    support, evidence = outcome.support, outcome.evidence
+    contributions = {item.contribution_id: item for item in evidence.contributions}
+    for hypothesis in evidence.hypotheses:
+        for item in hypothesis.evidence:
+            contribution = contributions[item.contribution_id]
+            yield {
+                "fusion_support_id": str(support.fusion_support_id),
+                "fused_evidence_id": str(evidence.fused_evidence_id),
+                "hypothesis_id": str(hypothesis.hypothesis_id),
+                "label": hypothesis.label,
+                "contribution_id": str(item.contribution_id),
+                "claim_id": str(item.claim_id),
+                "stance": item.stance.value,
+                "role": item.role.value,
+                "physical_observation_id": str(contribution.physical_observation_id),
+                "perception_result_id": str(contribution.perception_result_id),
+                "perception_run_id": str(contribution.perception_run_id),
+                "spatial_observation_id": str(contribution.spatial_observation_id),
+            }
 
 
 def _distribution(values: list[int]) -> dict[str, Any]:
