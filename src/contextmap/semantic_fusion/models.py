@@ -996,7 +996,11 @@ class FusedEvidence:
         Raises:
             KeyError: If the hypothesis does not belong to this fused evidence.
         """
-        hypothesis = next(item for item in self.hypotheses if item.hypothesis_id == hypothesis_id)
+        hypothesis = next(
+            (item for item in self.hypotheses if item.hypothesis_id == hypothesis_id), None
+        )
+        if hypothesis is None:
+            raise KeyError(hypothesis_id)
         contributions = {item.contribution_id: item for item in self.contributions}
         return tuple(
             sorted(

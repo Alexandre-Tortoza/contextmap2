@@ -107,6 +107,13 @@ def test_supporting_observations_are_counted_once_however_much_geometry_they_see
     assert len(large.contributions[0].geometry_support) == 500
 
 
+def test_an_unknown_hypothesis_raises_key_error() -> None:
+    fused = make_fused_evidence()
+
+    with pytest.raises(KeyError, match="hypothesis-9999"):
+        fused.supporting_physical_observations(FusedHypothesisId("hypothesis-9999"))
+
+
 def test_competing_hypotheses_are_kept_without_a_winner() -> None:
     fused = _two_frames_two_labels()
     names = {field.name for field in dataclasses.fields(FusedEvidence)}
