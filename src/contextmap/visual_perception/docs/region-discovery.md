@@ -199,6 +199,9 @@ metadados do pass sem produzir o crop/resize correspondente falha explicitamente
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
+Cada pass de tile é pareado, no momento em que é criado, com o `TilingConfig` que o gerou; com
+vários grids (`tiling` e `additional_tilings`), um tile é sempre julgado pela política de borda do
+seu próprio grid, sem reconstruir essa atribuição pela contagem de janelas (#619).
 Um candidato só-máscara (sem `bounding_box`) é testado pela caixa justa dos pixels verdadeiros da
 máscara; uma máscara vazia não toca borda nenhuma (#596).
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.

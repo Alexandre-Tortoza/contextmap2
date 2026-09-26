@@ -203,6 +203,43 @@ def _internal_border_tiling() -> DiscoveryPassConfig:
     )
 
 
+@pytest.mark.parametrize(
+    ("first_policy", "second_policy", "rejected"),
+    [
+        (BorderPolicy.REJECT_INTERNAL_BORDER, BorderPolicy.KEEP, ["tile-s00-0000/proposal-1"]),
+        (BorderPolicy.KEEP, BorderPolicy.REJECT_INTERNAL_BORDER, ["tile-s01-0000/proposal-1"]),
+    ],
+)
+def test_each_tile_pass_is_judged_by_the_border_policy_of_the_tiling_that_produced_it(
+    first_policy: BorderPolicy, second_policy: BorderPolicy, rejected: list[str]
+) -> None:
+    # VP-13: a atribuição pass -> tiling era reconstruída contando janelas; agora é explícita.
+    config = DiscoveryPassConfig(
+        tiling=TilingConfig(tile_width=4, tile_height=4, overlap_x=1, border_policy=first_policy),
+        additional_tilings=(
+            TilingConfig(tile_width=3, tile_height=4, border_policy=second_policy),
+        ),
+    )
+
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(touch_right_border=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=config,
+    )
+
+    assert [item.pass_id for item in result.passes] == [
+        "full-frame",
+        "tile-s00-0000",
+        "tile-s00-0001",
+        "tile-s01-0000",
+        "tile-s01-0001",
+    ]
+    assert [item.candidate_id for item in result.rejected] == rejected
+    assert len(result.candidates) == len(result.passes) - 1
+
+
 def test_reject_internal_border_applies_to_mask_only_candidates() -> None:
     # #596: sem bounding box, a borda vem dos pixels da máscara; não é bypass da política.
     result = run_discovery_passes(

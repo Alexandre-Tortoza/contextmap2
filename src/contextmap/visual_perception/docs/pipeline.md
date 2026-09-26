@@ -98,6 +98,8 @@ for observation in sequence:
 
 `resolve_pipeline()` constrói cada backend de estágio exatamente uma vez. `ResolvedPipeline.build_stage_graph()` é a operação chamada por observação — ela só injeta a(s) saída(s) de estágio "fonte" daquela observação (ex.: a imagem preparada) e reutiliza as mesmas instâncias de backend já resolvidas.
 
+Cada adaptador de capability confere explicitamente, ao executar, que o backend implementa o port do estágio e que cada input nomeado tem o contrato declarado; a violação é um `TypeError` que nomeia a capability, o port ou input esperado e o tipo recebido (o estágio sai `FAILED` com essa mensagem). `ResolvedPipeline.backend_provenance()` e `configuration_digest()` recusam da mesma forma um backend sem `backend_provenance()`, nomeando o estágio. Não há `assert` nessas validações: `python -O` os removeria (#619).
+
 ## Inserir/remover um estágio opcional sem tocar código de capability
 
 Um estágio marcado `optional=True` documenta que um preset alternativo pode omiti-lo — a aplicação é estrutural, não uma flag em runtime: se um preset omite um estágio opcional, qualquer estágio downstream que referenciasse seu `stage_id` em `inputs` também precisa ser atualizado nesse mesmo preset, ou a validação rejeita o preset por depender de um `stage_id` desconhecido.

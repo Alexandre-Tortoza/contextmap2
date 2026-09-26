@@ -172,66 +172,109 @@ class _SceneRegionSemanticStageBackend(Protocol):
     ) -> Sequence[SemanticClaim]: ...
 
 
+def _backend_type_error(capability: str, port: str, backend: object) -> TypeError:
+    """Describe a resolved backend that does not implement its stage's capability port.
+
+    The adapters below validate explicitly instead of with ``assert``, which ``python -O``
+    strips and which fails without saying what was wrong.
+    """
+    return TypeError(f"{capability} backend must implement {port}, got {type(backend).__name__}")
+
+
+def _input_type_error(capability: str, input_name: str, expected: str, value: object) -> TypeError:
+    """Describe an upstream output that is not the contract a named input declares."""
+    return TypeError(
+        f"{capability} input {input_name!r} must be {expected}, got {type(value).__name__}"
+    )
+
+
 def _run_region_discovery(backend: object, inputs: Mapping[str, object]) -> Sequence[Region2D]:
-    assert isinstance(backend, RegionDiscovery)
+    if not isinstance(backend, RegionDiscovery):
+        raise _backend_type_error("region_discovery", "RegionDiscovery", backend)
     image = inputs["image"]
-    assert isinstance(image, PreparedImage)
+    if not isinstance(image, PreparedImage):
+        raise _input_type_error("region_discovery", "image", "PreparedImage", image)
     return backend.discover(image)
 
 
 def _run_feature_extractor(
     backend: object, inputs: Mapping[str, object]
 ) -> Sequence[VisualFeature]:
-    assert isinstance(backend, FeatureExtractor)
+    if not isinstance(backend, FeatureExtractor):
+        raise _backend_type_error("feature_extractor", "FeatureExtractor", backend)
     image = inputs["image"]
-    assert isinstance(image, PreparedImage)
+    if not isinstance(image, PreparedImage):
+        raise _input_type_error("feature_extractor", "image", "PreparedImage", image)
     regions = inputs.get("regions", ())
-    assert isinstance(regions, Sequence)
+    if not isinstance(regions, Sequence):
+        raise _input_type_error("feature_extractor", "regions", "a Sequence", regions)
     return backend.extract(image, regions=regions)  # type: ignore[arg-type]
 
 
 def _run_feature_resolution_enhancement(
     backend: object, inputs: Mapping[str, object]
 ) -> DenseFeatureMap:
-    assert isinstance(backend, FeatureResolutionEnhancement)
+    if not isinstance(backend, FeatureResolutionEnhancement):
+        raise _backend_type_error(
+            "feature_resolution_enhancement", "FeatureResolutionEnhancement", backend
+        )
     dense_map = inputs["dense_map"]
-    assert isinstance(dense_map, DenseFeatureMap)
+    if not isinstance(dense_map, DenseFeatureMap):
+        raise _input_type_error(
+            "feature_resolution_enhancement", "dense_map", "DenseFeatureMap", dense_map
+        )
     return enhance_feature_resolution(dense_map, enhancer=backend)
 
 
 def _run_scene_interpretation(backend: object, inputs: Mapping[str, object]) -> SceneContext | None:
-    assert isinstance(backend, _SceneRegionSemanticStageBackend)
+    if not isinstance(backend, _SceneRegionSemanticStageBackend):
+        raise _backend_type_error(
+            "scene_interpretation", "interpret_scene() and interpret_regions()", backend
+        )
     image = inputs["image"]
-    assert isinstance(image, PreparedImage)
+    if not isinstance(image, PreparedImage):
+        raise _input_type_error("scene_interpretation", "image", "PreparedImage", image)
     return backend.interpret_scene(image)
 
 
 def _run_region_interpretation(
     backend: object, inputs: Mapping[str, object]
 ) -> Sequence[SemanticClaim]:
-    assert isinstance(backend, _SceneRegionSemanticStageBackend)
+    if not isinstance(backend, _SceneRegionSemanticStageBackend):
+        raise _backend_type_error(
+            "region_interpretation", "interpret_scene() and interpret_regions()", backend
+        )
     image = inputs["image"]
     regions = inputs["regions"]
-    assert isinstance(image, PreparedImage)
-    assert isinstance(regions, Sequence)
+    if not isinstance(image, PreparedImage):
+        raise _input_type_error("region_interpretation", "image", "PreparedImage", image)
+    if not isinstance(regions, Sequence):
+        raise _input_type_error("region_interpretation", "regions", "a Sequence", regions)
     return backend.interpret_regions(image, regions)  # type: ignore[arg-type]
 
 
 def _run_semantic_interpreter(
     backend: object, inputs: Mapping[str, object]
 ) -> SemanticInterpretationExecution:
-    assert isinstance(backend, SemanticInterpreter)
+    if not isinstance(backend, SemanticInterpreter):
+        raise _backend_type_error("semantic_interpreter", "SemanticInterpreter", backend)
     request = inputs["request"]
-    assert isinstance(request, SemanticInterpretationRequest)
+    if not isinstance(request, SemanticInterpretationRequest):
+        raise _input_type_error(
+            "semantic_interpreter", "request", "SemanticInterpretationRequest", request
+        )
     return backend.interpret(request)
 
 
 def _run_semantic_scorer(backend: object, inputs: Mapping[str, object]) -> Sequence[SemanticScore]:
-    assert isinstance(backend, SemanticScorer)
+    if not isinstance(backend, SemanticScorer):
+        raise _backend_type_error("semantic_scorer", "SemanticScorer", backend)
     claims = inputs["claims"]
     features = inputs["features"]
-    assert isinstance(claims, Sequence)
-    assert isinstance(features, Sequence)
+    if not isinstance(claims, Sequence):
+        raise _input_type_error("semantic_scorer", "claims", "a Sequence", claims)
+    if not isinstance(features, Sequence):
+        raise _input_type_error("semantic_scorer", "features", "a Sequence", features)
     return backend.score(claims, features)  # type: ignore[arg-type]
 
 
@@ -432,10 +475,17 @@ class ResolvedPipeline:
         Returns:
             One :class:`BackendProvenance` per backend stage, for
             persisting alongside a :class:`~contextmap.visual_perception.models.PerceptionRun`.
+
+        Raises:
+            TypeError: If a resolved backend does not report ``backend_provenance()``.
         """
         provenance: dict[str, BackendProvenance] = {}
         for stage_id, backend in self.backends.items():
-            assert isinstance(backend, _ProvenanceCapable)
+            if not isinstance(backend, _ProvenanceCapable):
+                raise TypeError(
+                    f"backend of stage {stage_id!r} does not report backend_provenance(): "
+                    f"{type(backend).__name__}"
+                )
             provenance[stage_id] = backend.backend_provenance()
         return provenance
 
@@ -451,6 +501,9 @@ class ResolvedPipeline:
 
         Returns:
             ``"sha256:<hex digest>"``.
+
+        Raises:
+            TypeError: If a resolved backend does not report ``backend_provenance()``.
         """
         payload = {
             "preset": encode_pipeline_preset(self.preset),

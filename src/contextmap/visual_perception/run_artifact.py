@@ -755,52 +755,51 @@ class PerceptionRunWriter:
                 f"request_id={request.request_id!r}, matches={len(matches)}"
             )
         result = matches[0]
-        if True:
-            if request.region_id is not None and all(
-                region.region_id != request.region_id for region in result.regions
-            ):
+        if request.region_id is not None and all(
+            region.region_id != request.region_id for region in result.regions
+        ):
+            raise RunArtifactError(
+                "semantic execution region_id does not resolve in its result: "
+                f"{request.region_id!r}"
+            )
+        payload_keys = {
+            (source_observation_id, feature.feature_id)
+            for feature, source_observation_id in self._feature_payloads
+        }
+        for feature_reference in request.visual_features:
+            feature_matches = [
+                feature
+                for feature in result.features
+                if feature.feature_id == feature_reference.feature_id
+                and feature.embedding_space_id == feature_reference.embedding_space_id
+                and feature.scope is feature_reference.scope
+                and feature.region_id == feature_reference.region_id
+            ]
+            if len(feature_matches) != 1:
                 raise RunArtifactError(
-                    "semantic execution region_id does not resolve in its result: "
-                    f"{request.region_id!r}"
+                    "semantic visual feature does not resolve exactly in its result: "
+                    f"{feature_reference.feature_id!r}"
                 )
-            payload_keys = {
-                (source_observation_id, feature.feature_id)
-                for feature, source_observation_id in self._feature_payloads
-            }
-            for feature_reference in request.visual_features:
-                feature_matches = [
-                    feature
-                    for feature in result.features
-                    if feature.feature_id == feature_reference.feature_id
-                    and feature.embedding_space_id == feature_reference.embedding_space_id
-                    and feature.scope is feature_reference.scope
-                    and feature.region_id == feature_reference.region_id
-                ]
-                if len(feature_matches) != 1:
-                    raise RunArtifactError(
-                        "semantic visual feature does not resolve exactly in its result: "
-                        f"{feature_reference.feature_id!r}"
-                    )
-                payload_key = (result.source_observation_id, feature_reference.feature_id)
-                if payload_key not in payload_keys:
-                    raise RunArtifactError(
-                        "semantic visual feature payload was not persisted: "
-                        f"{feature_reference.feature_id!r}"
-                    )
-            context_reference = request.scene_context_reference
-            if context_reference is not None:
-                context_matches = [
-                    candidate
-                    for candidate in self._results
-                    if str(candidate.result_id) == context_reference.evidence_id
-                    and candidate.source_observation_id == request.source_observation_id
-                    and candidate.scene_context is not None
-                ]
-                if len(context_matches) != 1:
-                    raise RunArtifactError(
-                        "semantic scene_context_reference does not resolve exactly: "
-                        f"{context_reference.evidence_id!r}"
-                    )
+            payload_key = (result.source_observation_id, feature_reference.feature_id)
+            if payload_key not in payload_keys:
+                raise RunArtifactError(
+                    "semantic visual feature payload was not persisted: "
+                    f"{feature_reference.feature_id!r}"
+                )
+        context_reference = request.scene_context_reference
+        if context_reference is not None:
+            context_matches = [
+                candidate
+                for candidate in self._results
+                if str(candidate.result_id) == context_reference.evidence_id
+                and candidate.source_observation_id == request.source_observation_id
+                and candidate.scene_context is not None
+            ]
+            if len(context_matches) != 1:
+                raise RunArtifactError(
+                    "semantic scene_context_reference does not resolve exactly: "
+                    f"{context_reference.evidence_id!r}"
+                )
         return result
 
     def _validate_failed_semantic_interpretations(self) -> None:
@@ -966,26 +965,25 @@ class PerceptionRunWriter:
                     _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
                 )
 
-        if True:
-            # Escrito SEMPRE, mesmo vazio e mesmo sem nenhuma tentativa semantica: assim a
-            # ausencia do arquivo significa inequivocamente "artifact anterior ao tracking",
-            # sem heuristica. Emiti-lo so quando havia tentativa deixava um buraco: um artifact
-            # legado em que toda tentativa falhou tambem tem zero execucoes e nenhuma stream,
-            # e passaria por completo.
-            #
-            # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
-            # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
-            # (e todo artifact ja escrito sob esta versao de schema).
-            failures_content = "".join(
-                f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
-                for failed in self._semantic_failures
-            )
-            failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
-            failures_path.parent.mkdir(parents=True, exist_ok=True)
-            failures_path.write_text(failures_content, encoding="utf-8")
-            file_entries.append(
-                _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
-            )
+        # Escrito SEMPRE, mesmo vazio e mesmo sem nenhuma tentativa semantica: assim a
+        # ausencia do arquivo significa inequivocamente "artifact anterior ao tracking",
+        # sem heuristica. Emiti-lo so quando havia tentativa deixava um buraco: um artifact
+        # legado em que toda tentativa falhou tambem tem zero execucoes e nenhuma stream,
+        # e passaria por completo.
+        #
+        # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
+        # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
+        # (e todo artifact ja escrito sob esta versao de schema).
+        failures_content = "".join(
+            f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
+            for failed in self._semantic_failures
+        )
+        failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
+        failures_path.parent.mkdir(parents=True, exist_ok=True)
+        failures_path.write_text(failures_content, encoding="utf-8")
+        file_entries.append(
+            _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
+        )
 
         # Também escrito SEMPRE, mesmo vazio: num run 0.6.0 a tabela existe e está inventariada,
         # então "nenhum frame auditado" nunca se confunde com "auditoria não registrada", que só
