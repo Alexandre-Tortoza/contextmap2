@@ -65,6 +65,18 @@ class TestAValidFoundation:
 
         assert changed.identity != _resolve(tmp_path, refs).identity
 
+    def test_it_round_trips_through_its_document(self, tmp_path: Path) -> None:
+        foundation = _resolve(tmp_path, foundation_refs(tmp_path))
+
+        assert SpatialFoundation.from_document(foundation.to_document()) == foundation
+
+    def test_a_document_without_one_of_its_references_is_refused(self, tmp_path: Path) -> None:
+        document = _resolve(tmp_path, foundation_refs(tmp_path)).to_document()
+        del document["geometry"]
+
+        with pytest.raises(ValueError, match="geometry"):
+            SpatialFoundation.from_document(document)
+
     def test_the_foundation_only_references_its_artifacts(self) -> None:
         names = {field.name for field in dataclasses.fields(SpatialFoundation)}
 

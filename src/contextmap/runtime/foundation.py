@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NewType
+from typing import Any, NewType
 
 from contextmap.ingestion import (
     FullSequenceSelection,
@@ -63,6 +63,43 @@ class SpatialFoundation:
     sequence: ArtifactRef
     state_estimation: ArtifactRef
     geometry: ArtifactRef
+
+    def to_document(self) -> dict[str, Any]:
+        """Return the JSON-compatible form embedded in the records that depend on it."""
+        return {
+            "identity": self.identity,
+            **{role: getattr(self, role).to_document() for role in _ROLES},
+        }
+
+    @classmethod
+    def from_document(cls, document: Mapping[str, Any]) -> SpatialFoundation:
+        """Rebuild a foundation already validated when its record was written.
+
+        It is not validated again: that would read every artifact, geometry included, each
+        time a record naming it is opened. The record's own identity check covers it.
+
+        Args:
+            document: A mapping produced by :meth:`to_document`.
+
+        Returns:
+            The foundation.
+
+        Raises:
+            ValueError: If the identity or a reference is missing or malformed.
+        """
+        identity = document.get("identity")
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("a spatial foundation document needs a text identity")
+        refs: dict[str, ArtifactRef] = {}
+        for role in _ROLES:
+            value = document.get(role)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"a spatial foundation document lacks its {role} reference")
+            refs[role] = ArtifactRef.from_document(value)
+        return cls(identity=SpatialFoundationId(identity), **refs)
+
+
+_ROLES = ("sequence", "state_estimation", "geometry")
 
 
 def resolve_spatial_foundation(

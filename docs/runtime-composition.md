@@ -388,6 +388,7 @@ src/contextmap/runtime/
 ├── coercion.py            # parâmetros JSON -> configuração da própria capability
 ├── composition.py         # composition root: construção lazy das implementações
 ├── config.py              # configuração efetiva, digest, segredos e disponibilidade
+├── context_run.py         # ContextRun: escopo de contexto sobre a fundação e seu registro imutável
 ├── errors.py              # falhas de composição e do DAG
 ├── foundation.py          # fundação espacial: sequência, trajetória e mapa validados juntos
 ├── ingestion_service.py   # serviço público de ingestion
@@ -501,7 +502,7 @@ acrescenta CR3 → revisão 3 → ContextBuild CB2 → M2   (CB1 e M1 nunca muda
 | Conceito | Owner | O que é | Persistência | Identidade |
 |---|---|---|---|---|
 | `SpatialFoundation` | runtime | valor que fixa as três refs (`ArtifactRef`) da fundação, validado pelos leitores públicos | **nenhum artifact próprio**: embutido nos registros de branch e de `ContextRun` | `SpatialFoundationId` = SHA-256 do digest de inventário (`inventory_digest`) de cada um dos três artifacts, calculado pela própria fundação ao validá-los |
-| `ContextRun` | runtime | um run do runtime (`run-NNNN`) que executa os estágios de contexto (`visual_perception`, `sensor_association` e, quando habilitado, `point_representation`) sobre uma fundação e uma seleção | `context_run.json` imutável na raiz do run, publicado **só** quando o run conclui | `ContextRunId` = SHA-256 de `SpatialFoundationId`, `selection_id` e dos `(stage_id, contrato, content_hash)` das saídas, produzidas ou reutilizadas |
+| `ContextRun` | runtime | um run do runtime (`run-NNNN`) que executa os estágios de contexto (`visual_perception`, `sensor_association` e, quando habilitado, `point_representation`) sobre uma fundação e uma seleção | `context_run.json` imutável na raiz do run, publicado **só** quando o run conclui | `ContextRunId` = SHA-256 de `SpatialFoundationId`, do documento canônico da seleção de observações e dos `(stage_id, contrato, content_hash)` das saídas, produzidas ou reutilizadas |
 | `ContextBranch` | runtime | fluxo lógico que acumula `ContextRun`s de **uma** fundação | `branches/<nome>/branch.json` (imutável: nome + fundação) e um registro imutável por acréscimo em `branches/<nome>/members/` | nome da branch (slug, único no dataset); a **revisão** é o número de membros |
 | `ContextBuild` | runtime | um run do runtime que materializa o mapa a partir de um conjunto congelado de `ContextRun`s | `context_build.json` imutável na raiz do run, escrito **antes** do primeiro estágio de jusante | `ContextBuildId` = SHA-256 de `SpatialFoundationId`, `ContextRunId`s em ordem canônica, digest do plano e `code_identity` |
 | `ContextMapId` | artifact | identidade final e imutável do snapshot | `ContextMapArtifact` (inalterado) | a de hoje: identidade do estágio `context_map` |
@@ -536,6 +537,13 @@ Implementada em `runtime/foundation.py` (#494): `resolve_spatial_foundation(work
 - é resolvida pela própria Ingestion (`resolve_selection_offsets`), sem decodificar nada fora da seleção, e o executor grava o `selection_id` real em vez de fixar `FullSequenceSelection()`.
 
 Evolução aditiva de configuração: todo documento `0.1.0` continua válido com o mesmo significado. A versão do schema de configuração segue [`versioning.md`](versioning.md), sem camada de compatibilidade.
+
+Implementada em `runtime/context_run.py` (#495):
+
+- `context_scope(plan, foundation)` escopa o plano aos estágios de contexto (`CONTEXT_STAGES`) com a fundação fornecida, nunca recomputada;
+- `publish_context_run(run_directory, workspace=, foundation=, execution=, record=)` publica `context_run.json` a partir do `ExecutionRecord` do run concluído, uma vez só. Recusa estágio fora do contexto, artifact sem hash de conteúdo ou local, e evidência construída sobre artifacts de outra fundação;
+- `read_context_run(run_directory, workspace=)` relê o registro e recusa um registro alterado (a identidade é recalculada) ou copiado para outro run;
+- cada artifact tem disposição `produced` ou `reused`, da decisão de reuso do estágio. A fundação vem embutida (`SpatialFoundation.to_document()`), sem ser revalidada a cada leitura.
 
 ### `ContextBranch`
 

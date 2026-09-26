@@ -96,8 +96,8 @@ class PlannedStage:
             and the backend and parameters of each of its variation points. Two stages
             with the same digest are configured identically, whatever else changed.
         observation_selection: For an observation-scoped stage, the encoded selection of the
-            observations it processes; ``None`` for the whole sequence and for every other
-            stage. It is part of ``config_digest``.
+            observations it processes, as a plain JSON document; ``None`` for the whole sequence
+            and for every other stage. It is part of ``config_digest``.
     """
 
     stage_id: str
@@ -594,7 +594,11 @@ def resolve_plan(
             for component_id in stage.components
             if component_id in config.components
         }
-        selection = config.inputs.observation_selection if stage.observation_scoped else None
+        selection = (
+            _thaw(config.inputs.observation_selection)
+            if stage.observation_scoped and config.inputs.observation_selection is not None
+            else None
+        )
         planned.append(
             PlannedStage(
                 stage_id=stage.stage_id,
