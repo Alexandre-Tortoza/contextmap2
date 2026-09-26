@@ -44,7 +44,7 @@ from contextmap.shared import (
     quaternion_norm,
     quaternion_to_rotation_matrix,
 )
-from contextmap.state_estimation.frame_graph import StaticFrameGraph
+from contextmap.state_estimation.frame_graph import STATIC_ROTATION_NORM_TOLERANCE, StaticFrameGraph
 
 BODY_ENDPOINT = "body"
 """Endpoint naming the body frame of the dynamic transform, instead of a modality."""
@@ -136,7 +136,7 @@ class PreflightTolerances:
         loop_rotation_rad: Largest rotation disagreement between redundant paths.
     """
 
-    rotation_orthonormality: float = 1e-5
+    rotation_orthonormality: float = STATIC_ROTATION_NORM_TOLERANCE
     inverse_round_trip_translation_m: float = 1e-9
     inverse_round_trip_rotation_rad: float = 1e-9
     loop_translation_m: float = 1e-3
