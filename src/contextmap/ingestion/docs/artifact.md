@@ -59,7 +59,7 @@ O path não é o contrato semântico — `manifest.json` é o ponto autoritativo
 
 ## `index.jsonl`
 
-Um objeto JSON por linha, um por observação, na ordem em que foi adicionada ao writer. Cada linha tem um campo `"modality"` (`"image"`, `"lidar"`, `"imu"`, `"external_pose"`) mais os campos do contrato correspondente (ver [`contracts.md`](contracts.md)). Para `image`/`lidar`, o payload binário fica em `rgb/`/`pointcloud/` e a linha do índice referencia o arquivo via `payload_path`; para `imu`/`external_pose`, todos os valores ficam inline.
+Um objeto JSON por linha, um por observação, na ordem em que foi adicionada ao writer. Cada linha tem um campo `"modality"` (`"image"`, `"lidar"`, `"imu"`, `"external_pose"`) mais os campos do contrato correspondente (ver [`contracts.md`](contracts.md)). Para `image`/`lidar`, o payload binário fica em `rgb/`/`pointcloud/` e a linha do índice referencia o arquivo via `payload_path`; para `imu`/`external_pose`, todos os valores ficam inline. O `payload_path` deriva do `observation_id` e precisa ser um caminho relativo dentro do artifact (`contextmap.shared.is_run_relative_path`): o writer recusa, antes de escrever qualquer arquivo, um id que o levaria para fora (por exemplo, com `../`), e o reader recusa com `SequenceArtifactError` um `payload_path` absoluto ou com `..` num índice adulterado, sem ler o arquivo. O inventário é conferido pela regra compartilhada `check_file_inventory`, com hash em blocos: nenhum payload é lido inteiro na memória só para conferir o hash.
 
 
 

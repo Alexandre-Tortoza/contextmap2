@@ -28,6 +28,7 @@ from contextmap.shared.run_directory import (
     RunDirectoryError,
     check_file_inventory,
     file_entry,
+    is_run_relative_path,
 )
 from contextmap.shared.time import SourceTimestamp
 
@@ -44,6 +45,7 @@ __all__ = [
     "compose_rigid",
     "file_entry",
     "invert_rigid",
+    "is_run_relative_path",
     "is_unit_quaternion",
     "normalize_quaternion",
     "quaternion_angle_between",
