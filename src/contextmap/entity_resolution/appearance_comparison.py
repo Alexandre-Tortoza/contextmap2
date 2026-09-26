@@ -328,8 +328,10 @@ class AppearanceComparator:
                     detail="the observation prototypes of an entity cancel out: no direction",
                 ),
             )
+        # Protótipos são unitários, então o produto interno já é o cosseno; o clamp em [-1, 1]
+        # só corrige o arredondamento (dot(u, u) pode passar de 1.0), como faz _vectors.cosine.
         pairs = [
-            _vectors.dot(left, right)
+            max(-1.0, min(1.0, _vectors.dot(left, right)))
             for left in profile_a.observation_prototypes
             for right in profile_b.observation_prototypes
         ]
@@ -338,8 +340,8 @@ class AppearanceComparator:
             metric=_METRIC,
             aggregation_id=APPEARANCE_AGGREGATION_ID,
             similarity=_vectors.cosine(profile_a.prototype, profile_b.prototype),
-            pair_similarity_min=max(-1.0, min(pairs)),
-            pair_similarity_max=min(1.0, max(pairs)),
+            pair_similarity_min=min(pairs),
+            pair_similarity_max=max(pairs),
             contributions_a=profile_a.contributions,
             contributions_b=profile_b.contributions,
         )
