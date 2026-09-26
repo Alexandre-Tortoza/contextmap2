@@ -194,9 +194,11 @@ Recursos recomendados:
 - CodeQL scanning;
 - regras de proteção para `main`, `dev` e, quando viável, padrão `milestone/*`.
 
-## Estado verificado em 2026-09-21
+## Estado verificado em 2026-09-26
 
-Este documento descreve as configurações **esperadas**. A tabela abaixo confronta cada uma com o que a API do GitHub devolveu em 2026-09-21, por leitura (`GET`) com as credenciais do mantenedor; nenhuma configuração foi alterada. Uma configuração que a API não permite ler com esse acesso é marcada como não verificável, e nenhuma é dada como ativa sem evidência.
+Este documento descreve as configurações **esperadas**. A tabela abaixo confronta cada uma com o que a API do GitHub devolveu, por leitura (`GET`) com as credenciais do mantenedor; nenhuma configuração foi alterada. Uma configuração que a API não permite ler com esse acesso é marcada como não verificável, e nenhuma é dada como ativa sem evidência.
+
+Releitura completa em **2026-09-26**, para o congelamento do escopo do v0.1.0 ([release-v0.1.0.md](release-v0.1.0.md)): **nada mudou** desde a leitura de 2026-09-21. `main` continua não existindo, `dev` continua sem proteção e sem ruleset, os três métodos de merge seguem habilitados, descrição e tópicos seguem vazios, e não há tag nem release. Toda divergência da tabela abaixo permanece divergente.
 
 | Configuração | Esperado | Observado | Situação |
 | --- | --- | --- | --- |

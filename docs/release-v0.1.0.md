@@ -69,7 +69,7 @@ Estados: **feito** (com evidência), **preparado** (existe, falta só a ação e
 
 ### B. Validação end-to-end (milestone #19)
 
-A evidência é o relatório [`v0.1.0-release-contract-20260925`](../src/contextmap/evaluation/docs/validation/v0.1.0-release-contract-20260925.md), decidido contra o cenário 1.0.5: **18 gates cumpridos com evidência real, 0 reprovados, 5 bloqueados, 3 não avaliados**, e `unmet_required_gates(kinds={INVARIANT})` vazio.
+A evidência é o relatório [`v0.1.0-release-contract-20260925`](../src/contextmap/evaluation/docs/validation/v0.1.0-release-contract-20260925.md), decidido contra o cenário 1.0.5, com os números por estágio em [build_results.md](build_results.md): **18 gates cumpridos com evidência real, 0 reprovados, 5 bloqueados, 3 não avaliados**, e `unmet_required_gates(kinds={INVARIANT})` vazio.
 
 | # | Item | Issue | Estado |
 | --- | --- | --- | --- |
