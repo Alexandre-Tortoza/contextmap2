@@ -254,6 +254,40 @@ class TestEncodeDecodeTimestampPolicy:
         assert rebuilt.correction.offset_nanoseconds == 12_500_000_000
         assert rebuilt.correction.anchor_source_time is None
 
+    def test_a_large_direct_offset_round_trips_to_the_exact_nanosecond(self) -> None:
+        # Um offset de ~25 anos com 1 ns de fração não cabe em float64 de segundos.
+        offset_nanoseconds = _TWENTY_FIVE_YEARS_SECONDS * 1_000_000_000 + 1
+        policy = TimestampPolicy(
+            correction=ConstantOffsetCorrection(offset_nanoseconds=offset_nanoseconds)
+        )
+
+        rebuilt = decode_timestamp_policy(encode_timestamp_policy(policy))
+
+        assert rebuilt.correction is not None
+        assert rebuilt.correction.offset_nanoseconds == offset_nanoseconds
+
+    def test_a_direct_offset_is_persisted_as_integer_nanoseconds(self) -> None:
+        policy = TimestampPolicy(correction=ConstantOffsetCorrection.from_offset_seconds(12.5))
+
+        correction_document = encode_timestamp_policy(policy)["correction"]
+
+        assert correction_document["offset_nanoseconds"] == 12_500_000_000
+        assert "offset_seconds" not in correction_document
+
+    def test_a_float_offset_in_nanoseconds_is_rejected(self) -> None:
+        document = {
+            "event_clock": "header_stamp",
+            "window_clock": "recording_time",
+            "correction": {
+                "type": "constant_offset",
+                "offset_nanoseconds": 12.5e9,
+                "anchor_source_time": None,
+                "anchor_reference_time": None,
+            },
+        }
+        with pytest.raises(ValueError, match="offset_nanoseconds must be an integer"):
+            decode_timestamp_policy(document)
+
     def test_an_anchor_derived_offset_round_trips_with_its_anchors(self) -> None:
         source = _timestamp(1_000_000_000)
         reference = _timestamp(1_000_000_000 + _TWENTY_FIVE_YEARS_SECONDS)
