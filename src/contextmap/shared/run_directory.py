@@ -272,6 +272,20 @@ class AtomicRunDirectory:
             raise RunDirectoryError(f"path has not been written in this run: {relative_path}")
         return self._tmp_dir / relative_path
 
+    def inventory(self) -> tuple[FileEntry, ...]:
+        """Return the inventory recorded so far, sorted by path.
+
+        It is exactly what :meth:`publish` adds to the manifest: every contractual file written
+        with :meth:`write_bytes`, and every contractual stream of :meth:`open_binary` once it is
+        closed, with the size and hash counted while it was written. An owner whose manifest
+        depends on the inventory (for example a content identity computed over the file hashes)
+        builds it from here without reading any file again.
+
+        Returns:
+            The entries recorded when this call is made; a stream still open is not among them.
+        """
+        return tuple(sorted(self._entries.values(), key=lambda entry: entry.path))
+
     def publish(self, *, manifest: Mapping[str, Any], readme: str) -> None:
         """Write the manifest, verify the inventory and make the run visible.
 
@@ -291,7 +305,7 @@ class AtomicRunDirectory:
             raise RunDirectoryError("a stream is still open; close it before publishing the run")
         if self._failed_stream:
             raise RunDirectoryError("a stream failed while writing; the run cannot be published")
-        inventory = sorted(self._entries.values(), key=lambda entry: entry.path)
+        inventory = self.inventory()
         record = {
             **manifest,
             "file_inventory": [

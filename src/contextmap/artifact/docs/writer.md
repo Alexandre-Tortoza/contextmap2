@@ -34,7 +34,7 @@ Provar que o registro a montante **existe** não prova que a cópia do mapa aind
 
 ## O que é validado antes de publicar
 
-Nada é escrito no disco se algo abaixo falhar, e nada inválido é descartado em silêncio:
+Nada é publicado se algo abaixo falhar, e nada inválido é descartado em silêncio. Tudo é conferido antes de tocar o disco, exceto um valor que JSON não representa numa entidade ou relação: as tabelas são gravadas em fluxo, então ele só aparece quando a sua linha é codificada, já dentro do diretório temporário, que é então removido.
 
 | Verificação | Erro |
 | --- | --- |
@@ -68,6 +68,12 @@ O conteúdo depende só do mapa: registros ordenados pelo id, linhas canônicas 
 ## Publicação atômica
 
 O writer usa `contextmap.shared.AtomicRunDirectory`: os arquivos são escritos num diretório temporário oculto, irmão de `output_dir`; o manifest só é escrito na publicação, depois de conferir o inventário contra o disco; e o diretório é publicado por um único `rename`. Uma falha remove o temporário. Se o processo morrer, sobra um diretório `.tmp-…` **sem `manifest.json`**, que nenhum leitor confunde com um artifact. Depois de publicar, o writer relê o manifest e confere que ele é idêntico ao calculado.
+
+## Custo
+
+O mapa é codificado **uma vez** por escrita (`context_map_to_record`): os documentos e as linhas das duas tabelas são partes desse mesmo registro (#600). As tabelas de entidades e de relações e os seus índices de deslocamento são gravados linha a linha, depois da ordenação por chave, por `AtomicRunDirectory.open_binary`, que conta o tamanho e calcula o SHA-256 enquanto grava; o inventário do manifest, e com ele a `content_identity`, vem de `AtomicRunDirectory.inventory()`, sem reler arquivo algum. Só os documentos pequenos e o índice de travessia (`entity-relation-index.jsonl`, que só tem chaves) são montados como bytes; o que continua proporcional ao mapa em memória é o seu registro, uma vez.
+
+Medido numa máquina de desenvolvimento com um mapa sintético de 8 000 entidades e 16 000 relações (25 MiB de tabelas), sem as verificações a montante (que não mudaram): o pico do `tracemalloc` durante `write` era 120,0 MiB, passou a 95,1 MiB codificando o mapa uma vez e a 60,8 MiB com as tabelas em fluxo. Com 2 000 entidades e 4 000 relações, `write` (sem `tracemalloc`) levava 0,93 s e passou a 0,41 s. `tests/artifact/test_context_map_serialization_writer.py` conta as codificações do mapa e confere que as tabelas passam por `open_binary`; digests gravados antes da mudança provam que os bytes publicados são os mesmos.
 
 ## Limites conhecidos
 

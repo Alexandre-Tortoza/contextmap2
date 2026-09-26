@@ -17,48 +17,57 @@ from contextmap.artifact.composition import ContextEntity, ContextRelation
 from contextmap.artifact.metadata import ContextMapMetadata
 from contextmap.artifact.models import ContextMap, GeometricMapLink
 from contextmap.artifact.provenance import UpstreamArtifact
-from contextmap.artifact.records import ContextMapRecordError, _decode, context_map_to_record
+from contextmap.artifact.records import ContextMapRecordError, _decode
 
 ENTITY_LINE_FIELDS = frozenset({"key", "record"})
 RELATION_LINE_FIELDS = frozenset({"key", "subject", "object", "record"})
 
 
-def entity_lines(context_map: ContextMap) -> list[dict[str, Any]]:
+def entity_lines(context_map: ContextMap, record: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Wrap every entity record of a map in the envelope the entity table stores.
 
     Args:
         context_map: The map.
+        record: The schema's record of this same map (``context_map_to_record``). The caller
+            encodes the map once and shares the record with every part it stores.
 
     Returns:
         One ``{"key", "record"}`` line per entity; the key is the entity id and the record is the
         schema's canonical record of the entity.
+
+    Raises:
+        ValueError: If ``record`` does not hold exactly one entity record per entity of the map.
     """
-    records = context_map_to_record(context_map)["entities"]
     return [
-        {"key": str(entity.entity_id), "record": record}
-        for entity, record in zip(context_map.entities, records, strict=True)
+        {"key": str(entity.entity_id), "record": item}
+        for entity, item in zip(context_map.entities, record["entities"], strict=True)
     ]
 
 
-def relation_lines(context_map: ContextMap) -> list[dict[str, Any]]:
+def relation_lines(context_map: ContextMap, record: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Wrap every relation record of a map in the envelope the relation table stores.
 
     Args:
         context_map: The map.
+        record: The schema's record of this same map (``context_map_to_record``). The caller
+            encodes the map once and shares the record with every part it stores.
 
     Returns:
         One ``{"key", "subject", "object", "record"}`` line per relation; the subject and the
         object are the ids of the entities the relation connects.
+
+    Raises:
+        ValueError: If ``record`` does not hold exactly one relation record per relation of the
+            map.
     """
-    records = context_map_to_record(context_map)["relations"]
     return [
         {
             "key": str(relation.relation_id),
             "subject": str(relation.subject.entity_id),
             "object": str(relation.object.entity_id),
-            "record": record,
+            "record": item,
         }
-        for relation, record in zip(context_map.relations, records, strict=True)
+        for relation, item in zip(context_map.relations, record["relations"], strict=True)
     ]
 
 
