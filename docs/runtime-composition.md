@@ -388,6 +388,7 @@ src/contextmap/runtime/
 ├── coercion.py            # parâmetros JSON -> configuração da própria capability
 ├── composition.py         # composition root: construção lazy das implementações
 ├── config.py              # configuração efetiva, digest, segredos e disponibilidade
+├── context_branch.py      # ContextBranch: acúmulo explícito de ContextRuns, só por acréscimo
 ├── context_run.py         # ContextRun: escopo de contexto sobre a fundação e seu registro imutável
 ├── errors.py              # falhas de composição e do DAG
 ├── foundation.py          # fundação espacial: sequência, trajetória e mapa validados juntos
@@ -551,6 +552,8 @@ Implementada em `runtime/context_run.py` (#495):
 - um acréscimo é um arquivo novo, publicado de forma atômica e **sem sobrescrever**: dois acréscimos concorrentes com a mesma revisão não passam os dois. Nenhum registro existente é alterado;
 - a autoridade são os registros de membro. Revisão e ordem vêm do conteúdo deles, nunca da ordem de listagem do sistema de arquivos; não há índice mutável a reconstruir;
 - a branch é orquestração, não crença: não guarda fusão, confiança nem vencedores.
+
+Implementada em `runtime/context_branch.py` (#496): `create_branch(workspace, dataset=, name=, foundation=)`, `open_branch(...)` e `append_to_branch(workspace, branch, context_run)`. `ContextBranch.revision` é o número de membros, `ContextBranch.at(revisão)` devolve a branch como estava naquela revisão (um acréscimo posterior nunca a altera) e `ContextBranch.context_run_ids` é o conjunto de membros em ordem canônica, independente da ordem dos acréscimos. Abrir uma branch confere que os registros de membro são exatamente as revisões `1..N`. Nenhuma operação de branch lê artifact de capability.
 
 ### `ContextBuild`
 
