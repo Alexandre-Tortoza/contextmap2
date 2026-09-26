@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -928,6 +929,39 @@ def test_iter_semantic_executions_streams_instead_of_materializing(tmp_path: Pat
     streamed = reader.iter_semantic_executions()
     assert not isinstance(streamed, list), "iter_semantic_executions() must be lazy"
     assert list(streamed) == [execution]
+
+
+def _without_raw_response_reference(line: str) -> str:
+    record = json.loads(line)
+    del record["raw_response_reference"]
+    return json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    "malform",
+    [
+        pytest.param(_without_raw_response_reference, id="missing-raw-response-reference"),
+        pytest.param(lambda line: "not json", id="not-json"),
+    ],
+)
+def test_a_malformed_semantic_execution_record_is_an_artifact_error(
+    tmp_path: Path, malform: Callable[[str], str]
+) -> None:
+    """VP-10: a malformed line escaped as a raw KeyError or JSONDecodeError."""
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+    writer.finalize()
+    executions_path = _run_dir(tmp_path) / "outputs" / "semantic-interpretations.jsonl"
+    executions_path.write_text(f"{malform(executions_path.read_text().strip())}\n")
+
+    with pytest.raises(
+        RunArtifactError,
+        match=r"invalid semantic execution record at outputs/semantic-interpretations\.jsonl:1",
+    ):
+        list(PerceptionRunReader(_run_dir(tmp_path)).iter_semantic_executions())
 
 
 def _masked_result(observation_id: str, mask: InlineMask) -> PerceptionResult:

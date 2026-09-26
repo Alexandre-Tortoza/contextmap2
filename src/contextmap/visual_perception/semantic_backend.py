@@ -332,7 +332,16 @@ def encode_semantic_execution(
 def decode_semantic_execution(
     record: dict[str, Any],
 ) -> SemanticInterpretationExecution:
-    """Decode one semantic execution and verify its contractual raw response."""
+    """Decode one semantic execution and verify its contractual raw response.
+
+    Raises:
+        KeyError: If a field of the record is missing, ``raw_response_reference`` included:
+            the execution does not carry it, but the record contract does.
+        ValueError: If the raw response or its reference is not a string, or the raw response
+            does not match its recorded hash.
+    """
+    if not isinstance(record["raw_response_reference"], str):
+        raise ValueError("semantic execution raw_response_reference must be a string")
     raw_response = record["raw_response"]
     if not isinstance(raw_response, str):
         raise ValueError("semantic execution raw_response must be a string")

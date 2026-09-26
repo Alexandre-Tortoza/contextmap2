@@ -141,6 +141,8 @@ deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
 
 `PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados, a auditoria de Region Discovery e os registros de execução contratuais; `debug/` não é dependência de leitura.
 
+Um registro malformado de `outputs/semantic-interpretations.jsonl` (linha que não é JSON, campo ausente, `raw_response_reference` incluído, ou hash da resposta que não confere) vira `RunArtifactError` com o arquivo e a linha, nunca um `KeyError` ou `JSONDecodeError` cru (#619).
+
 ## `serialization.py`
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.

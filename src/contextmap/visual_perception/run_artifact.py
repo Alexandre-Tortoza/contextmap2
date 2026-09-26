@@ -1140,23 +1140,28 @@ class PerceptionRunReader:
 
         Every record carries its full ``raw_response`` text, so a run's executions are
         markedly heavier than its results; stream them unless all are needed at once.
+
+        Raises:
+            RunArtifactError: While iterating, if a line is not JSON or not a valid execution
+                record; the error names the file and line.
         """
         executions_path = self._root / _SEMANTIC_EXECUTIONS_FILENAME
         if not executions_path.is_file():
             return
         with executions_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if not stripped:
                     continue
-                record = json.loads(stripped)
-                raw_reference = record["raw_response_reference"]
                 try:
-                    yield decode_semantic_execution(record)
+                    execution = decode_semantic_execution(json.loads(stripped))
                 except (ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(
-                        f"invalid semantic execution record for {raw_reference!r}: {error}"
+                        "invalid semantic execution record at "
+                        f"{_SEMANTIC_EXECUTIONS_FILENAME}:{line_number}: "
+                        f"{type(error).__name__}: {error}"
                     ) from error
+                yield execution
 
     def tracks_semantic_failures(self) -> bool:
         """Whether this run recorded its rejected interpretations at all.
