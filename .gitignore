@@ -30,6 +30,14 @@ artifacts/
 outputs/
 runs/
 workspace/
+# Exceção estreita: o pacote de demonstração do release é um fixture commitado, e o layout
+# contratual de um artifact tem um diretório `outputs/`. Sem esta negação, os arquivos
+# contratuais dele ficariam de fora e o artifact publicado seria inválido -- foi o que
+# aconteceu, e `test_no_example_file_is_ignored` agora impede que volte a acontecer.
+# A negação cobre só `outputs/` sob `examples/`: um `!examples/**` amplo anularia os padrões
+# de `.env` acima, que vêm antes dela e perderiam por serem anteriores.
+!examples/**/outputs/
+!examples/**/outputs/**
 datasets/
 checkpoints/
 *.pt

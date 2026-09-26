@@ -65,6 +65,36 @@ def test_research_data_workspaces_and_secrets_are_ignored(path: str) -> None:
     assert result.returncode == 0, f"{path} is not covered by .gitignore"
 
 
+def test_no_example_file_is_ignored() -> None:
+    """Every file of a committed example must actually be committed.
+
+    The release examples are fixtures, and an artifact's contractual layout has an ``outputs/``
+    directory -- the same name ``.gitignore`` uses to keep research outputs out of the tree. The
+    first version of the demo bundle lost 20 of its 52 files to that rule and was published
+    invalid, while the test that validates it passed locally because the files were still on
+    disk. Only a clean checkout showed it, so this asserts the property directly.
+    """
+    examples = REPOSITORY_ROOT / "examples"
+    if not examples.is_dir():
+        pytest.skip("there is no examples directory")
+    present = sorted(path for path in examples.rglob("*") if path.is_file())
+    tracked = {
+        REPOSITORY_ROOT / name
+        for name in subprocess.run(
+            ["git", "ls-files", "-z", "examples"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        .stdout.decode()
+        .split("\0")
+        if name
+    }
+
+    assert present, "the examples directory has no file"
+    assert [str(path.relative_to(REPOSITORY_ROOT)) for path in present if path not in tracked] == []
+
+
 def test_no_tracked_file_is_a_model_weight_a_recording_or_oversized() -> None:
     offenders = []
     for path in _tracked_files():

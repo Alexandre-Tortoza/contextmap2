@@ -11,6 +11,7 @@ import importlib.util
 _REQUIRES_ROSBAGS = (
     "ingestion/adapters/test_ros1_bag.py",
     "ingestion/adapters/test_ros2_bag.py",
+    "ingestion/test_windowed_ingestion_integration.py",
     "state_estimation/test_state_estimation_fast_lio_process.py",
 )
 _ROSBAGS_INSTALLED = importlib.util.find_spec("rosbags") is not None
