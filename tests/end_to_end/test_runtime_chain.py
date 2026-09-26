@@ -17,7 +17,12 @@ from typing import Any
 import pytest
 from chain import canned_perception_results
 
-from contextmap.artifact import ContextMapArtifactReader
+from contextmap.artifact import (
+    ContextMapArtifactReader,
+    ValidationLevel,
+    ValidationStatus,
+    validate_context_map_artifact,
+)
 from contextmap.entity_resolution import (
     CandidateRetrievalPolicy,
     ComparisonChannels,
@@ -44,15 +49,28 @@ from contextmap.ingestion import (
 )
 from contextmap.runtime import (
     ArtifactRef,
+    ContextBranch,
+    ContextBuild,
+    ContextRun,
     ExecutionPlan,
     FileArtifactStore,
+    PipelinePlan,
     ReusePolicy,
     RunJournal,
+    SpatialFoundation,
     StageExecutionError,
     StageRequest,
+    append_to_branch,
+    context_scope,
+    create_branch,
+    plan_context_build,
+    publish_context_build,
+    publish_context_run,
+    read_context_build,
     read_run,
     resolve_effective_config,
     resolve_plan,
+    resolve_spatial_foundation,
     resume_plan,
     run_plan,
 )
@@ -697,3 +715,117 @@ class TestFusionOverSeveralContextRuns:
 
         with pytest.raises(ExecutorError, match="not an input"):
             self._fuse(workspace, refs, [association], [refs["visual_perception"]])
+
+
+class TestIncrementalBuild:
+    """Issue #499: a ContextBuild materializes its frozen ContextRuns through the real assembler.
+
+    The foundation is the CI chain's own sequence, trajectory and map, validated as one; each
+    ContextRun is a real perception and association run over a different selection; each build
+    runs the real materialization stages and must leave a ContextMapArtifact that verifies.
+    """
+
+    @staticmethod
+    def _setup(tmp_path: Path) -> tuple[Path, Any, Any, SpatialFoundation]:
+        effective, execution = _scope(tmp_path)
+        workspace = tmp_path / "ws"
+        _, record = _run(effective, execution, workspace, _executors())
+        refs = _outputs(record)
+        foundation = resolve_spatial_foundation(
+            workspace,
+            sequence=refs["ingestion"],
+            state_estimation=refs["state_estimation"],
+            geometry=refs["geometric_mapping"],
+        )
+        return workspace, effective, execution.plan, foundation
+
+    @staticmethod
+    def _plan_over(effective: Any, selection: dict[str, Any]) -> tuple[Any, PipelinePlan]:
+        document = json.loads(json.dumps(effective.config.to_document()))
+        document["inputs"]["observation_selection"] = selection
+        path = Path(effective.sources[-1].identity).parent / "context.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        context_effective = resolve_effective_config(files=[path])
+        return context_effective, resolve_plan(context_effective)
+
+    def _context_run(
+        self, workspace: Path, effective: Any, foundation: SpatialFoundation, end: int
+    ) -> ContextRun:
+        selection = {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": end}
+        context_effective, plan = self._plan_over(effective, selection)
+        execution = context_scope(plan, foundation)
+        journal, record = _run(context_effective, execution, workspace, _executors())
+        return publish_context_run(
+            journal.directory,
+            workspace=workspace,
+            foundation=foundation,
+            execution=execution,
+            record=record,
+        )
+
+    @staticmethod
+    def _build(
+        workspace: Path, effective: Any, plan: PipelinePlan, branch: ContextBranch, revision: int
+    ) -> tuple[ContextBuild, Path]:
+        planned = plan_context_build(
+            workspace, branch, plan, code_identity="test", revision=revision
+        )
+        journal = RunJournal.create(workspace, effective, planned.execution)
+        publish_context_build(journal.directory, workspace=workspace, build=planned.build)
+        run_plan(
+            planned.execution,
+            _executors(),
+            environ={},
+            module_available=lambda _name: True,
+            provided_runtimes=PROVIDED,
+            journal=journal,
+        )
+        return planned.build, journal.directory
+
+    def test_each_build_materializes_a_verified_map_and_leaves_earlier_maps_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        workspace, effective, plan, foundation = self._setup(tmp_path)
+        branch = create_branch(
+            workspace, dataset=CI_FIXTURE_ID, name="incremental", foundation=foundation
+        )
+        branch = append_to_branch(
+            workspace, branch, self._context_run(workspace, effective, foundation, 100)
+        )
+        first, first_run = self._build(workspace, effective, plan, branch, revision=1)
+        first_map = first_run / "context_map"
+        before = {path: path.read_bytes() for path in first_map.rglob("*") if path.is_file()}
+
+        branch = append_to_branch(
+            workspace, branch, self._context_run(workspace, effective, foundation, 200)
+        )
+        second, second_run = self._build(workspace, effective, plan, branch, revision=2)
+
+        assert len(first.context_run_ids) == 1 and len(second.context_run_ids) == 2
+        for directory in (first_map, second_run / "context_map"):
+            report = validate_context_map_artifact(directory, level=ValidationLevel.FULL)
+            assert report.status is ValidationStatus.VERIFIED, report.findings
+        with ContextMapArtifactReader.open(first_map) as reader:
+            first_id = reader.context_map().context_map_id
+        with ContextMapArtifactReader.open(second_run / "context_map") as reader:
+            assert reader.context_map().context_map_id != first_id
+        after = {path: path.read_bytes() for path in first_map.rglob("*") if path.is_file()}
+        assert after == before
+        assert read_context_build(first_run, workspace=workspace) == first
+
+
+def test_a_context_map_that_does_not_verify_fails_its_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #499: the stage validates what it wrote; an invalid map is never a success."""
+    from contextmap.artifact import ValidationReport
+
+    def invalid(path: Path, **_options: Any) -> ValidationReport:
+        report = validate_context_map_artifact(path, level=ValidationLevel.STRUCTURAL)
+        return dataclasses.replace(report, status=ValidationStatus.INVALID)
+
+    monkeypatch.setattr("contextmap.runtime.executors.validate_context_map_artifact", invalid)
+    effective, execution = _scope(tmp_path)
+
+    with pytest.raises(StageExecutionError, match="does not verify"):
+        _run(effective, execution, tmp_path / "ws", _executors())

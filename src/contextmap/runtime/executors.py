@@ -42,9 +42,12 @@ from contextmap.artifact import (
     PolicyRef,
     SourceSequence,
     UpstreamArtifact,
+    ValidationLevel,
+    ValidationStatus,
     artifact_digest,
     assemble_context_map_with_metrics,
     estimator_local_map_frame,
+    validate_context_map_artifact,
     write_context_map_with_metrics,
 )
 from contextmap.entity_resolution import (
@@ -1564,6 +1567,22 @@ class ContextMapExecutor:
         manifest, _write_metrics = write_context_map_with_metrics(
             result.context_map, output_dir=output, upstream_locations=upstream_locations
         )
+        # A validação completa é do artifact; o estágio só se recusa a publicar como sucesso um
+        # mapa que ela não verifica (#499): um build nunca termina bem sobre um mapa inválido.
+        report = validate_context_map_artifact(
+            output,
+            level=ValidationLevel.FULL,
+            dependency_paths={
+                **upstream_locations,
+                str(sequence.manifest.artifact_id): sequence_dir,
+            },
+        )
+        if report.status is not ValidationStatus.VERIFIED:
+            findings = "; ".join(f"{item.code}: {item.message}" for item in report.findings[:5])
+            raise ExecutorError(
+                f"the context map written to {output} does not verify ({report.status.value}): "
+                f"{findings}"
+            )
         return _reference(
             request, CONTEXT_MAP, str(manifest.context_map_id), manifest.file_inventory
         )
