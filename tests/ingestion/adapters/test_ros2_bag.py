@@ -348,7 +348,8 @@ def test_missing_required_topic_raises_before_any_observation(bag_path: Path) ->
     adapter = Ros2BagSourceAdapter(config)
 
     with pytest.raises(MissingRequiredTopicError):
-        list(adapter.read_observations())
+        # Erro de pré-condição na chamada, sem iterar (o generator nunca é consumido).
+        adapter.read_observations()
 
 
 def test_unsupported_encoding_becomes_a_warning_not_a_crash(tmp_path: Path) -> None:
@@ -584,7 +585,8 @@ def test_window_with_no_overlap_is_rejected_explicitly(tmp_path: Path) -> None:
     adapter = Ros2BagSourceAdapter(replace(base_config, window=window))
 
     with pytest.raises(InvalidSourceWindowError, match="does not overlap"):
-        list(adapter.read_observations())
+        # Erro de pré-condição na chamada, sem iterar (o generator nunca é consumido).
+        adapter.read_observations()
 
 
 def test_content_hash_covers_only_the_window_not_the_whole_source(tmp_path: Path) -> None:

@@ -108,8 +108,13 @@ class Ros2BagSourceAdapter:
         :meth:`read_calibration`, which is global source metadata read once
         regardless of the window (see :meth:`read_calibration`).
 
-        Yields:
-            One :data:`~contextmap.ingestion.models.SourceObservation` per
+        The preconditions below are checked by the call itself, before the
+        returned iterator is advanced, reading only the bag's topic list and
+        index; decoding starts on the first ``next()``.
+
+        Returns:
+            An iterator over one
+            :data:`~contextmap.ingestion.models.SourceObservation` per
             successfully decoded message within the configured window (the
             whole bag when none is configured), in bag order. A message
             whose content cannot be decoded (a ``ValueError`` from decoding)
@@ -122,17 +127,25 @@ class Ros2BagSourceAdapter:
                 clock does not match this bag's recording-time clock, or it
                 does not overlap the bag's recording-time range at all.
         """
-        available = self._available_topics()
-        self._check_required_topics(available)
-
+        self._check_required_topics(self._available_topics())
         topic_kinds = self._configured_topic_kinds()
+        start_ns, stop_ns = _ros_common.resolve_window_bounds(
+            self._config, open_reader=lambda: Reader(self._config.path), topic_kinds=topic_kinds
+        )
+        return self._decoded_observations(topic_kinds, start_ns=start_ns, stop_ns=stop_ns)
+
+    def _decoded_observations(
+        self, topic_kinds: dict[str, str], *, start_ns: int | None, stop_ns: int | None
+    ) -> Iterator[SourceObservation]:
+        """Read and decode the configured topics within already validated bounds.
+
+        A generator, so nothing here runs before the first ``next()``: the
+        precondition checks live in :meth:`read_observations`, which calls it.
+        """
         calibration_ids = _ros_common.calibration_ids_by_sensor(self.read_calibration())
         self._warnings = []
         self._content_hash = _ros_common.StreamingContentHash()
         counters: dict[str, int] = {}
-        start_ns, stop_ns = _ros_common.resolve_window_bounds(
-            self._config, open_reader=lambda: Reader(self._config.path), topic_kinds=topic_kinds
-        )
 
         with Reader(self._config.path) as reader:
             connections = [
