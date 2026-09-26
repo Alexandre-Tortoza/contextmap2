@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, BinaryIO, NewType
+from typing import TYPE_CHECKING, Any, BinaryIO, NewType
 
 from contextmap.geometric_mapping import GeometryReference, MapId, geometry_id_for
 from contextmap.ingestion import SequenceArtifactId
@@ -58,6 +58,9 @@ from contextmap.shared import (
     check_file_inventory,
 )
 from contextmap.visual_perception import RegionId
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 SCHEMA_VERSION = "0.2.0"
 """Sensor Association run artifact schema version written and understood by this module.
@@ -89,6 +92,8 @@ _DIAGNOSTICS = "metrics/frame-diagnostics.jsonl"
 _SUMMARY = "metrics/summary.json"
 _RUNTIME = "metrics/runtime.json"
 _GEOMETRY_INFIX = "--geom-"
+_U32_INDEX_LIMIT = 2**32
+"""Global geometry indices must stay below this to fit the ``uint32`` support and dense tables."""
 
 
 class RunArtifactError(Exception):
@@ -366,8 +371,9 @@ class SensorAssociationRunTransaction:
         call.
 
         Raises:
-            RunArtifactError: If the run is already finalized or closed, or an observation's
-                geometry support disagrees with its region membership.
+            RunArtifactError: If the run is already finalized or closed, an observation's
+                geometry support disagrees with its region membership, or a persisted global
+                geometry index does not fit the 32-bit support or dense tables.
         """
         if self._finalized or self._closed:
             raise RunArtifactError("the run is no longer open for frames")
@@ -459,7 +465,7 @@ class SensorAssociationRunTransaction:
             # As posições são linhas de candidatos; o que se persiste é a identidade global
             # de cada uma, que é o que o leitor reconstrói (#562).
             rows = np.asarray(region.associated_indices)
-            positions = np.asarray(projection.global_indices[rows], dtype="<u4")
+            positions = _as_u32_indices(projection.global_indices[rows], table=_SUPPORT)
             if projection.map_references(rows) != observation.geometry_support:
                 raise RunArtifactError(
                     f"the geometry support of {observation.spatial_observation_id!r} "
@@ -509,7 +515,9 @@ class SensorAssociationRunTransaction:
         for channel_id in sorted(frame.dense_samples):
             samples = frame.dense_samples[channel_id]
             sections = (
-                np.asarray(global_indices[samples.eligible_indices], dtype="<u4").tobytes(),
+                _as_u32_indices(
+                    global_indices[samples.eligible_indices], table=_DENSE_CELLS
+                ).tobytes(),
                 np.asarray(samples.sampled, dtype="u1").tobytes(),
                 np.asarray(samples.cell_rows, dtype="<i4").tobytes(),
                 np.asarray(samples.cell_cols, dtype="<i4").tobytes(),
@@ -925,6 +933,24 @@ def _read_slice(path: Path, *, byte_offset: int, byte_length: int) -> bytes:
     with path.open("rb") as handle:
         handle.seek(byte_offset)
         return handle.read(byte_length)
+
+
+def _as_u32_indices(global_indices: NDArray[Any], *, table: str) -> NDArray[Any]:
+    """Return global geometry indices as the little-endian ``uint32`` a table stores.
+
+    Raises:
+        RunArtifactError: If an index does not fit in 32 bits. The cast would wrap it onto
+            another element's identity, so the persisted support would silently name the wrong
+            geometry; the schema has no wider index, so such a map is refused instead.
+    """
+    import numpy as np
+
+    if global_indices.size and int(global_indices.max()) >= _U32_INDEX_LIMIT:
+        raise RunArtifactError(
+            f"global geometry index {int(global_indices.max())} does not fit the 32-bit {table} "
+            f"table of schema {SCHEMA_VERSION}: casting it would wrap it onto another element"
+        )
+    return np.asarray(global_indices, dtype="<u4")
 
 
 def _array(typecode: str, data: bytes) -> array[Any]:
