@@ -28,6 +28,9 @@ from contextmap.runtime import (
     StageRequest,
 )
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the ingestion stage reads: reusing it needs that identity declared (issue #587)."""
+
 
 class PureStage:
     """A stage that is a pure function of what it consumed and how it is configured."""
@@ -134,7 +137,7 @@ def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     assert perception.inputs == {"sequence": (ingestion.output["artifact_id"],)}
 
     # 6. Reuso explícito: a segunda execução aponta o artifact exato da primeira.
-    policy = runtime.reuse_policy(tmp_path / "index", code_identity="frontend-1")
+    policy = runtime.reuse_policy(tmp_path / "index", code_identity="frontend-1", identities=SOURCE)
     warm = runtime.run(config, targets=list(plan.run_stages), reuse=policy)
     again = runtime.run(config, targets=list(plan.run_stages), reuse=policy)
     assert set(_summary(again).values()) == {"reused"}

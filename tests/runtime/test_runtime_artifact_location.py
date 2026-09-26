@@ -25,6 +25,10 @@ from contextmap.runtime import (
     run_plan,
 )
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the ingestion stage reads: reusing it needs that identity declared (issue #587)."""
+
+
 DATASET = "corridor-02"
 STAGES = ["ingestion", "visual_perception", "state_estimation"]
 PROVIDED = (
@@ -148,7 +152,7 @@ def test_an_artifact_reused_from_an_earlier_run_is_opened_where_it_was_written(
 ) -> None:
     effective, execution = _scope(tmp_path)
     store = FileArtifactStore(tmp_path / "index", verify=lambda _ref: True)
-    policy = ReusePolicy(store=store, code_identity="code-1")
+    policy = ReusePolicy(store=store, code_identity="code-1", identities=SOURCE)
     first = RunJournal.create(tmp_path / "ws", effective, execution)
     _run(execution, _executors(execution, [], {}), journal=first, reuse=policy)
 
@@ -172,14 +176,17 @@ def test_a_downstream_stage_opens_the_reused_upstream_directory_of_the_earlier_r
 ) -> None:
     effective, execution = _scope(tmp_path)
     store = FileArtifactStore(tmp_path / "index", verify=lambda _ref: True)
-    policy = ReusePolicy(store=store, code_identity="code-1")
+    policy = ReusePolicy(store=store, code_identity="code-1", identities=SOURCE)
     first = RunJournal.create(tmp_path / "ws", effective, execution)
     _run(execution, _executors(execution, [], {}), journal=first, reuse=policy)
 
     seen: dict[str, Any] = {}
     second = RunJournal.create(tmp_path / "ws", effective, execution)
     recompute = ReusePolicy(
-        store=store, code_identity="code-1", force_recompute=frozenset({"state_estimation"})
+        store=store,
+        code_identity="code-1",
+        identities=SOURCE,
+        force_recompute=frozenset({"state_estimation"}),
     )
     _run(execution, _executors(execution, [], seen), journal=second, reuse=recompute)
 

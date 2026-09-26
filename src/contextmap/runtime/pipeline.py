@@ -19,7 +19,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -57,6 +57,9 @@ PLAN_SCHEMA_VERSION = "0.1.0"
 
 PLAN_FILENAME = "plan.json"
 EXECUTION_FILENAME = "execution.json"
+
+SOURCE_IDENTITY = "source"
+"""Name of the reuse identity a source stage (one without inputs) must declare: what it reads."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -350,6 +353,11 @@ class StageRequest:
         workspace: The workspace root the run lives in, or ``None`` without a journal. An
             executor opens an input through :meth:`directory_of`, which resolves the location of
             the artifact (possibly written by an earlier run) inside this workspace.
+        identities: The extra identities the reuse policy declares for this stage, the same
+            ones folded into its reuse key; empty without reuse. An executor that knows what
+            one of them names checks it: a source stage refuses a declared
+            :data:`SOURCE_IDENTITY` other than the source it reads, so an artifact is never
+            indexed under a source it did not come from.
     """
 
     stage_id: str
@@ -358,6 +366,7 @@ class StageRequest:
     config_digest: str
     output_dir: Path | None = None
     workspace: Path | None = None
+    identities: Mapping[str, str] = field(default_factory=dict)
 
     def identity(self) -> str:
         """Return the identity of this execution: what a writer records as its run id.
@@ -658,6 +667,17 @@ def preflight(
                     message=f"{stage_id!r} is not a stage of this execution",
                 )
             )
+        problems.extend(
+            ConfigProblem(
+                path=f"reuse.identities.{stage.stage_id}.{SOURCE_IDENTITY}",
+                message=(
+                    "a source stage reads from outside the DAG: reusing it needs the identity of "
+                    "what it reads, declared by whoever binds its executor to that source"
+                ),
+            )
+            for stage in execution.stages
+            if _undeclared_source(stage, reuse)
+        )
     for stage in execution.stages:
         if not stage.available:
             problems.append(
@@ -745,6 +765,12 @@ def _decide(
         The decision, the artifact to reuse (or ``None``) and the reuse key (or ``None``
         when the inputs cannot be keyed).
     """
+    if _undeclared_source(stage, reuse):
+        reason = (
+            f"a source stage without a declared source identity ({SOURCE_IDENTITY!r}) cannot be "
+            "keyed: no prior artifact can be proven to come from the same source"
+        )
+        return ReuseDecision(kind="recomputed", reason=reason), None, None
     hashes: dict[str, tuple[str, str]] = {}
     missing = []
     for name, refs in sorted(inputs.items()):
@@ -779,6 +805,16 @@ def _decide(
         kind="reused", reason=found.reason, key_digest=key.digest, reused_from=found.artifact
     )
     return decision, found.artifact, key
+
+
+def _undeclared_source(stage: PlannedStage, reuse: ReusePolicy) -> bool:
+    """Tell whether a source stage lacks the declared identity of what it reads.
+
+    A stage without inputs reads from outside the DAG (a recording, a pose file): neither its
+    configuration nor its inputs say what it read, so two executions over different sources
+    would share one reuse key and one artifact identity (issue #587).
+    """
+    return not stage.inputs and not reuse.identities.get(stage.stage_id, {}).get(SOURCE_IDENTITY)
 
 
 def run_plan(
@@ -988,6 +1024,7 @@ def _run_stages(
                 config_digest=stage.config_digest,
                 output_dir=None if run_directory is None else run_directory / stage.stage_id,
                 workspace=None if run_directory is None else run_directory.parent.parent,
+                identities={} if reuse is None else dict(reuse.identities.get(stage.stage_id, {})),
             )
             try:
                 produced = executor.execute(request)

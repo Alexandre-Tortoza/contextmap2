@@ -14,11 +14,13 @@ from contextmap.runtime import (
     ArtifactRef,
     FileArtifactStore,
     PreflightError,
+    ReuseKey,
     ReusePolicy,
     RuntimePreset,
     StageDeclaration,
     StageExecutionError,
     StageRequest,
+    StoreLookup,
     predict_reuse,
     preflight,
     resolve_effective_config,
@@ -36,6 +38,8 @@ IMPLEMENTED = [
     "semantic_fusion",
 ]
 CODE = "code-1"
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""The source every run of this module ingests: a source stage cannot be reused without it."""
 
 
 def _ready(_name: str) -> bool:
@@ -69,11 +73,14 @@ def _run(
     targets: list[str] | None = None,
 ) -> Any:
     plan = resolve_plan(effective_from(tmp_path, document))
+    declared = {stage: dict(values) for stage, values in SOURCE.items()}
+    for stage, values in (identities or {}).items():
+        declared.setdefault(stage, {}).update(values)
     policy = ReusePolicy(
         store=store or world.store(tmp_path / "index"),
         code_identity=code,
         force_recompute=force,
-        identities=identities or {},
+        identities=declared,
     )
     return run_plan(
         plan.scope(targets=targets or ["semantic_fusion"], provided=provided),
@@ -130,7 +137,9 @@ class TestReuseOfIdenticalWork:
         world = World()
         _run(tmp_path, world, _document())
         plan = resolve_plan(effective_from(tmp_path, _document()))
-        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"), code_identity=CODE, identities=SOURCE
+        )
 
         record = run_plan(
             plan.scope(targets=["semantic_fusion"]),
@@ -303,7 +312,11 @@ class TestAlternativeDagsShareUpstream:
             world.executors(plan),
             environ={},
             module_available=_ready,
-            reuse=ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE),
+            reuse=ReusePolicy(
+                store=world.store(tmp_path / "index"),
+                code_identity=CODE,
+                identities={"source": {"source": "recording-A"}},
+            ),
         )
 
     def test_the_enhanced_arm_reuses_the_native_arms_upstream_artifacts(
@@ -431,7 +444,9 @@ class TestNothingUnsafeIsReused:
             environ={},
             module_available=_ready,
             provided_runtimes=_PROVIDED,
-            reuse=ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE),
+            reuse=ReusePolicy(
+                store=world.store(tmp_path / "index"), code_identity=CODE, identities=SOURCE
+            ),
         )
 
         assert not list((tmp_path / "index").glob("sha256-*.json"))
@@ -458,7 +473,9 @@ class TestPreflightAndPrediction:
         _run(tmp_path, world, _document())
         changed = _document(min_overlap=0.6)
         plan = resolve_plan(effective_from(tmp_path, changed))
-        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"), code_identity=CODE, identities=SOURCE
+        )
 
         predicted = predict_reuse(plan.scope(targets=["semantic_fusion"]), policy)
 
@@ -479,7 +496,9 @@ class TestPreflightAndPrediction:
         document = _document()
         document["components"]["visual_perception"]["region_discovery"]["sam3"]["prompt"] = "x"
         plan = resolve_plan(effective_from(tmp_path, document))
-        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"), code_identity=CODE, identities=SOURCE
+        )
 
         predicted = predict_reuse(plan.scope(targets=["semantic_fusion"]), policy)
 
@@ -508,7 +527,9 @@ class TestPreflightAndPrediction:
     ) -> None:
         world = World()
         plan = resolve_plan(effective_from(tmp_path, _document()))
-        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+        policy = ReusePolicy(
+            store=world.store(tmp_path / "index"), code_identity=CODE, identities=SOURCE
+        )
 
         with pytest.raises(PreflightError, match="executor"):
             run_plan(
@@ -519,6 +540,97 @@ class TestPreflightAndPrediction:
                 provided_runtimes=_PROVIDED,
                 reuse=policy,
             )
+
+
+class TestSourceStageIdentity:
+    """Issue #587: a source stage reads from outside the DAG, so nothing in its configuration
+    or inputs says what it read; only a declared source identity tells two executions apart."""
+
+    def _policy(self, tmp_path: Path, identities: dict[str, dict[str, str]]) -> ReusePolicy:
+        return ReusePolicy(
+            store=World().store(tmp_path / "index"), code_identity=CODE, identities=identities
+        )
+
+    def test_reuse_without_the_source_identity_of_a_source_stage_is_a_problem(
+        self, tmp_path: Path
+    ) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+
+        report = preflight(plan.scope(targets=["ingestion"]), reuse=self._policy(tmp_path, {}))
+
+        assert [problem.path for problem in report.problems] == [
+            "reuse.identities.ingestion.source"
+        ]
+
+    def test_every_source_stage_needs_its_own_source_identity(self, tmp_path: Path) -> None:
+        document = _document()
+        document["pipeline"]["stages"]["pose_ingestion"] = True
+        plan = resolve_plan(effective_from(tmp_path, document))
+
+        report = preflight(
+            plan.scope(targets=["state_estimation"]),
+            reuse=self._policy(tmp_path, SOURCE),
+        )
+
+        paths = [problem.path for problem in report.problems]
+        assert "reuse.identities.pose_ingestion.source" in paths
+        assert "reuse.identities.ingestion.source" not in paths
+
+    def test_a_run_without_reuse_needs_no_source_identity(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+
+        assert preflight(plan.scope(targets=["ingestion"])).ok
+
+    def test_the_declared_identities_reach_the_stage_request(self, tmp_path: Path) -> None:
+        world = World()
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        received: list[StageRequest] = []
+        ingestion = world.executor("ingestion", "SequenceArtifact")
+
+        class Recording:
+            def execute(self, request: StageRequest) -> ArtifactRef:
+                received.append(request)
+                produced: ArtifactRef = ingestion.execute(request)
+                return produced
+
+        run_plan(
+            plan.scope(targets=["ingestion"]),
+            {"ingestion": Recording()},
+            environ={},
+            module_available=_ready,
+            reuse=self._policy(tmp_path, SOURCE),
+        )
+
+        assert [dict(request.identities) for request in received] == [{"source": "recording-A"}]
+
+    def test_a_stage_request_without_reuse_declares_no_identity(self) -> None:
+        request = StageRequest(stage_id="ingestion", inputs={}, components={}, config_digest="c")
+
+        assert dict(request.identities) == {}
+
+    def test_the_prediction_never_reuses_a_source_stage_without_a_source_identity(
+        self, tmp_path: Path
+    ) -> None:
+        # Um índice escrito antes do #587 tem entradas de ingestion sem a fonte na chave.
+        prior = ArtifactRef(
+            stage_id="ingestion", contract="SequenceArtifact", artifact_id="a", content_hash="h"
+        )
+
+        class IndexedBeforeTheFix:
+            def find(self, key: ReuseKey) -> StoreLookup:
+                return StoreLookup(artifact=prior, reason="indexed")
+
+            def record(self, key: ReuseKey, output: ArtifactRef) -> bool:
+                return False
+
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        undeclared = ReusePolicy(store=IndexedBeforeTheFix(), code_identity=CODE)
+
+        predicted = predict_reuse(plan.scope(targets=["ingestion"]), undeclared)
+
+        assert predicted["ingestion"].kind == "recomputed"
+        assert "source identity" in predicted["ingestion"].reason
+        assert predicted["ingestion"].key_digest is None
 
 
 class TestReuseKey:

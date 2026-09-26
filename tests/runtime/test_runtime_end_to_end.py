@@ -58,6 +58,7 @@ class Campaign:
             *arguments,
             executors=world_executors(self.world) if executors else {},
             verifier=lambda ref: ref.artifact_id in self.world.existing,
+            reuse_identities={"ingestion": {"source": "recording-A"}},
             module_available=_ready,
         )
 

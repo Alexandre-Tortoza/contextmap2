@@ -14,11 +14,21 @@ O reuso **nunca** usa nome de diretório nem nome legível de run como chave, e 
 | configuração própria do estágio | `PlannedStage.config_digest` (contrato declarado, backend e parâmetros dos componentes) |
 | entradas | o tipo e o **hash de conteúdo** de cada artifact de entrada (`ArtifactRef.content_hash`), não seu nome nem seu id de run |
 | código e políticas | `ReusePolicy.code_identity`, **sem default**: reusar entre versões de código é uma decisão |
-| identidades extras | `ReusePolicy.identities[estágio]`: calibração, mapa, seleção de observações, transformações opcionais |
+| identidades extras | `ReusePolicy.identities[estágio]`: calibração, mapa, seleção de observações, transformações opcionais; para um estágio-fonte, obrigatoriamente `"source"` (abaixo) |
 
 `ReuseKey.digest` é o SHA-256 da forma canônica. Como a chave usa o **conteúdo** das entradas, dois artifacts com o mesmo hash de conteúdo são intercambiáveis, e um estágio recomputado que reproduz o mesmo conteúdo não invalida seus dependentes.
 
 O `content_hash` é declarado pelo executor que produz o artifact (por exemplo, o digest do inventário do manifest). Um artifact sem ele pode ser consumido, mas nunca reutilizado nem indexado: sem identidade de conteúdo, a chave dos dependentes não pode ser construída e eles são recomputados, com o motivo registrado. O `ArtifactRef` também carrega o `location` do artifact (relativo ao workspace): quando um estágio é reutilizado, o run novo guarda a **referência** ao diretório do run que o gravou, nunca uma cópia, e um estágio a jusante o abre por `StageRequest.directory_of`.
+
+### Estágio-fonte
+
+Um estágio sem entradas (`ingestion`, `pose_ingestion`) lê de fora do DAG: nem sua configuração nem suas entradas dizem **o que** ele leu. Sem mais nada, dois bags diferentes ingeridos com a mesma configuração teriam a mesma chave, e o segundo reutilizaria em silêncio o artifact do primeiro (issue #587). Por isso:
+
+- com reuso, um estágio-fonte **exige** a identidade `ReusePolicy.identities[estágio]["source"]`, declarada por quem liga o executor à fonte (para a ingestion, `IngestionRequest.identity`). Sem ela, o `preflight()` bloqueia o run com o problema `reuse.identities.<estágio>.source`, e `predict_reuse()` o prevê como recomputado, sem chave;
+- as identidades declaradas chegam ao executor em `StageRequest.identities`. O `IngestionStageExecutor` recusa (`StageFailure`, categoria `contract`) uma fonte declarada diferente da que ele ingere, antes de ler qualquer coisa: uma entrada do índice com `source=X` sempre veio da fonte `X`;
+- o `artifact_id` publicado pela ingestion combina a identidade do estágio com a da fonte, com ou sem reuso.
+
+Na CLI, quem injeta o executor de ingestion em `main(executors=...)` declara a fonte em `main(reuse_identities=...)`; na API, em `Runtime.reuse_policy(identities=...)`.
 
 ## Índice
 
@@ -44,7 +54,7 @@ Os estágios são decididos em ordem topológica, com a chave calculada a partir
 - alterar uma política de Semantic Fusion recomputa só a fusão; ingestion, percepção, estado, geometria e associação são reutilizados;
 - alterar a configuração da percepção recomputa a percepção e o que consome seu **novo conteúdo**; estado e geometria são reutilizados;
 - se uma recomputação reproduz o mesmo conteúdo, os dependentes seguem reutilizáveis;
-- mudar `code_identity` invalida tudo, e uma identidade extra invalida o estágio para o qual foi declarada.
+- mudar `code_identity` invalida tudo, e uma identidade extra invalida o estágio para o qual foi declarada; uma fonte diferente invalida o estágio-fonte e, pelo novo conteúdo, seus dependentes.
 
 ## Braços de um experimento
 

@@ -131,6 +131,7 @@ class _Session:
     environ: Mapping[str, str] | None
     module_available: Callable[[str], bool] | None
     verifier: Callable[[ArtifactRef], bool] | None
+    reuse_identities: Mapping[str, Mapping[str, str]]
     adapter_factory: SourceAdapterFactory | None
     out: TextIO
     err: TextIO
@@ -176,6 +177,7 @@ def main(
     environ: Mapping[str, str] | None = None,
     module_available: Callable[[str], bool] | None = None,
     verifier: Callable[[ArtifactRef], bool] | None = None,
+    reuse_identities: Mapping[str, Mapping[str, str]] | None = None,
     adapter_factory: SourceAdapterFactory | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
@@ -207,6 +209,10 @@ def main(
         module_available: Predicate telling whether an optional module is installed.
         verifier: Tells whether an indexed artifact still exists and is intact; the reuse
             flags need it, and only the owner of the executors can provide it.
+        reuse_identities: Extra identities per stage folded into its reuse key, for the reuse
+            flags. A source stage it reuses (``ingestion``, ``pose_ingestion``) needs its
+            ``"source"`` identity: only the owner of the executor bound to that source knows
+            it, for example ``IngestionRequest.identity`` (issue #587).
         adapter_factory: Builds the source adapter for ``ingest``; by default it is composed
             from the configuration's selected adapter backend.
         stdout: Stream for results; defaults to ``sys.stdout``.
@@ -229,6 +235,7 @@ def main(
             environ=environ,
             module_available=module_available,
             verifier=verifier,
+            reuse_identities=reuse_identities or {},
             adapter_factory=adapter_factory,
             out=out,
             err=err,
@@ -753,6 +760,7 @@ def _reuse_policy(session: _Session) -> ReusePolicy | None:
         store=FileArtifactStore(args.reuse_index, verify=session.verifier),
         code_identity=args.code_identity,
         force_recompute=frozenset(args.force or ()),
+        identities=session.reuse_identities,
     )
 
 

@@ -30,6 +30,10 @@ from contextmap.runtime import (
     run_plan,
 )
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the ingestion stage reads: reusing it needs that identity declared (issue #587)."""
+
+
 PROVIDED = (
     "visual_perception.region_discovery",
     "visual_perception.dense_features",
@@ -204,7 +208,9 @@ class TestCacheMistakes:
             environ={},
             module_available=_ready,
             provided_runtimes=PROVIDED,
-            reuse=ReusePolicy(store=world.store(tmp_path / "index"), code_identity="code-1"),
+            reuse=ReusePolicy(
+                store=world.store(tmp_path / "index"), code_identity="code-1", identities=SOURCE
+            ),
         )
 
     @staticmethod

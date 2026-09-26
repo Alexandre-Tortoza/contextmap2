@@ -35,6 +35,7 @@ from contextmap.runtime import (
     ReusePolicy,
     RunJournal,
     StageExecutionError,
+    StageFailure,
     StageRequest,
     ValidationPolicy,
     read_run,
@@ -871,11 +872,10 @@ class TestAsTheIngestionStageOfTheDag:
     def test_the_artifact_identity_is_derived_from_the_stage_and_is_repeatable(
         self, tmp_path: Path
     ) -> None:
-        (tmp_path / "a").mkdir()
-        (tmp_path / "b").mkdir()
-        _, first = self._run(tmp_path / "a", _service())
-        _, second = self._run(tmp_path / "b", _service())
+        _, first = self._run(tmp_path, _service())
+        _, second = self._run(tmp_path, _service())
 
+        assert first.stages[0].output.location != second.stages[0].output.location
         assert first.stages[0].output.artifact_id == second.stages[0].output.artifact_id
 
     def test_the_same_ingestion_is_reused_by_identity_and_a_changed_one_is_recomputed(
@@ -887,7 +887,9 @@ class TestAsTheIngestionStageOfTheDag:
             return ref.location is not None and (tmp_path / "ws" / ref.location).is_dir()
 
         policy = ReusePolicy(
-            store=FileArtifactStore(tmp_path / "index", verify=verify), code_identity="c1"
+            store=FileArtifactStore(tmp_path / "index", verify=verify),
+            code_identity="c1",
+            identities={"ingestion": {"source": make_request(tmp_path).identity}},
         )
         service = _service()
 
@@ -908,6 +910,95 @@ class TestAsTheIngestionStageOfTheDag:
         assert first.stages[0].output == second.stages[0].output
         assert second.stages[0].decision is not None and second.stages[0].decision.kind == "reused"
         assert len(list((tmp_path / "ws" / "S1").glob("run-*/ingestion"))) == 1
+
+    def test_two_sources_under_one_configuration_never_share_an_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression #587: bag B, ingested with the configuration of bag A, used to get bag A's
+        identity and reuse key, so it silently reused bag A's SequenceArtifact."""
+        effective, execution = self._plan(tmp_path)
+        store = FileArtifactStore(tmp_path / "index", verify=lambda ref: True)
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+
+        def run(source: IngestionRequest) -> Any:
+            policy = ReusePolicy(
+                store=store,
+                code_identity="c1",
+                identities={"ingestion": {"source": source.identity}},
+            )
+            return run_plan(
+                execution,
+                {"ingestion": IngestionStageExecutor(_service(), source)},
+                environ={},
+                module_available=lambda _n: True,
+                reuse=policy,
+                journal=RunJournal.create(tmp_path / "ws", effective, execution),
+            )
+
+        first = run(make_request(tmp_path / "a"))
+        second = run(make_request(tmp_path / "b"))
+
+        decision = second.stages[0].decision
+        assert decision is not None and decision.kind == "recomputed"
+        assert first.stages[0].output.artifact_id != second.stages[0].output.artifact_id
+
+    def test_the_artifact_identity_depends_on_what_is_ingested(self, tmp_path: Path) -> None:
+        stage = StageRequest(
+            stage_id="ingestion",
+            inputs={},
+            components={},
+            config_digest="same",
+            output_dir=tmp_path / "ws" / "S1" / "run-0001" / "ingestion",
+            workspace=tmp_path / "ws",
+        )
+        other = dataclasses.replace(
+            stage, output_dir=tmp_path / "ws" / "S1" / "run-0002" / "ingestion"
+        )
+        request = make_request(tmp_path)
+
+        bag = IngestionStageExecutor(_service(), request).execute(stage)
+        topics = IngestionStageExecutor(
+            _service(), dataclasses.replace(request, required_topics=frozenset({"rgb"}))
+        ).execute(other)
+
+        assert bag.artifact_id != topics.artifact_id
+
+    def test_a_declared_source_it_does_not_ingest_is_refused_before_ingesting(
+        self, tmp_path: Path
+    ) -> None:
+        built: list[FakeAdapter] = []
+        service = IngestionService(factory(built=built))
+        stage = StageRequest(
+            stage_id="ingestion",
+            inputs={},
+            components={},
+            config_digest="c",
+            output_dir=tmp_path / "ws" / "S1" / "run-0001" / "ingestion",
+            workspace=tmp_path / "ws",
+            identities={"source": "another-recording"},
+        )
+
+        with pytest.raises(StageFailure, match="another-recording"):
+            IngestionStageExecutor(service, make_request(tmp_path)).execute(stage)
+
+        assert built == []
+
+    def test_the_declared_source_it_ingests_is_accepted(self, tmp_path: Path) -> None:
+        request = make_request(tmp_path)
+        stage = StageRequest(
+            stage_id="ingestion",
+            inputs={},
+            components={},
+            config_digest="c",
+            output_dir=tmp_path / "ws" / "S1" / "run-0001" / "ingestion",
+            workspace=tmp_path / "ws",
+            identities={"source": request.identity},
+        )
+
+        ref = IngestionStageExecutor(_service(), request).execute(stage)
+
+        assert ref.contract == "SequenceArtifact"
 
     def test_an_ingestion_failure_becomes_a_categorized_failure_record(
         self, tmp_path: Path

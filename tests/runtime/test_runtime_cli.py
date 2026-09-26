@@ -25,6 +25,9 @@ from contextmap.runtime import (
 from contextmap.runtime.catalog import COMPONENTS
 from contextmap.runtime.cli import main
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the injected ingestion reads: a run reusing it declares it (issue #587)."""
+
 
 def _ready(_name: str) -> bool:
     return True
@@ -974,6 +977,7 @@ class TestLifecycleCommands:
             *args,
             executors=self._world_executors(world),
             verifier=lambda ref: ref.artifact_id in world.existing,
+            reuse_identities=SOURCE,
             module_available=_ready,
         )
         assert code == 1
@@ -1044,6 +1048,7 @@ class TestLifecycleCommands:
             "run-0001",
             executors=self._world_executors(world),
             verifier=lambda ref: ref.artifact_id in world.existing,
+            reuse_identities=SOURCE,
             module_available=_ready,
         )
 
@@ -1059,6 +1064,7 @@ class TestLifecycleCommands:
         options: dict[str, Any] = {
             "executors": self._world_executors(world),
             "verifier": lambda ref: ref.artifact_id in world.existing,
+            "reuse_identities": SOURCE,
             "module_available": _ready,
         }
         assert cli(*args, "--resume", "run-0001", **options)[0] == 0
@@ -1166,6 +1172,60 @@ class TestLifecycleCommands:
         for path in (tmp_path / "ws" / "S1" / "run-0001").iterdir():
             assert secret not in path.read_text("utf-8"), path.name
 
+    def test_reusing_an_injected_source_stage_needs_its_declared_source_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #587: only the owner of the injected ingestion executor knows what it reads."""
+        world = World()
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "ingestion",
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--reuse-index",
+            str(tmp_path / "index"),
+            "--code-identity",
+            "code-1",
+            executors=self._world_executors(world),
+            verifier=lambda ref: ref.artifact_id in world.existing,
+        )
+
+        assert code == 1
+        assert "reuse.identities.ingestion.source" in out + err
+        assert world.runs == []
+
+    def test_the_declared_source_identity_takes_part_in_the_reuse_key(self, tmp_path: Path) -> None:
+        world = World()
+        args = [
+            "run",
+            "-c",
+            str(_config(tmp_path)),
+            "--stage",
+            "ingestion",
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--reuse-index",
+            str(tmp_path / "index"),
+            "--code-identity",
+            "code-1",
+        ]
+
+        def run(source: str) -> int:
+            code, _, _ = cli(
+                *args,
+                executors=self._world_executors(world),
+                verifier=lambda ref: ref.artifact_id in world.existing,
+                reuse_identities={"ingestion": {"source": source}},
+            )
+            return code
+
+        assert (run("recording-A"), run("recording-A"), run("recording-B")) == (0, 0, 0)
+        assert world.runs == ["ingestion", "ingestion"]
+
     def test_the_dry_run_predicts_what_reuse_would_do(self, tmp_path: Path) -> None:
         world, _ = self._resumable(tmp_path)
 
@@ -1182,6 +1242,7 @@ class TestLifecycleCommands:
             "code-1",
             "--json",
             verifier=lambda ref: ref.artifact_id in world.existing,
+            reuse_identities=SOURCE,
             module_available=_ready,
         )
 

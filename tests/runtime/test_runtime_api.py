@@ -39,6 +39,10 @@ from contextmap.runtime import (
     resolve_effective_config,
 )
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the ingestion stage reads: reusing it needs that identity declared (issue #587)."""
+
+
 SRC = Path(__file__).resolve().parents[2] / "src"
 SECRET = "s3cr3t-value-123"
 TARGET = ["semantic_fusion"]
@@ -678,7 +682,7 @@ def test_preflight_warns_when_no_workspace_can_hold_the_run(tmp_path: Path) -> N
 def test_preflight_predicts_reuse_without_running_anything(tmp_path: Path) -> None:
     runtime, world = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
-    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1")
+    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE)
     runtime.run(config, targets=TARGET, reuse=policy)
     ran = list(world.runs)
 
@@ -696,7 +700,9 @@ def test_preflight_predicts_reuse_without_running_anything(tmp_path: Path) -> No
         environ={},
     )
     bare_report = bare.preflight(
-        config, targets=TARGET, reuse=bare.reuse_policy(tmp_path / "index", code_identity="code-1")
+        config,
+        targets=TARGET,
+        reuse=bare.reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE),
     )
     assert bare_report.ok
     assert bare_report.missing_executors == ()
@@ -958,14 +964,16 @@ def test_reuse_and_recompute_decisions_are_visible_with_the_exact_prior_artifact
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
     index = tmp_path / "index"
-    policy = runtime.reuse_policy(index, code_identity="code-1")
+    policy = runtime.reuse_policy(index, code_identity="code-1", identities=SOURCE)
 
     first = runtime.run(config, targets=TARGET, reuse=policy)
     second = runtime.run(config, targets=TARGET, reuse=policy)
     forced = runtime.run(
         config,
         targets=TARGET,
-        reuse=runtime.reuse_policy(index, code_identity="code-1", force=["visual_perception"]),
+        reuse=runtime.reuse_policy(
+            index, code_identity="code-1", identities=SOURCE, force=["visual_perception"]
+        ),
     )
 
     first_outputs = {}
@@ -993,7 +1001,7 @@ def test_resume_reuses_what_completed_and_says_so(tmp_path: Path) -> None:
     world.fail_at = "state_estimation"
     runtime, _ = _runtime(tmp_path, world)
     config = _config(runtime, tmp_path)
-    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1")
+    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE)
     failed = runtime.run(config, targets=TARGET, reuse=policy)
     world.fail_at = None
 
@@ -1015,7 +1023,7 @@ def test_resume_reuses_what_completed_and_says_so(tmp_path: Path) -> None:
 def test_a_resume_that_cannot_happen_is_refused_and_creates_no_run(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
-    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1")
+    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE)
     done = runtime.run(config, targets=TARGET, reuse=policy)
 
     with pytest.raises(ValueError, match="reuse policy"):
@@ -1032,7 +1040,7 @@ def test_reuse_needs_a_verifier_and_a_code_identity(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
 
     with pytest.raises(ValueError, match="verifier"):
-        Runtime().reuse_policy(tmp_path / "index", code_identity="code-1")
+        Runtime().reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE)
     with pytest.raises(ValueError, match="code_identity"):
         runtime.reuse_policy(tmp_path / "index", code_identity=" ")
 
@@ -1089,7 +1097,7 @@ def test_inspect_run_accepts_a_run_id_or_a_directory_and_refuses_unknown_runs(
 def test_inspect_run_never_infers_what_the_record_does_not_hold(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(runtime, tmp_path)
-    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1")
+    policy = runtime.reuse_policy(tmp_path / "index", code_identity="code-1", identities=SOURCE)
     plain = runtime.run(config, targets=TARGET)
     runtime.run(config, targets=TARGET, reuse=policy)
     reused = runtime.run(config, targets=TARGET, reuse=policy)

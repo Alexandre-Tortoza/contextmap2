@@ -73,10 +73,11 @@ from contextmap.runtime.lifecycle import (
     CancellationToken,
     EventEmitter,
     EventSink,
+    FailureCategory,
     StageFailure,
     utc_now,
 )
-from contextmap.runtime.pipeline import StageRequest
+from contextmap.runtime.pipeline import SOURCE_IDENTITY, StageRequest
 
 INGESTION_REQUEST_SCHEMA_VERSION = "0.1.0"
 """Version of the request document."""
@@ -987,6 +988,10 @@ class IngestionStageExecutor:
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Ingest and return the published sequence artifact.
 
+        The published ``artifact_id`` combines the stage's identity with the identity of the
+        bound request: the stage's configuration never names the source, so without it two
+        different recordings would publish under one identity (issue #587).
+
         Args:
             request: The stage request; ingestion has no upstream inputs to read from it.
 
@@ -994,15 +999,24 @@ class IngestionStageExecutor:
             A reference to the published artifact, identified by the hash of its inventory.
 
         Raises:
-            StageFailure: If the ingestion failed or was cancelled.
+            StageFailure: If the reuse policy declares a source other than the one this executor
+                ingests (nothing is read), or the ingestion failed or was cancelled.
         """
         if request.output_dir is None or request.workspace is None:
             raise StageFailure("ingestion needs the run's output directory", category="execution")
+        source = self._request.identity
+        declared = request.identities.get(SOURCE_IDENTITY)
+        if declared is not None and declared != source:
+            raise StageFailure(
+                f"the reuse policy declares the source {declared!r} for stage "
+                f"{request.stage_id!r}, but its executor ingests {source!r}",
+                category=FailureCategory.CONTRACT.value,
+            )
         result = self._service.run(
             dataclasses.replace(
                 self._request,
                 output_dir=str(request.output_dir),
-                artifact_id=request.identity(),
+                artifact_id=_source_stage_identity(request, source),
             ),
             event_sink=self._event_sink,
             cancellation=self._cancellation,
@@ -1184,6 +1198,16 @@ def _inventory_hash(manifest: Any) -> str:
         (entry.path, entry.size_bytes, entry.content_hash) for entry in manifest.file_inventory
     )
     return _digest(inventory)
+
+
+def _source_stage_identity(request: StageRequest, source: str) -> str:
+    """Return the identity a source stage publishes under: its stage identity and its source.
+
+    Returns:
+        32 hexadecimal characters, the shape of :meth:`StageRequest.identity`.
+    """
+    combined = f"{request.identity()}|{SOURCE_IDENTITY}={source}"
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:32]
 
 
 def _digest(value: object) -> str:

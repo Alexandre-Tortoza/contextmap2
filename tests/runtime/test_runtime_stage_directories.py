@@ -26,6 +26,10 @@ from contextmap.runtime import (
     run_plan,
 )
 
+SOURCE = {"ingestion": {"source": "recording-A"}}
+"""What the ingestion stage reads: reusing it needs that identity declared (issue #587)."""
+
+
 DATASET = "corridor-02"
 STAGES = [
     "ingestion",
@@ -160,7 +164,9 @@ def test_a_run_without_a_journal_has_no_output_directory(tmp_path: Path) -> None
 def test_a_reused_stage_is_referenced_and_gets_no_request_or_directory(tmp_path: Path) -> None:
     world = World()
     effective, execution = _scope(tmp_path)
-    policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity="code-1")
+    policy = ReusePolicy(
+        store=world.store(tmp_path / "index"), code_identity="code-1", identities=SOURCE
+    )
     first_journal = RunJournal.create(tmp_path / "ws", effective, execution)
     first_executors, _ = _executors(execution, world)
     _run(execution, first_executors, journal=first_journal, reuse=policy)

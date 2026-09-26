@@ -113,7 +113,12 @@ def _run(
 
 
 def _policy(tmp_path: Path, world: World, **changes: Any) -> ReusePolicy:
-    return ReusePolicy(store=world.store(tmp_path / "index"), code_identity="code-1", **changes)
+    return ReusePolicy(
+        store=world.store(tmp_path / "index"),
+        code_identity="code-1",
+        identities={"ingestion": {"source": "recording-A"}},
+        **changes,
+    )
 
 
 def _kinds(journal: RunJournal) -> list[str]:
@@ -368,7 +373,11 @@ class TestFailureRecords:
                 environ={},
                 module_available=_ready,
                 provided_runtimes=PROVIDED,
-                reuse=ReusePolicy(store=BrokenStore(), code_identity="c"),
+                reuse=ReusePolicy(
+                    store=BrokenStore(),
+                    code_identity="c",
+                    identities={"ingestion": {"source": "recording-A"}},
+                ),
                 journal=journal,
             )
 

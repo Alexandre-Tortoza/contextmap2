@@ -73,7 +73,7 @@ Categorias de falha: `configuration`, `dependency`, `source`, `validation`, `out
 
 ## Como estágio do DAG
 
-`IngestionStageExecutor(service, request)` roda a ingestion como o estágio `ingestion`: devolve um `ArtifactRef(contract="SequenceArtifact", content_hash=<hash do inventário>)` e traduz uma falha em `StageFailure` com a categoria da própria ingestion, então o registro de falha do run diz por quê. Com a `ReusePolicy`, a mesma ingestion é reutilizada por identidade. É o primeiro executor **real** de um estágio do canônico.
+`IngestionStageExecutor(service, request)` roda a ingestion como o estágio `ingestion`: devolve um `ArtifactRef(contract="SequenceArtifact", content_hash=<hash do inventário>)` e traduz uma falha em `StageFailure` com a categoria da própria ingestion, então o registro de falha do run diz por quê. O `artifact_id` publicado combina a identidade do estágio com a da fonte (`IngestionRequest.identity`): o estágio não tem entradas e sua configuração não nomeia a fonte. Com a `ReusePolicy`, a mesma ingestion é reutilizada por identidade, e a política precisa declarar `identities["ingestion"]["source"] = request.identity`; o executor recusa uma fonte declarada que não é a sua (issue #587, ver [`reuse.md`](reuse.md#estágio-fonte)). É o primeiro executor **real** de um estágio do canônico.
 
 ## CLI
 
