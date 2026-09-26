@@ -203,6 +203,43 @@ def _internal_border_tiling() -> DiscoveryPassConfig:
     )
 
 
+@pytest.mark.parametrize(
+    ("first_policy", "second_policy", "rejected"),
+    [
+        (BorderPolicy.REJECT_INTERNAL_BORDER, BorderPolicy.KEEP, ["tile-s00-0000/proposal-1"]),
+        (BorderPolicy.KEEP, BorderPolicy.REJECT_INTERNAL_BORDER, ["tile-s01-0000/proposal-1"]),
+    ],
+)
+def test_each_tile_pass_is_judged_by_the_border_policy_of_the_tiling_that_produced_it(
+    first_policy: BorderPolicy, second_policy: BorderPolicy, rejected: list[str]
+) -> None:
+    # VP-13: a atribuição pass -> tiling era reconstruída contando janelas; agora é explícita.
+    config = DiscoveryPassConfig(
+        tiling=TilingConfig(tile_width=4, tile_height=4, overlap_x=1, border_policy=first_policy),
+        additional_tilings=(
+            TilingConfig(tile_width=3, tile_height=4, border_policy=second_policy),
+        ),
+    )
+
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(touch_right_border=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=config,
+    )
+
+    assert [item.pass_id for item in result.passes] == [
+        "full-frame",
+        "tile-s00-0000",
+        "tile-s00-0001",
+        "tile-s01-0000",
+        "tile-s01-0001",
+    ]
+    assert [item.candidate_id for item in result.rejected] == rejected
+    assert len(result.candidates) == len(result.passes) - 1
+
+
 def test_reject_internal_border_applies_to_mask_only_candidates() -> None:
     # #596: sem bounding box, a borda vem dos pixels da máscara; não é bypass da política.
     result = run_discovery_passes(
@@ -291,6 +328,27 @@ def test_tile_mask_remapping_matches_the_recorded_behaviour(seed: int) -> None:
 
     remapped = {"resized": resized.to_dict(), "expanded": expanded.to_dict()}
     assert digest(remapped) == GOLDEN["remap"][str(seed)]
+
+
+@pytest.mark.parametrize(
+    ("row", "output_width", "expected"),
+    [
+        # VP-08: amostrar o canto da célula dava (F, F, T), deslocando a máscara em até 1 px.
+        pytest.param([False, True], 3, [False, True, True], id="upscale-2-to-3"),
+        pytest.param([False, True, False, False], 2, [True, False], id="downscale-4-to-2"),
+        pytest.param([False, True, True], 3, [False, True, True], id="identity"),
+    ],
+)
+def test_nearest_neighbour_resize_samples_pixel_centres(
+    row: list[bool], output_width: int, expected: list[bool]
+) -> None:
+    horizontal = _resize_mask(InlineMask(np.array([row], dtype=bool)), output_width, 1)
+    vertical = _resize_mask(
+        InlineMask(np.array([[value] for value in row], dtype=bool)), 1, output_width
+    )
+
+    assert horizontal.as_array().tolist() == [expected]
+    assert vertical.as_array().tolist() == [[value] for value in expected]
 
 
 def test_a_tile_mask_that_does_not_fit_the_image_is_refused() -> None:

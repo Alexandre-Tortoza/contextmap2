@@ -100,8 +100,10 @@ A convenção inicial é `pixel_xy_top_left`:
 - largura e altura descrevem o espaço da imagem preparada;
 - máscaras inline usam ordem row-major e exatamente `width * height` valores.
 
-Geometria fora dos limites da imagem é inválida. Remapeamentos de crop, resize ou tile devem
-ocorrer antes da criação da região canônica e permanecer registrados em provenance.
+Geometria fora dos limites da imagem é inválida: `RegionCandidate` e, quando conhece
+`image_width`/`image_height`, `Region2D` recusam uma bounding box que passe da imagem (#619).
+Remapeamentos de crop, resize ou tile devem ocorrer antes da criação da região canônica e
+permanecer registrados em provenance.
 
 ## Scores
 
@@ -186,7 +188,12 @@ adapters pelo `RegionCandidateDiscovery`: ele recebe `DiscoveryInput` e devolve 
 mais diagnostics. A orquestração do Core não contém branches para SAM2, SAM3 ou Florence-2.
 Propostas locais de tiles são remapeadas para a imagem preparada, recebem ID prefixado pelo pass e
 preservam o ID nativo em provenance. Máscaras inline são redimensionadas e expandidas no espaço
-global antes da normalização.
+global antes da normalização. O redimensionamento é por vizinho mais próximo amostrando o
+**centro** de cada pixel de saída: o pixel `x` cobre `[x, x + 1)`, seu centro `x + 0.5` vai para
+`(x + 0.5) * largura_entrada / largura_saída`, a mesma convenção contínua do remapeamento de
+boxes, e o pixel de entrada que contém esse ponto é o amostrado (em aritmética inteira, sem erro de
+ponto flutuante). Amostrar o canto `x` deslocava a máscara em até 1 px sempre que a escala não era
+1 (#619).
 
 `TilingConfig.scale` define as dimensões efetivamente apresentadas ao backend: cada
 `DiscoveryPass` registra `input_dimensions` e o transform inverso para o espaço preparado. Boxes e
@@ -199,6 +206,9 @@ metadados do pass sem produzir o crop/resize correspondente falha explicitamente
 
 `BorderPolicy.KEEP` mantém propostas que tocam bordas internas. A política
 `REJECT_INTERNAL_BORDER` registra `tile_border_truncation` sem apagar a proposta dos diagnostics.
+Cada pass de tile é pareado, no momento em que é criado, com o `TilingConfig` que o gerou; com
+vários grids (`tiling` e `additional_tilings`), um tile é sempre julgado pela política de borda do
+seu próprio grid, sem reconstruir essa atribuição pela contagem de janelas (#619).
 Um candidato só-máscara (sem `bounding_box`) é testado pela caixa justa dos pixels verdadeiros da
 máscara; uma máscara vazia não toca borda nenhuma (#596).
 Deduplicação entre passes não ocorre aqui; ela pertence à normalização geométrica.

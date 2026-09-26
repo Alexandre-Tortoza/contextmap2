@@ -63,6 +63,27 @@ def test_region_bounding_box_rejects_non_positive_extent() -> None:
         BoundingBox2D(x=0, y=0, width=0, height=10)
 
 
+@pytest.mark.parametrize(
+    "bounding_box",
+    [
+        pytest.param(BoundingBox2D(x=60, y=0, width=10, height=10), id="past-the-right-edge"),
+        pytest.param(BoundingBox2D(x=0, y=45, width=10, height=10), id="past-the-bottom-edge"),
+    ],
+)
+def test_region_bounding_box_must_lie_inside_its_image(bounding_box: BoundingBox2D) -> None:
+    """VP-12: the docs declare out-of-image geometry invalid, but only candidates checked it."""
+    with pytest.raises(ValueError, match="bounding box extends outside the region image"):
+        _region(bounding_box=bounding_box, image_width=64, image_height=48)
+
+
+def test_region_bounding_box_may_reach_the_image_edges() -> None:
+    region = _region(
+        bounding_box=BoundingBox2D(x=54, y=38, width=10, height=10), image_width=64, image_height=48
+    )
+
+    assert (region.bounding_box.x_max, region.bounding_box.y_max) == (64, 48)
+
+
 def test_rejected_region_requires_reason_only_when_rejected() -> None:
     with pytest.raises(ValueError, match="rejection_reason"):
         _region(is_accepted=True, rejection_reason="too small")

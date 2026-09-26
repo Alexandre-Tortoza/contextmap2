@@ -1171,7 +1171,9 @@ class VisualPerceptionExecutor:
                     "region_interpretation": lambda _parameters: semantic_bridge,
                 },
             )
-            writer = PerceptionRunWriter(
+            # O bloco descarta o diretório temporário do writer se o run parar antes de
+            # finalize(): as máscaras do primeiro frame já estão nele (#619).
+            with PerceptionRunWriter(
                 output_dir=output,
                 sequence_name=sequence.manifest.sequence_name,
                 run_id=run_id,
@@ -1187,35 +1189,38 @@ class VisualPerceptionExecutor:
                 ),
                 pipeline_preset=CANONICAL_PRESET_V1,
                 configuration_digest=resolved.configuration_digest(),
-            )
-            payload_sink.bind(writer)
-            semantic_bridge.bind(writer)
-            region_discovery.bind(writer)
+            ) as writer:
+                payload_sink.bind(writer)
+                semantic_bridge.bind(writer)
+                region_discovery.bind(writer)
 
-            for image in images():
-                prepared = _materialize_prepared_image(image, scratch)
-                result_id = perception_result_id_for(
-                    run_id=run_id, source_observation_id=image.observation_id
-                )
-                outcomes = execute_stage_graph(
-                    resolved.build_stage_graph({"image_preparation": prepared})
-                )
-                result = assemble_perception_result(
-                    result_id=result_id,
-                    source_observation_id=SourceObservationId(str(image.observation_id)),
-                    run_id=run_id,
-                    sequence_artifact_id=sequence.manifest.artifact_id,
-                    created_at=datetime.now(UTC).isoformat(),
-                    outcomes=outcomes,
-                    region_stage_id="region_discovery",
-                    feature_stage_ids=("dense_feature_extraction", "region_feature_extraction"),
-                    claim_stage_ids=("region_interpretation",),
-                    scene_context_stage_id="scene_interpretation",
-                )
-                writer.add_result(result)
-                writer.add_stage_outcomes(outcomes)
+                for image in images():
+                    prepared = _materialize_prepared_image(image, scratch)
+                    result_id = perception_result_id_for(
+                        run_id=run_id, source_observation_id=image.observation_id
+                    )
+                    outcomes = execute_stage_graph(
+                        resolved.build_stage_graph({"image_preparation": prepared})
+                    )
+                    result = assemble_perception_result(
+                        result_id=result_id,
+                        source_observation_id=SourceObservationId(str(image.observation_id)),
+                        run_id=run_id,
+                        sequence_artifact_id=sequence.manifest.artifact_id,
+                        created_at=datetime.now(UTC).isoformat(),
+                        outcomes=outcomes,
+                        region_stage_id="region_discovery",
+                        feature_stage_ids=(
+                            "dense_feature_extraction",
+                            "region_feature_extraction",
+                        ),
+                        claim_stage_ids=("region_interpretation",),
+                        scene_context_stage_id="scene_interpretation",
+                    )
+                    writer.add_result(result)
+                    writer.add_stage_outcomes(outcomes)
 
-            manifest = writer.finalize()
+                manifest = writer.finalize()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         return _reference(request, PERCEPTION, str(manifest.run_id), manifest.file_inventory)

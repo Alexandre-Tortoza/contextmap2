@@ -106,7 +106,7 @@ flowchart LR
 
 ## Escrita atômica e incremental
 
-Mesmo padrão de `contextmap.ingestion.sequence_artifact`, agora nas duas metades: **atômica e streaming**. O writer monta o run em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), criado na primeira escrita, roda uma checagem de consistência interna em `finalize()`, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e qualquer falha remove o temporário e não deixa nada. O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
+Mesmo padrão de `contextmap.ingestion.sequence_artifact`, agora nas duas metades: **atômica e streaming**. O writer monta o run em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), criado na primeira escrita, roda uma checagem de consistência interna em `finalize()`, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e qualquer falha remove o temporário e não deixa nada. O writer é um context manager: sair do bloco sem `finalize()`, normalmente ou por exceção (inclusive `KeyboardInterrupt`), remove o temporário que `add_result()`, `add_feature_payload()` ou `add_semantic_view_payload()` já tinham criado, então um run abandonado também não deixa `.tmp-*` no disco; o executor da runtime o usa assim (#619). O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
 
 Cada payload pesado é gravado **no momento em que é adicionado**, não em `finalize()`:
 
@@ -115,7 +115,7 @@ Cada payload pesado é gravado **no momento em que é adicionado**, não em `fin
 | `add_result()` | máscaras de cada região, em `outputs/masks/` | o resultado já com `mask_reference` e sem pixels |
 | `add_feature_payload()` | o `.npy` em `outputs/features/` | só a metadata da feature |
 | `add_semantic_view_payload()` | os bytes em `outputs/semantic-views/` | só `(sha256, size_bytes)` |
-| `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error` |
+| `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error`/`error_type`/`error_traceback` |
 | `add_region_discovery_audit()` | — | a auditoria do frame: IDs, motivos e números, nenhum pixel |
 
 Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **mesma** tupla de `Region2D` com máscaras que `add_result()` recebe, e as métricas de estágio nunca serializam esse `output`: retê-lo guardaria os pixels uma segunda vez.
@@ -123,6 +123,8 @@ Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **me
 O motivo é medido, não hipotético: uma `InlineMask` de 640x480 era então uma tuple de 307200 ponteiros (~2,36 MB; desde o #593 é um array de um byte por pixel, ~0,31 MB, e as mesmas regiões ainda somariam ~2,4 GB), então as 7828 regiões de um run real de 360 frames custavam ~18 GB só de máscaras — e outro tanto pelos `StageOutcome` retidos — antes de `finalize()` sequer começar. Depois da mudança, o crescimento de RSS do writer não escala com o número de frames; o que permanece é O(N) apenas em metadata leve (ids, hashes, contagens), medido em ~0,04 MB por frame.
 
 `finalize()` passa a fazer só o que é inerentemente global: validar os invariantes entre frames, escrever `mask-index.jsonl`/`feature-index.jsonl`, o `manifest.json`, o `README.md`, conferir o inventário e publicar por rename.
+
+A conferência do inventário, em `finalize()` e em `PerceptionRunReader.verify_integrity()`, é a regra comum a todo run artifact (`contextmap.shared.check_file_inventory`): cada arquivo é lido em blocos para o hash, então um payload `.npy` grande nunca é carregado inteiro, e um caminho de manifest fora do run é reportado sem ser aberto (#619).
 
 `add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
 
@@ -141,18 +143,22 @@ deve resolver pelo `PerceptionResultId` para um contexto da mesma observação.
 
 `PerceptionRunReader(run_dir)` abre um run **apenas com seu próprio diretório**. `manifest.json` e o inventário de `outputs/` fornecem os resultados, a auditoria de Region Discovery e os registros de execução contratuais; `debug/` não é dependência de leitura.
 
+Um registro malformado de `outputs/semantic-interpretations.jsonl` (linha que não é JSON, campo ausente, `raw_response_reference` incluído, ou hash da resposta que não confere) vira `RunArtifactError` com o arquivo e a linha, nunca um `KeyError` ou `JSONDecodeError` cru (#619).
+
 ## `serialization.py`
 
 Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`BackendProvenance`, `BoundingBox2D`, `Region2D`, `VisualFeature`, `SemanticClaim`, `SceneContext`, `PerceptionResult`). Reaproveitadas por `run_artifact.py` para persistir `outputs/results.jsonl`, mas não dependem do layout do artefato — qualquer chamador que precise de uma view JSON de um desses contratos pode usá-las diretamente.
 
 ## Reprodutibilidade do pipeline resolvido (`schema_version` 0.6.0)
 
-O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e não muda nenhum outro
-arquivo: resultados, máscaras, features, execuções e falhas semânticas, métricas e README mantêm os
-mesmos bytes, e o manifest só muda na versão e na entrada nova do inventário (há um teste de
-caracterização para isso). Por isso o leitor continua abrindo runs `0.5.0`, o schema da v0.1.0,
-sem outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não
-foi registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
+O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e, em cada registro de
+`metrics/stage-timings.jsonl`, os campos `error_type` e `error_traceback` do `StageOutcome`
+(`null` fora de `FAILED`; #619). Nenhum outro arquivo muda: resultados, máscaras, features,
+execuções e falhas semânticas e README mantêm os mesmos bytes, e o manifest só muda na versão e nas
+entradas do inventário desses dois arquivos (há um teste de caracterização para isso). Por isso o
+leitor, que não decodifica as métricas, continua abrindo runs `0.5.0`, o schema da v0.1.0, sem
+outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não foi
+registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
 recusadas na abertura.
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.

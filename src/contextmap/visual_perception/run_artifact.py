@@ -24,10 +24,12 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.shared import FileEntry, check_file_inventory
 from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
@@ -195,7 +197,13 @@ class RunArtifactManifest:
 
 
 class PerceptionRunWriter:
-    """Builds an immutable perception run artifact on the local filesystem."""
+    """Builds an immutable perception run artifact on the local filesystem.
+
+    Use it as a context manager: payloads reach a temporary sibling of ``output_dir`` as they
+    are added, and leaving the block without :meth:`finalize`, normally or with an exception,
+    removes that directory, so an abandoned run leaves nothing on disk. The writer must not be
+    used after its block.
+    """
 
     def __init__(
         self,
@@ -258,8 +266,9 @@ class PerceptionRunWriter:
         self._mask_store: MaskStoreWriter | None = None
         self._results: list[PerceptionResult] = []
         self._source_observation_ids: set[SourceObservationId] = set()
-        # Só o registro leve (stage_id/status/duration_ms/error) fica retido: o `output` de
-        # region_discovery é a mesma tupla de Region2D com máscaras que add_result() recebe.
+        # Só o registro leve (stage_id/status/duration_ms e o erro com tipo e traceback) fica
+        # retido: o `output` de region_discovery é a mesma tupla de Region2D com máscaras que
+        # add_result() recebe.
         self._stage_outcome_records: list[dict[str, Any]] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
@@ -273,6 +282,20 @@ class PerceptionRunWriter:
         self._feature_previews: list[FeatureDiagnosticPreview] = []
         self._region_discovery_audits: dict[SourceObservationId, RegionDiscoveryAudit] = {}
         self._finalized = False
+
+    def __enter__(self) -> PerceptionRunWriter:
+        """Return this writer; the staging directory is still created on first use."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Discard the staging directory unless :meth:`finalize` published the run."""
+        if not self._finalized:
+            self._discard_staging()
 
     def add_result(self, result: PerceptionResult) -> None:
         """Queue a result to be written by :meth:`finalize`.
@@ -754,52 +777,51 @@ class PerceptionRunWriter:
                 f"request_id={request.request_id!r}, matches={len(matches)}"
             )
         result = matches[0]
-        if True:
-            if request.region_id is not None and all(
-                region.region_id != request.region_id for region in result.regions
-            ):
+        if request.region_id is not None and all(
+            region.region_id != request.region_id for region in result.regions
+        ):
+            raise RunArtifactError(
+                "semantic execution region_id does not resolve in its result: "
+                f"{request.region_id!r}"
+            )
+        payload_keys = {
+            (source_observation_id, feature.feature_id)
+            for feature, source_observation_id in self._feature_payloads
+        }
+        for feature_reference in request.visual_features:
+            feature_matches = [
+                feature
+                for feature in result.features
+                if feature.feature_id == feature_reference.feature_id
+                and feature.embedding_space_id == feature_reference.embedding_space_id
+                and feature.scope is feature_reference.scope
+                and feature.region_id == feature_reference.region_id
+            ]
+            if len(feature_matches) != 1:
                 raise RunArtifactError(
-                    "semantic execution region_id does not resolve in its result: "
-                    f"{request.region_id!r}"
+                    "semantic visual feature does not resolve exactly in its result: "
+                    f"{feature_reference.feature_id!r}"
                 )
-            payload_keys = {
-                (source_observation_id, feature.feature_id)
-                for feature, source_observation_id in self._feature_payloads
-            }
-            for feature_reference in request.visual_features:
-                feature_matches = [
-                    feature
-                    for feature in result.features
-                    if feature.feature_id == feature_reference.feature_id
-                    and feature.embedding_space_id == feature_reference.embedding_space_id
-                    and feature.scope is feature_reference.scope
-                    and feature.region_id == feature_reference.region_id
-                ]
-                if len(feature_matches) != 1:
-                    raise RunArtifactError(
-                        "semantic visual feature does not resolve exactly in its result: "
-                        f"{feature_reference.feature_id!r}"
-                    )
-                payload_key = (result.source_observation_id, feature_reference.feature_id)
-                if payload_key not in payload_keys:
-                    raise RunArtifactError(
-                        "semantic visual feature payload was not persisted: "
-                        f"{feature_reference.feature_id!r}"
-                    )
-            context_reference = request.scene_context_reference
-            if context_reference is not None:
-                context_matches = [
-                    candidate
-                    for candidate in self._results
-                    if str(candidate.result_id) == context_reference.evidence_id
-                    and candidate.source_observation_id == request.source_observation_id
-                    and candidate.scene_context is not None
-                ]
-                if len(context_matches) != 1:
-                    raise RunArtifactError(
-                        "semantic scene_context_reference does not resolve exactly: "
-                        f"{context_reference.evidence_id!r}"
-                    )
+            payload_key = (result.source_observation_id, feature_reference.feature_id)
+            if payload_key not in payload_keys:
+                raise RunArtifactError(
+                    "semantic visual feature payload was not persisted: "
+                    f"{feature_reference.feature_id!r}"
+                )
+        context_reference = request.scene_context_reference
+        if context_reference is not None:
+            context_matches = [
+                candidate
+                for candidate in self._results
+                if str(candidate.result_id) == context_reference.evidence_id
+                and candidate.source_observation_id == request.source_observation_id
+                and candidate.scene_context is not None
+            ]
+            if len(context_matches) != 1:
+                raise RunArtifactError(
+                    "semantic scene_context_reference does not resolve exactly: "
+                    f"{context_reference.evidence_id!r}"
+                )
         return result
 
     def _validate_failed_semantic_interpretations(self) -> None:
@@ -965,26 +987,25 @@ class PerceptionRunWriter:
                     _file_entry(relative_path, (self._tmp_dir / relative_path).read_bytes())
                 )
 
-        if True:
-            # Escrito SEMPRE, mesmo vazio e mesmo sem nenhuma tentativa semantica: assim a
-            # ausencia do arquivo significa inequivocamente "artifact anterior ao tracking",
-            # sem heuristica. Emiti-lo so quando havia tentativa deixava um buraco: um artifact
-            # legado em que toda tentativa falhou tambem tem zero execucoes e nenhuma stream,
-            # e passaria por completo.
-            #
-            # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
-            # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
-            # (e todo artifact ja escrito sob esta versao de schema).
-            failures_content = "".join(
-                f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
-                for failed in self._semantic_failures
-            )
-            failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
-            failures_path.parent.mkdir(parents=True, exist_ok=True)
-            failures_path.write_text(failures_content, encoding="utf-8")
-            file_entries.append(
-                _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
-            )
+        # Escrito SEMPRE, mesmo vazio e mesmo sem nenhuma tentativa semantica: assim a
+        # ausencia do arquivo significa inequivocamente "artifact anterior ao tracking",
+        # sem heuristica. Emiti-lo so quando havia tentativa deixava um buraco: um artifact
+        # legado em que toda tentativa falhou tambem tem zero execucoes e nenhuma stream,
+        # e passaria por completo.
+        #
+        # Stream contratual proprio: a resposta invalida continua sendo evidencia observada,
+        # e mante-la fora de semantic-interpretations.jsonl preserva o contrato de sucesso
+        # (e todo artifact ja escrito sob esta versao de schema).
+        failures_content = "".join(
+            f"{json.dumps(encode_failed_semantic_interpretation(failed), sort_keys=True)}\n"
+            for failed in self._semantic_failures
+        )
+        failures_path = self._tmp_dir / _SEMANTIC_FAILURES_FILENAME
+        failures_path.parent.mkdir(parents=True, exist_ok=True)
+        failures_path.write_text(failures_content, encoding="utf-8")
+        file_entries.append(
+            _file_entry(_SEMANTIC_FAILURES_FILENAME, failures_content.encode("utf-8"))
+        )
 
         # Também escrito SEMPRE, mesmo vazio: num run 0.6.0 a tabela existe e está inventariada,
         # então "nenhum frame auditado" nunca se confunde com "auditoria não registrada", que só
@@ -1140,23 +1161,28 @@ class PerceptionRunReader:
 
         Every record carries its full ``raw_response`` text, so a run's executions are
         markedly heavier than its results; stream them unless all are needed at once.
+
+        Raises:
+            RunArtifactError: While iterating, if a line is not JSON or not a valid execution
+                record; the error names the file and line.
         """
         executions_path = self._root / _SEMANTIC_EXECUTIONS_FILENAME
         if not executions_path.is_file():
             return
         with executions_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
                 if not stripped:
                     continue
-                record = json.loads(stripped)
-                raw_reference = record["raw_response_reference"]
                 try:
-                    yield decode_semantic_execution(record)
+                    execution = decode_semantic_execution(json.loads(stripped))
                 except (ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(
-                        f"invalid semantic execution record for {raw_reference!r}: {error}"
+                        "invalid semantic execution record at "
+                        f"{_SEMANTIC_EXECUTIONS_FILENAME}:{line_number}: "
+                        f"{type(error).__name__}: {error}"
                     ) from error
+                yield execution
 
     def tracks_semantic_failures(self) -> bool:
         """Whether this run recorded its rejected interpretations at all.
@@ -1355,6 +1381,8 @@ def _encode_stage_outcome(outcome: StageOutcome) -> dict[str, Any]:
         "status": outcome.status.value,
         "duration_ms": outcome.duration_ms,
         "error": outcome.error,
+        "error_type": outcome.error_type,
+        "error_traceback": outcome.error_traceback,
     }
 
 
@@ -1489,19 +1517,14 @@ def _load_manifest(run_dir: Path) -> RunArtifactManifest:
 
 
 def _check_file_inventory(root: Path, manifest: RunArtifactManifest) -> list[str]:
-    problems: list[str] = []
-    for entry in manifest.file_inventory:
-        file_path = root / entry.path
-        if not file_path.is_file():
-            problems.append(f"missing file referenced by manifest: {entry.path}")
-            continue
-        data = file_path.read_bytes()
-        if len(data) != entry.size_bytes:
-            problems.append(
-                f"size mismatch for {entry.path}: expected {entry.size_bytes}, found {len(data)}"
-            )
-            continue
-        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
-        if digest != entry.content_hash:
-            problems.append(f"content hash mismatch for {entry.path}")
-    return problems
+    """Check the manifest's inventory with the rule every run artifact shares.
+
+    Files are hashed in chunks, so a large ``.npy`` payload is never read whole (VP-07).
+    """
+    return check_file_inventory(
+        root,
+        (
+            FileEntry(path=entry.path, size_bytes=entry.size_bytes, content_hash=entry.content_hash)
+            for entry in manifest.file_inventory
+        ),
+    )

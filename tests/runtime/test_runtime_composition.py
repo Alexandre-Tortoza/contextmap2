@@ -1723,8 +1723,11 @@ class TestCompositionFailuresReachPreflight:
         }
 
 
-def _perception_request(workspace: Path, *, width: int, height: int) -> Any:
-    """Publish a one-frame ``bgr8`` sequence and build the ``visual_perception`` request over it."""
+def _perception_request(workspace: Path, *, width: int, height: int, frames: int = 1) -> Any:
+    """Publish a ``bgr8`` sequence and build the ``visual_perception`` request over it.
+
+    The frames are ``frame-0000``, ``frame-0001``, ... one second apart.
+    """
     from contextmap.ingestion import (
         FrameId,
         ImageEncoding,
@@ -1745,19 +1748,24 @@ def _perception_request(workspace: Path, *, width: int, height: int) -> Any:
         sequence_name="corridor-02",
         artifact_id=SequenceArtifactId("sequence-0001"),
     ) as writer:
-        writer.add_observation(
-            ImageObservation(
-                observation_id=SourceObservationId("frame-0000"),
-                sensor_id=SensorId("camera_1"),
-                frame_id=FrameId("camera_1_optical"),
-                timestamp=SourceTimestamp(seconds=0, nanoseconds=0, clock_id="fixture:header"),
-                provenance=SourceProvenance(source_type="fixture", source_path="fixtures/images"),
-                width=width,
-                height=height,
-                encoding=ImageEncoding.BGR8,
-                data=bytes([10, 20, 30] * (width * height)),
+        for index in range(frames):
+            writer.add_observation(
+                ImageObservation(
+                    observation_id=SourceObservationId(f"frame-{index:04d}"),
+                    sensor_id=SensorId("camera_1"),
+                    frame_id=FrameId("camera_1_optical"),
+                    timestamp=SourceTimestamp(
+                        seconds=index, nanoseconds=0, clock_id="fixture:header"
+                    ),
+                    provenance=SourceProvenance(
+                        source_type="fixture", source_path="fixtures/images"
+                    ),
+                    width=width,
+                    height=height,
+                    encoding=ImageEncoding.BGR8,
+                    data=bytes([10, 20, 30] * (width * height)),
+                )
             )
-        )
         manifest = writer.finalize()
     sequence_ref = ArtifactRef(
         stage_id="ingestion",
@@ -2575,6 +2583,62 @@ class TestComposeVisualPerceptionExecutor:
         # A região sobrevivente nomeia os dois contribuintes: auditoria e resultado se reconciliam.
         (region,) = reader.result(SourceObservationId("frame-0000")).regions
         assert region.contributor_candidate_ids == ("full-frame/sam2-a", "full-frame/sam2-b")
+
+    @pytest.mark.usefixtures("fake_pillow")
+    def test_a_run_interrupted_after_its_first_frame_leaves_no_staging_behind(
+        self, tmp_path: Path
+    ) -> None:
+        """#619 (VP-14): the first frame's masks reach the writer's staging directory.
+
+        An interruption before finalize() (Ctrl-C on the second frame here) used to leave that
+        ``.tmp-visual_perception-*`` directory orphaned next to where the run would have been.
+        """
+        import numpy as np
+
+        from contextmap.runtime.executors import VisualPerceptionExecutor
+        from contextmap.visual_perception import FeatureScope, InlineMask
+        from contextmap.visual_perception.backends.sam2 import (
+            Sam2Config,
+            Sam2NativeProposal,
+            Sam2RegionDiscovery,
+        )
+        from contextmap.visual_perception.discovery import DiscoveryInput
+
+        class _InterruptedOnTheSecondFrame:
+            def predict(
+                self, discovery_input: DiscoveryInput, config: Sam2Config
+            ) -> tuple[Sam2NativeProposal, ...]:
+                if discovery_input.prepared_image.source_observation_id == "frame-0001":
+                    raise KeyboardInterrupt
+                width = discovery_input.discovery_pass.input_width
+                height = discovery_input.discovery_pass.input_height
+                return (
+                    Sam2NativeProposal(
+                        proposal_id="sam2-a",
+                        box=(0.0, 0.0, float(width), float(height)),
+                        mask=InlineMask(np.ones((height, width), dtype=bool)),
+                        predicted_iou=0.9,
+                        stability_score=0.9,
+                    ),
+                )
+
+        executor = VisualPerceptionExecutor(
+            region_discovery=Sam2RegionDiscovery(
+                config=Sam2Config(checkpoint="facebook/sam2-hiera-large", model_version="2.1"),
+                runtime=_InterruptedOnTheSecondFrame(),
+            ),
+            dense_features=lambda _scope: _NoFeatures(FeatureScope.DENSE),
+            region_features=lambda _scope: _NoFeatures(FeatureScope.REGION),
+            semantic_interpreter=_AbstainingSemanticInterpreter(),  # type: ignore[arg-type]
+        )
+        request = _perception_request(tmp_path / "ws", width=4, height=3, frames=2)
+
+        with pytest.raises(KeyboardInterrupt):
+            executor.execute(request)
+
+        run_root = request.output_dir.parent
+        assert not request.output_dir.exists()
+        assert sorted(path.name for path in run_root.glob(".tmp-*")) == []
 
     def test_a_region_discovery_backend_that_cannot_report_its_audit_is_refused(self) -> None:
         """#611: the canonical path never runs a discovery whose rejections it cannot persist."""

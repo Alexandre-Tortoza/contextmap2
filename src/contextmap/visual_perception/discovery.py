@@ -426,22 +426,38 @@ def build_discovery_passes(
     config: DiscoveryPassConfig | None = None,
 ) -> tuple[DiscoveryPass, ...]:
     """Build full-frame and tile passes in deterministic row-major order."""
+    return tuple(
+        discovery_pass for discovery_pass, _ in _plan_discovery_passes(prepared_image, config)
+    )
+
+
+def _plan_discovery_passes(
+    prepared_image: PreparedImage,
+    config: DiscoveryPassConfig | None,
+) -> tuple[tuple[DiscoveryPass, TilingConfig | None], ...]:
+    """Build the passes, each paired with the tiling that produced it.
+
+    The pairing is made where the pass is created, so the border policy applied to a tile never
+    depends on reconstructing how many windows each grid generated (VP-13).
+
+    Returns:
+        Every pass in :func:`build_discovery_passes` order; the full-frame pass has no tiling.
+    """
     if config is None:
         config = DiscoveryPassConfig()
-    passes: list[DiscoveryPass] = []
+    passes: list[tuple[DiscoveryPass, TilingConfig | None]] = []
     if config.include_full_frame:
-        passes.append(
-            DiscoveryPass(
-                pass_id="full-frame",
-                kind=PassKind.FULL_FRAME,
-                window=BoundingBox(
-                    x_min=0,
-                    y_min=0,
-                    x_max=prepared_image.width,
-                    y_max=prepared_image.height,
-                ),
-            )
+        full_frame = DiscoveryPass(
+            pass_id="full-frame",
+            kind=PassKind.FULL_FRAME,
+            window=BoundingBox(
+                x_min=0,
+                y_min=0,
+                x_max=prepared_image.width,
+                y_max=prepared_image.height,
+            ),
         )
+        passes.append((full_frame, None))
 
     tilings = (() if config.tiling is None else (config.tiling,)) + config.additional_tilings
     for tiling_index, tiling in enumerate(tilings):
@@ -453,19 +469,18 @@ def build_discovery_passes(
             for x_min in x_positions:
                 x_max = min(x_min + tiling.tile_width, prepared_image.width)
                 y_max = min(y_min + tiling.tile_height, prepared_image.height)
-                passes.append(
-                    DiscoveryPass(
-                        pass_id=f"{prefix}-{tile_index:04d}",
-                        kind=PassKind.TILE,
-                        window=BoundingBox(
-                            x_min=x_min,
-                            y_min=y_min,
-                            x_max=x_max,
-                            y_max=y_max,
-                        ),
-                        scale=tiling.scale,
-                    )
+                tile = DiscoveryPass(
+                    pass_id=f"{prefix}-{tile_index:04d}",
+                    kind=PassKind.TILE,
+                    window=BoundingBox(
+                        x_min=x_min,
+                        y_min=y_min,
+                        x_max=x_max,
+                        y_max=y_max,
+                    ),
+                    scale=tiling.scale,
                 )
+                passes.append((tile, tiling))
                 tile_index += 1
     return tuple(passes)
 
@@ -481,13 +496,12 @@ def run_discovery_passes(
     """Execute configured passes and remap every accepted proposal globally."""
     if config is None:
         config = DiscoveryPassConfig()
-    passes = build_discovery_passes(prepared_image, config)
+    planned_passes = _plan_discovery_passes(prepared_image, config)
     candidates: list[RegionCandidate] = []
     rejected: list[RejectedRegionCandidate] = []
     diagnostics: list[BackendDiagnostics] = []
 
-    tiling_by_pass = _tiling_by_pass(passes, config)
-    for discovery_pass in passes:
+    for discovery_pass, tiling in planned_passes:
         discovery_input = DiscoveryInput(
             prepared_image=prepared_image,
             discovery_pass=discovery_pass,
@@ -512,7 +526,6 @@ def run_discovery_passes(
 
         for candidate in pass_candidates:
             _validate_backend_candidate(candidate, discovery_input)
-            tiling = tiling_by_pass.get(discovery_pass.pass_id)
             if tiling is not None and _reject_for_internal_border(
                 candidate, discovery_pass, prepared_image, tiling.border_policy
             ):
@@ -530,7 +543,7 @@ def run_discovery_passes(
     return DiscoveryRunResult(
         candidates=tuple(candidates),
         rejected=tuple(rejected),
-        passes=passes,
+        passes=tuple(discovery_pass for discovery_pass, _ in planned_passes),
         diagnostics=tuple(diagnostics),
     )
 
@@ -543,36 +556,6 @@ def _tile_positions(length: int, tile_size: int, overlap: int) -> tuple[int, ...
     if positions[-1] != last_start:
         positions.append(last_start)
     return tuple(positions)
-
-
-def _tiling_by_pass(
-    passes: tuple[DiscoveryPass, ...], config: DiscoveryPassConfig
-) -> dict[str, TilingConfig]:
-    tilings = (() if config.tiling is None else (config.tiling,)) + config.additional_tilings
-    mapping: dict[str, TilingConfig] = {}
-    if not tilings:
-        return mapping
-    tile_passes = [item for item in passes if item.kind is PassKind.TILE]
-    cursor = 0
-    for tiling in tilings:
-        # Cada grid pode ser reconhecido pelo número determinístico de janelas.
-        pass_count = len(
-            _tile_positions(
-                int(max(item.window.x_max for item in passes)),
-                tiling.tile_width,
-                tiling.overlap_x,
-            )
-        ) * len(
-            _tile_positions(
-                int(max(item.window.y_max for item in passes)),
-                tiling.tile_height,
-                tiling.overlap_y,
-            )
-        )
-        for item in tile_passes[cursor : cursor + pass_count]:
-            mapping[item.pass_id] = tiling
-        cursor += pass_count
-    return mapping
 
 
 def _validate_backend_candidate(
@@ -662,19 +645,21 @@ def _remap_candidate(
 
 
 def _resize_mask(mask: InlineMask, output_width: int, output_height: int) -> InlineMask:
-    """Resize by nearest neighbour: output pixel ``x`` samples ``int(x * width / output_width)``."""
+    """Resize by nearest neighbour, sampling at pixel centres.
+
+    Output pixel ``x`` covers ``[x, x + 1)`` and its centre ``x + 0.5`` maps to
+    ``(x + 0.5) * width / output_width`` in the input, the same continuous convention the box
+    remap uses; the input pixel containing that point is sampled. Sampling the corner ``x`` instead
+    shifted the mask by up to one pixel whenever the scale was not 1 (VP-08).
+    """
     import numpy as np
 
     if (mask.width, mask.height) == (output_width, output_height):
         return mask
-    # A mesma aritmética da amostragem pixel a pixel: produto inteiro exato, divisão em float64
-    # e truncamento, limitado à última coluna/linha.
-    columns = np.minimum(
-        mask.width - 1, (np.arange(output_width) * mask.width / output_width).astype(np.int64)
-    )
-    rows = np.minimum(
-        mask.height - 1, (np.arange(output_height) * mask.height / output_height).astype(np.int64)
-    )
+    # floor((2x + 1) * in / (2 * out)) em inteiros: exato, sem erro de ponto flutuante, e sempre
+    # em [0, in - 1], porque (2x + 1) < 2 * out; por isso não há clamp nas bordas.
+    columns = (2 * np.arange(output_width) + 1) * mask.width // (2 * output_width)
+    rows = (2 * np.arange(output_height) + 1) * mask.height // (2 * output_height)
     return InlineMask(mask.as_array()[rows[:, None], columns[None, :]])
 
 

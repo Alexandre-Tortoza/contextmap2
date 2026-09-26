@@ -353,3 +353,75 @@ def test_known_capabilities_matches_canonical_preset_backend_stages() -> None:
         stage.capability for stage in CANONICAL_PRESET_V1.stages if stage.backend_id is not None
     }
     assert used <= KNOWN_CAPABILITIES
+
+
+# Entradas exigidas por capability e o rótulo do estágio-fonte que as produz; o valor semeado
+# não importa, porque o tipo do backend é conferido antes de qualquer entrada.
+_CAPABILITY_INPUT_SOURCES: dict[str, dict[str, str]] = {
+    "region_discovery": {"image": "image_preparation"},
+    "feature_extractor": {"image": "image_preparation"},
+    "feature_resolution_enhancement": {"dense_map": "dense_feature_map_source"},
+    "scene_interpretation": {"image": "image_preparation"},
+    "region_interpretation": {"image": "image_preparation", "regions": "region_discovery"},
+    "semantic_interpreter": {"request": "semantic_request"},
+    "semantic_scorer": {"claims": "semantic_claims", "features": "visual_features"},
+}
+
+
+@pytest.mark.parametrize("capability", sorted(KNOWN_CAPABILITIES))
+def test_a_backend_of_the_wrong_type_is_a_semantic_error_not_an_assertion(
+    capability: str,
+) -> None:
+    """VP-13: ``assert isinstance`` vanishes under ``python -O`` and says nothing when it fires."""
+    sources = _CAPABILITY_INPUT_SOURCES[capability]
+    preset = PipelinePreset(
+        preset_id="wrong-backend/1",
+        stages=(
+            *(
+                StageSpec(stage_id=f"{name}_source", capability=label)
+                for name, label in sources.items()
+            ),
+            StageSpec(
+                stage_id="stage",
+                capability=capability,
+                inputs={name: f"{name}_source" for name in sources},
+                backend_id="not-a-backend",
+                feature_scope=FeatureScope.DENSE if capability == "feature_extractor" else None,
+            ),
+        ),
+    )
+    resolved = resolve_pipeline(preset, backend_factories={"stage": lambda _p: object()})
+    seeds = {f"{name}_source": None for name in sources}
+    stage = next(
+        definition
+        for definition in resolved.build_stage_graph(seeds)
+        if definition.stage_id == "stage"
+    )
+
+    with pytest.raises(TypeError, match=rf"^{capability} backend must implement .+, got object$"):
+        stage.run(seeds)
+
+
+def test_a_stage_input_of_the_wrong_type_is_a_semantic_error_not_an_assertion() -> None:
+    resolved = resolve_pipeline(
+        CANONICAL_PRESET_V1, backend_factories=_canonical_backend_factories()
+    )
+    stages = resolved.build_stage_graph({"image_preparation": _prepared_image()})
+    stage = next(definition for definition in stages if definition.stage_id == "region_discovery")
+
+    with pytest.raises(
+        TypeError, match=r"^region_discovery input 'image' must be PreparedImage, got str$"
+    ):
+        stage.run({"image_preparation": "frame-0124.jpg"})
+
+
+def test_a_backend_without_provenance_is_named_by_its_stage() -> None:
+    resolved = resolve_pipeline(
+        CANONICAL_PRESET_V1,
+        backend_factories=_canonical_backend_factories(region_discovery=object()),
+    )
+
+    with pytest.raises(
+        TypeError, match=r"^backend of stage 'region_discovery' does not report backend_provenance"
+    ):
+        resolved.configuration_digest()

@@ -26,6 +26,7 @@ policy and worked examples.
 from __future__ import annotations
 
 import time
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -42,6 +43,14 @@ from contextmap.visual_perception.models import (
     VisualFeature,
 )
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
+
+STAGE_TRACEBACK_MAX_CHARS = 4000
+"""Characters of a failed stage's traceback kept in its :class:`StageOutcome`.
+
+A run records one outcome per stage per frame, so a failure repeated over thousands of frames must
+not grow the persisted metrics without bound. The innermost part is kept: it holds the frame that
+raised and the exception itself.
+"""
 
 StageRunner = Callable[[Mapping[str, object]], object]
 """A stage's execution logic.
@@ -97,10 +106,16 @@ class StageOutcome:
         output: The stage's produced value. ``None`` unless ``status`` is
             ``SUCCEEDED``.
         error: Human-readable explanation. Set when ``status`` is
-            ``FAILED`` (the raised exception's message) or ``SKIPPED``
-            (which dependency did not succeed).
+            ``FAILED`` (the raised exception's message, which may be empty)
+            or ``SKIPPED`` (which dependency did not succeed).
         duration_ms: Wall-clock duration of this stage's own execution.
             ``0.0`` for a skipped stage.
+        error_type: The raised exception's type name. Set only when
+            ``status`` is ``FAILED``.
+        error_traceback: The raised exception's formatted traceback, keeping
+            only its last :data:`STAGE_TRACEBACK_MAX_CHARS` characters behind a
+            ``[traceback truncated: ...]`` line when it is longer. Set only when
+            ``status`` is ``FAILED``.
     """
 
     stage_id: str
@@ -108,6 +123,8 @@ class StageOutcome:
     output: object | None = None
     error: str | None = None
     duration_ms: float = 0.0
+    error_type: str | None = None
+    error_traceback: str | None = None
 
 
 def execute_stage_graph(stages: Sequence[StageDefinition]) -> Sequence[StageOutcome]:
@@ -153,6 +170,8 @@ def execute_stage_graph(stages: Sequence[StageDefinition]) -> Sequence[StageOutc
                 status=StageStatus.FAILED,
                 error=str(error),
                 duration_ms=(time.monotonic() - start) * 1000,
+                error_type=type(error).__name__,
+                error_traceback=_truncated_traceback(error),
             )
             continue
 
@@ -165,6 +184,18 @@ def execute_stage_graph(stages: Sequence[StageDefinition]) -> Sequence[StageOutc
         )
 
     return tuple(outcomes[stage.stage_id] for stage in ordered)
+
+
+def _truncated_traceback(error: BaseException) -> str:
+    """Format ``error``'s traceback, keeping its innermost :data:`STAGE_TRACEBACK_MAX_CHARS`."""
+    formatted = "".join(traceback.format_exception(error))
+    if len(formatted) <= STAGE_TRACEBACK_MAX_CHARS:
+        return formatted
+    dropped = len(formatted) - STAGE_TRACEBACK_MAX_CHARS
+    return (
+        f"[traceback truncated: {dropped} leading characters dropped]\n"
+        f"{formatted[-STAGE_TRACEBACK_MAX_CHARS:]}"
+    )
 
 
 def assemble_perception_result(

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -223,6 +224,35 @@ def test_stage_outcomes_are_persisted_as_metrics(tmp_path: Path) -> None:
     record = json.loads(metrics_lines[0])
     assert record["stage_id"] == "region_discovery"
     assert record["status"] == StageStatus.SUCCEEDED.value
+
+
+def test_a_failed_stage_is_persisted_with_its_exception_type_and_traceback(
+    tmp_path: Path,
+) -> None:
+    """VP-11: the metrics kept only ``str(error)``, empty for ``ValueError()``."""
+
+    def failing(context: object) -> None:
+        raise ValueError()
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_stage_outcomes(
+        execute_stage_graph(
+            [
+                StageDefinition(
+                    stage_id="region_discovery", capability="region_discovery", run=failing
+                )
+            ]
+        )
+    )
+    writer.finalize()
+
+    metrics_path = _run_dir(tmp_path) / "metrics" / "stage-timings.jsonl"
+    record = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert record["status"] == StageStatus.FAILED.value
+    assert record["error"] == ""
+    assert record["error_type"] == "ValueError"
+    assert record["error_traceback"].endswith("ValueError\n")
 
 
 _SEMANTIC_VIEW_PAYLOAD = b"exact semantic view pixels"
@@ -720,6 +750,39 @@ def test_verify_integrity_detects_a_missing_output_file(tmp_path: Path) -> None:
     assert any("missing file" in problem for problem in reader.verify_integrity())
 
 
+def test_the_inventory_is_checked_without_reading_whole_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VP-07: finalize() and verify_integrity() read every inventoried file whole to hash it.
+
+    A dense feature or a mask is a ``.npy`` payload that can be large, so the check must
+    stream it in chunks like ``FeatureStoreReader.load`` does since #518.
+    """
+    feature = _dense_feature()
+    read_whole: list[Path] = []
+    real_read_bytes = Path.read_bytes
+
+    def spying_read_bytes(path: Path) -> bytes:
+        read_whole.append(path)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", spying_read_bytes)
+    writer = _write_run(tmp_path)
+    writer.add_result(
+        replace(
+            _masked_result("frame-0001", _full_frame_mask(width=8, height=6)), features=(feature,)
+        )
+    )
+    writer.add_feature_payload(
+        feature, SourceObservationId("frame-0001"), np.zeros((2, 2), dtype="float32")
+    )
+    writer.finalize()
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.verify_integrity() == []
+
+    assert [path for path in read_whole if path.suffix == ".npy"] == []
+
+
 def _dense_feature(feature_id: str = "feature-dense-0000") -> VisualFeature:
     return VisualFeature(
         feature_id=FeatureId(feature_id),
@@ -930,6 +993,39 @@ def test_iter_semantic_executions_streams_instead_of_materializing(tmp_path: Pat
     assert list(streamed) == [execution]
 
 
+def _without_raw_response_reference(line: str) -> str:
+    record = json.loads(line)
+    del record["raw_response_reference"]
+    return json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    "malform",
+    [
+        pytest.param(_without_raw_response_reference, id="missing-raw-response-reference"),
+        pytest.param(lambda line: "not json", id="not-json"),
+    ],
+)
+def test_a_malformed_semantic_execution_record_is_an_artifact_error(
+    tmp_path: Path, malform: Callable[[str], str]
+) -> None:
+    """VP-10: a malformed line escaped as a raw KeyError or JSONDecodeError."""
+    execution = _semantic_execution()
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001", claims=execution.parsed.claims))
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+    writer.finalize()
+    executions_path = _run_dir(tmp_path) / "outputs" / "semantic-interpretations.jsonl"
+    executions_path.write_text(f"{malform(executions_path.read_text().strip())}\n")
+
+    with pytest.raises(
+        RunArtifactError,
+        match=r"invalid semantic execution record at outputs/semantic-interpretations\.jsonl:1",
+    ):
+        list(PerceptionRunReader(_run_dir(tmp_path)).iter_semantic_executions())
+
+
 def _masked_result(observation_id: str, mask: InlineMask) -> PerceptionResult:
     region = Region2D(
         region_id=RegionId("region-0001"),
@@ -971,6 +1067,32 @@ def test_mask_pixels_reach_disk_when_the_result_is_added_not_at_finalize(
 
     masks = list((_staging_dir(tmp_path) / "outputs" / "masks").rglob("*.npy"))
     assert masks, "add_result() must persist the mask instead of buffering its pixels"
+
+
+def test_a_writer_left_without_finalize_leaves_no_staging_behind(tmp_path: Path) -> None:
+    """VP-14: add_result() creates the staging directory, and only a failing call removed it."""
+    with _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        assert _staging_dir(tmp_path).is_dir()
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_writer_interrupted_by_an_error_leaves_no_staging_behind(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="interrupted"), _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        raise RuntimeError("interrupted between frames")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_writer_finalized_inside_its_block_publishes_the_run(tmp_path: Path) -> None:
+    with _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        writer.finalize()
+
+    assert list(tmp_path.iterdir()) == [_run_dir(tmp_path)]
+    assert PerceptionRunReader(_run_dir(tmp_path)).verify_integrity() == []
 
 
 def test_writer_memory_does_not_grow_with_the_number_of_masked_results(
@@ -1416,7 +1538,10 @@ def _pre_audit_contents(run_dir: Path) -> dict[str, str]:
 def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
     """#611 only adds the audit table: every other file must keep its exact bytes.
 
-    The digests were recorded from the 0.5.0 writer, before the audit existed.
+    The digests were recorded from the 0.5.0 writer, before the audit existed, except for
+    ``metrics/stage-timings.jsonl`` and the manifest entry that inventories it: since #619 (VP-11)
+    every stage record also carries ``error_type`` and ``error_traceback``, ``null`` for the
+    succeeded stage recorded here. Nothing else in the manifest changed.
     """
     contents = _pre_audit_contents(_characterized_run(tmp_path))
 
@@ -1459,10 +1584,10 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "079016ab6ddf9054b6f82f0452d8ab3fb381d720123b4c06dd3796e4738f23e5"
         ),
         "manifest.json (stable part)": (
-            "3eb0f82f5e9542ca430b0c4ad0b89ef25602c4501c4ec21eeaf84a477896144e"
+            "f47b79899eb493c616a080a387448cbc727ce8004d67e4e387b061b09af60a2f"
         ),
         "metrics/stage-timings.jsonl": (
-            "0a43c0862087740b00dffa4d2160d6fc27c4df2d765d9f6e31c9b58b7c914611"
+            "ff75fc1139460aceccc7cc6d72b2f35e9d79f5ec467ce8e4983001ac4d8d3766"
         ),
         "outputs/features/feature-index.jsonl": (
             "8793dc07b59cd8b3f3976e1f8e122c0eebc1b606849f998e1464394d4ed5f93c"
