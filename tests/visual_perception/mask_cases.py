@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from fakes import FakeLoadedModel
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -61,6 +62,10 @@ GOLDEN: dict[str, dict[str, str]] = json.loads(
 NORMALIZATION_SEEDS = range(80)
 REMAP_SEEDS = range(40)
 MASK_STORE_SEEDS = range(12)
+# Versão com que os digests dos backends foram gravados, quando model_version ainda tinha esse
+# default (#617 o tornou obrigatório): ela entra na provenance e no config_digest de cada
+# candidato.
+RECORDED_MODEL_VERSION = "unknown"
 
 _BACKEND = BackendProvenance(
     backend_id="fake",
@@ -359,6 +364,7 @@ def sam2_candidates(seed: int) -> list[dict[str, object]]:
 
     config = Sam2Config(
         checkpoint="facebook/sam2-hiera-large",
+        model_version=RECORDED_MODEL_VERSION,
         predicted_iou_threshold=rng.choice([0.0, 0.5]),
         stability_threshold=rng.choice([0.0, 0.3]),
     )
@@ -409,6 +415,8 @@ def sam3_candidates(seed: int) -> list[dict[str, object]]:
     }
 
     class Processor:
+        model = FakeLoadedModel()
+
         def set_image(self, image: object) -> object:
             return {"image": "encoded"}
 
@@ -420,6 +428,7 @@ def sam3_candidates(seed: int) -> list[dict[str, object]]:
 
     config = Sam3Config(
         checkpoint="facebook/sam3",
+        model_version=RECORDED_MODEL_VERSION,
         strategy=Sam3Strategy.TEXT_PROMPT,
         prompt="movable item",
         mask_threshold=mask_threshold,
@@ -446,12 +455,12 @@ def florence2_candidates(seed: int) -> list[dict[str, object]]:
         "labels": [f"region {index}" for index in range(len(polygons))],
     }
 
-    class Model:
+    class Model(FakeLoadedModel):
         def generate(self, **kwargs: object) -> object:
             return "generated"
 
     class Inputs(dict[str, object]):
-        def to(self, device: str) -> Inputs:
+        def to(self, device: str, dtype: object) -> Inputs:
             return self
 
     class Processor:
@@ -469,6 +478,7 @@ def florence2_candidates(seed: int) -> list[dict[str, object]]:
     config = Florence2Config(
         checkpoint="florence-community/Florence-2-base",
         task="<REFERRING_EXPRESSION_SEGMENTATION>",
+        model_version=RECORDED_MODEL_VERSION,
         prompt="movable item",
     )
     runtime = TransformersFlorence2Runtime(

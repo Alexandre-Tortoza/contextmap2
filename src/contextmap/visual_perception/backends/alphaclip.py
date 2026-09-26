@@ -80,6 +80,9 @@ class AlphaClipConfig:
         image_interpolation: RGB resize interpolation; currently ``"bicubic"``.
         mask_interpolation: Mask resize interpolation; must be ``"nearest"``.
         l2_normalize: Normalize image embeddings before persistence.
+        max_batch_size: Largest number of requests sent to the model in one
+            inference call; a scene with more regions is encoded in consecutive
+            batches whose rows keep the order of the requests.
         payload_prefix: Artifact-relative feature payload directory.
         code_version: Adapter/mask-transform policy version.
     """
@@ -97,6 +100,7 @@ class AlphaClipConfig:
     image_interpolation: str = "bicubic"
     mask_interpolation: str = "nearest"
     l2_normalize: bool = True
+    max_batch_size: int = 32
     payload_prefix: str = "features"
     code_version: str = "1"
 
@@ -135,6 +139,8 @@ class AlphaClipConfig:
             raise ValueError("image_interpolation must be bicubic")
         if self.mask_interpolation != "nearest":
             raise ValueError("mask_interpolation must be nearest")
+        if self.max_batch_size <= 0:
+            raise ValueError("max_batch_size must be positive")
         if not self.payload_prefix:
             raise ValueError("payload_prefix must not be empty")
 
@@ -466,7 +472,14 @@ class OfficialAlphaClipRuntime:
     def encode(
         self, image: PreparedImage, requests: Sequence[AlphaClipRequest]
     ) -> AlphaClipNativeOutput:
-        """Run the official RGB+alpha visual encoder on explicit requests."""
+        """Run the official RGB+alpha visual encoder on explicit requests.
+
+        The requests are encoded in consecutive batches of at most
+        ``config.max_batch_size``; the rows of the returned array keep the order
+        of ``requests``, and the peak memory covers every batch.
+        """
+        import numpy as np
+
         self._ensure_loaded()
         if not requests:
             raise AlphaClipInferenceError("at least one AlphaClipRequest is required")
@@ -485,49 +498,19 @@ class OfficialAlphaClipRuntime:
                         f"prepared image metadata {(image.width, image.height)} does not match "
                         f"decoded payload {rgb_image.size}"
                     )
-                image_tensors = []
-                for request in requests:
-                    box = request.view.crop_box
-                    crop = rgb_image.crop((box.x, box.y, box.x + box.width, box.y + box.height))
-                    resized = crop.resize(
-                        (self._config.input_width, self._config.input_height),
-                        resample=self._image_module.Resampling.BICUBIC,
-                    )
-                    normalized = _normalized_rgb_array(
-                        resized,
-                        expected_width=self._config.input_width,
-                        expected_height=self._config.input_height,
-                    )
-                    image_tensors.append(self._torch.from_numpy(normalized))
-            image_batch = self._torch.stack(image_tensors).to(self._config.device)
-            mask_arrays = [
-                self._torch.from_numpy(request.mask.astype("float32"))[None, None]
-                for request in requests
-            ]
-            alpha_batch = self._torch.cat(mask_arrays, dim=0)
-            alpha_batch = self._torch.nn.functional.interpolate(
-                alpha_batch,
-                size=(self._config.input_height, self._config.input_width),
-                mode="nearest",
-            )
-            alpha_batch = (alpha_batch - 0.5) / 0.26
-            alpha_batch = alpha_batch.to(self._config.device)
-            if self._config.precision == "float16":
-                image_batch = image_batch.half()
-                alpha_batch = alpha_batch.half()
-            else:
-                image_batch = image_batch.float()
-                alpha_batch = alpha_batch.float()
-
-            _validate_batch_geometry(image_batch, alpha_batch)
-
             if self._config.device == "cuda":
                 self._torch.cuda.reset_peak_memory_stats()
-            with self._torch.inference_mode():
-                encoded = self._model.visual(image_batch, alpha_batch)
+            # Lotes limitados: com full_image cada região replica a imagem inteira, então o
+            # número de regiões da cena não pode definir sozinho a memória de uma inferência.
+            batch_size = self._config.max_batch_size
+            array = np.concatenate(
+                [
+                    self._encode_batch(rgb_image, requests[start : start + batch_size])
+                    for start in range(0, len(requests), batch_size)
+                ]
+            )
             if self._config.device == "cuda":
                 peak_memory_bytes = int(self._torch.cuda.max_memory_allocated())
-            array = encoded.detach().to("cpu").numpy()
         except AlphaClipInferenceError:
             raise
         except Exception as error:
@@ -539,6 +522,49 @@ class OfficialAlphaClipRuntime:
             elapsed_seconds=time.perf_counter() - started_at,
             peak_memory_bytes=peak_memory_bytes,
         )
+
+    def _encode_batch(self, rgb_image: Any, requests: Sequence[AlphaClipRequest]) -> NDArray[Any]:
+        """Build one RGB+alpha batch, run the visual encoder, and return it on the CPU."""
+        image_tensors = []
+        for request in requests:
+            box = request.view.crop_box
+            crop = rgb_image.crop((box.x, box.y, box.x + box.width, box.y + box.height))
+            resized = crop.resize(
+                (self._config.input_width, self._config.input_height),
+                resample=self._image_module.Resampling.BICUBIC,
+            )
+            normalized = _normalized_rgb_array(
+                resized,
+                expected_width=self._config.input_width,
+                expected_height=self._config.input_height,
+            )
+            image_tensors.append(self._torch.from_numpy(normalized))
+        image_batch = self._torch.stack(image_tensors).to(self._config.device)
+        mask_arrays = [
+            self._torch.from_numpy(request.mask.astype("float32"))[None, None]
+            for request in requests
+        ]
+        alpha_batch = self._torch.cat(mask_arrays, dim=0)
+        alpha_batch = self._torch.nn.functional.interpolate(
+            alpha_batch,
+            size=(self._config.input_height, self._config.input_width),
+            mode="nearest",
+        )
+        alpha_batch = (alpha_batch - 0.5) / 0.26
+        alpha_batch = alpha_batch.to(self._config.device)
+        if self._config.precision == "float16":
+            image_batch = image_batch.half()
+            alpha_batch = alpha_batch.half()
+        else:
+            image_batch = image_batch.float()
+            alpha_batch = alpha_batch.float()
+
+        _validate_batch_geometry(image_batch, alpha_batch)
+
+        with self._torch.inference_mode():
+            encoded = self._model.visual(image_batch, alpha_batch)
+        array: NDArray[Any] = encoded.detach().to("cpu").numpy()
+        return array
 
     def _ensure_loaded(self) -> None:
         """Import SDKs, verify local checkpoints, and load the model lazily."""
@@ -735,6 +761,7 @@ def _configuration_fingerprint(config: AlphaClipConfig) -> str:
         "image_interpolation": config.image_interpolation,
         "mask_interpolation": config.mask_interpolation,
         "l2_normalize": config.l2_normalize,
+        "max_batch_size": config.max_batch_size,
         "payload_prefix": config.payload_prefix,
         "code_version": config.code_version,
     }

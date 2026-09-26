@@ -146,6 +146,7 @@ class TestRealCapabilityConfigs:
             Sam3Config,
             {
                 "checkpoint": "sam3-x",
+                "model_version": "3.0",
                 "strategy": "text_prompt",
                 "prompt": "chair",
                 "score_threshold": 0.3,
@@ -160,7 +161,9 @@ class TestRealCapabilityConfigs:
         from contextmap.visual_perception.backends.sam3 import Sam3Config
 
         with pytest.raises(ParameterError, match="text_prompt strategy requires a prompt"):
-            build_config(Sam3Config, {"checkpoint": "x", "strategy": "text_prompt"})
+            build_config(
+                Sam3Config, {"checkpoint": "x", "model_version": "3.0", "strategy": "text_prompt"}
+            )
 
     def test_names_the_valid_parameters_when_one_is_unknown(self) -> None:
         from contextmap.visual_perception.backends.sam3 import Sam3Config

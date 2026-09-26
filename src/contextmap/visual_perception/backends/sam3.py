@@ -33,6 +33,7 @@ from ..region_models import (
     RegionProvenance,
     mask_bounding_box,
 )
+from ._model_placement import verify_model_placement
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -57,10 +58,12 @@ class Sam3Config:
     ``precision`` is the inference precision the official runtime applies: ``float32``
     runs the SDK as loaded, while ``float16`` and ``bfloat16`` run it under
     ``torch.autocast``. The official SAM3 image model requires ``bfloat16``.
+    ``model_version`` has no default: it enters provenance and the digest, so a run never
+    records a placeholder instead of the checkpoint version that produced it.
     """
 
     checkpoint: str
-    model_version: str = "unknown"
+    model_version: str
     device: str = "cpu"
     precision: str = "float32"
     strategy: Sam3Strategy = Sam3Strategy.AUTOMATIC
@@ -144,6 +147,11 @@ class Sam3Runtime(Protocol):
 class _Sam3ImageProcessor(Protocol):
     """Minimum official SAM3 image processor surface used by the runtime."""
 
+    @property
+    def model(self) -> object:
+        """Loaded SAM3 model the processor runs, whose placement the runtime verifies."""
+        ...
+
     def set_image(self, image: object) -> object:
         """Encode one image and return its inference state."""
         ...
@@ -172,24 +180,36 @@ class Sam3ImageProcessorRuntime:
         Args:
             processor: Official image processor already built around the model.
             image_loader: Materializes the exact image of one discovery pass.
-            autocast: Builds the context the SDK runs in for one configuration.
-                Defaults to ``torch.autocast`` for ``float16`` and ``bfloat16`` and to
-                no context for ``float32``; tests inject a recording context.
+            autocast: Builds the precision context the SDK runs in for one
+                configuration. Defaults to ``torch.autocast`` for ``float16`` and
+                ``bfloat16`` and to no context for ``float32``; tests inject a
+                recording context. The SDK calls always run inside
+                ``torch.inference_mode()`` as well, whatever the precision.
         """
         self._processor = processor
         self._image_loader = image_loader
         self._autocast = autocast or _torch_autocast
 
     def predict(self, discovery_input: DiscoveryInput, config: Sam3Config) -> Sam3NativeOutput:
-        """Run supported official image inference without a strategy fallback."""
+        """Run supported official image inference without a strategy fallback.
+
+        Raises:
+            ValueError: If the strategy is not ``text_prompt``, if the prompt is missing,
+                or if the processor's model is not on ``config.device``.
+        """
         if config.strategy is not Sam3Strategy.TEXT_PROMPT:
             raise ValueError("official SAM3 image runtime supports only text_prompt strategy")
         if config.prompt is None:
             raise ValueError("official SAM3 image runtime requires a text prompt")
+        # Só o device é conferido: a precisão do SAM3 é realizada por autocast sobre os pesos
+        # carregados, e a regra de dtype sob autocast ainda não foi decidida (#617).
+        verify_model_placement(
+            self._processor.model, device=config.device, precision=None, backend="SAM3"
+        )
 
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
-        with self._autocast(config):
+        with _torch_inference_mode(), self._autocast(config):
             state = self._processor.set_image(image)
             state = self._processor.set_confidence_threshold(config.score_threshold, state=state)
             if state is None:
@@ -353,6 +373,15 @@ class Sam3RegionDiscovery:
         )
 
 
+def _torch_inference_mode() -> AbstractContextManager[object]:
+    """Return ``torch.inference_mode()``, so the SDK calls never record autograd state."""
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError("SAM3 inference requires torch inference_mode; install torch") from error
+    return cast(AbstractContextManager[object], torch.inference_mode())
+
+
 def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:
     """Return the ``torch.autocast`` context that realizes the configured precision."""
     if config.precision == "float32":
@@ -494,9 +523,9 @@ def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, 
 
 
 def _finite_number(value: object, name: str) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if not isinstance(value, (int, float)):
+    # bool é subclasse de int, mas um bool nativo não é score nem coordenada: rejeitado como no
+    # SAM2 e no Florence-2 (#617).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"SAM3 {name} must be numeric")
     result = float(value)
     if not isfinite(result):

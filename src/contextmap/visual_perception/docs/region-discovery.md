@@ -239,6 +239,15 @@ a box nativa XYWH para XYXY, destaca a máscara binária e preserva `predicted_i
 `stability_score` e área. `from_model` constrói o generator com os thresholds e settings que
 participam do digest, sem tornar SAM2 dependência obrigatória do pacote principal.
 
+`model_version` não tem default em `Sam2Config`, `Sam3Config` nem `Florence2Config`: a versão entra
+na provenance e no digest, então uma execução nunca registra um placeholder no lugar da versão real
+do checkpoint. O modelo chega carregado pela composition root, e device e precision da configuração
+também vão para a provenance; por isso os runtimes oficiais conferem, antes da primeira inferência,
+o primeiro parâmetro do modelo contra a configuração (sem índice no device, qualquer GPU do tipo
+confere, como em `model.to("cuda")`). `from_model` do SAM2 falha com `ValueError` se o modelo estiver
+em outro device ou em outro dtype que `precision`: esse runtime não aplica autocast, então o dtype
+dos pesos é a precisão da inferência (#617).
+
 O `bbox` do SDK oficial usa **índices de pixel inclusivos** (`[x0, y0, x1 - x0, y1 - y0]`), e a
 `BoundingBox` canônica é semiaberta. A conversão soma um pixel às duas bordas máximas
 (`x + w + 1`, `y + h + 1`), o que torna a caixa justa à máscara. Sem isso a normalização, que exige
@@ -265,10 +274,17 @@ real específica; selecionar uma delas não aciona comportamento alternativo.
 
 A `precision` de `Sam3Config` (`float32`, `float16` ou `bfloat16`; qualquer outro valor é rejeitado
 na configuração) é a precisão com que a inferência realmente roda: o runtime executa as chamadas do
-SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem contexto para `float32`. O modelo de
+SDK dentro de `torch.autocast` para `float16`/`bfloat16` e sem autocast para `float32`. O modelo de
 imagem oficial do SAM3 só executa sob autocast `bfloat16`; com `float32` o SDK falha com
-`mat1 and mat2 must have the same dtype`. O contexto é injetável (`autocast=`), então os testes não
-precisam de torch, e `float32` nunca importa torch (issue #338).
+`mat1 and mat2 must have the same dtype`. O contexto de precisão é injetável (`autocast=`), então os
+testes registram a ordem das chamadas sem torch real (issue #338). Em qualquer precisão, as
+chamadas do SDK rodam também dentro de `torch.inference_mode()`, sem depender de o SDK desligar o
+autograd por conta própria; sem torch instalado, a inferência falha explicitamente (#617).
+
+Antes de chamar o SDK, o runtime confere o device do modelo exposto pelo processor
+(`processor.model`) contra `Sam3Config.device`. O dtype dos pesos ainda não é conferido: a precisão
+do SAM3 é realizada por autocast, e o SDK oficial roda com pesos `float32` sob autocast `bfloat16`
+(#338), então a regra de dtype sob autocast é uma decisão pendente da #617.
 
 ### Geometria das propostas SAM3
 
@@ -299,8 +315,10 @@ port e outro adapter, mesmo que a composition root possa compartilhar o
 lifecycle do modelo carregado.
 
 `TransformersFlorence2Runtime` implementa o fluxo oficial do Transformers: prepara o task prompt,
-move inputs para o device configurado, executa `generate`, mantém os tokens especiais no decode e
-chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões;
+confere que o modelo está no device e no dtype configurados (sem autocast, o dtype dos pesos é a
+precisão da inferência), move os inputs para esse device e converte os de ponto flutuante para esse
+dtype, executa `generate` dentro de `torch.inference_mode()` (#617), mantém os tokens especiais no
+decode e chama `post_process_generation` com o tamanho do pass. Tasks aceitas precisam produzir regiões;
 um frame sem detecções devolve zero regiões (`box_count=0`, `polygon_count=0`), como SAM2 e SAM3,
 e não falha o estágio.
 Boxes são destacadas diretamente e polígonos são rasterizados por centro de pixel; labels do parser

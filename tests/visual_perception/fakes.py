@@ -11,7 +11,8 @@ fallback.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 
 from contextmap.visual_perception import (
     BackendProvenance,
@@ -276,3 +277,36 @@ class FakeFailingRegionDiscovery:
 
     def discover(self, image: PreparedImage) -> Sequence[Region2D]:
         raise RuntimeError("region discovery backend unavailable")
+
+
+@dataclass(frozen=True)
+class FakeTorchDevice:
+    """Stand-in for ``torch.device``: a type, an optional index and the same string form."""
+
+    type: str
+    index: int | None = None
+
+    def __str__(self) -> str:
+        return self.type if self.index is None else f"{self.type}:{self.index}"
+
+
+@dataclass(frozen=True)
+class FakeTorchParameter:
+    """Stand-in for a model parameter; ``dtype`` prints like ``torch.float32`` does."""
+
+    device: FakeTorchDevice
+    dtype: str
+
+
+class FakeLoadedModel:
+    """A loaded torch model reduced to what the runtimes verify: where its weights live."""
+
+    def __init__(self, device: str = "cpu", precision: str = "float32") -> None:
+        device_type, _, index = device.partition(":")
+        self.parameter = FakeTorchParameter(
+            device=FakeTorchDevice(device_type, int(index) if index else None),
+            dtype=f"torch.{precision}",
+        )
+
+    def parameters(self) -> Iterator[FakeTorchParameter]:
+        yield self.parameter

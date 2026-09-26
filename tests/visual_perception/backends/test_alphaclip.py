@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -30,14 +32,17 @@ from contextmap.visual_perception import (
     feature_id_for,
     write_feature_index,
 )
+from contextmap.visual_perception.backends import alphaclip as alphaclip_module
 from contextmap.visual_perception.backends.alphaclip import (
     AlphaClipConfig,
     AlphaClipDependencyError,
+    AlphaClipExtraction,
     AlphaClipInferenceError,
     AlphaClipNativeOutput,
     AlphaClipRegionFeatureBackend,
     AlphaClipRequest,
     OfficialAlphaClipRuntime,
+    _combined_checkpoint_fingerprint,
     _normalized_rgb_array,
     _validate_batch_geometry,
 )
@@ -471,6 +476,7 @@ def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) 
         ("context_padding_fraction", float("nan")),
         ("context_padding_fraction", float("inf")),
         ("payload_prefix", ""),
+        ("max_batch_size", 0),
     ],
 )
 def test_invalid_config_is_rejected(field: str, value: object) -> None:
@@ -557,3 +563,167 @@ def test_missing_transitive_dependency_of_official_package_is_named(
 
     with pytest.raises(AlphaClipDependencyError, match="loralib"):
         runtime.encode(_image(), ())
+
+
+class _Tensor(np.ndarray):  # type: ignore[type-arg]
+    """NumPy-backed stand-in for the torch tensors the runtime builds, moves and detaches."""
+
+    def to(self, *args: object, **kwargs: object) -> _Tensor:
+        return self
+
+    def float(self) -> _Tensor:
+        return self.astype(np.float32).view(_Tensor)
+
+    def half(self) -> _Tensor:
+        return self.astype(np.float16).view(_Tensor)
+
+    def detach(self) -> _Tensor:
+        return self
+
+    def numpy(self) -> np.ndarray[Any, Any]:
+        return np.asarray(self)
+
+
+def _nearest(batch: _Tensor, *, size: tuple[int, int], mode: str) -> _Tensor:
+    rows = np.arange(size[0]) * batch.shape[2] // size[0]
+    columns = np.arange(size[1]) * batch.shape[3] // size[1]
+    return batch[:, :, rows][:, :, :, columns].view(_Tensor)
+
+
+class _Resized:
+    def __init__(self, size: tuple[int, int]) -> None:
+        self._size = size
+
+    def __array__(self, dtype: object = None, copy: object = None) -> np.ndarray[Any, Any]:
+        return np.full((self._size[1], self._size[0], 3), 128, dtype=np.float32)
+
+
+class _Crop:
+    def resize(self, size: tuple[int, int], resample: object) -> _Resized:
+        return _Resized(size)
+
+
+class _DecodedImage:
+    size = (6, 4)
+
+    def __enter__(self) -> _DecodedImage:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def convert(self, mode: str) -> _DecodedImage:
+        return self
+
+    def crop(self, box: tuple[int, int, int, int]) -> _Crop:
+        return _Crop()
+
+
+class _BatchRecordingAlphaClipModel:
+    """Embed each request as the sum of its alpha channel, so every row identifies its mask."""
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def float(self) -> _BatchRecordingAlphaClipModel:
+        return self
+
+    def eval(self) -> _BatchRecordingAlphaClipModel:
+        return self
+
+    def visual(self, image_batch: _Tensor, alpha_batch: _Tensor) -> _Tensor:
+        self.batch_sizes.append(image_batch.shape[0])
+        alpha_sums = np.asarray(alpha_batch).reshape(alpha_batch.shape[0], -1).sum(axis=1)
+        rows = np.stack([alpha_sums, np.ones_like(alpha_sums)], axis=1)
+        return rows.astype(np.float32).view(_Tensor)
+
+
+def _encode_five_masks(
+    max_batch_size: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[AlphaClipExtraction, list[int]]:
+    (tmp_path / "prepared").mkdir(exist_ok=True)
+    (tmp_path / "prepared" / "frame-0001.png").write_bytes(b"prepared image")
+    (tmp_path / "base.pt").write_bytes(b"base checkpoint")
+    (tmp_path / "alpha.pth").write_bytes(b"alpha checkpoint")
+    model = _BatchRecordingAlphaClipModel()
+    sdks = {
+        "torch": SimpleNamespace(
+            from_numpy=lambda array: array.view(_Tensor),
+            stack=lambda tensors: np.stack(tensors).view(_Tensor),
+            cat=lambda tensors, dim: np.concatenate(tensors, axis=dim).view(_Tensor),
+            nn=SimpleNamespace(functional=SimpleNamespace(interpolate=_nearest)),
+            inference_mode=nullcontext,
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        ),
+        "alpha_clip": SimpleNamespace(load=lambda *args, **kwargs: (model, None)),
+        "PIL.Image": SimpleNamespace(
+            open=lambda path: _DecodedImage(),
+            Resampling=SimpleNamespace(BICUBIC="bicubic"),
+        ),
+    }
+    monkeypatch.setattr(
+        alphaclip_module, "importlib", SimpleNamespace(import_module=sdks.__getitem__)
+    )
+    regions = tuple(_region(f"region-{index}", x=0, y=0, width=6, height=4) for index in range(5))
+    # A região i tem i + 1 pixels na máscara: a soma do alpha cresce com o índice.
+    masks = {
+        region.region_id: (np.arange(24) <= index).reshape(4, 6)
+        for index, region in enumerate(regions)
+    }
+    backend = AlphaClipRegionFeatureBackend(
+        config=AlphaClipConfig(
+            model_name="ViT-B/16",
+            base_checkpoint_path="base.pt",
+            alpha_checkpoint_path="alpha.pth",
+            checkpoint_fingerprint=_combined_checkpoint_fingerprint(
+                tmp_path / "base.pt", tmp_path / "alpha.pth"
+            ),
+            input_width=6,
+            input_height=4,
+            max_batch_size=max_batch_size,
+        ),
+        run_id=PerceptionRunId("run-0001"),
+        feature_stage_id="region_feature_extraction",
+        mask_source=DictMaskSource(masks),
+        payload_sink=RecordingPayloadSink(),
+        prepared_image_root=tmp_path,
+        checkpoint_root=tmp_path,
+    )
+    return backend.extract_masked(_image(), regions), model.batch_sizes
+
+
+def test_runtime_encodes_requests_in_bounded_batches_without_changing_values_or_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    single, single_batches = _encode_five_masks(5, monkeypatch, tmp_path)
+    chunked, chunked_batches = _encode_five_masks(2, monkeypatch, tmp_path)
+
+    assert single_batches == [5]
+    assert chunked_batches == [2, 2, 1]
+    np.testing.assert_array_equal(chunked.array, single.array)
+    assert np.all(np.diff(chunked.array[:, 0]) > 0)
+    assert [feature.region_id for feature in chunked.features] == [
+        RegionId(f"region-{index}") for index in range(5)
+    ]
+
+
+def test_max_batch_size_takes_part_in_the_configuration_fingerprint() -> None:
+    def fingerprint(max_batch_size: int) -> str | None:
+        backend = AlphaClipRegionFeatureBackend(
+            config=AlphaClipConfig(
+                model_name="ViT-B/16",
+                base_checkpoint_path="base.pt",
+                alpha_checkpoint_path="alpha.pth",
+                checkpoint_fingerprint="sha256:abc",
+                max_batch_size=max_batch_size,
+            ),
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="region_feature_extraction",
+            mask_source=DictMaskSource({}),
+            payload_sink=RecordingPayloadSink(),
+            runtime=FakeAlphaClipRuntime(np.ones((1, 2), dtype=np.float32)),
+        )
+        return backend.backend_provenance().configuration_fingerprint
+
+    assert fingerprint(8) != fingerprint(16)

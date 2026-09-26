@@ -2,9 +2,11 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from hashlib import sha256
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from fakes import FakeLoadedModel
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam2_candidates
 
 from contextmap.ingestion import SourceObservationId
@@ -17,6 +19,7 @@ from contextmap.visual_perception import (
     Region2D,
     RegionDiscovery,
 )
+from contextmap.visual_perception.backends import sam2 as sam2_module
 from contextmap.visual_perception.backends.sam2 import (
     Sam2AutomaticMaskRuntime,
     Sam2Config,
@@ -141,7 +144,8 @@ def test_sam2_normalizes_native_proposals_with_complete_provenance() -> None:
 def test_sam2_reports_the_audit_of_the_regions_it_discovers() -> None:
     """#611: the regions of the public port come with the passes, rejections and merges."""
     backend = Sam2RegionDiscovery(
-        config=Sam2Config(checkpoint="facebook/sam2-hiera-large"), runtime=FakeSam2Runtime()
+        config=Sam2Config(checkpoint="facebook/sam2-hiera-large", model_version="2.1"),
+        runtime=FakeSam2Runtime(),
     )
     image = _input().prepared_image
 
@@ -156,10 +160,11 @@ def test_sam2_reports_the_audit_of_the_regions_it_discovers() -> None:
 
 def test_sam2_configuration_rejects_invalid_thresholds_and_unknown_values() -> None:
     with pytest.raises(ValueError, match="predicted_iou_threshold"):
-        Sam2Config(checkpoint="sam2", predicted_iou_threshold=1.1)
+        Sam2Config(checkpoint="sam2", model_version="2.1", predicted_iou_threshold=1.1)
     with pytest.raises(ValueError, match="unique"):
         Sam2Config(
             checkpoint="sam2",
+            model_version="2.1",
             automatic_mask_settings=(("points_per_side", 16), ("points_per_side", 32)),
         )
 
@@ -179,7 +184,9 @@ def test_sam2_native_shape_errors_fail_explicitly() -> None:
                 ),
             )
 
-    backend = Sam2RegionDiscovery(config=Sam2Config(checkpoint="sam2"), runtime=InvalidRuntime())
+    backend = Sam2RegionDiscovery(
+        config=Sam2Config(checkpoint="sam2", model_version="2.1"), runtime=InvalidRuntime()
+    )
 
     with pytest.raises(ValueError, match="mask dimensions"):
         backend.discover_candidates(_input())
@@ -218,7 +225,7 @@ def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
                 }
             ]
 
-    config = Sam2Config(checkpoint="facebook/sam2-hiera-large")
+    config = Sam2Config(checkpoint="facebook/sam2-hiera-large", model_version="2.1")
     generator = AutomaticMaskGenerator()
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=generator,
@@ -256,7 +263,7 @@ def test_sam2_runtime_rejects_configuration_or_shape_drift() -> None:
                 }
             ]
 
-    config = Sam2Config(checkpoint="sam2")
+    config = Sam2Config(checkpoint="sam2", model_version="2.1")
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=InvalidGenerator(),
         image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
@@ -266,7 +273,7 @@ def test_sam2_runtime_rejects_configuration_or_shape_drift() -> None:
     with pytest.raises(ValueError, match="mask dimensions"):
         runtime.predict(_input(), config)
     with pytest.raises(ValueError, match="configuration digest"):
-        runtime.predict(_input(), Sam2Config(checkpoint="another-sam2"))
+        runtime.predict(_input(), Sam2Config(checkpoint="another-sam2", model_version="2.1"))
 
 
 def test_sam2_runtime_rejects_materialized_image_dimension_drift() -> None:
@@ -274,7 +281,7 @@ def test_sam2_runtime_rejects_materialized_image_dimension_drift() -> None:
         def generate(self, image: object) -> list[dict[str, object]]:
             return []
 
-    config = Sam2Config(checkpoint="sam2")
+    config = Sam2Config(checkpoint="sam2", model_version="2.1")
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=EmptyGenerator(),
         image_loader=lambda discovery_input: MaterializedImage(
@@ -303,7 +310,7 @@ def test_sam2_runtime_materializes_distinct_scaled_model_inputs() -> None:
         loaded.append(image)
         return image
 
-    config = Sam2Config(checkpoint="sam2")
+    config = Sam2Config(checkpoint="sam2", model_version="2.1")
     generator = RecordingGenerator()
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=generator,
@@ -342,7 +349,7 @@ def test_sam2_accepts_official_masks_whose_bbox_uses_inclusive_indices() -> None
                 }
             ]
 
-    config = Sam2Config(checkpoint="facebook/sam2.1-hiera-tiny")
+    config = Sam2Config(checkpoint="facebook/sam2.1-hiera-tiny", model_version="2.1")
     runtime = Sam2AutomaticMaskRuntime(
         mask_generator=InclusiveBoxGenerator(),
         image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
@@ -362,3 +369,72 @@ def test_sam2_accepts_official_masks_whose_bbox_uses_inclusive_indices() -> None
 def test_sam2_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
     # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
     assert digest(sam2_candidates(seed)) == GOLDEN["sam2"][str(seed)]
+
+
+def test_sam2_configuration_requires_an_explicit_model_version() -> None:
+    with pytest.raises(TypeError, match="model_version"):
+        Sam2Config(checkpoint="facebook/sam2.1-hiera-tiny")  # type: ignore[call-arg]
+
+
+def _install_fake_sam2_sdk(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Replace the official generator module; return the models it was built around."""
+    built: list[object] = []
+
+    class SAM2AutomaticMaskGenerator:
+        def __init__(self, *, model: object, **settings: object) -> None:
+            built.append(model)
+
+        def generate(self, image: object) -> list[dict[str, object]]:
+            return []
+
+    module = SimpleNamespace(SAM2AutomaticMaskGenerator=SAM2AutomaticMaskGenerator)
+    monkeypatch.setattr(sam2_module, "import_module", lambda name: module)
+    return built
+
+
+def _placed_config(*, device: str) -> Sam2Config:
+    return Sam2Config(
+        checkpoint="facebook/sam2.1-hiera-tiny",
+        model_version="2.1",
+        device=device,
+        precision="float32",
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "message"),
+    [
+        (FakeLoadedModel("cpu", "float32"), "device 'cuda:0'"),
+        (FakeLoadedModel("cuda:1", "float32"), "device 'cuda:0'"),
+        (FakeLoadedModel("cuda:0", "float16"), "precision 'float32'"),
+    ],
+)
+def test_sam2_from_model_rejects_a_model_placed_unlike_the_configuration(
+    model: FakeLoadedModel, message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built = _install_fake_sam2_sdk(monkeypatch)
+
+    with pytest.raises(ValueError, match=message):
+        Sam2AutomaticMaskRuntime.from_model(
+            model=model,
+            image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
+            config=_placed_config(device="cuda:0"),
+        )
+
+    assert built == []
+
+
+def test_sam2_from_model_accepts_a_model_placed_as_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _install_fake_sam2_sdk(monkeypatch)
+    model = FakeLoadedModel("cuda:0", "float32")
+
+    # Sem índice no config, qualquer GPU CUDA confere, como em model.to("cuda").
+    Sam2AutomaticMaskRuntime.from_model(
+        model=model,
+        image_loader=lambda discovery_input: _materialized_image(discovery_input, "pixels"),
+        config=_placed_config(device="cuda"),
+    )
+
+    assert built == [model]

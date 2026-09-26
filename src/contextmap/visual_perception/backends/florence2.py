@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from hashlib import sha256
+from importlib import import_module
 from math import isfinite
 from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, cast
@@ -29,6 +31,7 @@ from ..region_models import (
     RegionCandidate,
     RegionProvenance,
 )
+from ._model_placement import verify_model_placement
 
 if TYPE_CHECKING:
     import numpy as np
@@ -49,11 +52,15 @@ _REGION_TASKS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class Florence2Config:
-    """Effective configuration for Florence-2 region discovery only."""
+    """Effective configuration for Florence-2 region discovery only.
+
+    ``model_version`` has no default: it enters provenance and the digest, so a run never
+    records a placeholder instead of the checkpoint version that produced it.
+    """
 
     checkpoint: str
     task: str
-    model_version: str = "unknown"
+    model_version: str
     device: str = "cpu"
     precision: str = "float32"
     prompt: str | None = None
@@ -134,13 +141,17 @@ class Florence2Runtime(Protocol):
 class _ModelInputs(Protocol):
     """Device-transfer surface of Transformers model inputs."""
 
-    def to(self, device: str) -> Mapping[str, object]:
-        """Move tensors to the explicitly configured device."""
+    def to(self, device: str, dtype: object) -> Mapping[str, object]:
+        """Move tensors to the configured device, casting floating ones to ``dtype``."""
         ...
 
 
 class _Florence2Model(Protocol):
     """Minimum Transformers Florence-2 generation surface."""
+
+    def parameters(self) -> Iterator[object]:
+        """Yield the loaded weights, whose device and dtype the runtime verifies."""
+        ...
 
     def generate(self, **kwargs: object) -> object:
         """Generate native output token ids."""
@@ -183,23 +194,34 @@ class TransformersFlorence2Runtime:
     def predict(
         self, discovery_input: DiscoveryInput, config: Florence2Config
     ) -> Florence2NativeOutput:
-        """Generate and parse one configured Florence-2 region task."""
+        """Generate and parse one configured Florence-2 region task.
+
+        Raises:
+            ValueError: If the model's parameters are not on ``config.device`` or not in
+                ``config.precision``, if the generation settings duplicate a model input,
+                or if the parser output is not structured region output.
+        """
+        model_dtype = verify_model_placement(
+            self._model, device=config.device, precision=config.precision, backend="Florence-2"
+        )
         width = discovery_input.discovery_pass.input_width
         height = discovery_input.discovery_pass.input_height
         task_prompt = f"{config.task}{config.prompt or ''}"
         image = self._image_loader(discovery_input)
         validate_materialized_discovery_image(image, discovery_input)
+        # Os pixel_values saem do processor em float32: seguem o dtype verificado do modelo.
         inputs = self._processor(
             text=task_prompt,
             images=image,
             return_tensors="pt",
-        ).to(config.device)
+        ).to(config.device, model_dtype)
         generation_settings = dict(config.generation_settings)
         conflicts = set(inputs).intersection(generation_settings)
         if conflicts:
             names = ", ".join(sorted(conflicts))
             raise ValueError(f"Florence-2 generation settings duplicate model inputs: {names}")
-        generated_ids = self._model.generate(**inputs, **generation_settings)
+        with _torch_inference_mode():
+            generated_ids = self._model.generate(**inputs, **generation_settings)
         decoded = self._processor.batch_decode(generated_ids, skip_special_tokens=False)
         if len(decoded) != 1:
             raise ValueError("Florence-2 runtime expects exactly one decoded result per image")
@@ -349,6 +371,17 @@ class Florence2RegionDiscovery:
             ),
             native_metadata=native_metadata,
         )
+
+
+def _torch_inference_mode() -> AbstractContextManager[object]:
+    """Return ``torch.inference_mode()``, so ``generate`` never records autograd state."""
+    try:
+        torch = import_module("torch")
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Florence-2 inference requires torch inference_mode; install torch"
+        ) from error
+    return cast(AbstractContextManager[object], torch.inference_mode())
 
 
 def _parse_task_result(

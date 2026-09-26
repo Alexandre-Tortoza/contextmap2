@@ -82,6 +82,9 @@ class ClipConfig:
         crop_policy: ``"tight_box"`` or ``"context_box"``.
         context_padding_fraction: Fraction of region width/height added on each
             side for ``context_box``.
+        max_batch_size: Largest number of views sent to the model in one
+            inference call; a scene with more views is encoded in consecutive
+            batches whose rows keep the order of the views.
         payload_prefix: Artifact-relative feature directory.
         code_version: Adapter/view-policy version.
     """
@@ -97,6 +100,7 @@ class ClipConfig:
     l2_normalize: bool = True
     crop_policy: str = "tight_box"
     context_padding_fraction: float = 0.0
+    max_batch_size: int = 32
     payload_prefix: str = "features"
     code_version: str = "1"
 
@@ -119,6 +123,8 @@ class ClipConfig:
             raise ValueError("context_padding_fraction must be finite and non-negative")
         if self.crop_policy == "tight_box" and self.context_padding_fraction != 0.0:
             raise ValueError("context_padding_fraction must be zero for tight_box")
+        if self.max_batch_size <= 0:
+            raise ValueError("max_batch_size must be positive")
         if not self.payload_prefix:
             raise ValueError("payload_prefix must not be empty")
         prefix = Path(self.payload_prefix)
@@ -384,7 +390,14 @@ class HuggingFaceClipRuntime:
         self._torch_dtype: Any = None
 
     def encode(self, image: PreparedImage, views: Sequence[ClipView]) -> ClipNativeOutput:
-        """Decode exact crops and run only the CLIP image projection."""
+        """Decode exact crops and run only the CLIP image projection.
+
+        The views are encoded in consecutive batches of at most
+        ``config.max_batch_size``; the rows of the returned array keep the order
+        of ``views``.
+        """
+        import numpy as np
+
         self._ensure_loaded()
         if not views:
             raise ClipInferenceError("at least one ClipView is required")
@@ -409,21 +422,15 @@ class HuggingFaceClipRuntime:
                     )
                     for view in views
                 ]
-                pixel_values = preprocess_pixel_values(
-                    processor=self._processor,
-                    images=crops,
-                    width=self._config.input_width,
-                    height=self._config.input_height,
-                    resample=self._image_module.Resampling.BICUBIC,
-                ).to(
-                    device=self._config.device,
-                    dtype=self._torch_dtype,
-                )
-            with self._torch.inference_mode():
-                encoded = self._model.get_image_features(pixel_values=pixel_values)
-            if hasattr(encoded, "pooler_output"):
-                encoded = encoded.pooler_output
-            array = encoded.detach().to("cpu").numpy()
+            # Lotes limitados: o número de regiões da cena não pode definir sozinho a memória
+            # de uma inferência.
+            batch_size = self._config.max_batch_size
+            array = np.concatenate(
+                [
+                    self._encode_batch(crops[start : start + batch_size])
+                    for start in range(0, len(crops), batch_size)
+                ]
+            )
         except ClipInferenceError:
             raise
         except Exception as error:
@@ -434,6 +441,25 @@ class HuggingFaceClipRuntime:
             array=array,
             elapsed_seconds=time.perf_counter() - started_at,
         )
+
+    def _encode_batch(self, crops: Sequence[Any]) -> NDArray[Any]:
+        """Preprocess one batch of crops and return its projected embeddings on the CPU."""
+        pixel_values = preprocess_pixel_values(
+            processor=self._processor,
+            images=crops,
+            width=self._config.input_width,
+            height=self._config.input_height,
+            resample=self._image_module.Resampling.BICUBIC,
+        ).to(
+            device=self._config.device,
+            dtype=self._torch_dtype,
+        )
+        with self._torch.inference_mode():
+            encoded = self._model.get_image_features(pixel_values=pixel_values)
+        if hasattr(encoded, "pooler_output"):
+            encoded = encoded.pooler_output
+        array: NDArray[Any] = encoded.detach().to("cpu").numpy()
+        return array
 
     def _ensure_loaded(self) -> None:
         """Import SDKs, validate device, and load exact processor/model lazily."""
@@ -587,6 +613,7 @@ def _configuration_fingerprint(config: ClipConfig) -> str:
         "l2_normalize": config.l2_normalize,
         "crop_policy": config.crop_policy,
         "context_padding_fraction": config.context_padding_fraction,
+        "max_batch_size": config.max_batch_size,
         "preprocessing": "pillow_direct_bicubic_resize_processor_normalize_no_crop_v2",
         "payload_prefix": config.payload_prefix,
         "code_version": config.code_version,

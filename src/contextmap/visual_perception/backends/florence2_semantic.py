@@ -61,6 +61,7 @@ _PROMPT_NOT_CONSUMED_NOTICE = (
     "for the response contract but is not model input."
 )
 _PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
+_DEVICE_TYPES = frozenset({"cpu", "cuda", "mps"})
 
 
 class Florence2SemanticError(RuntimeError):
@@ -507,8 +508,16 @@ class HuggingFaceFlorence2SemanticRuntime:
             ) from error
         if config.precision not in _PRECISIONS:
             raise Florence2DeviceError(f"Florence-2 precision must be one of {sorted(_PRECISIONS)}")
-        if config.device.startswith("cuda") and not torch.cuda.is_available():
+        # O índice (cuda:1) continua permitido; o tipo segue o conjunto dos demais adapters.
+        device_type = config.device.split(":", 1)[0]
+        if device_type not in _DEVICE_TYPES:
+            raise Florence2DeviceError(
+                f"Florence-2 device type must be one of: cpu, cuda, mps; got {config.device!r}"
+            )
+        if device_type == "cuda" and not torch.cuda.is_available():
             raise Florence2DeviceError("configured CUDA device is unavailable")
+        if device_type == "mps" and not torch.backends.mps.is_available():
+            raise Florence2DeviceError("configured MPS device is unavailable")
         if config.device == "cpu" and config.precision == "float16":
             raise Florence2DeviceError("float16 Florence-2 inference is not supported on CPU")
         dtype = getattr(torch, config.precision)

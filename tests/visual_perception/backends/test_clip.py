@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -26,9 +28,11 @@ from contextmap.visual_perception import (
     execute_stage_graph,
     feature_id_for,
 )
+from contextmap.visual_perception.backends import clip as clip_module
 from contextmap.visual_perception.backends.clip import (
     ClipConfig,
     ClipDependencyError,
+    ClipExtraction,
     ClipInferenceError,
     ClipNativeOutput,
     ClipView,
@@ -371,6 +375,7 @@ def test_native_diagnostics_require_finite_elapsed_time(elapsed_seconds: float) 
         ("context_padding_fraction", float("nan")),
         ("context_padding_fraction", float("inf")),
         ("payload_prefix", ""),
+        ("max_batch_size", 0),
     ],
 )
 def test_invalid_config_is_rejected(field: str, value: object) -> None:
@@ -405,3 +410,154 @@ def test_missing_sdk_dependencies_are_explicit(
 
     with pytest.raises(ClipDependencyError, match="torch, transformers, and Pillow"):
         runtime.encode(_image(), ())
+
+
+class _SdkTensor:
+    """NumPy-backed stand-in for the torch tensors the runtime moves and detaches."""
+
+    def __init__(self, array: np.ndarray[Any, Any]) -> None:
+        self.array = array
+
+    def to(self, *args: object, **kwargs: object) -> _SdkTensor:
+        return self
+
+    def detach(self) -> _SdkTensor:
+        return self
+
+    def numpy(self) -> np.ndarray[Any, Any]:
+        return self.array
+
+
+class _Crop:
+    def __init__(self, box: tuple[int, int, int, int]) -> None:
+        self.box = box
+
+    def resize(self, size: tuple[int, int], resample: object) -> _Crop:
+        return self
+
+
+class _DecodedImage:
+    size = (100, 80)
+
+    def __enter__(self) -> _DecodedImage:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def convert(self, mode: str) -> _DecodedImage:
+        return self
+
+    def crop(self, box: tuple[int, int, int, int]) -> _Crop:
+        return _Crop(box)
+
+
+class _BoxProcessor:
+    """Turn each crop into its pixel box, so every embedding row identifies its view."""
+
+    def __call__(self, *, images: Sequence[_Crop], **kwargs: object) -> dict[str, _SdkTensor]:
+        return {"pixel_values": _SdkTensor(np.array([crop.box for crop in images], np.float32))}
+
+
+class _BatchRecordingModel:
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def to(self, device: str) -> _BatchRecordingModel:
+        return self
+
+    def eval(self) -> _BatchRecordingModel:
+        return self
+
+    def get_image_features(self, *, pixel_values: _SdkTensor) -> _SdkTensor:
+        self.batch_sizes.append(len(pixel_values.array))
+        return _SdkTensor(pixel_values.array + 1.0)
+
+
+def _install_fake_clip_sdk(monkeypatch: pytest.MonkeyPatch, model: _BatchRecordingModel) -> None:
+    sdks = {
+        "torch": SimpleNamespace(
+            float32="torch.float32",
+            float16="torch.float16",
+            inference_mode=nullcontext,
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        ),
+        "transformers": SimpleNamespace(
+            AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: _BoxProcessor()),
+            CLIPModel=SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        ),
+        "PIL.Image": SimpleNamespace(
+            open=lambda path: _DecodedImage(),
+            Resampling=SimpleNamespace(BICUBIC="bicubic"),
+        ),
+    }
+    monkeypatch.setattr(clip_module, "importlib", SimpleNamespace(import_module=sdks.__getitem__))
+
+
+def _clip_config(*, max_batch_size: int) -> ClipConfig:
+    return ClipConfig(
+        checkpoint="openai/clip-vit-base-patch32",
+        revision=_REVISION,
+        scope=FeatureScope.REGION,
+        max_batch_size=max_batch_size,
+    )
+
+
+def _encode_five_regions(
+    max_batch_size: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[ClipExtraction, list[int]]:
+    (tmp_path / "prepared").mkdir(exist_ok=True)
+    (tmp_path / "prepared" / "frame-0001.png").write_bytes(b"prepared image")
+    model = _BatchRecordingModel()
+    _install_fake_clip_sdk(monkeypatch, model)
+    backend = ClipVisualFeatureBackend(
+        config=_clip_config(max_batch_size=max_batch_size),
+        run_id=PerceptionRunId("run-0001"),
+        feature_stage_id="region_feature_extraction",
+        payload_sink=RecordingPayloadSink(),
+        prepared_image_root=tmp_path,
+    )
+    regions = tuple(
+        _region(f"region-{index}", x=10 * index, y=index, width=5 + index, height=4)
+        for index in range(5)
+    )
+    return backend.extract_visual(_image(), regions), model.batch_sizes
+
+
+def test_runtime_encodes_views_in_bounded_batches_without_changing_values_or_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    single, single_batches = _encode_five_regions(5, monkeypatch, tmp_path)
+    chunked, chunked_batches = _encode_five_regions(2, monkeypatch, tmp_path)
+
+    assert single_batches == [5]
+    assert chunked_batches == [2, 2, 1]
+    np.testing.assert_array_equal(chunked.array, single.array)
+    # Cada linha continua sendo a da sua view: o modelo fake devolve a caixa do crop mais um.
+    rows = np.array(
+        [
+            (box.x + 1, box.y + 1, box.x + box.width + 1, box.y + box.height + 1)
+            for box in (view.crop_box for view in chunked.views)
+        ],
+        dtype=np.float32,
+    )
+    expected = rows / np.linalg.norm(rows, axis=1, keepdims=True)
+    np.testing.assert_allclose(chunked.array, expected, rtol=1e-6)
+    assert [feature.region_id for feature in chunked.features] == [
+        RegionId(f"region-{index}") for index in range(5)
+    ]
+
+
+def test_max_batch_size_takes_part_in_the_configuration_fingerprint() -> None:
+    def fingerprint(max_batch_size: int) -> str | None:
+        backend = ClipVisualFeatureBackend(
+            config=_clip_config(max_batch_size=max_batch_size),
+            run_id=PerceptionRunId("run-0001"),
+            feature_stage_id="region_feature_extraction",
+            payload_sink=RecordingPayloadSink(),
+            runtime=FakeClipRuntime(np.ones((1, 2), dtype=np.float32)),
+        )
+        return backend.backend_provenance().configuration_fingerprint
+
+    assert fingerprint(8) != fingerprint(16)
