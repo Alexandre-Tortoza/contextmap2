@@ -83,6 +83,7 @@ from contextmap.runtime.pipeline import (
     read_plan_document,
     resolve_plan,
     run_plan,
+    with_source_identities,
 )
 from contextmap.runtime.reuse import FileArtifactStore, ReusePolicy
 from contextmap.runtime.runs import (
@@ -557,9 +558,13 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
         )
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
-    reuse = _reuse_policy(session)
     provider_overrides: list[str] = []
     executors = _executors_for(session, effective, provider_overrides)
+    reuse = _reuse_policy(session)
+    if reuse is not None:
+        # O dry-run não passa executores ao preflight; a fonte de cada estágio-fonte já vai na
+        # política para que a previsão e o preflight vejam a mesma chave que o run usaria.
+        reuse = with_source_identities(reuse, executors)
     if args.dry_run:
         return _dry_run(session, effective, plan, execution, resolved, reuse, executors)
     assert workspace is not None  # exigido acima

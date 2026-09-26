@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from contextmap.runtime._files import publish_text
 from contextmap.runtime.artifacts import ArtifactRef, artifact_directory
@@ -46,7 +46,7 @@ from contextmap.runtime.lifecycle import (
     FailureCategory,
     categorize_failure,
 )
-from contextmap.runtime.reuse import ReuseDecision, ReuseKey, ReusePolicy
+from contextmap.runtime.reuse import SOURCE_IDENTITY, ReuseDecision, ReuseKey, ReusePolicy
 
 if TYPE_CHECKING:
     from contextmap.runtime.runs import RunJournal, RunSummary
@@ -425,6 +425,21 @@ class StageExecutor(Protocol):
         ...
 
 
+@runtime_checkable
+class SourceStageExecutor(StageExecutor, Protocol):
+    """An executor that reads from outside the DAG and names what it reads.
+
+    A stage without upstream inputs has nothing in its reuse key but its configuration, so two
+    different sources ingested with the same configuration would share a key. The runner folds
+    :attr:`source_identity` into the key as the stage's ``source`` identity.
+    """
+
+    @property
+    def source_identity(self) -> str:
+        """Identity of what the stage reads from outside the DAG."""
+        ...
+
+
 @dataclass(frozen=True, kw_only=True)
 class StageRecord:
     """What one executed stage consumed and produced.
@@ -633,7 +648,9 @@ def preflight(
     With a reuse policy, a stage that will certainly be reused (its exact inputs are
     known and an identical, still valid artifact is indexed) needs neither an executor
     nor its optional modules and secrets: nothing of it will run. Its configuration must
-    still be complete. A forced stage that is not part of the execution is a problem.
+    still be complete. A forced stage that is not part of the execution is a problem, and so is
+    a stage without inputs whose source identity is unknown (see :class:`SourceStageExecutor`)
+    or contradicts its executor.
 
     Args:
         execution: The scoped execution.
@@ -648,6 +665,9 @@ def preflight(
         Every problem found, all at once.
     """
     problems = list(execution.problems)
+    if reuse is not None:
+        problems.extend(_contradicted_sources(reuse, executors))
+        reuse = with_source_identities(reuse, executors)
     predicted = {} if reuse is None else predict_reuse(execution, reuse)
     if reuse is not None:
         in_scope = {stage.stage_id for stage in execution.stages}
@@ -658,6 +678,7 @@ def preflight(
                     message=f"{stage_id!r} is not a stage of this execution",
                 )
             )
+        problems.extend(_undeclared_sources(execution, reuse))
     for stage in execution.stages:
         if not stage.available:
             problems.append(
@@ -693,7 +714,82 @@ def preflight(
     )
 
 
-def predict_reuse(execution: ExecutionPlan, reuse: ReusePolicy) -> dict[str, ReuseDecision]:
+def with_source_identities(
+    reuse: ReusePolicy, executors: Mapping[str, StageExecutor] | None
+) -> ReusePolicy:
+    """Return ``reuse`` with the source identity every source executor names folded in.
+
+    :func:`run_plan`, :func:`preflight` and :func:`predict_reuse` fold it themselves from the
+    executors they receive; a caller that checks or predicts without executors folds it first.
+
+    Args:
+        reuse: The reuse policy.
+        executors: The executors of the execution, by stage.
+
+    Returns:
+        The policy with ``identities[stage_id]["source"]`` set for every
+        :class:`SourceStageExecutor`. A source identity the policy already declares for a stage
+        is kept; preflight reports one that contradicts the stage's executor.
+    """
+    identities = {stage_id: dict(values) for stage_id, values in reuse.identities.items()}
+    for stage_id, executor in (executors or {}).items():
+        if isinstance(executor, SourceStageExecutor):
+            identities.setdefault(stage_id, {}).setdefault(
+                SOURCE_IDENTITY, executor.source_identity
+            )
+    return replace(reuse, identities=identities)
+
+
+def _contradicted_sources(
+    reuse: ReusePolicy, executors: Mapping[str, StageExecutor] | None
+) -> list[ConfigProblem]:
+    """Report every declared source identity that differs from what the stage's executor reads."""
+    problems = []
+    for stage_id, executor in sorted((executors or {}).items()):
+        declared = reuse.identities.get(stage_id, {}).get(SOURCE_IDENTITY)
+        if (
+            isinstance(executor, SourceStageExecutor)
+            and declared is not None
+            and declared != executor.source_identity
+        ):
+            problems.append(
+                ConfigProblem(
+                    path=f"reuse.identities.{stage_id}.{SOURCE_IDENTITY}",
+                    message=(
+                        f"the reuse policy declares source {declared!r} for {stage_id!r}, but its "
+                        f"executor reads {executor.source_identity!r}"
+                    ),
+                )
+            )
+    return problems
+
+
+def _undeclared_sources(execution: ExecutionPlan, reuse: ReusePolicy) -> list[ConfigProblem]:
+    """Report every stage without inputs whose reuse key would not name its source."""
+    return [
+        ConfigProblem(
+            path=f"reuse.identities.{stage.stage_id}.{SOURCE_IDENTITY}",
+            message=(
+                f"{stage.stage_id!r} reads its source from outside the DAG: reusing it needs its "
+                "source identity, from an executor that names it or declared in the reuse policy"
+            ),
+        )
+        for stage in execution.stages
+        if not stage.inputs and not _names_its_source(stage, reuse)
+    ]
+
+
+def _names_its_source(stage: PlannedStage, reuse: ReusePolicy) -> bool:
+    """Tell whether a stage without inputs has a source identity in its reuse key."""
+    return SOURCE_IDENTITY in reuse.identities.get(stage.stage_id, {})
+
+
+def predict_reuse(
+    execution: ExecutionPlan,
+    reuse: ReusePolicy,
+    *,
+    executors: Mapping[str, StageExecutor] | None = None,
+) -> dict[str, ReuseDecision]:
     """Predict, without running anything, which stages would be reused.
 
     Stages are visited in dependency order and looked up in the index. The prediction is
@@ -705,10 +801,13 @@ def predict_reuse(execution: ExecutionPlan, reuse: ReusePolicy) -> dict[str, Reu
     Args:
         execution: The scoped execution.
         reuse: The reuse policy.
+        executors: The executors that would run; a source executor names its source for the
+            stage's key (see :class:`SourceStageExecutor`).
 
     Returns:
         A decision per stage of the execution.
     """
+    reuse = with_source_identities(reuse, executors)
     known: dict[str, tuple[ArtifactRef, ...] | None] = dict(execution.reused)
     decisions: dict[str, ReuseDecision] = {}
     for stage in execution.stages:
@@ -745,6 +844,9 @@ def _decide(
         The decision, the artifact to reuse (or ``None``) and the reuse key (or ``None``
         when the inputs cannot be keyed).
     """
+    if not stage.inputs and not _names_its_source(stage, reuse):
+        reason = "the stage reads its source from outside the DAG and no source identity names it"
+        return ReuseDecision(kind="recomputed", reason=reason), None, None
     hashes: dict[str, tuple[str, str]] = {}
     missing = []
     for name, refs in sorted(inputs.items()):
@@ -845,6 +947,8 @@ def run_plan(
     """
     if resume_from is not None and reuse is None:
         raise ValueError("resuming a run needs a reuse policy: completed stages are reused")
+    if reuse is not None:
+        reuse = with_source_identities(reuse, executors)
     sinks = [sink for sink in (journal, events) if sink is not None]
     emitter = EventEmitter(sinks, clock=clock, redact=redact)
     emitter.emit(

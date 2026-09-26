@@ -19,7 +19,7 @@ import pytest
 from runtime_documents import selected_document
 from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from runtime_ingestion import factory, request
-from runtime_worlds import World, world_executors
+from runtime_worlds import World, source_identities, world_executors
 
 from contextmap.runtime import (
     ArtifactRef,
@@ -695,9 +695,11 @@ def test_preflight_predicts_reuse_without_running_anything(tmp_path: Path) -> No
         module_available=_ready,
         environ={},
     )
-    bare_report = bare.preflight(
-        config, targets=TARGET, reuse=bare.reuse_policy(tmp_path / "index", code_identity="code-1")
+    # Sem executor, a fonte do estágio de ingestion precisa ser declarada na política.
+    bare_policy = bare.reuse_policy(
+        tmp_path / "index", code_identity="code-1", identities=source_identities("ingestion")
     )
+    bare_report = bare.preflight(config, targets=TARGET, reuse=bare_policy)
     assert bare_report.ok
     assert bare_report.missing_executors == ()
 

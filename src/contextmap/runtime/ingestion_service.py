@@ -984,6 +984,18 @@ class IngestionStageExecutor:
         self._cancellation = cancellation
         self._redact = redact
 
+    @property
+    def source_identity(self) -> str:
+        """Return the identity of what this executor ingests from outside the DAG.
+
+        A source stage has no upstream artifact, so the stage identity and the reuse key alone
+        would not tell two recordings apart. This is :attr:`IngestionRequest.identity` (source,
+        topics, window, synchronization, timestamp policy); the published ``artifact_id`` folds
+        it in, and the runner folds it into the stage's reuse key
+        (:class:`~contextmap.runtime.pipeline.SourceStageExecutor`).
+        """
+        return self._request.identity
+
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Ingest and return the published sequence artifact.
 
@@ -1002,7 +1014,7 @@ class IngestionStageExecutor:
             dataclasses.replace(
                 self._request,
                 output_dir=str(request.output_dir),
-                artifact_id=request.identity(),
+                artifact_id=_source_stage_identity(request, self.source_identity),
             ),
             event_sink=self._event_sink,
             cancellation=self._cancellation,
@@ -1024,6 +1036,12 @@ class IngestionStageExecutor:
 
 
 # --- helpers ----------------------------------------------------------------------------
+
+
+def _source_stage_identity(request: StageRequest, source_identity: str) -> str:
+    """Combine the stage's execution identity with the identity of the source it ingests."""
+    combined = f"{request.identity()}|source={source_identity}"
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:32]
 
 
 def _problem(path: str, message: str) -> ConfigProblem:

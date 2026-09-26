@@ -15,10 +15,21 @@ O reuso **nunca** usa nome de diretório nem nome legível de run como chave, e 
 | entradas | o tipo e o **hash de conteúdo** de cada artifact de entrada (`ArtifactRef.content_hash`), não seu nome nem seu id de run |
 | código e políticas | `ReusePolicy.code_identity`, **sem default**: reusar entre versões de código é uma decisão |
 | identidades extras | `ReusePolicy.identities[estágio]`: calibração, mapa, seleção de observações, transformações opcionais |
+| fonte (estágio sem entradas) | `identities[estágio]["source"]`: o que o estágio lê de fora do DAG (ver abaixo) |
 
 `ReuseKey.digest` é o SHA-256 da forma canônica. Como a chave usa o **conteúdo** das entradas, dois artifacts com o mesmo hash de conteúdo são intercambiáveis, e um estágio recomputado que reproduz o mesmo conteúdo não invalida seus dependentes.
 
 O `content_hash` é declarado pelo executor que produz o artifact (por exemplo, o digest do inventário do manifest). Um artifact sem ele pode ser consumido, mas nunca reutilizado nem indexado: sem identidade de conteúdo, a chave dos dependentes não pode ser construída e eles são recomputados, com o motivo registrado. O `ArtifactRef` também carrega o `location` do artifact (relativo ao workspace): quando um estágio é reutilizado, o run novo guarda a **referência** ao diretório do run que o gravou, nunca uma cópia, e um estágio a jusante o abre por `StageRequest.directory_of`.
+
+### Estágio-fonte
+
+Um estágio sem entradas (`ingestion`, `pose_ingestion`) lê de fora do DAG: sua chave não teria nada além da configuração, e dois bags diferentes ingeridos com a mesma configuração compartilhariam a chave, reutilizando em silêncio o artifact do outro. Por isso a chave de um estágio-fonte **exige** a identidade da fonte, em `identities[estágio]["source"]`:
+
+- um executor que lê a fonte a nomeia em `source_identity` (protocolo `SourceStageExecutor`); `IngestionStageExecutor` devolve `IngestionRequest.identity`. `run_plan()`, `preflight()` e `predict_reuse(..., executors=...)` incorporam essa identidade à política; a CLI faz o mesmo antes do dry-run (`with_source_identities`);
+- sem executor (um run totalmente reutilizado), a política declara a fonte explicitamente;
+- sob reuso, um estágio-fonte sem identidade de fonte é **problema de preflight** (`reuse.identities.<estágio>.source`), e uma identidade declarada que contradiz a do executor também. Se o preflight for contornado, a decisão é `recomputed`, sem chave, com o motivo registrado.
+
+O `artifact_id` publicado pelo `IngestionStageExecutor` combina a identidade do estágio com a da fonte, então fontes distintas nunca publicam o mesmo id.
 
 ## Índice
 
@@ -54,7 +65,7 @@ Um DAG alternativo continua identificável (seu plano tem outro digest) e compar
 
 `predict_reuse()` diz, sem executar nada, o que seria reutilizado. A previsão é **conservadora**: um estágio a jusante de outro que será recomputado aparece como recomputado (suas entradas ainda não existem), embora a execução possa reutilizá-lo se a recomputação reproduzir o mesmo conteúdo; o registro da execução é a autoridade.
 
-No `preflight()`, um estágio que **certamente** será reutilizado dispensa executor, módulos opcionais e segredos: nada dele vai rodar (a configuração continua precisando estar completa). Forçar um estágio fora da execução é um problema.
+No `preflight()`, um estágio que **certamente** será reutilizado dispensa executor, módulos opcionais e segredos: nada dele vai rodar (a configuração continua precisando estar completa). Forçar um estágio fora da execução é um problema, assim como um estágio-fonte sem identidade de fonte (ver [Estágio-fonte](#estágio-fonte)).
 
 ## Recomputação forçada
 
