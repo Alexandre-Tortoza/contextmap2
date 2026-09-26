@@ -55,7 +55,18 @@ Falha cedo, com mensagem acionável, quando: uma observação se repete, ou pert
 
 ## Custo
 
-A sobreposição usa um conjunto de bits por observação sobre a geometria que pelo menos duas observações referenciam. O custo é quadrático no número de observações e linear na geometria compartilhada por par. Medição ad hoc (não versionada): 400 observações de 2 000 pontos sobre um mapa de 100 000 pontos, ~1 s.
+A sobreposição usa um conjunto de bits por observação sobre a geometria que pelo menos duas observações referenciam. Os pares candidatos vêm de um índice invertido dessa geometria: só observações que compartilham ao menos um elemento são comparadas, e nenhum par disjunto é avaliado. Os elementos vistos pelo mesmo conjunto de observações formam uma classe com uma faixa contígua de bits, de modo que montar o conjunto de bits e os parceiros de uma observação custa por classe, não por elemento. O custo segue o tamanho da entrada mais os pares que de fato se intersectam; só é quadrático quando toda observação sobrepõe toda outra, e aí esses pares são trabalho real. O resultado é o mesmo da comparação de todos os pares (teste de equivalência com seeds fixas).
+
+Medição ad hoc (não versionada, mesmo container, antes → depois, componentes idênticas):
+
+| Cenário | Antes | Depois |
+| --- | --- | --- |
+| 400 observações × 2 000 pontos em faixas, mapa de 100 000 | ~0,95 s | ~0,5 s |
+| 2 000 observações × 200 pontos, quase todas disjuntas | ~2,6 s | ~0,25 s |
+| 40 vistas × 5 regiões × 1 000 pontos (clusters densos) | ~0,07 s | ~0,03 s |
+| 400 observações × 2 000 pontos **aleatórios** de 100 000 (todo par se intersecta) | ~1,4 s | ~1,6 s |
+
+O último é o caso adversarial: todo par se intersecta, então o índice não descarta nada, e cada elemento tem seu próprio conjunto de observações, então as classes não agrupam. Regiões reais são espacialmente coerentes e caem nos primeiros cenários.
 
 ## O que não faz
 

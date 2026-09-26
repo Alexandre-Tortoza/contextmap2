@@ -32,8 +32,10 @@ The baseline policy, ``geometry-jaccard-support-v1``:
   so identical input and configuration always rebuild identical supports.
 
 Pairwise overlap uses one bit set per observation over the geometry that at least two
-observations reference, so the cost is quadratic in the number of observations and
-linear in the number of shared geometry elements per pair.
+observations reference. Candidate pairs come from an inverted index of that shared geometry,
+so only observations that share at least one element are compared: the cost follows the
+input size plus the pairs that actually intersect, and is quadratic only when every
+observation overlaps every other, where those pairs are real work.
 """
 
 from __future__ import annotations
@@ -41,7 +43,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Mapping
+from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -253,21 +256,31 @@ def _overlap_components(
 ) -> list[list[int]]:
     """Link observations by Jaccard overlap and return the components, by first member."""
     counts = [len(item.geometry_support) for item in observations]
-    references = [
-        {reference.geometry_id for reference in item.geometry_support} for item in observations
-    ]
-    occurrences: dict[GeometryId, int] = {}
-    for geometry_ids in references:
-        for geometry_id in geometry_ids:
-            occurrences[geometry_id] = occurrences.get(geometry_id, 0) + 1
-    # Só a geometria vista por mais de uma observação pode contribuir para uma interseção.
-    shared = {
-        geometry_id: bit
-        for bit, geometry_id in enumerate(
-            sorted(geometry_id for geometry_id, seen in occurrences.items() if seen > 1)
-        )
-    }
-    masks = [_bit_set(geometry_ids, shared) for geometry_ids in references]
+    # Índice invertido: quem vê cada elemento (geometry_support já é único por observação).
+    holders: defaultdict[GeometryId, list[int]] = defaultdict(list)
+    for index, item in enumerate(observations):
+        for reference in item.geometry_support:
+            holders[reference.geometry_id].append(index)
+    # Só a geometria vista por mais de uma observação pode contribuir para uma interseção. Os
+    # elementos vistos pelo mesmo conjunto de observações formam uma classe, e cada classe ocupa
+    # uma faixa contígua de bits: o bit set de uma observação é o OR das faixas das suas classes,
+    # e seus parceiros, o OR dos conjuntos de observações dessas classes. Um bit por elemento,
+    # como antes, então a interseção de um par é a mesma.
+    class_sizes: dict[tuple[int, ...], int] = {}
+    for seen_by in holders.values():
+        if len(seen_by) > 1:
+            key = tuple(seen_by)
+            class_sizes[key] = class_sizes.get(key, 0) + 1
+    spans: list[list[tuple[int, int]]] = [[] for _ in observations]
+    partners = [0] * len(observations)
+    width = 0
+    for members_of_class, size in class_sizes.items():
+        class_bits = _index_bit_set(members_of_class)
+        for index in members_of_class:
+            spans[index].append((width, size))
+            partners[index] |= class_bits
+        width += size
+    masks = [_span_bit_set(item, width) for item in spans]
 
     parent = list(range(len(observations)))
 
@@ -278,12 +291,9 @@ def _overlap_components(
         return index
 
     for left in range(len(observations)):
-        for right in range(left + 1, len(observations)):
-            intersection = (masks[left] & masks[right]).bit_count()
-            if intersection == 0:
-                continue
-            union = counts[left] + counts[right] - intersection
-            if intersection / union >= min_overlap:
+        # Só os pares que compartilham geometria podem se ligar: nenhum par disjunto é avaliado.
+        for right in _set_bits(partners[left] >> (left + 1), offset=left + 1):
+            if _overlap(masks[left], masks[right], counts[left], counts[right]) >= min_overlap:
                 root_left, root_right = find(left), find(right)
                 if root_left != root_right:
                     # A menor posição é a raiz: a primeira observação identifica a componente.
@@ -295,13 +305,43 @@ def _overlap_components(
     return [members[root] for root in sorted(members)]
 
 
-def _bit_set(geometry_ids: set[GeometryId], bit_of: Mapping[GeometryId, int]) -> int:
-    buffer = bytearray((len(bit_of) + 7) // 8)
-    for geometry_id in geometry_ids:
-        bit = bit_of.get(geometry_id)
-        if bit is not None:
-            buffer[bit >> 3] |= 1 << (bit & 7)
+def _overlap(left_mask: int, right_mask: int, left_count: int, right_count: int) -> float:
+    """Jaccard index of two observations, from their shared-geometry bit sets and sizes."""
+    intersection = (left_mask & right_mask).bit_count()
+    return intersection / (left_count + right_count - intersection)
+
+
+def _index_bit_set(indexes: tuple[int, ...]) -> int:
+    """Bit set with one bit per observation position in ``indexes``."""
+    buffer = bytearray((max(indexes) >> 3) + 1)
+    for index in indexes:
+        buffer[index >> 3] |= 1 << (index & 7)
     return int.from_bytes(buffer, "little")
+
+
+def _span_bit_set(spans: list[tuple[int, int]], width: int) -> int:
+    """Bit set of ``width`` bits with ``[start, start + size)`` set for every span, in one pass."""
+    buffer = bytearray((width + 7) >> 3)
+    for start, size in spans:
+        if size == 1:
+            buffer[start >> 3] |= 1 << (start & 7)
+            continue
+        end = start + size
+        # Bits soltos até o próximo byte inteiro, bytes inteiros no meio, bits soltos no fim.
+        head = min(end, (start + 7) & ~7)
+        tail = max(head, end & ~7)
+        for bit in (*range(start, head), *range(tail, end)):
+            buffer[bit >> 3] |= 1 << (bit & 7)
+        buffer[head >> 3 : tail >> 3] = b"\xff" * ((tail - head) >> 3)
+    return int.from_bytes(buffer, "little")
+
+
+def _set_bits(bits: int, *, offset: int) -> Iterator[int]:
+    """Yield ``offset`` plus the position of every set bit of ``bits``, in increasing order."""
+    while bits:
+        lowest = bits & -bits
+        yield offset + lowest.bit_length() - 1
+        bits ^= lowest
 
 
 class _CoordinateResolver:
