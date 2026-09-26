@@ -45,6 +45,7 @@ Vão para `FrameMembership.skipped`, com o motivo, em vez de sumirem:
 | --- | --- |
 | `REJECTED` | o candidato foi rejeitado pela normalização, então não está no conjunto canônico congelado |
 | `NO_INLINE_MASK` | a região não tem nenhuma máscara resolvível: só caixa, ou a máscara está por referência sem um `mask_loader` capaz de resolvê-la |
+| `EMPTY_MASK` | a região aceita tem máscara sem nenhum pixel de foreground: sem footprint, as estatísticas por pixel (cobertura, densidade de suporte) não têm definição, e `observation-quality-v2` exige `mask_area_px >= 1` |
 
 ## Espaço de coordenadas
 
