@@ -14,6 +14,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ..discovery import (
+    AuditedRegions,
     BackendDiagnostics,
     DiscoveryInput,
     DiscoveryOutput,
@@ -238,6 +239,10 @@ class Sam3RegionDiscovery:
 
     def discover(self, image: PreparedImage) -> tuple[Region2D, ...]:
         """Discover and normalize canonical regions through the public port."""
+        return self.discover_audited(image).regions
+
+    def discover_audited(self, image: PreparedImage) -> AuditedRegions:
+        """Discover canonical regions together with the audit of every decision behind them."""
         return discover_canonical_regions(
             image,
             self,

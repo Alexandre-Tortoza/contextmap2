@@ -154,6 +154,7 @@ from contextmap.state_estimation import (
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
     ArtifactReference,
+    AuditedRegionDiscovery,
     BackendProvenance,
     PerceptionRun,
     PerceptionRunId,
@@ -161,7 +162,6 @@ from contextmap.visual_perception import (
     PerceptionRunWriter,
     PreparedImage,
     Region2D,
-    RegionDiscovery,
     RegionId,
     SceneContext,
     SemanticClaim,
@@ -723,6 +723,49 @@ class _DeferredFeaturePayloadSink:
         self._writer.add_feature_payload(feature, source_observation_id, array)  # type: ignore[arg-type]
 
 
+class _AuditPublishingRegionDiscovery:
+    """Serves the plain ``RegionDiscovery`` port to the stage graph and publishes each audit.
+
+    ``CANONICAL_PRESET_V1``'s ``region_discovery`` stage calls ``discover()`` and hands its regions
+    to the stages that depend on them. This asks the composed backend for
+    ``discover_audited()`` instead, gives the frame's
+    :class:`~contextmap.visual_perception.RegionDiscoveryAudit` to the writer and returns exactly
+    the regions ``discover()`` would have. What the audit contains is decided in
+    :mod:`contextmap.visual_perception`; this only routes it, so rejected candidates and merge
+    decisions reach the artifact instead of dying with the stage output.
+    """
+
+    def __init__(self, discovery: AuditedRegionDiscovery) -> None:
+        """Wrap the composed backend; nothing is published until :meth:`bind`."""
+        self._discovery = discovery
+        self._writer: PerceptionRunWriter | None = None
+
+    def bind(self, writer: PerceptionRunWriter) -> None:
+        """Bind every subsequent audit to the real writer.
+
+        Same ordering cycle as :class:`_DeferredFeaturePayloadSink`: this has to exist before
+        ``resolve_pipeline()`` builds the stage graph, but the writer needs that graph's
+        ``configuration_digest``. Binding happens before any image is processed.
+        """
+        self._writer = writer
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Pass the wrapped backend's provenance through: the configuration digest is unchanged."""
+        return self._discovery.backend_provenance()
+
+    def discover(self, image: PreparedImage) -> tuple[Region2D, ...]:
+        """Discover one frame's regions and hand its audit to the writer before returning them.
+
+        Raises:
+            ExecutorError: If called before :meth:`bind`.
+        """
+        if self._writer is None:
+            raise ExecutorError("region discovery used before bind(): no writer for its audit")
+        audited = self._discovery.discover_audited(image)
+        self._writer.add_region_discovery_audit(audited.audit)
+        return audited.regions
+
+
 class _LegacySemanticInterpreterBridge:
     """Adapts a real ``SemanticInterpreter`` (``interpret()``) to the pipeline's legacy shape.
 
@@ -1026,7 +1069,8 @@ class VisualPerceptionExecutor:
     The executor only materializes decodable images, wires the run-scoped
     feature extractors (including a ``mask_source`` for a mask-conditioned region-features
     backend such as AlphaCLIP, see ``_RegionInlineMaskSource``), loops over observations and
-    hands results to ``PerceptionRunWriter``.
+    hands results to ``PerceptionRunWriter``, together with each frame's region discovery
+    audit (see ``_AuditPublishingRegionDiscovery``).
 
     A backend that does not (yet) satisfy the canonical preset's stage
     shape — for example a ``SemanticInterpreter`` that only implements the
@@ -1044,12 +1088,23 @@ class VisualPerceptionExecutor:
     def __init__(
         self,
         *,
-        region_discovery: RegionDiscovery,
+        region_discovery: AuditedRegionDiscovery,
         dense_features: FeatureFactory,
         region_features: FeatureFactory,
         semantic_interpreter: SemanticInterpreter,
     ) -> None:
-        """Bind the executor to the composed backends of the canonical preset."""
+        """Bind the executor to the composed backends of the canonical preset.
+
+        Raises:
+            TypeError: If ``region_discovery`` cannot report the audit of its regions
+                (``discover_audited``): the run would silently lose every rejection and merge.
+        """
+        if not isinstance(region_discovery, AuditedRegionDiscovery):
+            raise TypeError(
+                "the canonical perception path needs a region discovery backend that implements "
+                f"AuditedRegionDiscovery.discover_audited(); {type(region_discovery).__name__} "
+                "only returns regions, so its rejections and merges could not be persisted"
+            )
         self._region_discovery = region_discovery
         self._dense_features = dense_features
         self._region_features = region_features
@@ -1101,10 +1156,11 @@ class VisualPerceptionExecutor:
             semantic_bridge = _LegacySemanticInterpreterBridge(
                 interpreter=self._semantic_interpreter, run_id=run_id, view_root=scratch
             )
+            region_discovery = _AuditPublishingRegionDiscovery(self._region_discovery)
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={
-                    "region_discovery": lambda _parameters: self._region_discovery,
+                    "region_discovery": lambda _parameters: region_discovery,
                     "dense_feature_extraction": (
                         lambda _parameters: self._dense_features(dense_scope)
                     ),
@@ -1134,6 +1190,7 @@ class VisualPerceptionExecutor:
             )
             payload_sink.bind(writer)
             semantic_bridge.bind(writer)
+            region_discovery.bind(writer)
 
             for image in images():
                 prepared = _materialize_prepared_image(image, scratch)

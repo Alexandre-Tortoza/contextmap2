@@ -170,8 +170,10 @@ class Region2D:
         region_kind: Free-form category hint from the producing backend,
             e.g. ``"object"``, ``"surface"``. ``None`` when unclassified.
         is_accepted: Whether this region survived normalization/merge and
-            belongs to the frozen canonical set. A rejected candidate can
-            still be recorded, with ``is_accepted=False``, for audit.
+            belongs to the frozen canonical set. No production discovery
+            backend emits ``is_accepted=False``: the canonical path records
+            each rejected candidate as a ``RejectedRegionCandidate`` in the
+            frame's ``RegionDiscoveryAudit``, persisted in the perception run.
         rejection_reason: Human-readable reason; set only when
             ``is_accepted`` is ``False``.
     """

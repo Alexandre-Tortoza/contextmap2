@@ -17,11 +17,13 @@ flowchart LR
     NORM --> FREEZE["Geometry Freeze"]
     FREEZE --> REG["Region2D[]"]
     REG --> VP["PerceptionResult"]
-    CAND --> AUD["Diagnostics / audit"]
+    PASS --> AUD["RegionDiscoveryAudit<br/>passes, rejeições, merges"]
     NORM --> AUD
+    AUD --> PRA["PerceptionRunArtifact<br/>region-discovery-audit.jsonl"]
+    VP --> PRA
 ```
 
-O port consumido pelo Visual Perception Core é `RegionDiscovery.discover(PreparedImage) -> Sequence[Region2D]`. Passes, candidatos, rejeições, diagnostics e avaliação existem para tornar a produção dessas regiões verificável sem transformar uma proposta de frame em verdade persistente do mapa.
+O port consumido pelo Visual Perception Core é `RegionDiscovery.discover(PreparedImage) -> Sequence[Region2D]`. Passes, candidatos, rejeições, diagnostics e avaliação existem para tornar a produção dessas regiões verificável sem transformar uma proposta de frame em verdade persistente do mapa. O caminho canônico do runtime usa `AuditedRegionDiscovery.discover_audited(PreparedImage) -> AuditedRegions`, que devolve as mesmas regiões junto com a `RegionDiscoveryAudit` do frame; essa auditoria é gravada no `PerceptionRunArtifact` (ver [Evidência persistida](#evidência-persistida-a-auditoria-de-cada-frame)).
 
 ## Contratos canônicos
 
@@ -57,7 +59,10 @@ físico. Contributor IDs e provenance de geometry freeze estendem esse contrato 
 identidade não pode ser usada como entity ID do mapa.
 
 `RejectedRegionCandidate` registra uma rejeição com motivo legível por máquina, detalhe e pass de
-origem. Rejeições e propostas incorporadas por merge permanecem disponíveis para auditoria.
+origem. Rejeições e propostas incorporadas por merge permanecem disponíveis para auditoria: a
+`RegionDiscoveryAudit` de cada frame as leva até o `PerceptionRunArtifact`. Nenhum backend de
+produção devolve uma `Region2D` com `is_accepted=False`; o campo continua no contrato, mas a
+rejeição do caminho canônico é sempre uma `RejectedRegionCandidate` da auditoria.
 
 ## Fronteiras de contrato
 
@@ -79,7 +84,9 @@ flowchart TB
     BP --> NR
 ```
 
-`PreparedImage`, `Region2D` e `RegionDiscovery` possuem uma única definição canônica em Visual Perception Core. `DiscoveryInput`, `DiscoveryOutput`, `RegionCandidate`, `RejectedRegionCandidate` e os tipos de passes são contratos adapter-facing e de auditoria exportados pelo módulo, mas não substituem `Region2D` como evidência consumida pelas capabilities downstream.
+`PreparedImage`, `Region2D` e `RegionDiscovery` possuem uma única definição canônica em Visual Perception Core. `DiscoveryInput`, `DiscoveryOutput`, `RegionCandidate`, `RejectedRegionCandidate`, `RegionDiscoveryAudit` e os tipos de passes são contratos adapter-facing e de auditoria exportados pelo módulo, mas não substituem `Region2D` como evidência consumida pelas capabilities downstream.
+
+`AuditedRegionDiscovery` estende `RegionDiscovery` com `discover_audited()` e é o port que o executor de percepção do runtime exige. O port `RegionDiscovery` não muda: quem só precisa de regiões continua dependendo dele, e os três backends implementam os dois, com `discover()` devolvendo exatamente as regiões de `discover_audited()`.
 
 Uma `RegionCandidate` é evidência de proposta antes da consolidação. Ela preserva run/result, observação física, dimensões da imagem, provenance do proposal, score nativo e geometria materializada. Uma `Region2D` é a geometria canônica após validação, merge e freeze; ainda é evidência local ao `PerceptionResult`, nunca uma entidade 3D persistente.
 
@@ -121,12 +128,12 @@ descobrir uma região pode aparecer na provenance, mas não cria automaticamente
 ```text
 visual_perception/
 ├── models.py                 # PreparedImage, Region2D, BackendProvenance
-├── ports.py                  # RegionDiscovery
+├── ports.py                  # RegionDiscovery, AuditedRegionDiscovery
 ├── image_preparation.py      # plano auditável de preparação
 ├── region_models.py          # RegionCandidate e geometria de proposal
-├── discovery.py              # passes, tiling, remapeamento e adapter boundary
+├── discovery.py              # passes, tiling, remapeamento, adapter boundary e auditoria
 ├── normalization.py          # filtros, merge e geometry freeze
-├── diagnostics.py            # outputs e debug do estágio
+├── run_artifact.py           # persistência da auditoria no PerceptionRunArtifact
 └── backends/
     ├── sam2.py
     ├── sam3.py
@@ -339,7 +346,7 @@ flowchart TD
     DUP -. duplicata incorporada .-> REJ
 ```
 
-Rejeições permanecem evidência auditável. Um merge não apaga a proposta incorporada: a região final mantém contributor IDs e `discovery_provenance`, enquanto a decisão de merge e a rejeição correspondente explicam o que ocorreu.
+Rejeições permanecem evidência auditável, e não só durante a execução: a `RegionDiscoveryAudit` de cada frame é gravada no `PerceptionRunArtifact` (ver [Evidência persistida](#evidência-persistida-a-auditoria-de-cada-frame)). Um merge não apaga a proposta incorporada: a região final mantém contributor IDs e `discovery_provenance`, enquanto a decisão de merge e a rejeição correspondente explicam o que ocorreu.
 
 A chamada recebe o `BackendProvenance` exato reportado pelo adapter e valida sua consistência com
 as propostas. O mesmo value object acompanha cada `Region2D`; provider, model, versão e fingerprint
@@ -376,41 +383,94 @@ acompanha o resultado e muda quando a política muda. Máscaras inline são aval
 materializada, mesmo quando existe bounding box, evitando ignorar silenciosamente a máscara.
 Constraints só são aplicadas quando a `PreparedImage` as declara explicitamente.
 
-## Evidência persistida e diagnostics
+## Evidência persistida: a auditoria de cada frame
 
-`RegionDiscoveryEvidenceWriter` finaliza atomicamente o diretório de estágio fornecido pelo chamador e recusa sobrescrever
-um resultado já finalizado. O nome físico do diretório pertence à composição do run, não ao contrato do writer. `outputs/regions.jsonl`, `outputs/metrics.json` e `manifest.json` são
-contratuais. O manifest registra schema, backend, digest da política, nível de debug e hash de cada
-payload. Consumidores downstream não leem `debug/`.
+`discover_canonical_regions()` devolve `AuditedRegions`: as regiões canônicas e a
+`RegionDiscoveryAudit` do frame, montada a partir do `DiscoveryRunResult` e do
+`NormalizationResult` reais da execução, sem reconstrução. A auditoria é a evidência por trás das
+regiões, não as regiões: as aceitas continuam no `PerceptionResult` e nomeiam seus contribuintes em
+`contributor_candidate_ids`, com os mesmos IDs de candidato que as rejeições e as decisões de merge
+usam, então resultado e auditoria se reconciliam.
 
-Os níveis são:
+O executor de percepção do runtime entrega a auditoria de cada frame ao `PerceptionRunWriter`, que a
+grava na tabela contratual `outputs/region-discovery-audit.jsonl` do próprio `PerceptionRunArtifact`
+(schema `0.6.0`), inventariada no manifest com tamanho e SHA-256. Não existe mais um artifact de
+estágio paralelo: a auditoria herda a identidade, a escrita atômica e a integridade do run. Um
+registro por frame:
 
-- `none`: somente regiões, métricas e manifest;
-- `standard`: prepared-image reference, configuração efetiva, passes/timings, candidates,
-  accepted/rejected, merge decisions e overlays SVG;
-- `full`: conteúdo standard mais `region.json` e máscara PBM por região inline.
+```json
+{
+  "source_observation_id": "frame-0000",
+  "backend": {"backend_id": "sam2", "capability": "region_discovery", "provider": "facebook",
+              "model": "facebook/sam2-hiera-large", "version": "2.1",
+              "configuration_fingerprint": "sha256:..."},
+  "passes": [
+    {"pass_id": "full-frame", "kind": "full_frame",
+     "window": {"x_min": 0, "y_min": 0, "x_max": 640, "y_max": 480}, "scale": 1.0,
+     "input_dimensions": [640, 480], "input_to_prepared_scale": [1.0, 1.0],
+     "diagnostics": {"duration_ms": 812.4, "proposal_count": 37, "warnings": [],
+                     "metadata": [{"name": "raw_proposal_count", "value": 41}]}}
+  ],
+  "pass_rejections": [],
+  "normalization_config_digest": "sha256:...",
+  "normalization_rejections": [
+    {"candidate_id": "full-frame/p-2", "reason": "merged_duplicate",
+     "detail": "merged into full-frame/p-1", "discovery_pass_id": "full-frame"}
+  ],
+  "merge_decisions": [
+    {"representative_candidate_id": "full-frame/p-1", "merged_candidate_id": "full-frame/p-2",
+     "kind": "iou_duplicate", "iou": 0.93, "containment_fraction": 0.97}
+  ]
+}
+```
 
-Os overlays usam IDs canônicos e coordenadas da imagem preparada. O formato vetorial mantém a
-inspeção disponível sem introduzir uma biblioteca de imagem no domínio. Métricas preservam counts,
-motivos de rejeição, distribuição de área, merge ratio, duração por pass, warnings e memória quando
-o runtime a reporta.
+- `passes` traz cada pass apresentado ao backend, na ordem de execução, com os diagnostics do
+  backend naquele pass (duração, contagem, warnings e metadata nativa, como `raw_proposal_count`).
+- `pass_rejections` são as rejeições das políticas de pass (budget por pass, borda interna de tile),
+  antes da normalização; `normalization_rejections` são as da normalização, incluindo cada
+  `merged_duplicate`, na ordem em que foram decididas. As duas listas ficam separadas porque o mesmo
+  motivo `region_budget_exceeded` existe nos dois níveis (budget por pass e `maximum_regions`).
+- `merge_decisions` encadeia cada grupo até o representante final, como descrito acima.
+- `normalization_config_digest` identifica a `NormalizationConfig` efetiva do frame. Ele fica
+  auditável por frame, mas hoje não entra no `configuration_digest` do manifest nem na identidade do
+  run.
+- `backend` é a `BackendProvenance` exata do backend; sem ela, um frame sem nenhuma região não
+  diria qual backend e configuração o analisaram.
 
-### Fluxo de persistência
+Um frame com zero candidatos tem registro (passes e diagnostics, listas vazias). Um frame cuja
+descoberta falhou tem resultado, mas não tem registro: a falha fica em `metrics/stage-timings.jsonl`.
+Ficam fora da tabela a geometria e as máscaras dos candidatos rejeitados (a rejeição guarda
+identidade, motivo, detalhe e pass) e a geometria das regiões aceitas, que já está em
+`outputs/results.jsonl` e `outputs/masks/`.
+
+A leitura usa só o diretório do run: `PerceptionRunReader.records_region_discovery_audit()`,
+`iter_region_discovery_audits()` (em fluxo, um registro por vez) e
+`region_discovery_audit(source_observation_id)`. Um run `0.5.0`, o schema da v0.1.0, continua
+abrindo, mas não tem a tabela: `records_region_discovery_audit()` devolve `False` e as leituras
+falham com `RunArtifactError` dizendo que a auditoria não foi registrada, em vez de devolver uma
+lista vazia que se confundiria com "nada rejeitado". Um run `0.6.0` sem a tabela está corrompido e
+também falha, nunca é tratado como `0.5.0`.
 
 ```mermaid
 flowchart LR
-    RUN["DiscoveryRunResult"] --> REC["DiscoveryAuditRecord"]
-    NORM["NormalizationResult"] --> REC
-    PI["PreparedImage"] --> REC
-    REC --> WR["RegionDiscoveryEvidenceWriter"]
-    WR --> OUT["outputs/<br/>regions.jsonl + metrics.json"]
-    WR --> MAN["manifest.json<br/>hashes + config digest"]
-    WR -. debug standard/full .-> DBG["debug/<br/>passes, candidates, overlays, masks"]
-    OUT --> DOWN["consumo contratual / avaliação"]
-    DBG -. não contratual .-> HUMAN["inspeção humana"]
+    RUN["DiscoveryRunResult"] --> AUD["RegionDiscoveryAudit"]
+    NORM["NormalizationResult"] --> AUD
+    NORM --> REG["Region2D[]"]
+    AUD --> EX["executor de percepção<br/>(runtime)"]
+    REG --> EX
+    EX --> WR["PerceptionRunWriter"]
+    WR --> OUT["outputs/region-discovery-audit.jsonl<br/>outputs/results.jsonl"]
+    OUT --> RD["PerceptionRunReader"]
 ```
 
-O writer finaliza atomicamente o diretório solicitado e recusa sobrescrita. `outputs/` e `manifest.json` são contratuais para esse artifact de estágio; `debug/` é auxiliar e nunca deve ser requisito de uma capability downstream. A documentação global de artifacts explica como esse output se relaciona ao `PerceptionRunArtifact`.
+Diagnósticos humanos (overlays SVG de candidatos e rejeições, máscara PBM por região) não são
+gravados hoje. O antigo `RegionDiscoveryEvidenceWriter`, que os escrevia num diretório de estágio
+avulso com manifest próprio, não tinha chamador de produção e foi removido (#611): a parte
+contratual do que ele gravava agora está na tabela acima, e as métricas agregadas (contagens, razão
+de merge, durações) derivam dela e de `outputs/results.jsonl`, como a avaliação de Region Discovery
+já as calcula. Se esses diagnósticos voltarem, vão para o `debug/` do run, pelo
+`PerceptionRunWriter`, somente quando um nível de debug os pedir, e nunca como dependência de outra
+capability.
 
 ## Avaliação objetiva
 
@@ -443,7 +503,8 @@ Region Discovery falha cedo quando um contrato que afeta a interpretação geom�
 - materialização do pass possui as dimensões realmente declaradas;
 - geometria não sai dos bounds da imagem;
 - estratégias de runtime não implementadas falham sem fallback silencioso;
-- escrita de evidence artifact é atômica e não sobrescreve resultado finalizado;
+- cada auditoria persistida resolve para um resultado do mesmo run, no máximo uma por observação, e
+  um registro que não seja a codificação canônica da auditoria é recusado na leitura;
 - Geometry Freeze produz `Region2D` imutável.
 
 ## Como adicionar outro backend de Region Discovery
@@ -452,7 +513,7 @@ Um novo backend deve resolver um variation point real sem alterar o contrato dow
 
 1. definir configuração efetiva e fingerprint reproduzível;
 2. isolar o SDK/runtime dentro de `backends/`;
-3. implementar `backend_provenance()` e `discover(PreparedImage)` do port canônico;
+3. implementar `backend_provenance()`, `discover(PreparedImage)` e `discover_audited(PreparedImage)` (`AuditedRegionDiscovery`, que o runtime exige), delegando a `discover_canonical_regions()`;
 4. converter output nativo para `RegionCandidate` no boundary adapter-facing;
 5. preservar scores com nome e semântica próprios;
 6. reutilizar passes, remapeamento e `normalize_regions()` em vez de criar política geométrica paralela;
@@ -469,7 +530,8 @@ A cobertura principal está em:
 - `tests/visual_perception/test_image_preparation.py`;
 - `tests/visual_perception/test_discovery_passes.py`;
 - `tests/visual_perception/test_region_normalization.py`;
-- `tests/visual_perception/test_discovery_diagnostics.py`;
+- `tests/visual_perception/test_discovery_audit.py`;
+- `tests/visual_perception/test_run_artifact.py` (tabela de auditoria e runs `0.5.0`);
 - `tests/visual_perception/backends/test_sam2.py`;
 - `tests/visual_perception/backends/test_sam3.py`;
 - `tests/visual_perception/backends/test_florence2.py`;

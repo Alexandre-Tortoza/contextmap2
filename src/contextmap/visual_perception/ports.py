@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from contextmap.visual_perception.dense_region_association import DenseFeatureMap
+from contextmap.visual_perception.discovery import AuditedRegions
 from contextmap.visual_perception.models import (
     BackendProvenance,
     FeatureScope,
@@ -49,14 +50,38 @@ class RegionDiscovery(Protocol):
         ...
 
     def discover(self, image: PreparedImage) -> Sequence[Region2D]:
-        """Discover region candidates in a prepared image.
+        """Discover the canonical regions of a prepared image.
 
         Args:
             image: The prepared image to search.
 
         Returns:
-            Discovered regions, accepted and/or rejected (see
-            :attr:`~contextmap.visual_perception.models.Region2D.is_accepted`).
+            The regions that survived discovery and normalization. No production backend
+            returns a rejected candidate here (``Region2D.is_accepted=False``): rejections and
+            merges are reported by :meth:`AuditedRegionDiscovery.discover_audited`.
+        """
+        ...
+
+
+@runtime_checkable
+class AuditedRegionDiscovery(RegionDiscovery, Protocol):
+    """Capability port: region discovery that also reports how each frame's regions were decided.
+
+    The canonical runtime path requires it, so that rejected candidates and merge decisions
+    reach the ``PerceptionRunArtifact`` instead of dying with the run. A consumer that only
+    needs regions keeps depending on :class:`RegionDiscovery`, which is unchanged.
+    """
+
+    def discover_audited(self, image: PreparedImage) -> AuditedRegions:
+        """Discover the canonical regions of a prepared image together with their audit.
+
+        Args:
+            image: The prepared image to search.
+
+        Returns:
+            The same regions :meth:`~RegionDiscovery.discover` returns, and the audit of the
+            passes, pass-level rejections, normalization rejections and merge decisions that
+            produced them.
         """
         ...
 

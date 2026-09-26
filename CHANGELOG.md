@@ -10,6 +10,12 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 
 - Schema do pedido de ingestão: `ingestion_request 0.1.0 → 0.2.0`. A correção de timestamp `constant_offset` passa a ser gravada como `offset_nanoseconds` inteiro, em vez de `offset_seconds` em ponto flutuante, para que o documento reconstrua exatamente a mesma correção (#618).
 - **Spatial relations:** `SpatialRelationsRunArtifact 0.1.0 → 0.2.0`. As exclusões de candidatos passaram a ter teto por grupo `(predicado, razão)`: um grupo com mais exclusões que o teto lista só as mais próximas (menor distância entre os limites) e guarda num registro `exclusion_summary` a contagem, as distâncias mínima e máxima e um digest de todas elas, e a memória da geração fica limitada. `metrics/counts.json` conta todas as exclusões e ganha `unlisted_exclusions`. O leitor continua abrindo runs `0.1.0`, que listam todas as exclusões. O avaliador de relações vai à versão 3 e atribui a `excluded_unlisted:<predicado>` a falha de recuperação que pode estar entre as exclusões não listadas (#601).
+- Schema do `PerceptionRunArtifact` 0.5.0 → 0.6.0: todo run grava `outputs/region-discovery-audit.jsonl`, um registro por frame com os passes de Region Discovery e os diagnostics do backend em cada um, cada candidato rejeitado com o motivo, cada decisão de merge e o digest da configuração de normalização (#611). As rejeições e os merges deixam de se perder ao fim do run. O `PerceptionRunReader` continua abrindo runs 0.5.0 e informa que a auditoria deles não foi registrada, em vez de devolvê-la vazia.
+- Os backends de Region Discovery (SAM2, SAM3 e Florence-2) implementam o novo port `AuditedRegionDiscovery`, cujo `discover_audited()` devolve as regiões canônicas junto com a `RegionDiscoveryAudit` que as explica; o port `RegionDiscovery` não muda. O executor de `visual_perception` do runtime exige esse port, grava a auditoria de cada frame no run e recusa na construção um backend que só devolva regiões (#611).
+
+### Removido
+
+- `RegionDiscoveryEvidenceWriter`, `DiscoveryAuditRecord`, `DebugLevel` e `WrittenDiscoveryEvidence`: o writer de evidência de estágio de Region Discovery não tinha chamador de produção, e a evidência contratual que ele gravava agora faz parte do `PerceptionRunArtifact` (#611).
 
 ## [0.1.0] - 2026-09-25
 
