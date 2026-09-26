@@ -71,7 +71,12 @@ from contextmap.ingestion.sequence_provenance import (
     encode_provenance,
 )
 from contextmap.ingestion.synchronization import DroppedEvent, SynchronizationDiagnostics
-from contextmap.shared import SourceTimestamp
+from contextmap.shared import (
+    FileEntry,
+    SourceTimestamp,
+    check_file_inventory,
+    is_run_relative_path,
+)
 
 SCHEMA_VERSION = "0.2.0"
 """Sequence artifact schema version written and understood by this module."""
@@ -290,14 +295,20 @@ class SequenceArtifactWriter:
 
         Raises:
             SequenceArtifactError: If called after :meth:`finalize` or
-                :meth:`abort`, or if ``observation.observation_id`` was
-                already added.
+                :meth:`abort`, if ``observation.observation_id`` was
+                already added, or if it would place the payload outside the
+                artifact (for example an id with ``../``); nothing is written.
         """
         self._require_open("add observations")
         observation_id = str(observation.observation_id)
         if observation_id in self._seen_observation_ids:
             raise SequenceArtifactError(f"duplicate observation_id: {observation_id!r}")
         record, payload = _encode_observation(observation)
+        if payload is not None and not is_run_relative_path(payload[0]):
+            raise SequenceArtifactError(
+                f"observation_id {observation_id!r} would place its payload at {payload[0]!r}, "
+                "outside the artifact"
+            )
         modality = record["modality"]
         assert isinstance(modality, str)
 
@@ -903,6 +914,21 @@ def _encode_observation(
     raise SequenceArtifactError(f"unsupported observation type: {type(observation)!r}")
 
 
+def _payload_file(root: Path, record: Mapping[str, Any]) -> Path:
+    """Return the payload file an index record names, refusing one outside the artifact.
+
+    Raises:
+        SequenceArtifactError: If ``payload_path`` is absolute, has a ``..`` part or is empty.
+    """
+    payload_path = record["payload_path"]
+    if not isinstance(payload_path, str) or not is_run_relative_path(payload_path):
+        raise SequenceArtifactError(
+            f"observation {record['observation_id']!r} has payload_path {payload_path!r}, "
+            "which is not a relative path inside the artifact"
+        )
+    return root / payload_path
+
+
 def _decode_observation(
     record: dict[str, Any], root: Path, *, load_payload: bool = True
 ) -> SourceObservation:
@@ -922,7 +948,7 @@ def _decode_observation(
     modality = record["modality"]
 
     if modality == "image":
-        data = (root / record["payload_path"]).read_bytes() if load_payload else b""
+        data = _payload_file(root, record).read_bytes() if load_payload else b""
         return ImageObservation(
             **common,
             width=record["width"],
@@ -932,7 +958,7 @@ def _decode_observation(
         )
 
     if modality == "lidar":
-        data = (root / record["payload_path"]).read_bytes() if load_payload else b""
+        data = _payload_file(root, record).read_bytes() if load_payload else b""
         fields = tuple(
             PointFieldDescriptor(
                 name=item["name"],
@@ -1070,22 +1096,14 @@ def _load_manifest(artifact_dir: Path) -> SequenceArtifactManifest:
 
 
 def _check_file_inventory(root: Path, manifest: SequenceArtifactManifest) -> list[str]:
-    problems: list[str] = []
-    for entry in manifest.file_inventory:
-        file_path = root / entry.path
-        if not file_path.is_file():
-            problems.append(f"missing file referenced by manifest: {entry.path}")
-            continue
-        data = file_path.read_bytes()
-        if len(data) != entry.size_bytes:
-            problems.append(
-                f"size mismatch for {entry.path}: expected {entry.size_bytes}, found {len(data)}"
-            )
-            continue
-        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
-        if digest != entry.content_hash:
-            problems.append(f"content hash mismatch for {entry.path}")
-    return problems
+    """Check the inventory with the shared rule: hashed in chunks, never outside ``root``."""
+    return check_file_inventory(
+        root,
+        (
+            FileEntry(path=entry.path, size_bytes=entry.size_bytes, content_hash=entry.content_hash)
+            for entry in manifest.file_inventory
+        ),
+    )
 
 
 def _check_index_cross_references(root: Path, manifest: SequenceArtifactManifest) -> list[str]:
@@ -1102,7 +1120,14 @@ def _check_index_cross_references(root: Path, manifest: SequenceArtifactManifest
                 continue
             record = json.loads(stripped)
             payload_path = record.get("payload_path")
-            if payload_path is not None and payload_path not in known_paths:
+            if payload_path is not None and not (
+                isinstance(payload_path, str) and is_run_relative_path(payload_path)
+            ):
+                problems.append(
+                    f"{_INDEX_FILENAME} line {line_number} references payload_path "
+                    f"{payload_path!r}, which is not a relative path inside the artifact"
+                )
+            elif payload_path is not None and payload_path not in known_paths:
                 problems.append(
                     f"{_INDEX_FILENAME} line {line_number} references payload_path "
                     f"{payload_path!r} not present in manifest file_inventory"

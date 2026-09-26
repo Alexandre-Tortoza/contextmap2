@@ -78,11 +78,16 @@ def check_file_inventory(root: Path, inventory: Iterable[FileEntry]) -> list[str
         inventory: The entries the manifest promises.
 
     Returns:
-        Human-readable problems (missing file, size mismatch, hash
-        mismatch); empty means the inventory matches.
+        Human-readable problems (a path that is not inside the run, missing
+        file, size mismatch, hash mismatch); empty means the inventory matches.
+        A path outside the run is reported and never opened.
     """
     problems: list[str] = []
     for entry in inventory:
+        # Um manifest adulterado nunca faz o leitor abrir um arquivo fora do run.
+        if not is_run_relative_path(entry.path):
+            problems.append(f"invalid path in manifest: {entry.path!r}")
+            continue
         file_path = root / entry.path
         if not file_path.is_file():
             problems.append(f"missing file referenced by manifest: {entry.path}")
@@ -312,9 +317,24 @@ class AtomicRunDirectory:
         self._published = True
 
 
-def _require_relative_path(relative_path: str) -> None:
+def is_run_relative_path(relative_path: str) -> bool:
+    """Tell whether a path is a plain relative path that stays inside a run directory.
+
+    Args:
+        relative_path: Path with ``/`` separators, as a manifest or an index records it.
+
+    Returns:
+        ``False`` for an empty path, an absolute path, a path with a ``..`` part or ``.``
+        alone: joining any of them to the run directory could leave it or name it.
+    """
     path = PurePosixPath(relative_path)
-    if not relative_path or path.is_absolute() or ".." in path.parts or path.parts == (".",):
+    return bool(relative_path) and not (
+        path.is_absolute() or ".." in path.parts or path.parts == (".",)
+    )
+
+
+def _require_relative_path(relative_path: str) -> None:
+    if not is_run_relative_path(relative_path):
         raise RunDirectoryError(
             f"expected a relative path inside the run directory, got {relative_path!r}"
         )

@@ -253,3 +253,14 @@ def test_a_streamed_path_follows_the_same_rules_as_a_written_one(tmp_path: Path)
             pass
         with pytest.raises(RunDirectoryError, match="relative path"), run.open_binary("../x"):
             pass
+
+
+@pytest.mark.parametrize("path", ["../outside.bin", "/etc/hostname", ""])
+def test_the_inventory_check_never_reads_outside_the_run(tmp_path: Path, path: str) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (tmp_path / "outside.bin").write_bytes(b"x")
+
+    problems = check_file_inventory(run, [file_entry(path, b"x")])
+
+    assert problems == [f"invalid path in manifest: {path!r}"]

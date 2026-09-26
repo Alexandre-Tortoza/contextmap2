@@ -983,3 +983,99 @@ def test_index_entry_carries_modality_so_callers_can_filter_without_decoding_pay
         SourceObservationId("frame-0001"),
         SourceObservationId("frame-0002"),
     }
+
+
+# --- ING-03 / ING-13: paths de payload e hash do inventário ------------------------------------
+
+
+def test_an_observation_id_that_escapes_the_artifact_is_refused_before_writing(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writer = _writer(workspace)
+    escaping = ImageObservation(
+        observation_id=SourceObservationId("../../escape"),
+        sensor_id=SensorId("front_camera"),
+        frame_id=FrameId("front_camera_optical"),
+        timestamp=_timestamp(1),
+        provenance=_provenance(),
+        width=1,
+        height=1,
+        encoding=ImageEncoding.MONO8,
+        data=b"\x01",
+    )
+
+    with pytest.raises(SequenceArtifactError, match="escape"):
+        writer.add_observation(escaping)
+    writer.abort()
+
+    assert sorted(path.name for path in tmp_path.rglob("*") if path.is_file()) == []
+
+
+def _tamper_first_payload_path(artifact_dir: Path, payload_path: str) -> None:
+    index_path = artifact_dir / "index.jsonl"
+    lines = index_path.read_text(encoding="utf-8").splitlines()
+    first_record = json.loads(lines[0])
+    first_record["payload_path"] = payload_path
+    lines[0] = json.dumps(first_record)
+    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["absolute", "parent"])
+def test_a_payload_path_outside_the_artifact_is_never_read(tmp_path: Path, kind: str) -> None:
+    writer = _writer(tmp_path)
+    _build_fixture_sequence(writer)
+    writer.finalize()
+    artifact_dir = _output_dir(tmp_path)
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"outside the artifact")
+    outside = str(secret) if kind == "absolute" else "../secret.bin"
+    _tamper_first_payload_path(artifact_dir, outside)
+    reader = SequenceArtifactReader(artifact_dir)
+
+    with pytest.raises(SequenceArtifactError, match="payload_path"):
+        reader.list_observations()
+    assert any(outside in problem for problem in reader.verify_integrity())
+
+
+def test_an_inventory_path_outside_the_artifact_is_reported_and_never_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    _build_fixture_sequence(writer)
+    writer.finalize()
+    artifact_dir = _output_dir(tmp_path)
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["file_inventory"][0]["path"] = "../secret.bin"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "secret.bin").write_bytes(b"outside the artifact")
+    opened: list[Path] = []
+    real_open = Path.open
+
+    def recording_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        opened.append(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", recording_open)
+
+    problems = SequenceArtifactReader(artifact_dir).verify_integrity()
+
+    assert any("../secret.bin" in problem for problem in problems)
+    assert all(path.name != "secret.bin" for path in opened)
+
+
+def test_the_inventory_is_hashed_in_chunks_never_whole_in_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = bytes(range(256)) * (3 * 4096)  # 3 MiB, maior que o chunk de hash
+    writer = _writer(tmp_path)
+    writer.add_observation(_image(1, payload))
+    whole_reads = _count_payload_reads(monkeypatch, directory="rgb")
+
+    writer.finalize()
+    problems = SequenceArtifactReader(_output_dir(tmp_path)).verify_integrity()
+
+    assert problems == []
+    assert whole_reads == []
