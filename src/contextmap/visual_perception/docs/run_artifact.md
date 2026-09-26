@@ -106,7 +106,7 @@ flowchart LR
 
 ## Escrita atômica e incremental
 
-Mesmo padrão de `contextmap.ingestion.sequence_artifact`, agora nas duas metades: **atômica e streaming**. O writer monta o run em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), criado na primeira escrita, roda uma checagem de consistência interna em `finalize()`, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e qualquer falha remove o temporário e não deixa nada. O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
+Mesmo padrão de `contextmap.ingestion.sequence_artifact`, agora nas duas metades: **atômica e streaming**. O writer monta o run em um diretório temporário irmão de `output_dir` (`.tmp-<nome-de-output_dir>-<random>/`), criado na primeira escrita, roda uma checagem de consistência interna em `finalize()`, e só então renomeia para `output_dir` — um run interrompido nunca aparenta ser válido. Um `output_dir` que já exista é recusado com `RunArtifactError`, sem alterar o run que está lá, e qualquer falha remove o temporário e não deixa nada. O writer é um context manager: sair do bloco sem `finalize()`, normalmente ou por exceção (inclusive `KeyboardInterrupt`), remove o temporário que `add_result()`, `add_feature_payload()` ou `add_semantic_view_payload()` já tinham criado, então um run abandonado também não deixa `.tmp-*` no disco; o executor da runtime o usa assim (#619). O writer não escreve registro nem `runs.json` e não toca em nenhum outro diretório.
 
 Cada payload pesado é gravado **no momento em que é adicionado**, não em `finalize()`:
 

@@ -24,6 +24,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -196,7 +197,13 @@ class RunArtifactManifest:
 
 
 class PerceptionRunWriter:
-    """Builds an immutable perception run artifact on the local filesystem."""
+    """Builds an immutable perception run artifact on the local filesystem.
+
+    Use it as a context manager: payloads reach a temporary sibling of ``output_dir`` as they
+    are added, and leaving the block without :meth:`finalize`, normally or with an exception,
+    removes that directory, so an abandoned run leaves nothing on disk. The writer must not be
+    used after its block.
+    """
 
     def __init__(
         self,
@@ -275,6 +282,20 @@ class PerceptionRunWriter:
         self._feature_previews: list[FeatureDiagnosticPreview] = []
         self._region_discovery_audits: dict[SourceObservationId, RegionDiscoveryAudit] = {}
         self._finalized = False
+
+    def __enter__(self) -> PerceptionRunWriter:
+        """Return this writer; the staging directory is still created on first use."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Discard the staging directory unless :meth:`finalize` published the run."""
+        if not self._finalized:
+            self._discard_staging()
 
     def add_result(self, result: PerceptionResult) -> None:
         """Queue a result to be written by :meth:`finalize`.

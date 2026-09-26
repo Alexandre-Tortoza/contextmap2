@@ -1069,6 +1069,32 @@ def test_mask_pixels_reach_disk_when_the_result_is_added_not_at_finalize(
     assert masks, "add_result() must persist the mask instead of buffering its pixels"
 
 
+def test_a_writer_left_without_finalize_leaves_no_staging_behind(tmp_path: Path) -> None:
+    """VP-14: add_result() creates the staging directory, and only a failing call removed it."""
+    with _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        assert _staging_dir(tmp_path).is_dir()
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_writer_interrupted_by_an_error_leaves_no_staging_behind(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="interrupted"), _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        raise RuntimeError("interrupted between frames")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_writer_finalized_inside_its_block_publishes_the_run(tmp_path: Path) -> None:
+    with _write_run(tmp_path) as writer:
+        writer.add_result(_masked_result("frame-0001", _full_frame_mask(width=4, height=3)))
+        writer.finalize()
+
+    assert list(tmp_path.iterdir()) == [_run_dir(tmp_path)]
+    assert PerceptionRunReader(_run_dir(tmp_path)).verify_integrity() == []
+
+
 def test_writer_memory_does_not_grow_with_the_number_of_masked_results(
     tmp_path: Path,
 ) -> None:
