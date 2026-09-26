@@ -170,6 +170,7 @@ from contextmap.visual_perception import (
     RegionId,
     SceneContext,
     SemanticClaim,
+    SemanticEvidenceReference,
     SemanticInterpretationExecution,
     SemanticInterpretationFailedError,
     SemanticInterpretationMode,
@@ -772,6 +773,9 @@ class _LegacySemanticInterpreterBridge:
         provenance = interpreter.backend_provenance()
         self._configuration_fingerprint = provenance.configuration_fingerprint or provenance.model
         self._writer: PerceptionRunWriter | None = None
+        # Só o contexto do frame corrente: o de cena é interpretado antes das regiões do mesmo
+        # frame (ordem topológica determinística do preset) e nunca vaza para outro frame.
+        self._scene_context: tuple[SourceObservationId, SceneContext | None] | None = None
 
     def bind(self, writer: PerceptionRunWriter) -> None:
         """Bind every subsequent execution to the real writer.
@@ -876,8 +880,28 @@ class _LegacySemanticInterpreterBridge:
             self._writer.add_failed_semantic_interpretation(failed.failure)
             raise
 
+    def _conditioning(self, image: PreparedImage) -> SceneContext:
+        """Return the scene context this frame's scene request produced (#529).
+
+        Raises:
+            ExecutorError: If the frame has none -- its scene request failed, abstained or has
+                not run. The region request is then refused, never sent without the context
+                the configuration asked for.
+        """
+        cached = self._scene_context
+        if cached is None or cached[0] != image.source_observation_id or cached[1] is None:
+            raise ExecutorError(
+                f"region requests are conditioned on scene context, but frame "
+                f"{image.source_observation_id!r} has no scene context from its scene request"
+            )
+        return cached[1]
+
     def interpret_scene(self, image: PreparedImage) -> SceneContext | None:
-        """Build the frame's SCENE request from its full-frame view and delegate to interpret()."""
+        """Build the frame's SCENE request from its full-frame view and delegate to interpret().
+
+        A scene request is never conditioned on scene context, so conditioning is acyclic.
+        """
+        self._scene_context = (image.source_observation_id, None)
         prompt = self._prompt(SemanticInterpretationMode.SCENE)
         pixels, source_sha256 = self._frame(image)
         views = (
@@ -903,6 +927,7 @@ class _LegacySemanticInterpreterBridge:
         )
         execution = self._interpret_preserving_failures(request, views)
         self._publish(execution, views)
+        self._scene_context = (image.source_observation_id, execution.parsed.scene_context)
         return execution.parsed.scene_context
 
     def interpret_regions(
@@ -916,6 +941,7 @@ class _LegacySemanticInterpreterBridge:
         for region in regions:
             # Consultado por região, como antes: um frame sem regiões não exige política.
             prompt = self._prompt(SemanticInterpretationMode.REGION)
+            context = self._conditioning(image) if prompt.scene_context else None
             views = materialize_region_views(
                 pixels,
                 source_observation_id=image.source_observation_id,
@@ -938,6 +964,15 @@ class _LegacySemanticInterpreterBridge:
                 prompt_template_id=prompt.template_id,
                 requested_output_schema=prompt.output_schema,
                 configuration_fingerprint=self._configuration_fingerprint,
+                scene_context_reference=(
+                    None
+                    if context is None
+                    else SemanticEvidenceReference(
+                        evidence_type="scene_context",
+                        evidence_id=str(context.perception_result_id),
+                    )
+                ),
+                scene_context=context,
             )
             execution = self._interpret_preserving_failures(request, views)
             self._publish(execution, views)

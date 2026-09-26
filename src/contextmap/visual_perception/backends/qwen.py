@@ -176,7 +176,9 @@ class QwenSemanticInterpreter:
             ),
             supported_view_kinds=frozenset(VisualViewKind),
             accepts_visual_features=False,
-            accepts_scene_context=False,
+            # #529: o contexto de cena chega renderizado no prompt, pelo template que o request
+            # seleciona; um template que não o renderiza recusa o request antes da inferência.
+            accepts_scene_context=True,
         )
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:

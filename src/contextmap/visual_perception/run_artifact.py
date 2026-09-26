@@ -758,6 +758,13 @@ class PerceptionRunWriter:
                         "semantic scene_context_reference does not resolve exactly: "
                         f"{context_reference.evidence_id!r}"
                     )
+                if request.scene_context != context_matches[0].scene_context:
+                    # O prompt renderizou o contexto que o request carrega; ele precisa ser o
+                    # mesmo que o run persistiu, senão a evidência citada não é a consumida.
+                    raise RunArtifactError(
+                        "the scene context the request carries is not the one this run "
+                        f"persisted for {context_reference.evidence_id!r}"
+                    )
         return result
 
     def _validate_failed_semantic_interpretations(self) -> None:

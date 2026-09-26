@@ -52,6 +52,15 @@ class SemanticConfidencePolicy(Enum):
 SEMANTIC_RESPONSE_SCHEMA = "semantic-response/1"
 """The one output schema :func:`render_semantic_prompt` renders and the parser implements."""
 
+SCENE_CONTEXT_RENDERING = "scene-context/1"
+"""Versioned form in which a template that conditions on scene context renders it (#529).
+
+The section names this version, then either states that no scene context was supplied or
+gives the template's framing instructions followed by the context as canonical JSON (sorted
+keys): the six structured fields and each claim's hypothesis, role, category, region kind
+and attributes. Confidence is never rendered, so no uncalibrated number is fed back.
+"""
+
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticPromptTemplate:
@@ -67,9 +76,15 @@ class SemanticPromptTemplate:
     mode: SemanticInterpretationMode
     output_schema_version: str
     instructions: str
+    scene_context_instructions: str | None = None
 
     def __post_init__(self) -> None:
-        """Reject unnamed or empty policy fields and an output schema nothing implements."""
+        """Reject unnamed or empty policy fields and an output schema nothing implements.
+
+        ``scene_context_instructions`` makes a region template render a scene-context
+        section (:data:`SCENE_CONTEXT_RENDERING`); a scene template never does, so scene
+        interpretation cannot depend on its own output.
+        """
         for field_name, value in (
             ("template_id", self.template_id),
             ("output_schema_version", self.output_schema_version),
@@ -85,6 +100,14 @@ class SemanticPromptTemplate:
                 f"{self.output_schema_version!r}; the renderer and parser implement only "
                 f"{SEMANTIC_RESPONSE_SCHEMA!r}"
             )
+        if self.scene_context_instructions is not None:
+            if self.mode is not SemanticInterpretationMode.REGION:
+                raise ValueError(
+                    f"prompt template {self.template_id!r}: only a region template may render "
+                    "scene context; a scene request conditioned on scene context is circular"
+                )
+            if not self.scene_context_instructions.strip():
+                raise ValueError("scene_context_instructions must not be empty when declared")
 
 
 _TEMPLATES = (
@@ -122,6 +145,25 @@ _TEMPLATES = (
             "it or set it to null."
         ),
     ),
+    # Condicionamento por contexto de cena (#529): mesmas instruções de region/v1 mais a seção
+    # de contexto; sem contexto, a seção diz explicitamente que nenhum foi fornecido, então
+    # um par com/sem contexto varia só esse insumo.
+    SemanticPromptTemplate(
+        template_id="region-scene-context/v1",
+        mode=SemanticInterpretationMode.REGION,
+        output_schema_version=SEMANTIC_RESPONSE_SCHEMA,
+        instructions=(
+            "Describe only the referenced region. Return one primary hypothesis, "
+            "preserve plausible alternatives, and never invent confidence: omit it "
+            "or set it to null."
+        ),
+        scene_context_instructions=(
+            "The scene context below is a prior hypothesis from another inference over the "
+            "same image, not ground truth. Use it only to disambiguate what the region "
+            "shows; never describe the scene instead of the region, and disregard it where "
+            "the visible evidence contradicts it."
+        ),
+    ),
 )
 
 SEMANTIC_PROMPT_TEMPLATES: Mapping[str, SemanticPromptTemplate] = MappingProxyType(
@@ -130,9 +172,10 @@ SEMANTIC_PROMPT_TEMPLATES: Mapping[str, SemanticPromptTemplate] = MappingProxyTy
 """Every versioned instruction template, keyed by its identity; closed and immutable.
 
 ``scene/v1`` and ``region/v1`` are the canonical policies. ``region-abstention/v1`` is a
-non-canonical, unevaluated alternative. A new prompt policy is a new entry with a new
-identity, never an edit of an existing one: an identity names exactly one instruction text
-and output schema.
+non-canonical, unevaluated alternative. ``region-scene-context/v1`` renders the scene context
+a region request is conditioned on (#529); its instructions are those of ``region/v1``.
+A new prompt policy is a new entry with a new identity, never an edit of an existing one:
+an identity names exactly one instruction text and output schema.
 """
 
 
@@ -164,10 +207,16 @@ class SemanticPromptPolicy:
     Attributes:
         scene: Identity of the :data:`SEMANTIC_PROMPT_TEMPLATES` entry scene requests name.
         region: Identity of the entry region requests name.
+        region_scene_context: Whether each region request is conditioned on the scene
+            context its observation's scene request produced (#529). Requires a region
+            template that renders scene context. ``False`` conditions nothing: with such a
+            template the prompt then states that no scene context was supplied, which is the
+            disabled arm of a matched ablation.
     """
 
     scene: str
     region: str
+    region_scene_context: bool = False
 
     def __post_init__(self) -> None:
         """Require each identity to name a catalog template of its own mode."""
@@ -181,6 +230,12 @@ class SemanticPromptPolicy:
                     f"{mode.value} prompt policy {template_id!r} is a "
                     f"{template.mode.value} template"
                 )
+        region = semantic_prompt_template(self.region)
+        if self.region_scene_context and region.scene_context_instructions is None:
+            raise ValueError(
+                f"region prompt template {self.region!r} does not render scene context; "
+                "select one that does (region-scene-context/v1) to condition region requests"
+            )
 
     def template_for(self, mode: SemanticInterpretationMode) -> SemanticPromptTemplate:
         """Return the selected template of one mode."""
@@ -249,6 +304,12 @@ def render_semantic_prompt(
         raise ValueError("prompt template identity must match semantic request")
     if template.output_schema_version != request.requested_output_schema:
         raise ValueError("prompt output schema must match semantic request")
+    if request.scene_context is not None and template.scene_context_instructions is None:
+        # Aceitar o contexto e não renderizá-lo seria descartá-lo em silêncio.
+        raise ValueError(
+            f"prompt template {template.template_id!r} does not render scene context, but the "
+            "request is conditioned on one"
+        )
 
     request_summary = {
         "request_id": str(request.request_id),
@@ -380,11 +441,15 @@ def render_semantic_prompt(
             non_abstained_schema,
         ],
     }
-    text = "\n\n".join(
+    sections = [
+        f"Template: {template.template_id}",
+        template.instructions,
+        "Request:\n" + json.dumps(request_summary, sort_keys=True, separators=(",", ":")),
+    ]
+    if template.scene_context_instructions is not None:
+        sections.append(_scene_context_section(request, template.scene_context_instructions))
+    sections.extend(
         (
-            f"Template: {template.template_id}",
-            template.instructions,
-            "Request:\n" + json.dumps(request_summary, sort_keys=True, separators=(",", ":")),
             (
                 f"Output schema ({template.output_schema_version}):\n"
                 + json.dumps(schema, sort_keys=True, separators=(",", ":"))
@@ -392,12 +457,42 @@ def render_semantic_prompt(
             "Return exactly one JSON object and no explanatory text.",
         )
     )
+    text = "\n\n".join(sections)
     fingerprint = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
     return RenderedSemanticPrompt(
         template_id=template.template_id,
         output_schema_version=template.output_schema_version,
         text=text,
         fingerprint=fingerprint,
+    )
+
+
+def _scene_context_section(request: SemanticInterpretationRequest, instructions: str) -> str:
+    """Render the scene context a region request carries, or state that it carries none."""
+    heading = f"Scene context ({SCENE_CONTEXT_RENDERING}):"
+    context = request.scene_context
+    if context is None:
+        return f"{heading} none supplied for this request."
+    rendered = {
+        "scene_type": context.scene_type,
+        "environment": context.environment,
+        "layout": context.layout,
+        "lighting": context.lighting,
+        "visibility": context.visibility,
+        "navigability": context.navigability,
+        "claims": [
+            {
+                "hypothesis": claim.hypothesis,
+                "role": claim.role.value,
+                "category": claim.category,
+                "region_kind": None if claim.region_kind is None else claim.region_kind.value,
+                "attributes": {item.name: item.value for item in claim.attributes},
+            }
+            for claim in context.claims
+        ],
+    }
+    return "\n".join(
+        (heading, instructions, json.dumps(rendered, sort_keys=True, separators=(",", ":")))
     )
 
 

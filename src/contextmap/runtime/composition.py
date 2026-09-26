@@ -187,10 +187,13 @@ class SemanticRequestPrompt:
     Attributes:
         template_id: Becomes the request's ``prompt_template_id``.
         output_schema: Becomes the request's ``requested_output_schema``.
+        scene_context: Whether each request of this mode is conditioned on the scene context
+            its frame's scene request produced (#529); only ever true for region requests.
     """
 
     template_id: str
     output_schema: str
+    scene_context: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -734,6 +737,9 @@ def _instruction_prompts(
         mode: SemanticRequestPrompt(
             template_id=policy.template_for(mode).template_id,
             output_schema=policy.template_for(mode).output_schema_version,
+            scene_context=(
+                mode is SemanticInterpretationMode.REGION and policy.region_scene_context
+            ),
         )
         for mode in SemanticInterpretationMode
     }
@@ -756,11 +762,23 @@ def _semantic_interpretation(
     """
     from contextmap.visual_perception import check_view_policy_supported
 
+    capabilities = interpreter.capabilities()
+    backend = context.component(component_id).backend or ""
     try:
-        check_view_policy_supported(view_policy, interpreter.capabilities())
+        check_view_policy_supported(view_policy, capabilities)
     except ValueError as error:
-        backend = context.component(component_id).backend or ""
         raise BackendConfigurationError(component_id, backend, [f"view_policy: {error}"]) from error
+    if any(prompt.scene_context for prompt in prompts.values()) and not (
+        capabilities.accepts_scene_context
+    ):
+        raise BackendConfigurationError(
+            component_id,
+            backend,
+            [
+                "prompt_policy: region_scene_context is set, but this interpreter does not accept "
+                "scene context"
+            ],
+        )
     return _SemanticInterpretation(
         interpreter=interpreter, prompts=prompts, view_policy=view_policy
     )

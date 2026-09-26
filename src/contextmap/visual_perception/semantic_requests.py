@@ -13,9 +13,11 @@ from contextmap.visual_perception.models import (
     FeatureScope,
     PerceptionResultId,
     RegionId,
+    SceneContext,
     SemanticEvidenceReference,
 )
 from contextmap.visual_perception.region_models import JsonScalar
+from contextmap.visual_perception.serialization import decode_scene_context, encode_scene_context
 
 SemanticRequestId = NewType("SemanticRequestId", str)
 """Identity of one auditable semantic backend request."""
@@ -151,7 +153,14 @@ class SemanticRequestMetadata:
 
 @dataclass(frozen=True, kw_only=True)
 class SemanticInterpretationRequest:
-    """Backend-neutral, reproducible selection of semantic input evidence."""
+    """Backend-neutral, reproducible selection of semantic input evidence.
+
+    Attributes:
+        scene_context_reference: Identity of the scene context the request is conditioned on.
+        scene_context: The exact :class:`SceneContext` that reference names, carried so the
+            prompt renders what was referenced (#529). Both are set together or not at all; a
+            scene request is never conditioned on scene context, so conditioning is acyclic.
+    """
 
     request_id: SemanticRequestId
     source_observation_id: SourceObservationId
@@ -165,6 +174,7 @@ class SemanticInterpretationRequest:
     visual_features: tuple[SemanticFeatureReference, ...] = ()
     scene_context_reference: SemanticEvidenceReference | None = None
     supporting_metadata: tuple[SemanticRequestMetadata, ...] = ()
+    scene_context: SceneContext | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete, ambiguous, or cross-observation requests."""
@@ -211,6 +221,33 @@ class SemanticInterpretationRequest:
             and self.scene_context_reference.evidence_type != "scene_context"
         ):
             raise ValueError("scene_context_reference must have evidence_type='scene_context'")
+        self._validate_scene_context()
+
+    def _validate_scene_context(self) -> None:
+        """Hold scene-context conditioning to one resolved, same-observation, acyclic input."""
+        reference, context = self.scene_context_reference, self.scene_context
+        if (reference is None) != (context is None):
+            raise ValueError(
+                "a request conditioned on scene context carries the scene context it names: "
+                "scene_context_reference and scene_context are set together"
+            )
+        if reference is None or context is None:
+            return
+        if self.mode is SemanticInterpretationMode.SCENE:
+            raise ValueError(
+                "a scene request cannot be conditioned on scene context: the dependency would "
+                "be circular"
+            )
+        if reference.evidence_id != str(context.perception_result_id):
+            raise ValueError(
+                f"scene_context_reference {reference.evidence_id!r} does not name the carried "
+                f"scene context of {context.perception_result_id!r}"
+            )
+        if context.source_observation_id != self.source_observation_id:
+            raise ValueError(
+                "scene context of another observation cannot condition this request: "
+                f"{context.source_observation_id!r}"
+            )
 
     def evidence_references(self) -> tuple[SemanticEvidenceReference, ...]:
         """Return the complete canonical evidence identity set for this request."""
@@ -325,6 +362,9 @@ def encode_semantic_request(request: SemanticInterpretationRequest) -> dict[str,
                 "evidence_id": request.scene_context_reference.evidence_id,
             }
         ),
+        "scene_context": (
+            None if request.scene_context is None else encode_scene_context(request.scene_context)
+        ),
         "supporting_metadata": [
             {"name": item.name, "value": item.value} for item in request.supporting_metadata
         ],
@@ -371,6 +411,11 @@ def decode_semantic_request(record: dict[str, Any]) -> SemanticInterpretationReq
                 evidence_type=raw_context["evidence_type"],
                 evidence_id=raw_context["evidence_id"],
             )
+        ),
+        scene_context=(
+            None
+            if record["scene_context"] is None
+            else decode_scene_context(record["scene_context"])
         ),
         supporting_metadata=tuple(
             SemanticRequestMetadata(name=item["name"], value=item["value"])

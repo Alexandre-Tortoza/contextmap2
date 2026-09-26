@@ -227,6 +227,7 @@ region_id?
 visual_views[]
 visual_features[]
 scene_context_reference?
+scene_context?
 supporting_metadata[]
 prompt_template_id
 requested_output_schema
@@ -245,6 +246,11 @@ Features opcionais preservam `feature_id`,
 `embedding_space_id`, scope e região. Evidência não suportada por um backend é
 rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
 descartada silenciosamente.
+
+`scene_context_reference` e `scene_context` vêm juntos: o request de região
+condicionado carrega exatamente o `SceneContext` que nomeia, da mesma observação,
+e um template que não renderiza contexto o recusa em vez de descartá-lo. Um
+request de cena nunca é condicionado a contexto de cena (#529).
 
 `prompt_template_id` é a política de prompt selecionada antes da inferência, não
 um rótulo: o interpretador renderiza exatamente essa política (um template do

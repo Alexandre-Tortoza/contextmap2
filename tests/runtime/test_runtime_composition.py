@@ -2964,3 +2964,156 @@ def sys_image_module() -> Any:
     import sys
 
     return sys.modules["PIL.Image"]
+
+
+class TestSceneContextConditioning:
+    """#529: region requests carry their frame's scene context only when configured to."""
+
+    @staticmethod
+    def _interpreter() -> Any:
+        """Answer scenes with a real scene context and regions with an abstention."""
+        import json
+
+        from contextmap.visual_perception import (
+            SEMANTIC_PROMPT_TEMPLATES,
+            BackendProvenance,
+            SemanticBackendDiagnostics,
+            SemanticConfidencePolicy,
+            SemanticInferenceProvenance,
+            SemanticInterpretationExecution,
+            parse_semantic_response,
+            render_semantic_prompt,
+        )
+
+        class _Fake:
+            def backend_provenance(self) -> BackendProvenance:
+                return BackendProvenance(
+                    backend_id="fake_semantic_interpreter",
+                    capability="semantic_interpreter",
+                    provider="fake",
+                    model="fake",
+                    version="0.1",
+                )
+
+            def interpret(self, request: Any) -> object:
+                rendered = render_semantic_prompt(
+                    request,
+                    SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id],
+                    confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                )
+                scene = request.mode is SCENE
+                raw = json.dumps(
+                    {"abstained": False, "claims": [], "scene_context": {"scene_type": "aisle"}}
+                    if scene
+                    else {"abstained": True, "claims": [], "scene_context": None}
+                )
+                provenance = SemanticInferenceProvenance(
+                    backend=self.backend_provenance(),
+                    task_identity=f"fake-{request.mode.value}",
+                    prompt_template_id=request.prompt_template_id,
+                    output_schema_version=request.requested_output_schema,
+                )
+                return SemanticInterpretationExecution(
+                    request=request,
+                    rendered_prompt=rendered,
+                    raw_response=raw,
+                    parsed=parse_semantic_response(
+                        raw,
+                        request,
+                        provenance,
+                        confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
+                    ),
+                    diagnostics=SemanticBackendDiagnostics(latency_ms=0.0),
+                    effective_configuration={"backend": "fake"},
+                )
+
+        return _Fake()
+
+    @staticmethod
+    def _prompts(*, conditioned: bool) -> dict[SemanticInterpretationMode, SemanticRequestPrompt]:
+        return {
+            SCENE: _CANONICAL_PROMPTS[SCENE],
+            REGION_MODE: SemanticRequestPrompt(
+                template_id="region-scene-context/v1",
+                output_schema="semantic-response/1",
+                scene_context=conditioned,
+            ),
+        }
+
+    def test_region_requests_carry_the_scene_context_of_their_own_frame(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(
+            tmp_path, prompts=self._prompts(conditioned=True), interpreter=self._interpreter()
+        )
+        image, region = _prepared_image_and_region(tmp_path)
+
+        context = bridge.interpret_scene(image)
+        bridge.interpret_regions(image, [region])
+
+        scene_request, region_request = requests
+        assert scene_request.scene_context is None
+        assert context is not None and context.scene_type == "aisle"
+        assert region_request.scene_context == context
+        assert region_request.scene_context_reference.evidence_id == str(
+            context.perception_result_id
+        )
+
+    def test_disabled_conditioning_attaches_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(
+            tmp_path, prompts=self._prompts(conditioned=False), interpreter=self._interpreter()
+        )
+        image, region = _prepared_image_and_region(tmp_path)
+
+        bridge.interpret_scene(image)
+        bridge.interpret_regions(image, [region])
+
+        assert requests[1].scene_context is None
+        assert requests[1].scene_context_reference is None
+
+    def test_without_a_scene_context_for_the_frame_region_requests_fail_explicitly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from contextmap.runtime.executors import ExecutorError
+
+        _without_pillow(monkeypatch)
+        bridge, requests, _ = _semantic_bridge(
+            tmp_path, prompts=self._prompts(conditioned=True), interpreter=self._interpreter()
+        )
+        image, region = _prepared_image_and_region(tmp_path)
+
+        with pytest.raises(ExecutorError, match="no scene context"):
+            bridge.interpret_regions(image, [region])
+
+        assert requests == []
+
+    def test_the_configured_switch_reaches_the_region_prompt(self, tmp_path: Path) -> None:
+        document = selected_document()
+        document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = {
+            "scene": "scene/v1",
+            "region": "region-scene-context/v1",
+            "region_scene_context": True,
+        }
+
+        composed = _compose(tmp_path, document=document)
+
+        assert composed.semantic_prompts is not None
+        assert composed.semantic_prompts[REGION_MODE].scene_context
+        assert not composed.semantic_prompts[SCENE].scene_context
+
+    def test_conditioning_with_a_template_that_cannot_render_it_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        document["components"]["visual_perception"]["semantic_interpretation"]["qwen"][
+            "prompt_policy"
+        ] = {"scene": "scene/v1", "region": "region/v1", "region_scene_context": True}
+
+        with pytest.raises(BackendConfigurationError, match="does not render scene context"):
+            _compose(tmp_path, document=document)

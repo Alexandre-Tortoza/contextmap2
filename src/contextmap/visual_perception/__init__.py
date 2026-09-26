@@ -203,6 +203,7 @@ from contextmap.visual_perception.semantic_backend import (
     semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
+    SCENE_CONTEXT_RENDERING,
     SEMANTIC_PROMPT_TEMPLATES,
     ParsedSemanticResponse,
     RenderedSemanticPrompt,
@@ -261,6 +262,7 @@ __all__ = [
     "MASK_INDEX_FILENAME",
     "MASK_INDEX_SCHEMA_VERSION",
     "POOLING_POLICY",
+    "SCENE_CONTEXT_RENDERING",
     "SEMANTIC_DEBUG_ROOT",
     "SEMANTIC_PROMPT_TEMPLATES",
     "SEMANTIC_VIEW_POLICY_VERSION",

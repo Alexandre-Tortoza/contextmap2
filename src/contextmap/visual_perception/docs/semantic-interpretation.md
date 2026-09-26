@@ -269,6 +269,49 @@ fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
 número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
 bruta é registrado separadamente dos outputs canônicos.
 
+## Condicionamento por contexto de cena (#529)
+
+Um request de região pode ser condicionado ao `SceneContext` que o request de cena
+da mesma observação produziu. O contexto continua sendo evidência/hipótese de uma
+inferência anterior, nunca truth.
+
+- **Contexto nomeado e carregado.** `scene_context_reference` nomeia o contexto e
+  `scene_context` carrega exatamente o `SceneContext` nomeado; os dois vêm juntos
+  ou nenhum vem. A referência precisa nomear o `perception_result_id` do contexto
+  carregado, e o contexto precisa ser da mesma observação do request. O run
+  artifact recusa, na finalização, um request cujo contexto carregado difira do
+  `SceneContext` persistido para aquele resultado: o contexto renderizado é o
+  contexto citado.
+- **Sem ciclo.** Um request de cena nunca é condicionado a contexto de cena, e só
+  um template de região pode renderizar contexto; a dependência é sempre
+  cena → região, nunca o contrário.
+- **Renderização versionada.** `region-scene-context/v1` tem as instruções de
+  `region/v1` mais `scene_context_instructions`. O prompt ganha uma seção
+  `Scene context (scene-context/1)`: as instruções de enquadramento ("hipótese
+  anterior, não truth; use só para desambiguar a região") seguidas do contexto em
+  JSON canônico (chaves ordenadas): os seis campos estruturados e, por claim,
+  hipótese, role, categoria, region kind e atributos. A confiança nunca é
+  renderizada. `region/v1` continua byte a byte igual: não tem seção de contexto.
+- **Desligável para uma ablação pareada.** `SemanticPromptPolicy.region_scene_context`
+  liga o condicionamento (exige um template de região que renderize contexto).
+  Desligado com o mesmo template, o request não carrega contexto e a seção diz
+  explicitamente que nenhum foi fornecido; os dois braços usam o mesmo template e
+  diferem só no insumo de contexto. Com `region/v1` não há contexto nenhum.
+- **Nunca descartado em silêncio.** Um template que não renderiza contexto recusa
+  um request que carrega um, antes da inferência.
+- **Adapters.** Qwen e Gemini declaram `accepts_scene_context=True` desde que esse
+  caminho existe e está testado; Florence-2 continua sem suporte (não aceita
+  `prompt_policy`, e sua declaração segue `False`). O runtime recusa, na
+  composição, `region_scene_context` para um intérprete que não aceita contexto.
+- **Runtime.** A bridge guarda só o `SceneContext` do frame corrente, produzido
+  pelo request de cena (que roda antes das regiões do mesmo frame na ordem
+  topológica determinística do preset). Se o frame não tem contexto (cena falhou,
+  abstenção ou não executada), cada request de região condicionado falha com erro
+  explícito em vez de seguir sem o contexto pedido.
+- **Avaliação.** O gancho com/sem contexto de `compare_evidence_variants()` roda
+  sobre execuções reais de Qwen e Gemini (runtimes/clients fake na CI): o canal
+  `scene_context` vem do request, e o template é o mesmo nos dois braços.
+
 ## Materialização e persistência
 
 `assemble_perception_result()` recebe explicitamente os ids dos stages que
