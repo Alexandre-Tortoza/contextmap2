@@ -48,11 +48,16 @@ def _image(width: int = 6, height: int = 4) -> PreparedImage:
 
 class FakeDiscovery:
     def __init__(
-        self, *, touch_right_border: bool = False, relative_geometry: bool = False
+        self,
+        *,
+        touch_right_border: bool = False,
+        relative_geometry: bool = False,
+        mask_only: bool = False,
     ) -> None:
         self.inputs: list[DiscoveryInput] = []
         self.touch_right_border = touch_right_border
         self.relative_geometry = relative_geometry
+        self.mask_only = mask_only
 
     def backend_provenance(self) -> BackendProvenance:
         return BackendProvenance(
@@ -90,7 +95,7 @@ class FakeDiscovery:
             perception_result_id=discovery_input.perception_result_id,
             image_width=width,
             image_height=height,
-            bounding_box=box,
+            bounding_box=None if self.mask_only else box,
             mask=InlineMask(np.array(mask_data, dtype=bool).reshape(height, width)),
             provenance=RegionProvenance(
                 backend_id="fake",
@@ -183,6 +188,50 @@ def test_internal_tile_border_rejection_is_explicit_and_auditable() -> None:
     assert [item.candidate_id for item in result.rejected] == ["tile-0000/proposal-1"]
     assert result.rejected[0].reason.value == "tile_border_truncation"
     assert [item.candidate_id for item in result.candidates] == ["tile-0001/proposal-1"]
+
+
+def _internal_border_tiling() -> DiscoveryPassConfig:
+    return DiscoveryPassConfig(
+        tiling=TilingConfig(
+            tile_width=4,
+            tile_height=4,
+            overlap_x=1,
+            overlap_y=0,
+            border_policy=BorderPolicy.REJECT_INTERNAL_BORDER,
+        ),
+        include_full_frame=False,
+    )
+
+
+def test_reject_internal_border_applies_to_mask_only_candidates() -> None:
+    # #596: sem bounding box, a borda vem dos pixels da máscara; não é bypass da política.
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(touch_right_border=True, mask_only=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=_internal_border_tiling(),
+    )
+
+    assert [item.candidate_id for item in result.rejected] == ["tile-0000/proposal-1"]
+    assert result.rejected[0].reason.value == "tile_border_truncation"
+    assert [item.candidate_id for item in result.candidates] == ["tile-0001/proposal-1"]
+
+
+def test_mask_only_candidates_away_from_internal_borders_are_kept() -> None:
+    result = run_discovery_passes(
+        prepared_image=_image(width=6, height=4),
+        backend=FakeDiscovery(mask_only=True),
+        perception_run_id="run-1",
+        perception_result_id="result-1",
+        config=_internal_border_tiling(),
+    )
+
+    assert result.rejected == ()
+    assert [item.candidate_id for item in result.candidates] == [
+        "tile-0000/proposal-1",
+        "tile-0001/proposal-1",
+    ]
 
 
 def test_tile_scale_changes_model_input_and_preserves_global_coordinates() -> None:

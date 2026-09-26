@@ -30,6 +30,7 @@ from ..region_models import (
     JsonScalar,
     RegionCandidate,
     RegionProvenance,
+    mask_bounding_box,
 )
 
 if TYPE_CHECKING:
@@ -296,7 +297,7 @@ class Sam3RegionDiscovery:
         """
         if (proposal.mask.width, proposal.mask.height) != (width, height):
             raise ValueError("SAM3 proposal mask dimensions must match discovery pass dimensions")
-        mask_box = _mask_bounding_box(proposal.mask)
+        mask_box = mask_bounding_box(proposal.mask)
         bounding_box = mask_box or _clamp_box(proposal.box, width=width, height=height)
         native_metadata: tuple[tuple[str, JsonScalar], ...] = (
             *proposal.metadata,
@@ -363,23 +364,6 @@ def _torch_autocast(config: Sam3Config) -> AbstractContextManager[object]:
             device_type=config.device.split(":", 1)[0],
             dtype=getattr(torch, config.precision),
         ),
-    )
-
-
-def _mask_bounding_box(mask: InlineMask) -> BoundingBox | None:
-    """Return the tight half-open box of the true pixels, or ``None`` for an empty mask."""
-    import numpy as np
-
-    pixels = mask.as_array()
-    rows = np.flatnonzero(pixels.any(axis=1))
-    if rows.size == 0:
-        return None
-    columns = np.flatnonzero(pixels.any(axis=0))
-    return BoundingBox(
-        x_min=int(columns[0]),
-        y_min=int(rows[0]),
-        x_max=int(columns[-1]) + 1,
-        y_max=int(rows[-1]) + 1,
     )
 
 
