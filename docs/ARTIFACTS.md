@@ -274,7 +274,7 @@ A identidade do mapa é `<sequência>--<run_id>` e toda `GeometryReference` a ca
 <dir>/                                  # separado do GeometricMapArtifact; nunca dentro dele
 ├── README.md
 ├── manifest.json
-├── lineage.json                        # identidade exata do artifact bruto, com o SHA-256 de geometry.bin
+├── lineage.json                        # identidade exata do bruto: digest do inventário e hashes lidos
 ├── config.json                         # política (grade inclusa), fingerprint e tamanho de bloco
 ├── environment.json
 ├── outputs/

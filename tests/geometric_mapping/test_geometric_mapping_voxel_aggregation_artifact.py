@@ -121,23 +121,93 @@ def test_the_lineage_names_the_exact_raw_artifact_it_was_derived_from(tmp_path: 
     lineage = reader.read_record("lineage.json")
 
     with GeometricMapArtifactReader(raw) as source:
-        geometry_entry = next(
-            entry
-            for entry in source.manifest.file_inventory
-            if entry.path == "outputs/geometry.bin"
-        )
+        inventory = {entry.path: entry for entry in source.manifest.file_inventory}
+        digest = hashlib.sha256(
+            json.dumps(
+                sorted([e.path, e.size_bytes, e.content_hash] for e in inventory.values())
+            ).encode("utf-8")
+        ).hexdigest()
         assert lineage["source"] == {
             "run_id": str(source.manifest.run_id),
             "map_id": str(source.manifest.map_id),
             "schema_version": source.manifest.schema_version,
             "configuration_fingerprint": source.manifest.configuration_fingerprint,
-            "geometry_content_hash": geometry_entry.content_hash,
+            "contractual_inventory_digest": f"sha256:{digest}",
+            "consumed_files": {
+                path: inventory[path].content_hash
+                for path in (
+                    "outputs/geometry.bin",
+                    "outputs/map-metadata.json",
+                    "outputs/source-index.jsonl",
+                )
+            },
             "aggregation_rule": None,
             "sequence_artifact_id": str(source.manifest.sequence_artifact_id),
             "selection_id": source.manifest.selection_id,
             "trajectory_id": str(source.manifest.trajectory_id),
             "calibration_identity": source.manifest.calibration_identity,
         }
+
+
+def _tamper_source_index(raw: Path) -> None:
+    """Move the first scan's acquisition time, leaving the geometry and the manifest alone."""
+    index = raw / "outputs/source-index.jsonl"
+    lines = index.read_text(encoding="utf-8").splitlines(keepends=True)
+    assert '"nanoseconds": 0, "seconds": 0}' in lines[0]
+    lines[0] = lines[0].replace(
+        '"nanoseconds": 0, "seconds": 0}', '"nanoseconds": 0, "seconds": 7}'
+    )
+    index.write_text("".join(lines), encoding="utf-8")
+
+
+def _reinventory(raw: Path, relative: str) -> None:
+    """Rewrite the raw manifest so its inventory agrees with a tampered file again."""
+    manifest_path = raw / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data = (raw / relative).read_bytes()
+    for entry in manifest["file_inventory"]:
+        if entry["path"] == relative:
+            entry["size_bytes"] = len(data)
+            entry["content_hash"] = f"sha256:{hashlib.sha256(data).hexdigest()}"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def test_a_raw_artifact_with_a_tampered_source_index_is_refused_before_deriving(
+    tmp_path: Path,
+) -> None:
+    raw = write_raw_artifact(tmp_path / "raw", REVISIT)
+    _tamper_source_index(raw)
+
+    with pytest.raises(MapArtifactError, match=r"source-index\.jsonl"):
+        _derive(tmp_path, raw=raw)
+    assert not (tmp_path / "derived").exists()
+
+
+def test_a_source_index_tampered_after_deriving_fails_the_verification(tmp_path: Path) -> None:
+    raw = write_raw_artifact(tmp_path / "raw", REVISIT)
+    reader = VoxelAggregationArtifactReader(_derive(tmp_path, raw=raw))
+    _tamper_source_index(raw)
+
+    with GeometricMapArtifactReader(raw) as source:
+        problems = reader.verify_integrity(source=source)
+
+    assert any("source-index.jsonl" in problem for problem in problems)
+
+
+def test_a_raw_artifact_rewritten_consistently_is_not_the_recorded_source(
+    tmp_path: Path,
+) -> None:
+    raw = write_raw_artifact(tmp_path / "raw", REVISIT)
+    reader = VoxelAggregationArtifactReader(_derive(tmp_path, raw=raw))
+    _tamper_source_index(raw)
+    _reinventory(raw, "outputs/source-index.jsonl")
+
+    with GeometricMapArtifactReader(raw) as source:
+        assert source.verify_integrity(check_index=False) == []
+        problems = reader.verify_integrity(source=source)
+
+    assert any("consumed_files" in problem for problem in problems)
+    assert any("contractual_inventory_digest" in problem for problem in problems)
 
 
 def test_the_chunk_size_is_recorded_but_is_not_part_of_the_policy_identity(
@@ -219,7 +289,7 @@ def test_lineage_verification_refuses_another_raw_artifact(tmp_path: Path) -> No
     with GeometricMapArtifactReader(other) as source:
         problems = reader.verify_integrity(source=source)
 
-    assert any("geometry" in problem for problem in problems)
+    assert any("consumed_files" in problem for problem in problems)
 
 
 def test_a_tampered_aggregate_payload_is_detected(tmp_path: Path) -> None:

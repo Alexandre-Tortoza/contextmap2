@@ -15,6 +15,8 @@ follows :class:`~contextmap.shared.AtomicRunDirectory`. See
 
 from __future__ import annotations
 
+import hashlib
+import json
 import platform
 import struct
 from dataclasses import dataclass
@@ -86,7 +88,12 @@ _CONTRIBUTIONS = "outputs/contributions.bin"
 _MAP_METADATA = "outputs/map-metadata.json"
 _AGGREGATION = "outputs/aggregation.json"
 _METRICS = "metrics/aggregation.json"
-_RAW_GEOMETRY = "outputs/geometry.bin"
+_RAW_CONSUMED = (
+    "outputs/geometry.bin",
+    "outputs/map-metadata.json",
+    "outputs/source-index.jsonl",
+)
+"""The files of the raw artifact a derivation reads: payload, map metadata and source index."""
 
 _CONTRACTUAL_RECORDS = frozenset({_LINEAGE, _CONFIG, _ENVIRONMENT})
 _CONTRACTUAL_DIRECTORIES = ("outputs/", "metrics/")
@@ -172,8 +179,9 @@ class VoxelAggregationArtifactWriter:
             The manifest of the finalized artifact.
 
         Raises:
-            MapArtifactError: If the target is inside the raw artifact, already exists,
-                or the raw map cannot be aggregated.
+            MapArtifactError: If the target is inside the raw artifact or already exists,
+                a file of the raw artifact does not match its own inventory, or the raw map
+                cannot be aggregated.
         """
         if self._final_dir.resolve().is_relative_to(source_dir.resolve()):
             raise MapArtifactError(
@@ -183,6 +191,12 @@ class VoxelAggregationArtifactWriter:
         if self._final_dir.exists():
             raise MapArtifactError(f"run directory already exists: {self._final_dir}")
         with GeometricMapArtifactReader(source_dir) as source:
+            unverified = _source_problems(source)
+            if unverified:
+                raise MapArtifactError(
+                    f"the raw artifact {source_dir} does not verify, so nothing is derived from "
+                    f"it: {unverified}"
+                )
             geometry = source.geometry()
             try:
                 aggregation = aggregate_geometry(geometry, policy, block_points=block_points)
@@ -358,8 +372,10 @@ class VoxelAggregationArtifactReader:
 
         Args:
             source: The raw artifact the derivation claims to summarize. When given, its
-                identity and geometry hash must be the recorded ones, and the per-scan
-                lineage is re-derived from its geometry; this reads the whole raw map.
+                own inventory must verify, its identity (the digest of its contractual
+                inventory and the hashes of the files the derivation read included) must be
+                the recorded one, and the per-scan lineage is re-derived from its geometry;
+                this reads the whole raw map.
 
         Returns:
             Human-readable problems; empty means the derivation is intact.
@@ -378,9 +394,14 @@ class VoxelAggregationArtifactReader:
             problems.append("the manifest counts another number of aggregates than the payload")
         if source is None:
             return problems
+        unverified = _source_problems(source)
+        if unverified:
+            return problems + unverified
         recorded = self.read_record(_LINEAGE)["source"]
         actual = _source_identity(source.manifest)
-        mismatched = sorted(key for key in recorded if recorded[key] != actual.get(key))
+        mismatched = sorted(
+            key for key in set(recorded) | set(actual) if recorded.get(key) != actual.get(key)
+        )
         if mismatched:
             problems.append(f"the raw artifact differs from the recorded source in {mismatched}")
             return problems
@@ -437,18 +458,42 @@ def _pack_contributions(aggregation: VoxelAggregation) -> bytes:
     return records.tobytes()
 
 
+def _source_problems(source: GeometricMapArtifactReader) -> list[str]:
+    """Check the raw artifact's files against its own inventory, before trusting any of them.
+
+    The reader does not verify on open, so a file changed after finalization would otherwise
+    be read, and then recorded, as if it were the original. The derived bounds index is not
+    recomputed: the derivation never reads it, and the inventory already hashes every file.
+    """
+    inventoried = {entry.path for entry in source.manifest.file_inventory}
+    problems = [
+        f"{path} is not inventoried by the raw artifact"
+        for path in _RAW_CONSUMED
+        if path not in inventoried
+    ]
+    problems.extend(source.verify_integrity(check_index=False))
+    return [f"raw artifact: {problem}" for problem in problems]
+
+
 def _source_identity(manifest: GeometricMapArtifactManifest) -> dict[str, Any]:
-    """The identity of the raw artifact, down to the hash of its geometry payload."""
-    geometry_hash = next(
-        (entry.content_hash for entry in manifest.file_inventory if entry.path == _RAW_GEOMETRY),
-        None,
+    """The identity of the raw artifact, down to the content of every contractual file.
+
+    ``contractual_inventory_digest`` pins the whole inventory, so a raw artifact rewritten
+    with a consistent manifest is still another artifact; ``consumed_files`` names the hashes
+    of the files the derivation actually read.
+    """
+    inventory = sorted(
+        [entry.path, entry.size_bytes, entry.content_hash] for entry in manifest.file_inventory
     )
+    digest = hashlib.sha256(json.dumps(inventory).encode("utf-8")).hexdigest()
+    hashes = {entry.path: entry.content_hash for entry in manifest.file_inventory}
     return {
         "run_id": str(manifest.run_id),
         "map_id": str(manifest.map_id),
         "schema_version": manifest.schema_version,
         "configuration_fingerprint": manifest.configuration_fingerprint,
-        "geometry_content_hash": geometry_hash,
+        "contractual_inventory_digest": f"sha256:{digest}",
+        "consumed_files": {path: hashes.get(path) for path in _RAW_CONSUMED},
         "aggregation_rule": manifest.aggregation_rule,
         "sequence_artifact_id": str(manifest.sequence_artifact_id),
         "selection_id": manifest.selection_id,

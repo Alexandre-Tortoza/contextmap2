@@ -84,7 +84,7 @@ A soma das contagens de contribuição é exatamente o número de pontos brutos,
 <dir>/                                  # separado do GeometricMapArtifact; nunca dentro dele
 ├── README.md
 ├── manifest.json                       # identidade, grade, fingerprint, contagens, inventário
-├── lineage.json                        # identidade exata do artifact bruto (inclui o SHA-256 de geometry.bin)
+├── lineage.json                        # identidade exata do artifact bruto: digest do inventário e hashes lidos
 ├── config.json                         # política completa, fingerprint e execution.block_points
 ├── environment.json
 ├── outputs/
@@ -95,7 +95,14 @@ A soma das contagens de contribuição é exatamente o número de pontos brutos,
 └── metrics/aggregation.json            # escala e custo de provenance
 ```
 
-`aggregates.bin`, na ordem: chave, centróide, soma dos offsets, mínimo, máximo, primeiro e último ns, `point_count`, `scan_count`, `observation_count`. As contribuições de cada agregado são as `scan_count` entradas seguintes de `contributions.bin`, então não há offset gravado. A escrita segue `AtomicRunDirectory`: um diretório existente nunca é substituído, e escrever dentro do artifact bruto é recusado. Os bytes do artifact bruto permanecem idênticos (teste). `verify_integrity(source=raw)` confere o inventário, as invariantes, a identidade do bruto gravada em `lineage.json` e re-deriva a lineage.
+`aggregates.bin`, na ordem: chave, centróide, soma dos offsets, mínimo, máximo, primeiro e último ns, `point_count`, `scan_count`, `observation_count`. As contribuições de cada agregado são as `scan_count` entradas seguintes de `contributions.bin`, então não há offset gravado. A escrita segue `AtomicRunDirectory`: um diretório existente nunca é substituído, e escrever dentro do artifact bruto é recusado. Os bytes do artifact bruto permanecem idênticos (teste).
+
+**Identidade do artifact bruto.** A lineage depende de `geometry.bin` (coordenadas), mas também de `source-index.jsonl` (observação, tempo, cadeia de transforms e intervalo de cada scan) e de `map-metadata.json`. `lineage.json` grava por isso duas coisas:
+
+- `consumed_files`: o SHA-256 de cada um desses três arquivos;
+- `contractual_inventory_digest`: o SHA-256 do inventário contratual inteiro do bruto (caminho, tamanho e hash de cada arquivo), que identifica o bruto exato mesmo que alguém o regrave com um manifest coerente.
+
+O `GeometricMapArtifactReader` não verifica o inventário ao abrir. Por isso o writer confere o bruto contra o próprio inventário **antes** de derivar, e recusa qualquer arquivo alterado. `verify_integrity(source=raw)` confere de novo o inventário do bruto, compara a identidade gravada campo a campo e só então re-deriva a lineage. Um `source-index.jsonl` adulterado é recusado antes da derivação e detectado depois dela, inclusive quando o manifest do bruto foi reescrito para concordar com ele (testes). O índice derivado de limites do bruto não é recomputado nessas verificações: a derivação não o lê, e o inventário já cobre o hash de todo arquivo.
 
 `metrics/aggregation.json` separa escala e custo de provenance de qualquer medida de qualidade: `reduction_ratio`, `aggregate_bytes`, `lineage_bytes`, `lineage_bytes_per_aggregate`, `explicit_point_lineage_bytes` (quanto custaria listar um índice por ponto bruto: comparável, nunca escrito) e distribuições de pontos, scans e observações por agregado.
 
@@ -112,7 +119,7 @@ Nenhum label, claim, embedding, hipótese semântica ou identidade de instância
 Decidido agora, antes do schema canônico:
 
 1. **A geometria bruta continua sendo a evidência canônica.** `GeometricMap`, `MapAccumulator`, o `GeometricMapArtifact` e o runtime não mudam.
-2. **A agregação inter-scan existe só como artifact derivado e separado**, com lineage para o artifact bruto exato (hash do payload incluído). Nenhum estágio canônico o consome.
+2. **A agregação inter-scan existe só como artifact derivado e separado**, com lineage para o artifact bruto exato (digest do inventário contratual e hashes dos arquivos lidos). Nenhum estágio canônico o consome.
 3. **A semântica da provenance agregado → contribuintes está definida**: lineage por scan, recuperável por recomputação, verificada contra o bruto. Contagens de pontos, scans e observações ficam separadas.
 4. **A grade (frame, origem, resolução, convenção de indexação) faz parte da identidade e do fingerprint.**
 5. **Nenhuma voxelização interna de modelo ML é reutilizada como contrato de mapa.**
