@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import random
-from itertools import pairwise
+from collections.abc import Iterator
+from itertools import combinations, pairwise
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,7 @@ from contextmap.entity_resolution import (
     UnknownResolvedEntityError,
     contradiction_id_for,
     derive_resolved_ambiguity,
+    materialization,
     materialize_resolved_entities,
     resolved_entity_id_for,
 )
@@ -995,3 +998,146 @@ def test_the_remaining_record_validators_refuse_incoherent_values() -> None:
             ),
             policy=merged.provenance.policy,
         )
+
+
+# --- scale: lookups instead of scans (#599) ------------------------------------------------------
+
+
+def random_run(seed: int) -> tuple[dict[str, Entity], list[ResolutionDecision]]:
+    """Twelve entities and a random decision for some of their pairs."""
+    rng = random.Random(seed)
+    entities = boxes(*(f"e{index:02d}" for index in range(12)))
+    decisions: list[ResolutionDecision] = []
+    for first, second in combinations(entities.values(), 2):
+        roll = rng.random()
+        if roll < 0.12:
+            decisions.append(decide(first, second, MATCH))
+        elif roll < 0.2:
+            decisions.append(decide(first, second, DISTINCT))
+        elif roll < 0.28:
+            decisions.append(decide(first, second, UNRESOLVED))
+    return entities, decisions
+
+
+def outcome_digest(seed: int) -> str:
+    entities, decisions = random_run(seed)
+    try:
+        result = materialize(entities, *decisions)
+    except MaterializationError as error:
+        return f"refused: {error}"
+    resolved = result.resolved
+    lookups = [
+        [str(item.resolved_entity_id) for item in (resolved.resolved_of(entity.reference),)]
+        for entity in entities.values()
+    ]
+    errors = []
+    for attempt in (
+        lambda: resolved.resolve(
+            ResolvedEntityReference(
+                resolution_run_id=RUN, resolved_entity_id=resolved_entity_id_for(())
+            )
+        ),
+        lambda: resolved.resolve(
+            ResolvedEntityReference(
+                resolution_run_id=EntityResolutionRunId("other-run"),
+                resolved_entity_id=resolved.entities[0].resolved_entity_id,
+            )
+        ),
+        lambda: resolved.resolved_of(
+            EntityReference(semantic_map_id=SemanticMapId("x"), entity_id="y")  # type: ignore[arg-type]
+        ),
+    ):
+        try:
+            attempt()
+        except (KeyError, ValueError) as error:
+            errors.append(f"{type(error).__name__}: {error}")
+    record = {"result": to_record(result), "lookups": lookups, "errors": errors}
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+# Gravados antes de trocar as varreduras por índices: a semântica não pode mudar.
+RECORDED_OUTCOMES = {
+    0: "de8be035e9728997bac610755a0ce503be6fdb62d99121ccaf267a58016d1309",
+    1: "0ff816789e47592202c9545dfac7b0be7d9790ac9500aab3526dea35f9f97d02",
+    2: "a59731d5f2a469f89a652aa0538cf2745cefb51334daa3d56a68bdcad364579d",
+    3: "87040088dc80b84132f4b1359a59817239115386ca53ad11cc20dbd2a3152e7d",
+    4: "e1ed374732dca4c17b55c429c31f429893a7b5c4d03b5871af93fd02b223ad4d",
+    5: "add2552f3d154f04412f652c0ad4b5179df71ac3d3c673f9cd79a71d7c226356",
+    6: "4be3c436edea90cedd0beeec6a5c1569d6f37d7e5e15d9ba8e0332aac7309f40",
+    7: "7e7249b84577fd601d272d6c2a4840310841fc5ef415240c4bb589c24b70781a",
+    8: "fbb841de922848172149de3b8af179efee0207f9495de2a370204c46c7907dae",
+    9: "f249881836ecc5c9b3309ae71054e5bf2ba89f1b411a75b674abfec3cbdfa59d",
+}
+
+
+@pytest.mark.parametrize("seed", sorted(RECORDED_OUTCOMES))
+def test_materialization_and_lookups_match_the_recorded_outcomes(seed: int) -> None:
+    assert outcome_digest(seed) == RECORDED_OUTCOMES[seed]
+
+
+class ScanCountingLinks(dict[Any, Any]):
+    """A link table that counts every full scan."""
+
+    scans = 0
+
+    def items(self) -> Any:
+        ScanCountingLinks.scans += 1
+        return super().items()
+
+    def __iter__(self) -> Iterator[Any]:
+        ScanCountingLinks.scans += 1
+        return super().__iter__()
+
+
+def test_members_find_their_match_decisions_without_scanning_every_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ER-02: varrer todos os MATCH por membro custa O(entidades x matches) no run.
+    build_graph = materialization._match_graph
+
+    def counting_graph(decisions: Any) -> Any:
+        graph = build_graph(decisions)
+        return dataclasses.replace(graph, link=ScanCountingLinks(graph.link))
+
+    monkeypatch.setattr(materialization, "_match_graph", counting_graph)
+    ScanCountingLinks.scans = 0
+    entities = boxes(*(f"e{index:02d}" for index in range(6)))
+    names = list(entities)
+
+    result = materialize(
+        entities, *(decide(entities[a], entities[b], MATCH) for a, b in pairwise(names))
+    )
+
+    assert members_of(result) == [names]
+    assert ScanCountingLinks.scans == 0
+
+
+class IterationCountingTuple(tuple[Any, ...]):
+    """A tuple that counts how often it is iterated."""
+
+    iterations = 0
+
+    def __iter__(self) -> Iterator[Any]:
+        IterationCountingTuple.iterations += 1
+        return super().__iter__()
+
+
+def test_a_resolved_entity_set_looks_references_up_without_rescanning() -> None:
+    # ER-03: cada resolve/resolved_of varria o conjunto inteiro.
+    entities = boxes(*(f"e{index:02d}" for index in range(6)))
+    resolved = materialize(entities).resolved
+    object.__setattr__(resolved, "entities", IterationCountingTuple(resolved.entities))
+    IterationCountingTuple.iterations = 0
+
+    def look_everything_up() -> None:
+        for entity in entities.values():
+            owner = resolved.resolved_of(entity.reference)
+            assert resolved.resolve(owner.reference) is owner
+
+    look_everything_up()
+    first_round = IterationCountingTuple.iterations
+    look_everything_up()
+
+    # No máximo uma passada por índice, e nenhuma a mais por consulta.
+    assert first_round <= 2
+    assert IterationCountingTuple.iterations == first_round

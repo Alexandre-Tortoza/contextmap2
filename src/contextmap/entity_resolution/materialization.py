@@ -319,12 +319,14 @@ def _aggregate(
 ) -> ResolvedEntity:
     references = tuple(member.reference for member in members)
     in_group = set(references)
+    # Os MATCH de um membro são as arestas até os seus vizinhos no grupo: consultá-las custa o
+    # grau do membro, não todos os MATCH do run.
     matched = {
         reference: tuple(
             sorted(
-                decision
-                for pair, decision in graph.link.items()
-                if reference in pair and pair <= in_group
+                graph.link[frozenset((reference, other))]
+                for other in graph.neighbors.get(reference, ())
+                if other in in_group
             )
         )
         for reference in references

@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from dataclasses import dataclass
+from functools import cached_property
 from typing import NewType
 
 from contextmap.entity_resolution._checks import require_canonical, require_present
@@ -497,10 +498,10 @@ class ResolvedEntitySet:
                 f"reference names resolution run {reference.resolution_run_id!r}, but this is "
                 f"{self.resolution_run_id!r}"
             )
-        for entity in self.entities:
-            if entity.resolved_entity_id == reference.resolved_entity_id:
-                return entity
-        raise UnknownResolvedEntityError(reference.resolved_entity_id)
+        entity = self._by_id.get(reference.resolved_entity_id)
+        if entity is None:
+            raise UnknownResolvedEntityError(reference.resolved_entity_id)
+        return entity
 
     def resolved_of(self, entity_ref: EntityReference) -> ResolvedEntity:
         """The resolved entity a source entity belongs to.
@@ -514,10 +515,20 @@ class ResolvedEntitySet:
         Raises:
             KeyError: If no resolved entity has this member.
         """
-        for entity in self.entities:
-            if entity_ref in entity.member_entity_refs:
-                return entity
-        raise KeyError(entity_ref)
+        entity = self._by_member.get(entity_ref)
+        if entity is None:
+            raise KeyError(entity_ref)
+        return entity
+
+    @cached_property
+    def _by_id(self) -> dict[ResolvedEntityId, ResolvedEntity]:
+        """Index of the entities by id, built on first lookup; ids are unique by construction."""
+        return {entity.resolved_entity_id: entity for entity in self.entities}
+
+    @cached_property
+    def _by_member(self) -> dict[EntityReference, ResolvedEntity]:
+        """Index of the entities by member, built on first lookup; members are disjoint."""
+        return {member: entity for entity in self.entities for member in entity.member_entity_refs}
 
 
 @dataclass(frozen=True, kw_only=True)
