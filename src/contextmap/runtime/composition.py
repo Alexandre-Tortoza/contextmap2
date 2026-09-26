@@ -79,6 +79,7 @@ if TYPE_CHECKING:
         PerceptionRunId,
         RegionDiscovery,
         RegionGrounding,
+        RegionRefinement,
         SemanticInterpretationMode,
         SemanticInterpreter,
         SemanticPromptPolicy,
@@ -148,6 +149,8 @@ def resolve_provider(component_id: str, target: str) -> RuntimeProvider:
 FeatureFactory = Callable[["FeatureBuildScope"], "FeatureExtractor"]
 GroundingFactory = Callable[[Path], "RegionGrounding"]
 """Builds a run's grounding backend from the directory holding its prepared images."""
+RefinementFactory = Callable[[Path], "RegionRefinement"]
+"""Builds a run's grounding refiner from the directory holding its prepared images."""
 SourceAdapterFactory = Callable[["SourceAdapterConfig"], "SourceAdapter"]
 
 
@@ -232,6 +235,9 @@ class ComposedRuntime:
         region_discovery: Region discovery backend.
         region_grounding: Prompt-conditioned grounding backend and its queries, only when
             the optional ``visual_perception.region_grounding`` component is selected.
+        region_refinement: Builds the run's refiner of grounding proposals, only when the
+            optional ``visual_perception.region_refinement`` component is selected (it
+            requires grounding).
         dense_features: Builds the dense feature extractor once a run scope exists.
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
@@ -271,6 +277,7 @@ class ComposedRuntime:
     source_adapter: SourceAdapterFactory | None = None
     region_discovery: RegionDiscovery | None = None
     region_grounding: RegionGroundingPlan | None = None
+    region_refinement: RefinementFactory | None = None
     dense_features: FeatureFactory | None = None
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
@@ -656,6 +663,26 @@ def _locateanything(context: _Context, component_id: str) -> RegionGroundingPlan
         return LocateAnythingRegionGrounding(config=config, runtime=runtime)
 
     return RegionGroundingPlan(queries=queries, factory=build)
+
+
+def _sam2_refinement(context: _Context, component_id: str) -> RefinementFactory:
+    from contextmap.visual_perception.backends.sam2 import (
+        Sam2PromptRefinement,
+        Sam2RefinementConfig,
+    )
+
+    config, _ = context.build(component_id, Sam2RefinementConfig)
+    context.ensure_available(component_id)
+    # O runtime recebe os bytes da imagem, não a raiz das imagens preparadas: um único runtime
+    # (um carregamento do SAM2) por composição serve o run inteiro.
+    runtime = context.runtime(component_id, config, "Sam2PromptRuntime")
+
+    def build(prepared_image_root: Path) -> RegionRefinement:
+        return Sam2PromptRefinement(
+            config=config, runtime=runtime, prepared_image_root=prepared_image_root
+        )
+
+    return build
 
 
 # --- visual perception: features (run-scoped) --------------------------------------
@@ -1140,6 +1167,7 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "florence2": _florence2_regions,
     },
     "visual_perception.region_grounding": {"locateanything": _locateanything},
+    "visual_perception.region_refinement": {"sam2": _sam2_refinement},
     "visual_perception.dense_features": {
         "dinov2": _dinov2,
         "dinov3": _dinov3,
@@ -1224,9 +1252,16 @@ def _compose_visual_perception(context: _Context) -> dict[str, object]:
     composed = {
         "region_discovery": _construct(context, "visual_perception.region_discovery"),
         "region_grounding": _construct_optional(context, "visual_perception.region_grounding"),
+        "region_refinement": _construct_optional(context, "visual_perception.region_refinement"),
         "dense_features": _construct(context, "visual_perception.dense_features"),
         "region_features": _construct(context, "visual_perception.region_features"),
     }
+    if composed["region_refinement"] is not None and composed["region_grounding"] is None:
+        raise ConfigurationError.single(
+            "region refinement refines grounding proposals: select a "
+            "visual_perception.region_grounding backend too, or no refinement",
+            path="components.visual_perception.region_refinement",
+        )
     semantic: _SemanticInterpretation = _construct(
         context, "visual_perception.semantic_interpretation"
     )
@@ -1487,6 +1522,7 @@ def compose_executors(
             semantic_interpreter=visual_perception.semantic_interpreter,
             semantic_prompts=visual_perception.semantic_prompts,
             region_grounding=visual_perception.region_grounding,
+            region_refinement=visual_perception.region_refinement,
         )
 
     state_estimation = _compose_stage("state_estimation")
