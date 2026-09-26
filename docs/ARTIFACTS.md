@@ -95,7 +95,7 @@ class StateEstimationRunWriter:
 
 **O que foi removido** de todas as capabilities: `_sequence_dir`, `allocate_*_run_index`, `rebuild_*_registry`, os helpers que só serviam a eles (`_valid_run_index`, `_registry_record`), a chamada do registro dentro de `finalize()` e os símbolos do `__init__` e do `__all__`. `contextmap.shared.run_directory` também perdeu `next_run_index` e `write_run_registry`, sem nenhum uso restante.
 
-**Cardinalidade.** Um diretório de estágio guarda **um** artifact, e um pedido de estágio produz um. Uma entrada declarada `multiple` (vários runs de percepção para a associação, vários runs de associação para a fusão) mantém a evidência distinta, mas o executor de um estágio consome **exatamente um** run por entrada: um pedido com vários é recusado, sem escolher um em silêncio. Comparar runs (dois modelos, dois braços de ablação) é executar runs da runtime diferentes, cada um com a sua pasta, e a comparação lê os dois pelo `ArtifactRef`.
+**Cardinalidade.** Um diretório de estágio guarda **um** artifact, e um pedido de estágio produz um. Uma entrada declarada `multiple` (vários runs de percepção para a associação, vários runs de associação para a fusão) mantém a evidência distinta, e o executor de um estágio consome **exatamente um** run por entrada, exceto a fusão, que funde os runs de percepção e de associação das `ContextRun`s de um build (#500): um pedido com vários runs em outro estágio é recusado, sem escolher um em silêncio. Comparar runs (dois modelos, dois braços de ablação) é executar runs da runtime diferentes, cada um com a sua pasta, e a comparação lê os dois pelo `ArtifactRef`.
 
 **Leitura.** Os leitores abrem o diretório do artifact diretamente e não mudam: manifests, `manifest.json` e o schema continuam iguais.
 

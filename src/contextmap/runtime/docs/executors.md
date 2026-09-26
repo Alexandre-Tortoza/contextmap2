@@ -42,7 +42,7 @@ O `run_id` que o writer grava vem de `StageRequest.identity()`: o estágio, o `c
 
 ## Cardinalidade
 
-Um estágio produz **exatamente um** artifact, e um executor consome **exatamente um** run por entrada: um pedido com vários runs para a mesma entrada (`multiple`) é recusado com `ExecutorError`, sem escolher um em silêncio. Comparar dois runs de percepção ou dois braços de ablação é executar a runtime duas vezes e ler os dois artifacts pela referência.
+Um estágio produz **exatamente um** artifact. Um executor consome **exatamente um** run por entrada, com uma exceção: `SemanticFusionExecutor` funde vários runs de `association` e `perception`, as `ContextRun`s de um build (issue #500), como evidência separada, agrupada pela Semantic Fusion por observação física. Um run alcançado duas vezes entra uma vez; cada associação tem de vir de percepções que são entradas da fusão; e uma percepção só pode ser associada uma vez, porque duas associações dela descreveriam as mesmas regiões duas vezes. Nos demais estágios, um pedido com vários runs para a mesma entrada é recusado com `ExecutorError`, sem escolher um em silêncio. Comparar dois runs de percepção ou dois braços de ablação é executar a runtime duas vezes e ler os dois artifacts pela referência.
 
 ## Topologia
 

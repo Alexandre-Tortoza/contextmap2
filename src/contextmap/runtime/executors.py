@@ -224,6 +224,28 @@ def _one(request: StageRequest, name: str) -> Path:
     return request.directory_of(refs[0])
 
 
+def _many(request: StageRequest, name: str) -> tuple[Path, ...]:
+    """Return the distinct runs of an input that accepts several, in a deterministic order.
+
+    One run reached twice (through two ContextRuns of a build, say) is one piece of evidence and
+    is read once; two different contents under one identity are refused.
+
+    Raises:
+        ExecutorError: If the input is empty, or names one run with two different contents.
+    """
+    distinct: dict[str, ArtifactRef] = {}
+    for ref in request.inputs.get(name, ()):
+        seen = distinct.setdefault(ref.artifact_id, ref)
+        if seen.content_hash != ref.content_hash:
+            raise ExecutorError(
+                f"input {name!r} of stage {request.stage_id!r} names run {ref.artifact_id!r} "
+                "twice with different content"
+            )
+    if not distinct:
+        raise ExecutorError(f"stage {request.stage_id!r} needs at least one run of {name!r}")
+    return tuple(request.directory_of(distinct[run_id]) for run_id in sorted(distinct))
+
+
 def _optional_one(request: StageRequest, name: str) -> Path | None:
     refs = request.inputs.get(name, ())
     if not refs:
@@ -594,26 +616,45 @@ class SemanticFusionExecutor:
         self._code_version = code_version
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Fuse the ``association`` run over the ``geometry`` map and reference the fusion run."""
+        """Fuse the ``association`` runs over the ``geometry`` map and reference the fusion run.
+
+        Several association and perception runs (the ContextRuns of one build, issue #500) are
+        fused as separate evidence: Semantic Fusion groups them by physical observation, so
+        repeated inference over one frame never counts as another observation. Each association
+        run must come from perception runs that are inputs of this fusion, and each perception
+        run may be associated once: two associations of one perception run would describe the
+        same regions twice.
+        """
         output = _output(request)
         if request.inputs.get("representation"):
             raise ExecutorError(
                 "the point representation channel is not supported by this executor: "
                 "run the stage without a representation input"
             )
-        association = SensorAssociationRunReader(_one(request, "association"))
-        perception = PerceptionRunReader(_one(request, "perception"))
-        results = {result.result_id: result for result in perception.iter_results()}
-        observations = list(association.observations())
-        described = perception.manifest
-        run = PerceptionRun(
-            run_id=PerceptionRunId(str(described.run_id)),
-            run_index=described.run_index,
-            sequence_artifact_id=str(described.sequence_artifact_id),
-            selection_id=described.selection_id,
-            enabled_capabilities=frozenset(described.enabled_capabilities),
-            backend_provenance={},
+        associations = [SensorAssociationRunReader(path) for path in _many(request, "association")]
+        perceptions = [PerceptionRunReader(path) for path in _many(request, "perception")]
+        runs = tuple(
+            PerceptionRun(
+                run_id=PerceptionRunId(str(described.run_id)),
+                run_index=described.run_index,
+                sequence_artifact_id=str(described.sequence_artifact_id),
+                selection_id=described.selection_id,
+                enabled_capabilities=frozenset(described.enabled_capabilities),
+                backend_provenance={},
+            )
+            for described in (perception.manifest for perception in perceptions)
         )
+        _check_one_association_per_perception(associations, {str(run.run_id) for run in runs})
+        results = {
+            result.result_id: result
+            for perception in perceptions
+            for result in perception.iter_results()
+        }
+        observations = [
+            observation
+            for association in associations
+            for observation in association.observations()
+        ]
         # Pelo índice, não por list_observations(): esta fusão só precisa do timestamp de cada
         # imagem, e decodificar a sequência inteira para isso custava os 2,6 GB de payload do
         # corridor-02 (#514). O índice já carrega identidade, timestamp e modalidade.
@@ -625,7 +666,7 @@ class SemanticFusionExecutor:
         with GeometricMapArtifactReader(_one(request, "geometry")) as geometry:
             source = geometry.geometry()
             grouping = group_by_physical_observation(
-                observations, selected_runs=(run,), acquisition_timestamps=timestamps
+                observations, selected_runs=runs, acquisition_timestamps=timestamps
             )
             build = build_fusion_supports(
                 observations,
@@ -649,21 +690,54 @@ class SemanticFusionExecutor:
                 )
                 for support in build.supports
             )
+            first = associations[0].manifest
             manifest = SemanticFusionRunWriter(
                 output_dir=output,
-                sequence_name=association.manifest.sequence_name,
+                sequence_name=first.sequence_name,
                 run_id=SemanticFusionRunId(request.identity()),
                 run_index=request.run_number(),
                 lineage=FusionRunLineage(
-                    sequence_artifact_id=str(association.manifest.sequence_artifact_id),
+                    sequence_artifact_id=str(first.sequence_artifact_id),
                     geometric_map_id=geometry.manifest.map_id,
-                    association_run_ids=(str(association.manifest.run_id),),
-                    perception_run_ids=(run.run_id,),
+                    association_run_ids=tuple(
+                        sorted(str(association.manifest.run_id) for association in associations)
+                    ),
+                    perception_run_ids=tuple(sorted(run.run_id for run in runs)),
                     point_representation_run_ids=(),
                 ),
                 code_version=self._code_version or "",
             ).write(outcomes, excluded=build.excluded)
         return _reference(request, FUSION, str(manifest.run_id), manifest.file_inventory)
+
+
+def _check_one_association_per_perception(
+    associations: Sequence[SensorAssociationRunReader], perception_runs: set[str]
+) -> None:
+    """Refuse association runs a fusion cannot combine without describing a region twice.
+
+    A spatial observation's identity comes from its perception result and region, not from the
+    association run, so two associations of one perception run would collide; an association of
+    a perception run that is not an input would reference results the fusion cannot see.
+
+    Raises:
+        ExecutorError: If an association comes from a perception run that is not an input, or
+            two associations share a perception run.
+    """
+    associated: dict[str, str] = {}
+    for association in associations:
+        association_run = str(association.manifest.run_id)
+        for perception_run in association.manifest.perception_run_ids:
+            if perception_run not in perception_runs:
+                raise ExecutorError(
+                    f"association run {association_run!r} was built from perception run "
+                    f"{perception_run!r}, which is not an input of this fusion"
+                )
+            other = associated.setdefault(perception_run, association_run)
+            if other != association_run:
+                raise ExecutorError(
+                    f"perception run {perception_run!r} is associated by both {other!r} and "
+                    f"{association_run!r}; a fusion takes one association per perception run"
+                )
 
 
 class SemanticMappingExecutor:
