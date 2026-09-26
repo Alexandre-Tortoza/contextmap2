@@ -282,3 +282,44 @@ def test_point_field_byte_order_still_rejects_a_field_beyond_point_step() -> Non
 
     with pytest.raises(ValueError, match="exceeds point_step=8"):
         _ros_common._normalize_point_field_byte_order(bytes(16), point_step=8, fields=(field,))
+
+
+_K_MATRIX = (600.0, 0.0, 640.0, 0.0, 600.0, 360.0, 0.0, 0.0, 1.0)
+
+
+def test_build_camera_model_reports_no_conversion_for_four_equidistant_coefficients() -> None:
+    model, conversions = _ros_common.build_camera_model(
+        width=1280,
+        height=720,
+        k_matrix=_K_MATRIX,
+        distortion_model_name="equidistant",
+        distortion_coefficients=(0.1, 0.2, 0.3, 0.4),
+    )
+
+    assert model.distortion_coefficients == (0.1, 0.2, 0.3, 0.4)
+    assert conversions == ()
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "expected", "note"),
+    [
+        ((0.1, 0.2, 0.3, 0.4, 0.5), (0.1, 0.2, 0.3, 0.4), "dropped 1 extra coefficient(s) [0.5]"),
+        ((0.1, 0.2), (0.1, 0.2, 0.0, 0.0), "zero-filled the missing 2"),
+    ],
+    ids=["truncated", "zero_filled"],
+)
+def test_build_camera_model_records_how_equidistant_coefficients_were_normalized(
+    coefficients: tuple[float, ...], expected: tuple[float, ...], note: str
+) -> None:
+    model, conversions = _ros_common.build_camera_model(
+        width=1280,
+        height=720,
+        k_matrix=_K_MATRIX,
+        distortion_model_name="equidistant",
+        distortion_coefficients=coefficients,
+    )
+
+    assert model.distortion_coefficients == expected
+    (conversion,) = conversions
+    assert f"got {len(coefficients)}" in conversion
+    assert note in conversion

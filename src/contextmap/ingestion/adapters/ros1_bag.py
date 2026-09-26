@@ -272,7 +272,7 @@ class Ros1BagSourceAdapter:
     def _camera_calibration_entry(self, message: Any, topic: str) -> CalibrationEntry:
         sensor_id = SensorId(_ros_common.sanitize_topic(self._config.topics.rgb or topic))
         frame_id = FrameId(message.header.frame_id)
-        camera_model = _ros_common.build_camera_model(
+        camera_model, conversions = _ros_common.build_camera_model(
             width=message.width,
             height=message.height,
             k_matrix=message.K,
@@ -292,6 +292,7 @@ class Ros1BagSourceAdapter:
                     "distortion_model": message.distortion_model,
                     "D": [float(value) for value in message.D],
                 },
+                conversions_applied=conversions,
             ),
             content_hash=compute_content_hash(
                 sensor_id=sensor_id, frame_id=frame_id, camera_model=camera_model

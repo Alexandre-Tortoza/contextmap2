@@ -64,6 +64,7 @@ def _build_bag(
     path: Path,
     *,
     distortion_model: str = "plumb_bob",
+    distortion_coefficients_override: tuple[float, ...] | None = None,
     imu_orientation_available: bool = True,
     include_bad_image: bool = False,
     camera_info_repeats: int = 1,
@@ -116,6 +117,8 @@ def _build_bag(
             if distortion_model == "equidistant"
             else np.array([0.1, -0.05, 0.0, 0.0, 0.0], dtype=np.float64)
         )
+        if distortion_coefficients_override is not None:
+            distortion_coefficients = np.array(distortion_coefficients_override, dtype=np.float64)
         camera_info_msg: Any = types["sensor_msgs/msg/CameraInfo"](
             header=_header(1, "front_camera_optical"),
             height=720,
@@ -768,3 +771,26 @@ def test_repeated_identical_camera_info_is_kept_once_during_the_scan(
     assert calibration is not None
     assert len(calibration.entries) == 1
     assert merged == [1]
+
+
+@pytest.mark.parametrize(
+    "coefficients",
+    [(0.01, 0.002, 0.0003, 0.00004, 0.5), (0.01, 0.002)],
+    ids=["five_truncated", "two_zero_filled"],
+)
+def test_equidistant_coefficients_that_are_not_four_leave_a_conversion_note(
+    tmp_path: Path, coefficients: tuple[float, ...]
+) -> None:
+    path = tmp_path / "fisheye.bag"
+    _build_bag(path, distortion_model="equidistant", distortion_coefficients_override=coefficients)
+    adapter = Ros1BagSourceAdapter(
+        SourceAdapterConfig(source_type="ros1_bag", path=str(path), topics=_TOPICS)
+    )
+
+    calibration = adapter.read_calibration()
+
+    assert calibration is not None
+    (entry,) = calibration.entries.values()
+    assert isinstance(entry.camera_model, FisheyeCameraModel)
+    (conversion,) = entry.provenance.conversions_applied
+    assert f"got {len(coefficients)}" in conversion

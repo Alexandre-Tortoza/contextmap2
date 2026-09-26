@@ -542,7 +542,7 @@ def build_camera_model(
     k_matrix: Any,
     distortion_model_name: str,
     distortion_coefficients: Any,
-) -> CameraModel:
+) -> tuple[CameraModel, tuple[str, ...]]:
     """Build a canonical camera model from primitive ``CameraInfo`` values.
 
     Callers extract ``K``/``D`` (ROS 1) or ``k``/``d`` (ROS 2) themselves,
@@ -557,8 +557,13 @@ def build_camera_model(
         distortion_coefficients: The distortion coefficient array.
 
     Returns:
-        A :class:`~contextmap.ingestion.calibration.FisheyeCameraModel` when
-        ``distortion_model_name == "equidistant"``, otherwise a
+        The camera model and the notes of every normalization applied to the
+        source values, for
+        :attr:`~contextmap.ingestion.calibration.CalibrationProvenance.conversions_applied`
+        (empty when the values mapped as given). The model is a
+        :class:`~contextmap.ingestion.calibration.FisheyeCameraModel` when
+        ``distortion_model_name == "equidistant"``, whose ``D`` is truncated
+        or zero-filled to its four coefficients (with a note), otherwise a
         :class:`~contextmap.ingestion.calibration.PinholeCameraModel`
         (falling back to :attr:`DistortionModel.NONE` for an unrecognized
         model name, leaving validation to catch the resulting
@@ -570,9 +575,19 @@ def build_camera_model(
     cy = float(k_matrix[5])
 
     if distortion_model_name == "equidistant":
-        coefficients = [float(value) for value in distortion_coefficients[:4]]
-        coefficients += [0.0] * (4 - len(coefficients))
-        k1, k2, k3, k4 = coefficients
+        source = [float(value) for value in distortion_coefficients]
+        conversions: tuple[str, ...] = ()
+        if len(source) > 4:
+            conversions = (
+                f"equidistant takes 4 distortion coefficients (k1, k2, k3, k4), got "
+                f"{len(source)}: dropped {len(source) - 4} extra coefficient(s) {source[4:]}",
+            )
+        elif len(source) < 4:
+            conversions = (
+                f"equidistant takes 4 distortion coefficients (k1, k2, k3, k4), got "
+                f"{len(source)}: zero-filled the missing {4 - len(source)}",
+            )
+        k1, k2, k3, k4 = (source + [0.0] * 4)[:4]
         return FisheyeCameraModel(
             width=width,
             height=height,
@@ -581,7 +596,7 @@ def build_camera_model(
             cx=cx,
             cy=cy,
             distortion_coefficients=(k1, k2, k3, k4),
-        )
+        ), conversions
 
     distortion_model = PINHOLE_DISTORTION_MODEL_MAP.get(distortion_model_name, DistortionModel.NONE)
     return PinholeCameraModel(
@@ -593,7 +608,7 @@ def build_camera_model(
         cy=cy,
         distortion_model=distortion_model,
         distortion_coefficients=tuple(float(value) for value in distortion_coefficients),
-    )
+    ), ()
 
 
 class StreamingContentHash:
