@@ -42,7 +42,9 @@ O eixo de 2 e 3 é o `up_axis` (`ABOVE`, `ON_TOP_OF`) ou o `forward_axis` (`IN_F
 
 ## Escala
 
-Sem retorno a todos-os-pares. Os limites são ordenados ao longo do eixo em que os centros mais se espalham e uma varredura (sweep and prune) só pareia caixas cujo intervalo nesse eixo está dentro do maior alcance da política, então um corredor longo custa trabalho proporcional aos pares realmente próximos. Os pares que a varredura prova mais distantes que todo alcance **não são enumerados** e apenas contados (`pairs_not_enumerated`), o que mantém o registro de exclusões limitado. Uma varredura com 300 entidades enfileiradas gera zero candidatos e zero exclusões e conta os 44 850 pares não enumerados.
+Sem retorno a todos-os-pares. Os limites são ordenados ao longo do eixo em que os centros mais se espalham e uma varredura (sweep and prune) só pareia caixas cujo intervalo nesse eixo está dentro do maior alcance da política, então um corredor longo custa trabalho proporcional aos pares realmente próximos. Os pares que a varredura prova mais distantes que todo alcance **não são enumerados** e apenas contados (`pairs_not_enumerated`): só esses ficam fora do registro de exclusões. Uma varredura com 300 entidades enfileiradas gera zero candidatos e zero exclusões e conta os 44 850 pares não enumerados.
+
+O registro de exclusões **não é limitado**: todo par enumerado gera, para cada predicado avaliado e cada sentido, um candidato ou uma `CandidateExclusion`, e todas ficam em memória e são serializadas no conjunto de candidatos. Elas crescem com predicados × sentidos × pares próximos, e também com a razão entre o alcance direcional e o de proximidade, porque um par enumerado pelo alcance direcional gera uma exclusão `BEYOND_PROXIMITY_RADIUS` para cada predicado de proximidade. Numa pilha densa de 101 entidades (#601), 26 236 exclusões para 7 764 candidatos ocupavam 77% dos bytes de `relation-candidates.jsonl`. Limitar esse registro muda o schema do artifact e está em aberto na #601.
 
 ## Limites conhecidos
 

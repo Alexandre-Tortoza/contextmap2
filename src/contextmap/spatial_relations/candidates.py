@@ -14,7 +14,9 @@ How it stays sub-quadratic: entities are ordered along the axis on which they ar
 and a sweep only pairs boxes whose gap along that axis is within the largest reach of the policy
 (sweep and prune), so a long corridor of entities costs work proportional to the pairs that are
 actually near each other. Pairs the sweep proves farther apart than every reach are not enumerated
-and are only counted, which keeps the exclusion record bounded and honest.
+and are only counted. Every enumerated pair still records a candidate or an exclusion per evaluated
+predicate and direction, so the exclusion record grows with the pairs near each other: it is not
+bounded.
 
 Every precondition is a *necessary* condition for the corresponding evaluator to *support* the
 relation, on the assumption
