@@ -463,6 +463,52 @@ class TestStructuralPreflight:
         )
 
 
+def _provided(stage_id: str, contract: str, name: str) -> ArtifactRef:
+    return ArtifactRef(stage_id=stage_id, contract=contract, artifact_id=name, content_hash=name)
+
+
+class TestSeveralProvidedRuns:
+    """Issue #498: a build supplies the runs of several ContextRuns to one stage."""
+
+    def _upstream(self) -> dict[str, Any]:
+        return {
+            "ingestion": _provided("ingestion", "SequenceArtifact", "seq"),
+            "geometric_mapping": _provided("geometric_mapping", "GeometricMapArtifact", "map"),
+            "visual_perception": (
+                _provided("visual_perception", "PerceptionRunArtifact", "perception-1"),
+                _provided("visual_perception", "PerceptionRunArtifact", "perception-2"),
+            ),
+            "sensor_association": (
+                _provided("sensor_association", "SensorAssociationRunArtifact", "association-1"),
+                _provided("sensor_association", "SensorAssociationRunArtifact", "association-2"),
+            ),
+        }
+
+    def test_several_runs_reach_an_input_that_accepts_them(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+
+        execution = plan.scope(targets=["semantic_fusion"], provided=self._upstream())
+
+        assert not execution.problems
+        assert [ref.artifact_id for ref in execution.reused["sensor_association"]] == [
+            "association-1",
+            "association-2",
+        ]
+
+    def test_several_runs_for_an_input_that_takes_one_are_a_problem(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        upstream = self._upstream()
+        upstream["geometric_mapping"] = (
+            _provided("geometric_mapping", "GeometricMapArtifact", "map-1"),
+            _provided("geometric_mapping", "GeometricMapArtifact", "map-2"),
+        )
+
+        execution = plan.scope(targets=["semantic_fusion"], provided=upstream)
+
+        assert [problem.path for problem in execution.problems] == ["provided.geometric_mapping"]
+        assert "semantic_fusion" in execution.problems[0].message
+
+
 class TestScopeAndExecution:
     def test_runs_the_complete_pipeline_in_dependency_order_with_fake_stages(
         self, tmp_path: Path

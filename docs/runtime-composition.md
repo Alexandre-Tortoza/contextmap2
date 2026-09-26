@@ -389,6 +389,7 @@ src/contextmap/runtime/
 ├── composition.py         # composition root: construção lazy das implementações
 ├── config.py              # configuração efetiva, digest, segredos e disponibilidade
 ├── context_branch.py      # ContextBranch: acúmulo explícito de ContextRuns, só por acréscimo
+├── context_build.py       # ContextBuild: entrada congelada de uma materialização
 ├── context_run.py         # ContextRun: escopo de contexto sobre a fundação e seu registro imutável
 ├── errors.py              # falhas de composição e do DAG
 ├── foundation.py          # fundação espacial: sequência, trajetória e mapa validados juntos
@@ -505,7 +506,7 @@ acrescenta CR3 → revisão 3 → ContextBuild CB2 → M2   (CB1 e M1 nunca muda
 | `SpatialFoundation` | runtime | valor que fixa as três refs (`ArtifactRef`) da fundação, validado pelos leitores públicos | **nenhum artifact próprio**: embutido nos registros de branch e de `ContextRun` | `SpatialFoundationId` = SHA-256 do digest de inventário (`inventory_digest`) de cada um dos três artifacts, calculado pela própria fundação ao validá-los |
 | `ContextRun` | runtime | um run do runtime (`run-NNNN`) que executa os estágios de contexto (`visual_perception`, `sensor_association` e, quando habilitado, `point_representation`) sobre uma fundação e uma seleção | `context_run.json` imutável na raiz do run, publicado **só** quando o run conclui | `ContextRunId` = SHA-256 de `SpatialFoundationId`, do documento canônico da seleção de observações e dos `(stage_id, contrato, content_hash)` das saídas, produzidas ou reutilizadas |
 | `ContextBranch` | runtime | fluxo lógico que acumula `ContextRun`s de **uma** fundação | `branches/<nome>/branch.json` (imutável: nome + fundação) e um registro imutável por acréscimo em `branches/<nome>/members/` | nome da branch (slug, único no dataset); a **revisão** é o número de membros |
-| `ContextBuild` | runtime | um run do runtime que materializa o mapa a partir de um conjunto congelado de `ContextRun`s | `context_build.json` imutável na raiz do run, escrito **antes** do primeiro estágio de jusante | `ContextBuildId` = SHA-256 de `SpatialFoundationId`, `ContextRunId`s em ordem canônica, digest do plano e `code_identity` |
+| `ContextBuild` | runtime | um run do runtime que materializa o mapa a partir de um conjunto congelado de `ContextRun`s | `context_build.json` imutável na raiz do run, escrito **antes** do primeiro estágio de jusante | `ContextBuildId` = SHA-256 de `SpatialFoundationId`, `ContextRunId`s em ordem canônica, artifacts fornecidos, `config_digest` de cada estágio que o build executa e `code_identity`; nunca o nome da branch nem a revisão |
 | `ContextMapId` | artifact | identidade final e imutável do snapshot | `ContextMapArtifact` (inalterado) | a de hoje: identidade do estágio `context_map` |
 
 Regras de identidade:
@@ -562,6 +563,8 @@ Implementada em `runtime/context_branch.py` (#496): `create_branch(workspace, da
 - acrescentar uma run à branch depois nunca altera um build já congelado: o build nomeia seus membros, não uma revisão "atual";
 - o `ContextMapId` final e o sucesso ou falha vêm do registro de execução do run (`execution.json`, `status.json`), sem duplicá-los em `context_build.json`;
 - depois de gravar o mapa, o build roda `validate_context_map_artifact(..., level=ValidationLevel.FULL)`, a validação que o artifact já possui e que o runtime ainda não chama.
+
+Implementado em `runtime/context_build.py` (#498): `plan_context_build(workspace, branch, plan, code_identity=, revision=, context_run_ids=)` reabre cada `ContextRun` selecionada pelo seu registro (tem de ser o membro que a branch nomeia, sobre a mesma fundação), deduplica os artifacts e devolve o `ContextBuild` e a execução escopada até `context_map`. A execução recebe só a sequência e o mapa da fundação (a materialização não consome a trajetória) e as saídas das `ContextRun`s; se ela fosse recomputar algum estágio de contexto ou da fundação, por exemplo `point_representation` habilitado sem nenhuma `ContextRun` que o tenha produzido, o build é recusado. `publish_context_build(run_directory, workspace=, build=)` grava `context_build.json` antes do primeiro estágio, e `read_context_build(...)` recusa um registro alterado ou copiado para outro run. `scope(provided=...)` aceita várias refs por estágio e reporta várias refs chegando a uma entrada que não é `multiple`.
 
 ### Fusão sobre várias `ContextRun`s
 
