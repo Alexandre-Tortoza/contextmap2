@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from contextmap.ingestion import SourceObservationId
+from contextmap.shared import FileEntry, check_file_inventory
 from contextmap.visual_perception.dense_region_association import (
     DenseFeatureMap,
     DenseFeatureSampling,
@@ -1494,19 +1495,14 @@ def _load_manifest(run_dir: Path) -> RunArtifactManifest:
 
 
 def _check_file_inventory(root: Path, manifest: RunArtifactManifest) -> list[str]:
-    problems: list[str] = []
-    for entry in manifest.file_inventory:
-        file_path = root / entry.path
-        if not file_path.is_file():
-            problems.append(f"missing file referenced by manifest: {entry.path}")
-            continue
-        data = file_path.read_bytes()
-        if len(data) != entry.size_bytes:
-            problems.append(
-                f"size mismatch for {entry.path}: expected {entry.size_bytes}, found {len(data)}"
-            )
-            continue
-        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
-        if digest != entry.content_hash:
-            problems.append(f"content hash mismatch for {entry.path}")
-    return problems
+    """Check the manifest's inventory with the rule every run artifact shares.
+
+    Files are hashed in chunks, so a large ``.npy`` payload is never read whole (VP-07).
+    """
+    return check_file_inventory(
+        root,
+        (
+            FileEntry(path=entry.path, size_bytes=entry.size_bytes, content_hash=entry.content_hash)
+            for entry in manifest.file_inventory
+        ),
+    )

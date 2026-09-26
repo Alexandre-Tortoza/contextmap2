@@ -721,6 +721,39 @@ def test_verify_integrity_detects_a_missing_output_file(tmp_path: Path) -> None:
     assert any("missing file" in problem for problem in reader.verify_integrity())
 
 
+def test_the_inventory_is_checked_without_reading_whole_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VP-07: finalize() and verify_integrity() read every inventoried file whole to hash it.
+
+    A dense feature or a mask is a ``.npy`` payload that can be large, so the check must
+    stream it in chunks like ``FeatureStoreReader.load`` does since #518.
+    """
+    feature = _dense_feature()
+    read_whole: list[Path] = []
+    real_read_bytes = Path.read_bytes
+
+    def spying_read_bytes(path: Path) -> bytes:
+        read_whole.append(path)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", spying_read_bytes)
+    writer = _write_run(tmp_path)
+    writer.add_result(
+        replace(
+            _masked_result("frame-0001", _full_frame_mask(width=8, height=6)), features=(feature,)
+        )
+    )
+    writer.add_feature_payload(
+        feature, SourceObservationId("frame-0001"), np.zeros((2, 2), dtype="float32")
+    )
+    writer.finalize()
+    reader = PerceptionRunReader(_run_dir(tmp_path))
+    assert reader.verify_integrity() == []
+
+    assert [path for path in read_whole if path.suffix == ".npy"] == []
+
+
 def _dense_feature(feature_id: str = "feature-dense-0000") -> VisualFeature:
     return VisualFeature(
         feature_id=FeatureId(feature_id),

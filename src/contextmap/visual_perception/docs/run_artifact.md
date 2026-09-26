@@ -124,6 +124,8 @@ O motivo é medido, não hipotético: uma `InlineMask` de 640x480 era então uma
 
 `finalize()` passa a fazer só o que é inerentemente global: validar os invariantes entre frames, escrever `mask-index.jsonl`/`feature-index.jsonl`, o `manifest.json`, o `README.md`, conferir o inventário e publicar por rename.
 
+A conferência do inventário, em `finalize()` e em `PerceptionRunReader.verify_integrity()`, é a regra comum a todo run artifact (`contextmap.shared.check_file_inventory`): cada arquivo é lido em blocos para o hash, então um payload `.npy` grande nunca é carregado inteiro, e um caminho de manifest fora do run é reportado sem ser aberto (#619).
+
 `add_result()` rejeita evidência pertencente a outro `run_id`, a outro `sequence_artifact_id` ou uma segunda evidência para o mesmo `source_observation_id`. Assim, o arquivo final preserva exatamente um resultado por observação e nunca mistura ownership de runs ou sequências.
 
 O writer também exige, antes de publicar, que cada diagnostic de feature `SUCCEEDED`/`WARNING` descreva exatamente uma feature do resultado da mesma observação (`feature_id`), com scope, shape, dtype, normalização, `payload_reference`, proveniência do backend e fingerprint do `EmbeddingSpace` iguais. Para features densas, `(grid_height, grid_width)` precisa ser `feature.shape[:2]` e `source_artifact_id` precisa ser o `run_id` do próprio run; um segundo diagnostic para a mesma feature é rejeitado. `metrics/feature-extraction.jsonl` carrega a geometria densa contratual, então ela não pode descrever outro payload. Detalhes em [`feature_diagnostics.md`](feature_diagnostics.md).
