@@ -229,6 +229,7 @@ pipeline principal.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.
 - [`state_estimation.md`](state_estimation.md) — camadas do relatório, referência confiável, protocolo de comparação (associação, alinhamento, ATE, RPE), perfil de referência, limiares por perfil, o baseline `ExternalPose` e o relatório do FAST-LIO.
+- [`voxel_aggregation.md`](voxel_aggregation.md) — avaliação pareada bruto × agregação voxel inter-scan: fidelidade geométrica por faixa de alcance, estabilidade da associação 2D→3D por voxel, geometria do suporte e parâmetros fixados antes dos resultados (#624).
 - [`geometric_mapping.md`](geometric_mapping.md) — camadas do relatório, concordância ponto-plano entre scans, referência sem alinhamento, reprodutibilidade, fixtures sintéticas e a execução real de referência.
 - [`docs/architecture.md`](../../../../docs/architecture.md) — ownership e direção de dependências.
 - [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md) — imutabilidade e separação entre outputs, métricas e debug.

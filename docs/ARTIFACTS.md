@@ -268,6 +268,25 @@ No schema atual, `manifest.json` também persiste `pipeline_preset` e `configura
 
 A identidade do mapa é `<sequência>--<run_id>` e toda `GeometryReference` a carrega; as referências são locais ao artifact. O `manifest.json` inventaria os arquivos contratuais com tamanho e SHA-256, e `debug/` fica fora do inventário. O leitor abre sem ROS, sem FAST-LIO, sem biblioteca de modelo e sem NumPy, e `geometry()` devolve um `GeometrySource` sobre o payload mapeado, sem lê-lo. A configuração é JSON (`config.json`), não YAML. Detalhes: [Geometric Mapping artifact](../src/contextmap/geometric_mapping/docs/artifact.md).
 
+### `VoxelAggregationArtifact` (derivado, experimental)
+
+```text
+<dir>/                                  # separado do GeometricMapArtifact; nunca dentro dele
+├── README.md
+├── manifest.json
+├── lineage.json                        # identidade exata do bruto: digest do inventário e hashes lidos
+├── config.json                         # política (grade inclusa), fingerprint e tamanho de bloco
+├── environment.json
+├── outputs/
+│   ├── aggregates.bin                  # um registro de 148 bytes por voxel ocupado
+│   ├── contributions.bin               # um (scan, pontos) de 8 bytes por par voxel × scan
+│   ├── aggregation.json
+│   └── map-metadata.json               # GeometricMap derivado, com identidade própria
+└── metrics/aggregation.json            # escala e custo de provenance
+```
+
+Uma agregação voxel **entre scans** derivada de um `GeometricMapArtifact` bruto já finalizado, que ela só lê. Nenhum estágio canônico a consome: ela existe para medir, na issue #624, se uma representação agregada pode acompanhar ou substituir a geometria bruta. Detalhes: [agregação inter-scan](../src/contextmap/geometric_mapping/docs/inter-scan-aggregation.md).
+
 ### `SensorAssociationRunArtifact` atual
 
 ```text
