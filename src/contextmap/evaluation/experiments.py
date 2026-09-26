@@ -112,6 +112,9 @@ class AblationMode(Enum):
     FULL_FACTORIAL = "full_factorial"
     """Every combination of every variable's values."""
 
+    SELECTED = "selected"
+    """The baseline plus an explicit selection of cells, never the whole product."""
+
 
 class ExperimentPurpose(Enum):
     """Whether the experiment tunes something or only measures it."""
@@ -473,7 +476,12 @@ def ablation_cells(
     """Return the assignments of every arm of an ablation matrix, baseline first.
 
     The order is deterministic: variables and values in declaration order.
+
+    Raises:
+        ExperimentError: For ``SELECTED``, whose cells are listed explicitly, not generated.
     """
+    if mode is AblationMode.SELECTED:
+        raise ExperimentError("a selected ablation lists its cells explicitly")
     baseline = tuple((item.name, item.baseline_value) for item in variables)
     if mode is AblationMode.ONE_AT_A_TIME:
         cells = [baseline]
@@ -998,8 +1006,13 @@ class ExperimentManifest:
                         f"arm {arm.arm_id!r} assigns {value!r} to variable {name!r}, which "
                         f"allows only {list(variable.values)}"
                     )
-        declared = {tuple(sorted(cell)) for cell in ablation_cells(self.variables, self.mode)}
         actual = {tuple(sorted(arm.assignments)) for arm in self.arms}
+        if self.mode is AblationMode.SELECTED:
+            if len(actual) != len(self.arms):
+                raise ExperimentError("two selected arms assign the same values")
+            declared = actual
+        else:
+            declared = {tuple(sorted(cell)) for cell in ablation_cells(self.variables, self.mode)}
         if actual != declared or len(self.arms) != len(declared):
             raise ExperimentError(
                 f"the arms are not the cells of the {self.mode.value} ablation matrix: "

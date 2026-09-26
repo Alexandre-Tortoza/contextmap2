@@ -107,9 +107,11 @@ class RuntimeBinding:
         stage_id: The stage of the canonical preset that runs it.
         component_id: The variation point, or ``None`` for an operation the stage itself owns.
         backend_id: The backend of that variation point.
-        settings: ``(parameter, accepted values)`` that select this native operation among
-            the ones the backend offers (a Florence-2 ``task``, a SAM3 ``strategy``, the
-            ``policy_id`` of a LocateAnything query in its ``query_set``).
+        settings: ``(parameter path, accepted values)`` that select this native operation
+            among the ones the backend offers (a Florence-2 ``task``, a SAM3 ``strategy``, the
+            ``policy_id`` of a LocateAnything query). The path is dotted inside the backend's
+            parameters; a list along it fans out, so ``query_set.queries.policy_id`` reads the
+            policy of every query, and the operation is selected when any value is accepted.
     """
 
     stage_id: str
@@ -473,7 +475,7 @@ _SCORING_LIMITATIONS = (
     "another scorer's values (#530 evaluates it)",
 )
 
-CAPABILITY_MATRIX_VERSION = "1.1.0"
+CAPABILITY_MATRIX_VERSION = "1.2.0"
 """Version of :data:`CAPABILITY_MATRIX`; a changed entry is a new version."""
 
 CAPABILITY_MATRIX = CapabilityMatrix(
@@ -1266,7 +1268,9 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 stage_id=_VP,
                 component_id=_GROUNDING,
                 backend_id="locateanything",
-                settings=(("policy_id", ("locateanything.category-detection/1",)),),
+                settings=(
+                    ("query_set.queries.policy_id", ("locateanything.category-detection/1",)),
+                ),
             ),
             input_evidence=("PreparedImage", "GroundingQuery (CATEGORY_DETECTION, BOX)"),
             output_evidence=("Region2D (box only)", "GroundingOutput label (never a claim)"),
@@ -1294,7 +1298,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 stage_id=_VP,
                 component_id=_GROUNDING,
                 backend_id="locateanything",
-                settings=(("policy_id", ("locateanything.phrase-grounding/1",)),),
+                settings=(("query_set.queries.policy_id", ("locateanything.phrase-grounding/1",)),),
             ),
             input_evidence=("PreparedImage", "GroundingQuery (PHRASE_GROUNDING, BOX)"),
             output_evidence=("Region2D (box only)", "GroundingOutput label (never a claim)"),
@@ -1322,7 +1326,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 stage_id=_VP,
                 component_id=_GROUNDING,
                 backend_id="locateanything",
-                settings=(("policy_id", ("locateanything.pointing/1",)),),
+                settings=(("query_set.queries.policy_id", ("locateanything.pointing/1",)),),
             ),
             input_evidence=("PreparedImage", "GroundingQuery (PHRASE_GROUNDING, POINT)"),
             output_evidence=("GroundingPoint (grounding stream only)",),

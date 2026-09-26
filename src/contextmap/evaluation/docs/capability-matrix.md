@@ -1,6 +1,6 @@
 # Matriz de capacidades e compatibilidade (#522)
 
-`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.1.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
+`contextmap.evaluation.capability_matrix` congela, como dados tipados, o que cada família de modelo do experimento do milestone #22 faz nativamente, que papel do ContextMap2 ela ocupa, se já é selecionável pelo runtime e quais composições produtor → consumidor são admissíveis. A versão atual é `1.2.0` (`CAPABILITY_MATRIX_VERSION`); repositórios e model cards upstream foram consultados em 2026-09-25.
 
 A matriz descreve composições experimentais admissíveis; ela **não** escolhe um pipeline canônico. Um modelo só ocupa vários papéis por contratos de evidência explícitos de cada capability: geometria, hipótese semântica e crença persistente nunca se fundem só porque saem da mesma inferência.
 
@@ -9,7 +9,7 @@ A matriz descreve composições experimentais admissíveis; ela **não** escolhe
 | Tipo | Conteúdo |
 |---|---|
 | `Capability` | uma operação nativa de uma família (ou uma operação do próprio ContextMap2 que a consome): backend, operação nativa, papel e adapter, status, `RuntimeBinding`, evidência de entrada e saída, geometria, controles de prompt/tarefa e de modelo/runtime, campos de proveniência, limitações, papéis compatíveis a montante e a jusante, grupo de comparação, família de métricas, motivo do status e issue |
-| `RuntimeBinding` | estágio do preset canônico, componente e backend e os `settings` que selecionam a operação nativa (`task` do Florence-2, `strategy` do SAM3, `policy_id` de uma query do LocateAnything) |
+| `RuntimeBinding` | estágio do preset canônico, componente e backend e os `settings` que selecionam a operação nativa (`task` do Florence-2, `strategy` do SAM3, `query_set.queries.policy_id` do LocateAnything; um caminho pontuado cujas listas se abrem, e a operação é selecionada quando algum valor encontrado é aceito) |
 | `Control` | um parâmetro (ou grupo reservado) e seu status; controles ainda não disponíveis citam a issue que os entrega |
 | `Composition` | uma aresta produtor → consumidor com status, nota, issue, grupo de comparação e família de métricas |
 

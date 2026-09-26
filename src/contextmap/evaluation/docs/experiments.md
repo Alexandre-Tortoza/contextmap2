@@ -25,7 +25,7 @@ Resolver uma configuração em um DAG é responsabilidade do `runtime` (`Pipelin
 
 O manifesto só se constrói se for uma comparação controlada:
 
-1. **Matriz.** Os arms são exatamente as células de `ablation_cells()`: `one_at_a_time` (baseline mais um arm por variável e valor não baseline) ou `full_factorial` (todas as combinações). O baseline segura todos os valores baseline.
+1. **Matriz.** Os arms são exatamente as células de `ablation_cells()`: `one_at_a_time` (baseline mais um arm por variável e valor não baseline) ou `full_factorial` (todas as combinações); ou, em `selected`, o baseline mais uma lista explícita de células distintas. O baseline segura todos os valores baseline.
 2. **Diferenças declaradas.** Cada diferença entre um arm e o baseline precisa ser coberta por uma variável que o arm atribui a um valor não baseline, **de um tipo que a permita**:
 
    | Diferença | Tipo de variável exigido |
@@ -172,6 +172,10 @@ Artifacts de estágios não afetados são comparados por `kind` + `digest`: uma 
 ### Arms que falham continuam no resultado
 
 Um arm que falhou, estourou memória ou ficou indisponível aparece em `arms` com status e motivo, com o par `incomplete` e seus `factors` e `declared_differences`; nunca é removido para fabricar um conjunto pareado. A comparação fica `complete: false`.
+
+## Fases
+
+As fases do #521 declaram fatores sobre a configuração do runtime e são expandidas em arms deste manifesto por [`experiment-phases.md`](experiment-phases.md); o modo `selected` roda o baseline e só as células escolhidas.
 
 ## Matriz de capacidades
 
