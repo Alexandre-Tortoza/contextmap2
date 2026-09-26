@@ -56,7 +56,7 @@ python experiments/geometric-aggregation-raw-vs-voxel-20260926/scripts/run_all.p
 
 Sem `--sequence`, `--trajectory` e `--perception`, só a parte geométrica roda. Cada braço deixa em `<saída>/<braço>/` o seu artifact derivado (`voxel_aggregation/`), `arm-report.json`, o run de associação (`sensor_association/`) e `association-stability.json`. `report.json` reúne tudo. Os artifacts e configs de cada braço ficam retidos para reinspeção.
 
-A execução é **fail-fast**. Um passo falha quando sai com status diferente de zero, não deixa relatório ou relata problema de integridade (do artifact derivado, da lineage contra o bruto ou do run de associação) ou de chunking. Nesse caso nenhum passo seguinte roda, `report.json` sai com `"status": "failed"` e a lista `failures`, e `run_all.py` termina com status 1. Só um `report.json` com `"status": "complete"` e status de saída 0 é evidência para a #624.
+A execução é **fail-fast**. Antes de qualquer passo, a identidade do artifact bruto é registrada uma única vez; se ele não puder ser lido (manifest ou `config.json` ausente ou corrompido), isso já é uma falha `source: ...` e nenhum braço roda. Um passo falha quando sai com status diferente de zero, não deixa relatório ou relata problema de integridade (do artifact derivado, da lineage contra o bruto ou do run de associação) ou de chunking. Nesse caso nenhum passo seguinte roda, `report.json` sai com `"status": "failed"` e a lista `failures`, e `run_all.py` termina com status 1. Só um `report.json` com `"status": "complete"` e status de saída 0 é evidência para a #624. O único caso sem `report.json` é um diretório de saída que já existe: ele é recusado para que o relatório de outro run nunca seja sobrescrito.
 
 | Script | Faz |
 |---|---|

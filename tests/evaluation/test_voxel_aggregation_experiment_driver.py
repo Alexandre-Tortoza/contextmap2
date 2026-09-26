@@ -11,6 +11,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -84,6 +85,31 @@ def test_a_failed_arm_stops_the_run_and_exits_non_zero(tmp_path: Path) -> None:
     assert report["status"] == "failed"
     assert any(failure.startswith("arm.py B") for failure in report["failures"])
     assert "C" not in report["arms"]
+
+
+@pytest.mark.parametrize(
+    ("relative", "damage"),
+    [
+        ("config.json", lambda path: path.unlink()),
+        ("config.json", lambda path: path.write_text("{not json", encoding="utf-8")),
+        ("manifest.json", lambda path: path.unlink()),
+    ],
+    ids=["missing-config", "corrupted-config", "missing-manifest"],
+)
+def test_an_unreadable_raw_artifact_still_leaves_a_failed_report(
+    tmp_path: Path, relative: str, damage: Callable[[Path], object]
+) -> None:
+    raw = write_run(tmp_path / "raw", make_plan())
+    raw.close()
+    damage(tmp_path / "raw" / "run-0001" / relative)
+
+    result = _run_all(tmp_path / "out", tmp_path / "raw" / "run-0001")
+
+    assert result.returncode != 0
+    report = _report(tmp_path / "out")
+    assert report["status"] == "failed"
+    assert any(failure.startswith("source:") for failure in report["failures"])
+    assert report["arms"] == {}
 
 
 @pytest.mark.parametrize(

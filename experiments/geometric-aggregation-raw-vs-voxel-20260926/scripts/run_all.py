@@ -28,7 +28,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from contextmap.geometric_mapping import GeometricMapArtifactReader
+from contextmap.geometric_mapping import GeometricMapArtifactReader, MapArtifactError
 
 HERE = Path(__file__).resolve().parent
 RUN_ONE = HERE / "_run_one.py"
@@ -123,6 +123,18 @@ def _step(script: str, *arguments: str) -> dict[str, Any]:
     return record
 
 
+def _source_snapshot(raw_map: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    """Record the raw artifact's identity once, before any step, or say why it cannot be read.
+
+    It is never re-read after a step failed: an unreadable raw artifact becomes a failure in
+    the report instead of an exception that would leave no report at all.
+    """
+    try:
+        return _source(raw_map), []
+    except (MapArtifactError, OSError, ValueError, KeyError) as error:
+        return None, [f"source: {type(error).__name__}: {error}"]
+
+
 def _source(raw_map: Path) -> dict[str, Any]:
     with GeometricMapArtifactReader(raw_map) as reader:
         manifest = reader.manifest
@@ -162,12 +174,16 @@ def main() -> int:
     associating = None not in (options.sequence, options.trajectory, options.perception)
 
     root = options.output_root
+    # Um diretório de saída existente é recusado antes de tudo: o relatório de outro run nunca
+    # é sobrescrito. É o único caso em que não sai `report.json`.
     root.mkdir(parents=True, exist_ok=False)
     code = _commit()
     origin = [str(value) for value in options.origin]
     arms: dict[str, dict[str, Any]] = {}
-    failures: list[str] = []
+    source, failures = _source_snapshot(options.raw_map)
     try:
+        if failures:
+            raise StepFailedError(failures)
         arms["A"] = {"cell_m": None}
         _checked_step(
             arms["A"],
@@ -209,7 +225,7 @@ def main() -> int:
         "issue": 624,
         "code": code,
         "environment": _environment(),
-        "source": _source(options.raw_map),
+        "source": source,
         "grid_origin_m": list(options.origin),
         "association": None
         if not associating
