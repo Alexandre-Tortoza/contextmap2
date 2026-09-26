@@ -226,6 +226,35 @@ def test_stage_outcomes_are_persisted_as_metrics(tmp_path: Path) -> None:
     assert record["status"] == StageStatus.SUCCEEDED.value
 
 
+def test_a_failed_stage_is_persisted_with_its_exception_type_and_traceback(
+    tmp_path: Path,
+) -> None:
+    """VP-11: the metrics kept only ``str(error)``, empty for ``ValueError()``."""
+
+    def failing(context: object) -> None:
+        raise ValueError()
+
+    writer = _write_run(tmp_path)
+    writer.add_result(_result("frame-0001", "run-0001"))
+    writer.add_stage_outcomes(
+        execute_stage_graph(
+            [
+                StageDefinition(
+                    stage_id="region_discovery", capability="region_discovery", run=failing
+                )
+            ]
+        )
+    )
+    writer.finalize()
+
+    metrics_path = _run_dir(tmp_path) / "metrics" / "stage-timings.jsonl"
+    record = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert record["status"] == StageStatus.FAILED.value
+    assert record["error"] == ""
+    assert record["error_type"] == "ValueError"
+    assert record["error_traceback"].endswith("ValueError\n")
+
+
 _SEMANTIC_VIEW_PAYLOAD = b"exact semantic view pixels"
 
 
@@ -1483,7 +1512,10 @@ def _pre_audit_contents(run_dir: Path) -> dict[str, str]:
 def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
     """#611 only adds the audit table: every other file must keep its exact bytes.
 
-    The digests were recorded from the 0.5.0 writer, before the audit existed.
+    The digests were recorded from the 0.5.0 writer, before the audit existed, except for
+    ``metrics/stage-timings.jsonl`` and the manifest entry that inventories it: since #619 (VP-11)
+    every stage record also carries ``error_type`` and ``error_traceback``, ``null`` for the
+    succeeded stage recorded here. Nothing else in the manifest changed.
     """
     contents = _pre_audit_contents(_characterized_run(tmp_path))
 
@@ -1526,10 +1558,10 @@ def test_every_pre_audit_output_stays_byte_identical(tmp_path: Path) -> None:
             "079016ab6ddf9054b6f82f0452d8ab3fb381d720123b4c06dd3796e4738f23e5"
         ),
         "manifest.json (stable part)": (
-            "3eb0f82f5e9542ca430b0c4ad0b89ef25602c4501c4ec21eeaf84a477896144e"
+            "f47b79899eb493c616a080a387448cbc727ce8004d67e4e387b061b09af60a2f"
         ),
         "metrics/stage-timings.jsonl": (
-            "0a43c0862087740b00dffa4d2160d6fc27c4df2d765d9f6e31c9b58b7c914611"
+            "ff75fc1139460aceccc7cc6d72b2f35e9d79f5ec467ce8e4983001ac4d8d3766"
         ),
         "outputs/features/feature-index.jsonl": (
             "8793dc07b59cd8b3f3976e1f8e122c0eebc1b606849f998e1464394d4ed5f93c"

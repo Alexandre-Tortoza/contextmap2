@@ -115,7 +115,7 @@ Cada payload pesado é gravado **no momento em que é adicionado**, não em `fin
 | `add_result()` | máscaras de cada região, em `outputs/masks/` | o resultado já com `mask_reference` e sem pixels |
 | `add_feature_payload()` | o `.npy` em `outputs/features/` | só a metadata da feature |
 | `add_semantic_view_payload()` | os bytes em `outputs/semantic-views/` | só `(sha256, size_bytes)` |
-| `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error` |
+| `add_stage_outcomes()` | — | só `stage_id`/`status`/`duration_ms`/`error`/`error_type`/`error_traceback` |
 | `add_region_discovery_audit()` | — | a auditoria do frame: IDs, motivos e números, nenhum pixel |
 
 Isso vale porque o `output` de um `StageOutcome` de `region_discovery` é a **mesma** tupla de `Region2D` com máscaras que `add_result()` recebe, e as métricas de estágio nunca serializam esse `output`: retê-lo guardaria os pixels uma segunda vez.
@@ -151,12 +151,14 @@ Funções `encode_x`/`decode_x` simétricas para cada tipo de `models.py` (`Back
 
 ## Reprodutibilidade do pipeline resolvido (`schema_version` 0.6.0)
 
-O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e não muda nenhum outro
-arquivo: resultados, máscaras, features, execuções e falhas semânticas, métricas e README mantêm os
-mesmos bytes, e o manifest só muda na versão e na entrada nova do inventário (há um teste de
-caracterização para isso). Por isso o leitor continua abrindo runs `0.5.0`, o schema da v0.1.0,
-sem outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não
-foi registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
+O schema `0.6.0` acrescenta `outputs/region-discovery-audit.jsonl` (#611) e, em cada registro de
+`metrics/stage-timings.jsonl`, os campos `error_type` e `error_traceback` do `StageOutcome`
+(`null` fora de `FAILED`; #619). Nenhum outro arquivo muda: resultados, máscaras, features,
+execuções e falhas semânticas e README mantêm os mesmos bytes, e o manifest só muda na versão e nas
+entradas do inventário desses dois arquivos (há um teste de caracterização para isso). Por isso o
+leitor, que não decodifica as métricas, continua abrindo runs `0.5.0`, o schema da v0.1.0, sem
+outro ramo de compatibilidade além de informar que a auditoria de Region Discovery deles não foi
+registrada (`records_region_discovery_audit()` devolve `False`). Versões anteriores continuam
 recusadas na abertura.
 
 `manifest.json` também persiste `pipeline_preset` (o `PipelinePreset` resolvido — ver [`pipeline.md`](pipeline.md) — codificado por `encode_pipeline_preset()`) e `configuration_digest` (o fingerprint determinístico de `ResolvedPipeline.configuration_digest()`). Isso torna o grafo de estágios e as identidades de backend efetivamente usados por um run inspecionáveis a partir do próprio manifest, sem precisar reabrir `outputs/results.jsonl` e agregar a proveniência de cada evidência individualmente.

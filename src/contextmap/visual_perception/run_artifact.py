@@ -259,8 +259,9 @@ class PerceptionRunWriter:
         self._mask_store: MaskStoreWriter | None = None
         self._results: list[PerceptionResult] = []
         self._source_observation_ids: set[SourceObservationId] = set()
-        # Só o registro leve (stage_id/status/duration_ms/error) fica retido: o `output` de
-        # region_discovery é a mesma tupla de Region2D com máscaras que add_result() recebe.
+        # Só o registro leve (stage_id/status/duration_ms e o erro com tipo e traceback) fica
+        # retido: o `output` de region_discovery é a mesma tupla de Region2D com máscaras que
+        # add_result() recebe.
         self._stage_outcome_records: list[dict[str, Any]] = []
         self._semantic_executions: list[SemanticInterpretationExecution] = []
         self._semantic_request_ids: set[str] = set()
@@ -1359,6 +1360,8 @@ def _encode_stage_outcome(outcome: StageOutcome) -> dict[str, Any]:
         "status": outcome.status.value,
         "duration_ms": outcome.duration_ms,
         "error": outcome.error,
+        "error_type": outcome.error_type,
+        "error_traceback": outcome.error_traceback,
     }
 
 
