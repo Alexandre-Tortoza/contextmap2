@@ -43,7 +43,9 @@ occlusion rule compares:
     the *support* population, not only the evaluated one. It can also **add** evidence: a less
     occluded element is a visible one, and a visible element inside a region's mask is
     ``ASSOCIATED``, so a region's spatial observation can name geometry the full map rejected
-    as occluded -- a false positive, not merely a different support.
+    as occluded -- a false positive, not merely a different support. Each frame's
+    ``range_limit_candidate_support_count`` diagnostic counts the associated support deep
+    enough for that to have happened; a zero rules it out for the frame.
 
     The regime is reachable only with a coarse grid. A measured probe put the smallest
     window reach that made it fire at about 24 px, against the 12 px of the corridor-02

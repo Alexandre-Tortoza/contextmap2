@@ -73,6 +73,9 @@ About 1e-4 rad over the fisheye's ``[0, pi]`` and half that over the pinhole's `
 
 _BISECTION_STEPS = 64
 
+_ANGLE_BOUND_ULPS = 4
+"""ULPs added to a ray-angle bound, so that rounding can only widen it and never narrow it."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class CameraIdentity:
@@ -181,6 +184,24 @@ class CameraProjection(Protocol):
         """
         ...
 
+    def max_ray_angle_rad(
+        self, *, u_bounds: tuple[float, float], v_bounds: tuple[float, float]
+    ) -> float:
+        """Bound the angle to the optical axis of every ray the model sends into a pixel box.
+
+        Args:
+            u_bounds: ``(u_min, u_max)`` of the closed box, in raw pixels.
+            v_bounds: ``(v_min, v_max)`` of the closed box, in raw pixels.
+
+        Returns:
+            An angle, in radians, that no ray of the model's viewing domain landing in the
+            box exceeds. It is never above the domain's own limit.
+
+        Raises:
+            ValueError: If a bound is not finite or the box is empty.
+        """
+        ...
+
 
 def _numpy() -> Any:
     import numpy as np
@@ -236,6 +257,52 @@ def _growth_limit(growth: Callable[[NDArray[Any]], NDArray[Any]], upper: float) 
         else:
             high = middle
     return low
+
+
+def _tangential_reach(p1: float, p2: float) -> float:
+    """Largest ``|t| / r^2`` of the OpenCV tangential term ``t`` at normalized radius ``r``.
+
+    ``t = (2 p1 x y + p2 (r^2 + 2 x^2), p1 (r^2 + 2 y^2) + 2 p2 x y)``; since ``2 |x y| <= r^2``
+    and ``r^2 + 2 x^2 <= 3 r^2``, its components are at most ``(|p1| + 3 |p2|) r^2`` and
+    ``(3 |p1| + |p2|) r^2``.
+    """
+    return math.hypot(abs(p1) + 3 * abs(p2), 3 * abs(p1) + abs(p2))
+
+
+def _sublevel_limit(
+    radius_at: Callable[[NDArray[Any]], NDArray[Any]], level: float, upper: float
+) -> float:
+    """Largest angle in ``[0, upper]`` whose radius lower bound does not exceed ``level``.
+
+    A scan over ``[0, upper]`` finds the last sample at or below ``level`` -- angle zero always
+    is -- and a bisection towards the next sample keeps its outer end, so the result can only
+    err wide. The scan has the resolution of the domain limits: a lower bound that is not
+    monotone could dip below ``level`` strictly between two samples, which it would not see.
+
+    Args:
+        radius_at: A lower bound of the distorted normalized radius of every ray at a given
+            angle to the optical axis; zero at angle zero.
+        level: The normalized radius to stay within.
+        upper: The end of the model's viewing domain, in radians.
+
+    Returns:
+        The angle, in radians, with a few ULPs of conservative margin, never above ``upper``.
+    """
+    np = _numpy()
+    angle = np.linspace(0.0, upper, _RADIUS_SCAN_STEPS)
+    # Perto do limite do domínio os denominadores se anulam: inf e NaN ficam fora do nível.
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        last = int(np.flatnonzero(radius_at(angle) <= level)[-1])
+        if last == angle.shape[0] - 1:
+            return upper
+        low, high = float(angle[last]), float(angle[last + 1])
+        for _ in range(_BISECTION_STEPS):
+            middle = (low + high) / 2
+            if float(radius_at(np.array([middle]))[0]) <= level:
+                low = middle
+            else:
+                high = middle
+    return min(upper, high + _ANGLE_BOUND_ULPS * math.ulp(high))
 
 
 def _undistort(
@@ -335,6 +402,29 @@ class _CalibratedProjection:
         u, v = array[:, 0], array[:, 1]
         return (u >= -0.5) & (u < width - 0.5) & (v >= -0.5) & (v < height - 0.5)  # type: ignore[no-any-return]
 
+    def max_ray_angle_rad(
+        self, *, u_bounds: tuple[float, float], v_bounds: tuple[float, float]
+    ) -> float:
+        """Bound the ray angle over a pixel box, from its farthest corner and the domain.
+
+        The farthest point of the box from the principal point on the normalized plane is a
+        corner, since that plane is an axis-aligned scaling of the pixels. A ray landing in the
+        box therefore has a distorted normalized radius of at most that corner's, ``rho``, and
+        of at least the model's lower bound at its angle, so its angle lies where that bound
+        is at most ``rho``, inside the viewing domain. Without tangential terms the lower bound
+        is the exact radius, and the result is the angle of the farthest corner's ray, or the
+        domain's limit when the box reaches past it.
+        """
+        np = _numpy()
+        bounds = np.array((u_bounds, v_bounds), dtype=np.float64)
+        if not np.isfinite(bounds).all() or (bounds[:, 0] > bounds[:, 1]).any():
+            raise ValueError(f"the pixel box must be finite and ordered, got {bounds.tolist()}")
+        u_reach = float(np.abs((bounds[0] - self._cx) / self._fx).max())
+        v_reach = float(np.abs((bounds[1] - self._cy) / self._fy).max())
+        return _sublevel_limit(
+            self._radius_lower_bound, math.hypot(u_reach, v_reach), self._domain_limit_rad()
+        )
+
     def _apply_intrinsics(self, xd: NDArray[Any], yd: NDArray[Any]) -> NDArray[Any]:
         """Apply focal lengths and principal point to normalized-plane coordinates."""
         np = _numpy()
@@ -352,6 +442,14 @@ class _CalibratedProjection:
         raise NotImplementedError
 
     def _to_rays(self, xd: NDArray[Any], yd: NDArray[Any]) -> tuple[NDArray[Any], NDArray[Any]]:
+        raise NotImplementedError
+
+    def _domain_limit_rad(self) -> float:
+        """Supremum of the angle to the optical axis inside the viewing domain."""
+        raise NotImplementedError
+
+    def _radius_lower_bound(self, angle: NDArray[Any]) -> NDArray[Any]:
+        """Lower bound of the distorted normalized radius of every ray at ``angle``."""
         raise NotImplementedError
 
 
@@ -419,6 +517,19 @@ class PinholeProjection(_CalibratedProjection):
         # Raio x/z, y/z comparado sem dividir: z > 0 onde o ponto está na frente.
         return in_front & (_numpy().hypot(x, y) < self._max_radius * z)  # type: ignore[no-any-return]
 
+    def _domain_limit_rad(self) -> float:
+        return math.atan(self._max_radius)
+
+    def _radius_lower_bound(self, angle: NDArray[Any]) -> NDArray[Any]:
+        np = _numpy()
+        r = np.tan(angle)
+        if not self._distorted:
+            return r  # type: ignore[no-any-return]
+        k1, k2, p1, p2, k3, k4, k5, k6 = self._k
+        r2 = r * r
+        radial = (1 + r2 * (k1 + r2 * (k2 + r2 * k3))) / (1 + r2 * (k4 + r2 * (k5 + r2 * k6)))
+        return r * np.abs(radial) - _tangential_reach(p1, p2) * r2  # type: ignore[no-any-return]
+
     def _to_pixels(
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]
     ) -> NDArray[Any]:
@@ -481,6 +592,13 @@ class FisheyeProjection(_CalibratedProjection):
         theta = np.arctan2(np.hypot(x, y), z)
         return (range_m > 0) & (theta < self._theta_max)  # type: ignore[no-any-return]
 
+    def _domain_limit_rad(self) -> float:
+        return self._theta_max
+
+    def _radius_lower_bound(self, angle: NDArray[Any]) -> NDArray[Any]:
+        # Sem termo tangencial, o raio normalizado é exatamente theta_d.
+        return self._theta_d(angle)
+
     def _to_pixels(
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]
     ) -> NDArray[Any]:
@@ -532,6 +650,20 @@ class MeiProjection(_CalibratedProjection):
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]
     ) -> NDArray[Any]:
         return z > (self._cosine_limit + _COSINE_MARGIN) * range_m  # type: ignore[no-any-return]
+
+    def _domain_limit_rad(self) -> float:
+        return math.acos(self._cosine_limit)
+
+    def _radius_lower_bound(self, angle: NDArray[Any]) -> NDArray[Any]:
+        np = _numpy()
+        # Raio no plano normalizado do ponto da esfera unitária a esse ângulo do eixo. No
+        # limite do domínio o denominador se anula e o arredondamento pode deixá-lo negativo:
+        # ali o raio é ilimitado, nunca um valor negativo que caberia em qualquer caixa.
+        shifted = np.cos(angle) + self._xi
+        m = np.where(shifted > 0, np.sin(angle) / shifted, np.inf)
+        m2 = m * m
+        radial = 1 + m2 * (self._k1 + m2 * self._k2)
+        return m * np.abs(radial) - _tangential_reach(self._p1, self._p2) * m2  # type: ignore[no-any-return]
 
     def _to_pixels(
         self, x: NDArray[Any], y: NDArray[Any], z: NDArray[Any], range_m: NDArray[Any]

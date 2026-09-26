@@ -196,6 +196,11 @@ class FrameProjection:
             outside every exclusion region).
         global_indices: ``(N,)`` global index in the map of each row, strictly
             increasing; the persistent identity culling must never lose.
+        max_ray_angle_rad: Bound, in radians, of the angle to the optical axis of every ray
+            the camera model sends into the prepared image
+            (:meth:`CameraProjection.max_ray_angle_rad` over its raw extent). Every point
+            that lands in the prepared image, and so every point that can occlude another,
+            lies within it.
         candidates: What the candidate step selected for this frame, and its cost.
         projection_seconds: Wall-clock time the exact projection of the candidates took.
     """
@@ -217,6 +222,7 @@ class FrameProjection:
     in_prepared_image: NDArray[Any]
     in_valid_support: NDArray[Any]
     global_indices: NDArray[Any]
+    max_ray_angle_rad: float
     candidates: CandidateGeometryReport
     projection_seconds: float
 
@@ -508,6 +514,7 @@ class FrameProjector:
         prepared_pixels = transform.map_pixels(projected.pixels)
         in_image = projected.projectable & transform.in_prepared_image(prepared_pixels)
         in_support = in_image & _supported(prepared_image, prepared_pixels, in_image)
+        u_bounds, v_bounds = transform.raw_extent()
         return FrameProjection(
             source_observation_id=observation.observation_id,
             image_timestamp=observation.timestamp,
@@ -542,6 +549,7 @@ class FrameProjector:
             in_prepared_image=in_image,
             in_valid_support=in_support,
             global_indices=cloud.global_indices,
+            max_ray_angle_rad=camera.max_ray_angle_rad(u_bounds=u_bounds, v_bounds=v_bounds),
             candidates=selection.report,
             projection_seconds=time.perf_counter() - started,
         )

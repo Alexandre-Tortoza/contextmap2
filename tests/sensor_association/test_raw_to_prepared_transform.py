@@ -101,6 +101,22 @@ def test_the_prepared_extent_is_half_open_about_the_pixel_edges() -> None:
     assert transform.in_prepared_image(prepared).tolist() == [True, True, False, False, False]
 
 
+def test_the_prepared_image_covers_a_closed_box_of_the_raw_image() -> None:
+    prepared = make_prepared_image((_crop(100, 50, 500, 350), _resize(200, 150)))
+    transform = raw_to_prepared_transform(raw_size=RAW, prepared_image=prepared)
+    untouched = raw_to_prepared_transform(raw_size=RAW, prepared_image=make_prepared_image())
+
+    u_bounds, v_bounds = transform.raw_extent()
+
+    assert (u_bounds, v_bounds) == ((99.5, 499.5), (49.5, 349.5))
+    assert untouched.raw_extent() == ((-0.5, RAW[0] - 0.5), (-0.5, RAW[1] - 0.5))
+    # As quinas da caixa caem exatamente nas bordas da imagem preparada.
+    np.testing.assert_allclose(
+        transform.map_pixels(np.array([[99.5, 49.5], [499.5, 349.5]])),
+        [[-0.5, -0.5], [199.5, 149.5]],
+    )
+
+
 def test_the_transform_identity_is_deterministic_and_tracks_every_parameter() -> None:
     def transform_id(*operations: object) -> str:
         prepared = make_prepared_image(operations)  # type: ignore[arg-type]
