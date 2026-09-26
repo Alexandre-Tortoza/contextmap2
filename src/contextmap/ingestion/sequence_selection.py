@@ -179,18 +179,7 @@ def resolve_selection(
             or observation identities that do not exist in the sequence.
     """
     sequence_artifact_id = reader.manifest.artifact_id
-
-    if isinstance(selection, FullSequenceSelection):
-        offsets: list[int] = [entry.offset for entry in reader.iter_index()]
-    elif isinstance(selection, FrameRangeSelection):
-        offsets = _resolve_frame_range_offsets(reader, selection)
-    elif isinstance(selection, TimestampRangeSelection):
-        offsets = _resolve_timestamp_range_offsets(reader, selection)
-    elif isinstance(selection, ExplicitIdsSelection):
-        offsets = _resolve_explicit_ids_offsets(reader, selection)
-    else:
-        raise TypeError(f"unsupported selection type: {type(selection)!r}")
-
+    offsets = resolve_selection_offsets(reader, selection)
     observations: Sequence[SourceObservation] = (
         _LazyObservationView(reader, offsets) if offsets else ()
     )
@@ -200,6 +189,40 @@ def resolve_selection(
         selection_id=selection_identity(sequence_artifact_id, selection),
         observations=observations,
     )
+
+
+def resolve_selection_offsets(
+    reader: SequenceArtifactReader, selection: SequenceSelection
+) -> tuple[int, ...]:
+    """Resolve which index entries a selection covers, without decoding any observation.
+
+    It is the matching step of :func:`resolve_selection`, for a consumer that needs only some
+    modalities: it filters these offsets against
+    :meth:`~contextmap.ingestion.sequence_artifact.SequenceArtifactReader.iter_index` and
+    decodes nothing else.
+
+    Args:
+        reader: Reader for the sequence artifact to select from.
+        selection: The selection to resolve.
+
+    Returns:
+        Index offsets (see
+        :attr:`~contextmap.ingestion.sequence_artifact.IndexEntry.offset`) of the selected
+        observations, in the sequence's canonical index order.
+
+    Raises:
+        SequenceSelectionError: If ``selection`` references frame indices or observation
+            identities that do not exist in the sequence.
+    """
+    if isinstance(selection, FullSequenceSelection):
+        return tuple(entry.offset for entry in reader.iter_index())
+    if isinstance(selection, FrameRangeSelection):
+        return tuple(_resolve_frame_range_offsets(reader, selection))
+    if isinstance(selection, TimestampRangeSelection):
+        return tuple(_resolve_timestamp_range_offsets(reader, selection))
+    if isinstance(selection, ExplicitIdsSelection):
+        return tuple(_resolve_explicit_ids_offsets(reader, selection))
+    raise TypeError(f"unsupported selection type: {type(selection)!r}")
 
 
 def _resolve_frame_range_offsets(

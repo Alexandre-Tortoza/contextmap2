@@ -95,6 +95,9 @@ class PlannedStage:
         config_digest: Identity of the stage's own configuration: its declared contract
             and the backend and parameters of each of its variation points. Two stages
             with the same digest are configured identically, whatever else changed.
+        observation_selection: For an observation-scoped stage, the encoded selection of the
+            observations it processes; ``None`` for the whole sequence and for every other
+            stage. It is part of ``config_digest``.
     """
 
     stage_id: str
@@ -106,6 +109,7 @@ class PlannedStage:
     components: Mapping[str, str | None]
     component_configs: Mapping[str, ComponentConfig]
     config_digest: str
+    observation_selection: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -167,6 +171,11 @@ class PipelinePlan:
                         for item in stage.inputs
                     ],
                     "output": stage.output,
+                    **(
+                        {}
+                        if stage.observation_selection is None
+                        else {"observation_selection": _thaw(stage.observation_selection)}
+                    ),
                 }
                 for stage in self.stages
             ],
@@ -350,6 +359,9 @@ class StageRequest:
         workspace: The workspace root the run lives in, or ``None`` without a journal. An
             executor opens an input through :meth:`directory_of`, which resolves the location of
             the artifact (possibly written by an earlier run) inside this workspace.
+        observation_selection: The encoded selection of the observations an
+            observation-scoped stage processes, from its plan; ``None`` for the whole sequence.
+            The executor decodes it through the Ingestion, which owns the selection kinds.
     """
 
     stage_id: str
@@ -358,6 +370,7 @@ class StageRequest:
     config_digest: str
     output_dir: Path | None = None
     workspace: Path | None = None
+    observation_selection: Mapping[str, Any] | None = None
 
     def identity(self) -> str:
         """Return the identity of this execution: what a writer records as its run id.
@@ -581,6 +594,7 @@ def resolve_plan(
             for component_id in stage.components
             if component_id in config.components
         }
+        selection = config.inputs.observation_selection if stage.observation_scoped else None
         planned.append(
             PlannedStage(
                 stage_id=stage.stage_id,
@@ -592,8 +606,14 @@ def resolve_plan(
                 components={cid: cfg.backend for cid, cfg in component_configs.items()},
                 component_configs=component_configs,
                 config_digest=_stage_digest(
-                    stage.stage_id, stage.capability, inputs, stage.output, component_configs
+                    stage.stage_id,
+                    stage.capability,
+                    inputs,
+                    stage.output,
+                    component_configs,
+                    selection,
                 ),
+                observation_selection=selection,
             )
         )
 
@@ -988,6 +1008,7 @@ def _run_stages(
                 config_digest=stage.config_digest,
                 output_dir=None if run_directory is None else run_directory / stage.stage_id,
                 workspace=None if run_directory is None else run_directory.parent.parent,
+                observation_selection=stage.observation_selection,
             )
             try:
                 produced = executor.execute(request)
@@ -1265,22 +1286,28 @@ def _stage_digest(
     inputs: Sequence[PlannedInput],
     output: str | None,
     components: Mapping[str, ComponentConfig],
+    observation_selection: Mapping[str, Any] | None,
 ) -> str:
-    """Identify a stage's own configuration, not its position in the topology."""
-    return _digest(
-        {
-            "stage_id": stage_id,
-            "capability": capability,
-            "contract": {"inputs": {item.name: item.contract for item in inputs}, "output": output},
-            "components": {
-                component_id: {
-                    "backend": component.backend,
-                    "parameters": _thaw(component.parameters),
-                }
-                for component_id, component in components.items()
-            },
-        }
-    )
+    """Identify a stage's own configuration, not its position in the topology.
+
+    The observation selection enters only when there is one, so the identity of a stage over
+    the whole sequence is the one it had before selections existed.
+    """
+    document: dict[str, Any] = {
+        "stage_id": stage_id,
+        "capability": capability,
+        "contract": {"inputs": {item.name: item.contract for item in inputs}, "output": output},
+        "components": {
+            component_id: {
+                "backend": component.backend,
+                "parameters": _thaw(component.parameters),
+            }
+            for component_id, component in components.items()
+        },
+    }
+    if observation_selection is not None:
+        document["observation_selection"] = _thaw(observation_selection)
+    return _digest(document)
 
 
 def _thaw(value: Any) -> Any:

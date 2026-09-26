@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,8 +73,13 @@ from contextmap.ingestion import (
     ImageEncoding,
     ImageObservation,
     SequenceArtifactReader,
+    SequenceSelection,
+    SequenceSelectionError,
     SourceObservation,
     SourceObservationId,
+    decode_selection,
+    encode_selection,
+    resolve_selection_offsets,
     selection_identity,
     validate_cross_source_clock_plausibility,
 )
@@ -229,6 +234,46 @@ def _optional_one(request: StageRequest, name: str) -> Path | None:
             f"{len(refs)}: run the runtime once per run instead of choosing one"
         )
     return request.directory_of(refs[0])
+
+
+def _observation_selection(request: StageRequest) -> SequenceSelection:
+    """Decode the observation selection of an observation-scoped stage (issue #497).
+
+    The document must be the canonical form :func:`~contextmap.ingestion.encode_selection`
+    gives the selection it decodes to: fields of another kind, which a merge of configuration
+    layers can leave behind, are refused rather than silently ignored.
+
+    Returns:
+        The selection, or the whole sequence when the stage has none.
+
+    Raises:
+        ExecutorError: If the document is not a selection in canonical form.
+    """
+    document = request.observation_selection
+    if document is None:
+        return FullSequenceSelection()
+    plain = _plain(document)
+    try:
+        selection = decode_selection(plain)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ExecutorError(
+            f"inputs.observation_selection {plain!r} is not a sequence selection: {error}"
+        ) from error
+    canonical = encode_selection(selection)
+    if canonical != plain:
+        raise ExecutorError(
+            f"inputs.observation_selection {plain!r} is not in canonical form; write {canonical!r}"
+        )
+    return selection
+
+
+def _plain(value: Any) -> Any:
+    """Turn a frozen configuration value back into plain JSON containers."""
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain(item) for item in value]
+    return value
 
 
 def _reference(
@@ -487,9 +532,9 @@ class SensorAssociationExecutor:
             outcome = SensorAssociationService().run(
                 SensorAssociationRequest(
                     sequence_artifact_id=sequence.manifest.artifact_id,
-                    selection_id=selection_identity(
-                        sequence.manifest.artifact_id, FullSequenceSelection()
-                    ),
+                    # A associação cobre exatamente os frames da run de percepção: a seleção é a
+                    # dela, nunca uma reconstruída aqui (#497).
+                    selection_id=perception.manifest.selection_id,
                     geometry=geometry.geometry(),
                     trajectory=TrajectoryLookup(trajectory.trajectory()),
                     pose_policy=self._pose_policy,
@@ -1042,19 +1087,32 @@ class VisualPerceptionExecutor:
         self._semantic_interpreter = semantic_interpreter
 
     def execute(self, request: StageRequest) -> ArtifactRef:
-        """Process every image observation of the ``sequence`` input and reference the run."""
+        """Process the selected image observations of the ``sequence`` input and reference the run.
+
+        The observation selection is decoded and resolved before anything else, so an invalid
+        one fails before any image is prepared or any backend is called.
+        """
         output = _output(request)
         sequence = SequenceArtifactReader(_one(request, "sequence"))
+        selection = _observation_selection(request)
+        try:
+            selected = frozenset(resolve_selection_offsets(sequence, selection))
+        except SequenceSelectionError as error:
+            raise ExecutorError(
+                f"inputs.observation_selection does not resolve against sequence "
+                f"{sequence.manifest.artifact_id!r}: {error}"
+            ) from error
 
         def images() -> Iterator[ImageObservation]:
-            """Decodifica uma imagem por vez, guiado pelo índice.
+            """Decodifica uma imagem selecionada por vez, guiado pelo índice.
 
             O laço abaixo consome um frame de cada vez, então materializar a sequência inteira
             custaria os 2,2 GB de RGB do corridor-02 (mais 364 MB de pointcloud e 20781
-            registros de IMU que este estágio nem usa) sem nenhum ganho (#511).
+            registros de IMU que este estágio nem usa) sem nenhum ganho (#511). A seleção é
+            filtrada pelo offset do índice, sem decodificar nada fora dela.
             """
             for entry in sequence.iter_index():
-                if entry.modality != "image":
+                if entry.modality != "image" or entry.offset not in selected:
                     continue
                 observation = sequence.observation_at(entry.offset)
                 if isinstance(observation, ImageObservation):
@@ -1107,9 +1165,7 @@ class VisualPerceptionExecutor:
                 run_id=run_id,
                 run_index=request.run_number(),
                 sequence_artifact_id=sequence.manifest.artifact_id,
-                selection_id=selection_identity(
-                    sequence.manifest.artifact_id, FullSequenceSelection()
-                ),
+                selection_id=selection_identity(sequence.manifest.artifact_id, selection),
                 enabled_capabilities=frozenset(
                     stage.capability
                     for stage in CANONICAL_PRESET_V1.stages

@@ -256,6 +256,82 @@ class TestSelectiveRecomputation:
         }["state_estimation"]
 
 
+_FRAMES = {"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 10}
+_LATER = {"kind": "frame_range", "start_frame_index": 10, "end_frame_index": 20}
+
+
+class TestIncrementalContextInvalidation:
+    """Issue #497: what a context run over another selection, or another map, recomputes.
+
+    The observation selection is the only new identity; a changed map reaches its dependents
+    through the content hash of their inputs, as every other upstream change does.
+    """
+
+    @staticmethod
+    def _over(selection: dict[str, Any]) -> dict[str, Any]:
+        document = _document()
+        document["inputs"] = {"observation_selection": selection}
+        return document
+
+    def test_another_selection_reuses_the_foundation_and_recomputes_the_context(
+        self, tmp_path: Path
+    ) -> None:
+        world = World()
+        _run(tmp_path, world, _document())
+        world.runs.clear()
+
+        record = _run(tmp_path, world, self._over(_FRAMES))
+
+        assert world.runs == ["visual_perception", "sensor_association", "semantic_fusion"]
+        assert _kinds(record) == {
+            "ingestion": "reused",
+            "visual_perception": "recomputed",
+            "state_estimation": "reused",
+            "geometric_mapping": "reused",
+            "sensor_association": "recomputed",
+            "semantic_fusion": "recomputed",
+        }
+
+    def test_the_same_selection_is_reused(self, tmp_path: Path) -> None:
+        world = World()
+        _run(tmp_path, world, self._over(_FRAMES))
+        world.runs.clear()
+
+        record = _run(tmp_path, world, self._over(_FRAMES))
+
+        assert world.runs == []
+        assert set(_kinds(record).values()) == {"reused"}
+
+    def test_each_selection_stays_reusable_after_another_one_ran(self, tmp_path: Path) -> None:
+        world = World()
+        first = _run(tmp_path, world, self._over(_FRAMES))
+        _run(tmp_path, world, self._over(_LATER))
+        world.runs.clear()
+
+        again = _run(tmp_path, world, self._over(_FRAMES))
+
+        assert world.runs == []
+        assert [stage.output for stage in again.stages] == [stage.output for stage in first.stages]
+
+    def test_another_map_recomputes_what_depends_on_it_and_keeps_the_perception(
+        self, tmp_path: Path
+    ) -> None:
+        world = World()
+        _run(tmp_path, world, self._over(_FRAMES))
+        world.runs.clear()
+        document = self._over(_FRAMES)
+        document["components"]["geometric_mapping"]["pose_lookup"]["lookup-policy-v1"] = {
+            "mode": "nearest",
+            "max_time_delta_ns": 1_000_000,
+        }
+
+        record = _run(tmp_path, world, document)
+
+        assert world.runs == ["geometric_mapping", "sensor_association", "semantic_fusion"]
+        assert _kinds(record)["visual_perception"] == "reused"
+        assert _kinds(record)["state_estimation"] == "reused"
+
+
 class TestAlternativeDagsShareUpstream:
     def _preset(self) -> RuntimePreset:
         return RuntimePreset(
