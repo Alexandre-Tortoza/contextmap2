@@ -33,6 +33,8 @@ been run against the real FAST-LIO in a container (see
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -56,6 +58,8 @@ _PLACEHOLDERS = ("{input_bag}", "{job}", "{output_dir}")
 _POSE_COLUMNS = 8
 _COVARIANCE_COLUMNS = 36
 _STDERR_TAIL_CHARS = 2000
+# Tempo que o grupo tem para sair após SIGTERM antes do SIGKILL, num timeout do host.
+_TERMINATION_GRACE_S = 5.0
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 
 # Códigos de tipo de dado do sensor_msgs/PointField.
@@ -309,30 +313,40 @@ class SubprocessFastLioRunner:
             return self._read_output(output_dir)
 
     def _execute(self, arguments: list[str]) -> None:
+        """Run the command in its own process group and classify how it ended.
+
+        Raises:
+            FastLioFailure: ``PROCESS_FAILED`` if the command cannot start or exits
+                with a non-zero code; ``TIMEOUT`` once the whole process group was
+                stopped after ``timeout_s``.
+        """
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 arguments,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 errors="replace",
-                timeout=self._timeout_s,
-                check=False,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired as error:
-            raise FastLioFailure(
-                kind=FastLioFailureKind.TIMEOUT,
-                detail=f"the process did not finish within {self._timeout_s} s",
-            ) from error
         except OSError as error:
             raise FastLioFailure(
                 kind=FastLioFailureKind.PROCESS_FAILED,
                 detail=f"cannot start {arguments[0]!r}: {error}",
             ) from error
-        if completed.returncode != 0:
+        try:
+            _, stderr = process.communicate(timeout=self._timeout_s)
+        except subprocess.TimeoutExpired as error:
+            _stop_process_group(process)
+            raise FastLioFailure(
+                kind=FastLioFailureKind.TIMEOUT,
+                detail=f"the process did not finish within {self._timeout_s} s",
+            ) from error
+        if process.returncode != 0:
             raise FastLioFailure(
                 kind=FastLioFailureKind.PROCESS_FAILED,
-                detail=f"the process exited with exit code {completed.returncode}",
-                stderr_tail=completed.stderr[-_STDERR_TAIL_CHARS:],
+                detail=f"the process exited with exit code {process.returncode}",
+                stderr_tail=stderr[-_STDERR_TAIL_CHARS:],
             )
 
     def _read_output(self, output_dir: Path) -> FastLioRunOutput:
@@ -377,3 +391,25 @@ class SubprocessFastLioRunner:
                 detail=f"{_TRAJECTORY_FILE}: {error}",
             ) from error
         return FastLioRunOutput(poses=poses, reported_ref=reported_ref, warnings=warnings)
+
+
+def _stop_process_group(process: subprocess.Popen[str]) -> None:
+    """Stop every process in the timed-out command's group, then reap the direct child.
+
+    SIGTERM goes first so a ``docker run`` client can forward it to its container
+    (``--sig-proxy``); SIGKILL then ends whatever ignored it. The pipes are closed
+    without draining, because a descendant that escaped the group would keep them
+    open indefinitely.
+    """
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, signal_number)
+        except ProcessLookupError:
+            break
+        try:
+            process.wait(timeout=_TERMINATION_GRACE_S)
+        except subprocess.TimeoutExpired:
+            continue
+    for pipe in (process.stdout, process.stderr):
+        if pipe is not None:
+            pipe.close()
