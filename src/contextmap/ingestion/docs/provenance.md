@@ -40,6 +40,10 @@ Consequências, correspondendo diretamente aos requisitos da issue:
 
 A última linha é intencional: "não assumir que igualdade de path significa igualdade de conteúdo" vale nos dois sentidos — path igual não garante conteúdo igual, e path diferente não impede conteúdo igual ser reconhecido como a mesma identidade.
 
+## `compute_configuration_hash()`
+
+Hasheia o JSON canônico (chaves ordenadas) da configuração efetiva. A configuração só pode conter primitivos JSON — `str`, `int`, `float`, `bool` e `None`, aninhados em `dict`s e listas. Um valor fora disso (um `Path`, um objeto de domínio) é `TypeError` com o caminho da chave ofensora (por exemplo, `config['window']['bounds']`), nunca serializado por `str(valor)`: essa representação pode carregar um endereço de memória e tornaria o hash, e com ele a identidade de conteúdo, não determinístico em silêncio.
+
 ## `compute_source_content_hash()`
 
 Hasheia a fonte bruta inteira: um arquivo (bag ROS 1) é hasheado diretamente; um diretório (bag ROS 2) é hasheado sobre a lista ordenada de paths relativos + tamanho + hash de cada arquivo — nunca apenas path/mtime, que não detectaria conteúdo trocado sob o mesmo nome.

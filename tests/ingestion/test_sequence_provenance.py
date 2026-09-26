@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from contextmap.ingestion import (
     SequenceProvenance,
     compute_configuration_hash,
@@ -89,6 +91,21 @@ def test_compute_configuration_hash_changes_with_content() -> None:
     b = compute_configuration_hash({"tolerance_seconds": 0.1})
 
     assert a != b
+
+
+def test_compute_configuration_hash_rejects_a_non_primitive_value_naming_its_key() -> None:
+    # Um objeto sem forma JSON viraria str(obj), com endereço de memória: hash não determinístico.
+    config = {"window": {"clock_id": "recording_time", "bounds": object()}}
+
+    with pytest.raises(TypeError, match=r"\['window'\]\['bounds'\].*object"):
+        compute_configuration_hash(config)
+
+
+def test_compute_configuration_hash_rejects_a_non_primitive_list_item() -> None:
+    config = {"required_topics": ["rgb", Path("lidar")]}
+
+    with pytest.raises(TypeError, match=r"\['required_topics'\]\[1\].*Path"):
+        compute_configuration_hash(config)
 
 
 def test_provenance_round_trips_through_encode_decode() -> None:
