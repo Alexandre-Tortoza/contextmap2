@@ -1,6 +1,8 @@
 from dataclasses import FrozenInstanceError
 
+import numpy as np
 import pytest
+from mask_cases import inline_mask
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
@@ -161,3 +163,11 @@ def test_rejected_candidate_preserves_machine_readable_reason() -> None:
 
     assert RejectedRegionCandidate.from_dict(rejected.to_dict()) == rejected
     assert rejected.to_dict()["reason"] == "invalid_geometry"
+
+
+@pytest.mark.xfail(strict=True, raises=AttributeError, reason="#593: a tuple of Python bools")
+def test_an_inline_mask_holds_one_byte_per_pixel() -> None:
+    # #593: um tuple de bools custa ~2,36 MB numa máscara 640x480; um byte por pixel, ~300 KB.
+    mask = inline_mask(np.zeros((480, 640), dtype=bool))
+
+    assert mask.as_array().nbytes == 640 * 480  # type: ignore[attr-defined]  # #593 remove

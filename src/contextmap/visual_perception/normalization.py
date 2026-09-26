@@ -376,17 +376,22 @@ def _find_duplicate(
     config: NormalizationConfig,
 ) -> tuple[_RegionGroup, MergeKind, float, float] | None:
     for group in groups:
-        representative = group.representative
-        intersection = len(geometry.pixels & representative.pixels)
-        union = len(geometry.pixels | representative.pixels)
-        iou = intersection / union if union else 0.0
-        minimum_area = min(len(geometry.pixels), len(representative.pixels))
-        containment = intersection / minimum_area if minimum_area else 0.0
+        iou, containment = _overlap(geometry, group.representative)
         if iou >= config.duplicate_iou_threshold:
             return group, MergeKind.IOU_DUPLICATE, iou, containment
         if containment >= config.containment_threshold:
             return group, MergeKind.CONTAINMENT, iou, containment
     return None
+
+
+def _overlap(geometry: _Geometry, representative: _Geometry) -> tuple[float, float]:
+    """Return the IoU and the containment fraction of two candidate footprints, in pixels."""
+    intersection = len(geometry.pixels & representative.pixels)
+    union = len(geometry.pixels | representative.pixels)
+    iou = intersection / union if union else 0.0
+    minimum_area = min(len(geometry.pixels), len(representative.pixels))
+    containment = intersection / minimum_area if minimum_area else 0.0
+    return iou, containment
 
 
 def _freeze_group(
