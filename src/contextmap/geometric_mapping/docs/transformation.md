@@ -48,7 +48,7 @@ Pontos cujas coordenadas de origem **não são finitas** (`NaN`/`inf`, comuns em
 
 A aritmética é `float64`, com ordem de avaliação fixa (sem BLAS), então o resultado não depende do build do NumPy. Para coordenadas de LiDAR abaixo de 1e3 m o erro de arredondamento é da ordem de 1e-12 m; os testes usam a tolerância absoluta de **1e-9 m**. A quantização do payload `float32` (~1e-4 m a 1e3 m) vem do sensor, não da transformação. Um scan de 100 mil pontos leva cerca de 13 ms.
 
-O NumPy é importado apenas quando um scan é transformado (`import contextmap.geometric_mapping` não o importa; há um teste). Ele está nos extras `dev` e `ros1`, não nas dependências base do pacote.
+O NumPy é importado apenas quando um scan é transformado (`import contextmap.geometric_mapping` não o importa; há um teste). Ele é dependência base do pacote (`numpy<2.4`); só não é carregado por quem apenas importa a capability.
 
 ## Traces de transformação
 

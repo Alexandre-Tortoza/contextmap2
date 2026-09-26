@@ -1,0 +1,30 @@
+{
+  "accepted_scan_count": 10,
+  "ignored_observation_counts": {},
+  "motion_correction": {
+    "disposition_counts": {
+      "accept": 10
+    },
+    "policy": {
+      "raw": "accept",
+      "unknown": "accept"
+    },
+    "state_counts": {
+      "unknown": 10
+    },
+    "warnings": []
+  },
+  "pose_lookup": {
+    "exact_count": 10,
+    "interpolated_count": 0,
+    "lookup_count": 10,
+    "max_time_delta_ns": 0,
+    "median_time_delta_ns": 0,
+    "min_time_delta_ns": 0,
+    "nearest_count": 0
+  },
+  "pose_lookup_rejected_count": 0,
+  "rejected_scan_count": 0,
+  "rejections": [],
+  "selected_scan_count": 10
+}

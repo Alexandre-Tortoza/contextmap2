@@ -228,6 +228,13 @@ def contract_results(
         "visual_perception.evidence_completeness",
         detail="the perception evidence is canned and in memory; no perception run artifact",
     )
+    results["reproducibility.semantic_rerun_agreement"] = GateResult.not_evaluated(
+        "reproducibility.semantic_rerun_agreement",
+        detail=(
+            "the semantic evidence is canned, so two chain runs agree by construction; only two "
+            "real backend executions can measure this"
+        ),
+    )
     for result in cross_stage_gate_results(
         cross,
         evidence_class=_CONTRACT,

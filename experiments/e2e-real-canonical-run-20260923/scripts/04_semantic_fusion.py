@@ -18,7 +18,7 @@ from contextmap.semantic_fusion import (
     SemanticFusionRunReader,
 )
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 GEOMETRIC_MAP_ARTIFACT_ID = "d6ed712aa1a77b91dc93fd951273d938"
 SENSOR_ASSOCIATION_ARTIFACT_ID = "ec435f284cef18bc1980cfd0188022a4"

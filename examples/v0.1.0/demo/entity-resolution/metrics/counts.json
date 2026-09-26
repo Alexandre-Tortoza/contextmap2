@@ -1,0 +1,32 @@
+{
+  "counts": {
+    "blocked_comparisons": 0,
+    "candidate_pairs": 6,
+    "candidate_sets": 4,
+    "channel_appearance_measured": 0,
+    "channel_appearance_not_evaluated": 3,
+    "channel_appearance_unavailable": 0,
+    "channel_geometry_measured": 3,
+    "channel_geometry_not_evaluated": 0,
+    "channel_geometry_unavailable": 0,
+    "channel_point_representation_measured": 0,
+    "channel_point_representation_not_evaluated": 3,
+    "channel_point_representation_unavailable": 0,
+    "channel_semantic_measured": 0,
+    "channel_semantic_not_evaluated": 3,
+    "channel_semantic_unavailable": 0,
+    "channel_temporal_measured": 0,
+    "channel_temporal_not_evaluated": 3,
+    "channel_temporal_unavailable": 0,
+    "compared_pairs": 3,
+    "decision_distinct": 1,
+    "decision_match": 1,
+    "decision_unresolved": 1,
+    "merged_entities": 1,
+    "resolved_entities": 3,
+    "source_entities": 4,
+    "split_candidates": 0,
+    "transitivity_contradictions": 0
+  },
+  "warnings": 0
+}

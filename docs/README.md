@@ -83,7 +83,7 @@ Spatial Relations descreve **como entidades resolvidas se relacionam no espaço,
 
 Evaluation também define **o que significa "Solution 1 validada"**: o cenário end-to-end congelado (`solution-1-canonical`, sobre a amostra real do `corridor-02` e sobre o subconjunto sintético de CI), o perfil canônico de backends, as opções que só entram por ablação e uma matriz de aceitação de 25 gates atribuíveis a uma capability, sem score global. As checagens entre estágios (lineage, frames, rastreabilidade e identidade da observação física) leem os artifacts persistidos e nomeiam a capability que quebrou uma fronteira. Só um gate aprovado com evidência **real** conta como cumprido; o ensaio de CI é evidência de contrato. Existe uma execução real **parcial** sobre o `corridor-02` (geometria, associação, fusão e checagens entre estágios): 3 gates cumpridos, 1 reprovado por um achado real (a sequência pinada não carrega modelo de câmera), 12 bloqueados e 9 não avaliados. Entity Resolution e Spatial Relations já têm executor real composto automaticamente da configuração, e a montagem do `ContextMapArtifact` a partir desses dois runs já existe (`assemble_context_map_with_metrics`); nenhum run canônico real os encadeou ainda até o artifact final, então os gates que dependem disso continuam bloqueados até essa execução acontecer.
 
-Runtime & Configuration compõe essas capabilities: possui a configuração efetiva versionada (perfil, arquivos e overrides, digest determinístico, segredos só do ambiente), o catálogo de stages, pontos de variação e backends, a composition root, o DAG de estágios com preflight, o reuso por identidade de conteúdo, a seleção explícita de runs com linhagem, o ciclo de vida do run (journal, eventos, cancelamento, retomada), o serviço público de ingestion, a CLI `contextmap` e a API pública de aplicação `Runtime` para qualquer frontend. `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` têm executor real, composto automaticamente da configuração (`compose_executors`); Point Representation ainda não tem (depende de backend com modelo/GPU); a Ingestion tem executor real, mas continua exigindo injeção explícita de quem chama, porque `compose_executors` não a constrói (precisa de um `IngestionRequest` da execução, não da configuração); Semantic Mapping compõe quando o chamador também fornece `semantic_map_id`/`code_digest`, que não são valor de configuração. Um preset versionado declara a topologia, do recorded source ao `ContextMapArtifact`: `canonical/1`. Antes do v0.1.0 sair não existe consumidor publicado a proteger de uma mudança de topologia, então esta identidade continua livre para evoluir; a disciplina de nunca mudar a topologia de um preset publicado começa a valer a partir do release. A orquestração end-to-end com dados reais ainda não foi validada.
+Runtime & Configuration compõe essas capabilities: possui a configuração efetiva versionada (perfil, arquivos e overrides, digest determinístico, segredos só do ambiente), o catálogo de stages, pontos de variação e backends, a composition root, o DAG de estágios com preflight, o reuso por identidade de conteúdo, a seleção explícita de runs com linhagem, o ciclo de vida do run (journal, eventos, cancelamento, retomada), o serviço público de ingestion, a CLI `contextmap` e a API pública de aplicação `Runtime` para qualquer frontend. `visual_perception`, `state_estimation`, `geometric_mapping`, `sensor_association`, `semantic_fusion`, `semantic_mapping`, `entity_resolution`, `spatial_relations` e `context_map` têm executor real, composto automaticamente da configuração (`compose_executors`); Point Representation ainda não tem (depende de backend com modelo/GPU); a Ingestion tem executor real, mas continua exigindo injeção explícita de quem chama, porque `compose_executors` não a constrói (precisa de um `IngestionRequest` da execução, não da configuração); Semantic Mapping compõe quando o chamador também fornece `semantic_map_id`/`code_digest`, que não são valor de configuração. Um preset versionado declara a topologia, do recorded source ao `ContextMapArtifact`: `canonical/1`. Antes do v0.1.0 sair não existe consumidor publicado a proteger de uma mudança de topologia, então esta identidade continua livre para evoluir; a disciplina de nunca mudar a topologia de um preset publicado começa a valer a partir do release. A orquestração end-to-end **foi executada sobre dados reais**: os doze estágios, do `SequenceArtifact` do `corridor-02` ao `ContextMapArtifact` verificado por hash, com os mesmos executores reais de `contextmap.runtime.executors`. A distinção que importa: esse run encadeou os executores estágio a estágio, não uma única invocação de `contextmap run` sobre um plano resolvido; o caminho do `run_plan` (com journal, reuso por referência e retomada de interrupção) é validado por evidência de **contrato** sobre a cadeia sintética. A evidência real está em [release-v0.1.0.md](release-v0.1.0.md) e no relatório de aceitação que ele cita.
 
 Os detalhes implementados pertencem aos documentos dos módulos. Os documentos globais integram esses boundaries e descrevem como eles se conectam ao restante do canonical pipeline, sem duplicar a especificação interna.
 
@@ -99,6 +99,12 @@ Os detalhes implementados pertencem aos documentos dos módulos. Os documentos g
 8. [development.md](development.md), fluxo de desenvolvimento, branches, commits, Python e qualidade.
 9. [repository-settings.md](repository-settings.md), políticas esperadas do GitHub e checks.
 10. [versioning.md](versioning.md), Semantic Versioning e releases.
+11. [installation.md](installation.md), instalação base, extras opcionais e runtimes que não vêm do PyPI.
+12. [third-party-licenses.md](third-party-licenses.md), licenças declaradas de dependências, modelos e runtimes, e o que o repositório redistribui.
+13. [release-v0.1.0.md](release-v0.1.0.md), escopo **congelado** do v0.1.0 e checklist de aceitação com a evidência de cada item.
+14. [releases/v0.1.0.md](releases/v0.1.0.md), notas da release: capacidades validadas com o gate que as sustenta, backend experimental e limitações conhecidas.
+15. [troubleshooting.md](troubleshooting.md), falhas comuns de calibração, backend, recursos, orquestração, leitura de artifact e publicação.
+16. [build_results.md](build_results.md), resultados **reais** do run canônico end-to-end sobre o `corridor-02`, estágio por estágio.
 
 ## Mapa da documentação
 
@@ -116,6 +122,11 @@ flowchart TD
     R --> D[development.md]
     R --> RS[repository-settings.md]
     R --> V[versioning.md]
+    R --> I[installation.md]
+    R --> TS[troubleshooting.md]
+    R --> BR[build_results.md]
+    R --> L[third-party-licenses.md]
+    R --> RL[release-v0.1.0.md]
 
     A --> M[docs específicos dos módulos]
     API --> M
@@ -158,6 +169,9 @@ flowchart TD
 | `development.md` | Como uma mudança deve ser implementada e integrada? |
 | `repository-settings.md` | Como o GitHub deve reforçar o fluxo de desenvolvimento? |
 | `versioning.md` | Como versões e releases são identificadas? |
+| `installation.md` | O que cada instalação e cada extra traz, e o que fica por conta do usuário? |
+| `third-party-licenses.md` | Sob quais licenças estão as dependências, os modelos e os runtimes, e o que o repositório redistribui? |
+| `release-v0.1.0.md` | O que entra no v0.1.0 e qual evidência sustenta cada item de aceitação? |
 
 ## Pipeline em uma linha
 

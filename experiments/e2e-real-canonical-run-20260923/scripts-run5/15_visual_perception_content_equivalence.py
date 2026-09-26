@@ -29,7 +29,9 @@ from pathlib import Path
 
 from contextmap.visual_perception import PerceptionRunReader
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs/e2e-real/visual_perception/workspace/corridor-02")
+WORKSPACE = Path(__file__).resolve().parents[3] / (
+    "outputs/e2e-real/visual_perception/workspace/corridor-02"
+)
 
 
 def _claim_key(claim: object) -> tuple[str, object, str, str, object, object]:

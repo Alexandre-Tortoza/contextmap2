@@ -22,7 +22,7 @@ from contextmap.state_estimation.backends.external_pose import (
     InvalidSamplePolicy,
 )
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_ARTIFACT_ID = "720a486de8d44c16a9d3d2ff9fa7b1a4"
 POSE_ARTIFACT_ID = "e2d832c152b1493999082d4f67210b5b"
 OUTPUT_DIR = WORKSPACE / "e2e-real/run-0002/state_estimation"

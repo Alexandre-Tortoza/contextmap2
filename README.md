@@ -76,6 +76,18 @@ Os adapters de Feature Extraction usam carregamento lazy e checkpoints locais po
 
 Os demais estágios do mapa contextual permanecem arquitetura alvo e serão integrados por milestones posteriores.
 
+## Instalação
+
+O pacote ainda não é publicado no PyPI: instale a partir de um clone ou da wheel de uma GitHub Release.
+
+```bash
+python -m pip install .              # base: só NumPy
+python -m pip install '.[ros1]'      # + leitura de bags ROS 1/ROS 2 (rosbags); '.[ros2]' é equivalente
+python -m pip install '.[vision]'    # + DINOv2, DINOv3 e CLIP (torch, torchvision, transformers, Pillow)
+```
+
+A instalação base importa os contratos públicos e lê artifacts persistidos sem ROS, Torch ou modelos, e instala o comando `contextmap` (também `python -m contextmap`; veja `contextmap --help`), a interface da capability `runtime`. Extras, runtimes que não vêm do PyPI (SAM 2, AlphaCLIP, PTv3, FAST-LIO) e erros de dependência opcional estão em [docs/installation.md](docs/installation.md).
+
 ## Desenvolvimento
 
 Python 3.11 ou superior é obrigatório.
@@ -95,6 +107,7 @@ make format
 make typecheck
 make test
 make build
+make smoke-install   # constrói e testa a wheel em um venv novo
 ```
 
 ## Fluxo de branches
@@ -147,8 +160,8 @@ Tags Git usam Semantic Versioning no formato `vMAJOR.MINOR.PATCH`. Durante a fas
 
 Uma tag válida deve apontar para `main` e dispara o pipeline de release.
 
-Consulte [docs/versioning.md](docs/versioning.md) para a política completa.
+Consulte [docs/versioning.md](docs/versioning.md) para a política completa. As mudanças por versão ficam em [CHANGELOG.md](CHANGELOG.md).
 
 ## Licença
 
-GNU Affero General Public License v3.0. Consulte [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 (`AGPL-3.0-only`). Consulte [LICENSE](LICENSE). Modelos, pesos e runtimes de terceiros não são redistribuídos e mantêm as licenças de seus fornecedores: veja [docs/third-party-licenses.md](docs/third-party-licenses.md).

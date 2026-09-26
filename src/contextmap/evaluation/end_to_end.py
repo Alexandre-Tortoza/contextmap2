@@ -30,7 +30,7 @@ from contextmap.evaluation.reference_set import ReferenceSetIdentity
 SCENARIO_SCHEMA = "contextmap.e2e.scenario/v1"
 ACCEPTANCE_REPORT_SCHEMA = "contextmap.e2e.acceptance-report/v1"
 SCENARIO_ID = "solution-1-canonical"
-SCENARIO_VERSION = "1.0.4"
+SCENARIO_VERSION = "1.0.5"
 """Version of the frozen scenario; any change to a frozen decision needs a new one.
 
 1.0.1 fixed the runtime-selection completeness bug that #540's real catalog wiring for
@@ -63,6 +63,38 @@ segment); only the artifact identity, its selection identity and its observation
 shifted by the correction's offset. Resolved observation counts inside the window are bit-for-bit
 identical to the previous artifact (2160 images, 892 LiDAR scans, 17983 IMU samples), which is
 itself evidence that the correction changed no data, only its clock.
+
+1.0.5 is the **release contract** of v0.1.0, and it exists because 1.0.4's campaign produced a
+real negative result that 1.0.4 must keep reporting. Two independent real executions of the
+identical canonical Visual Perception configuration (SAM2.1-hiera-tiny + DINOv2-base +
+CLIP-ViT-L/14 + Qwen3-VL-4B-Instruct nf4, greedy, ``temperature=0.0``) over the same 20 real
+corridor-02 frames agreed on only 29 of 90 compared canonical claims, while region discovery was
+perfectly reproducible (0/20 frame mismatches) and, given the *same* ``PerceptionRunArtifact``,
+all eight downstream stages were exactly reproducible. 1.0.4 therefore fails
+``reproducibility.rerun_equivalence`` and **stays failed**: it is the authoritative record of the
+campaign that ran against it, and no version of this history may relabel it.
+
+What 1.0.5 changes is what the *release* requires, not what 1.0.4 measured:
+
+* ``reproducibility.rerun_equivalence`` is narrowed to the property the evidence actually
+  supports -- repeated runs from the same ``PerceptionRunArtifact`` yield equivalent artifacts,
+  metric reports and final map. It no longer asserts that recorded sensors to
+  ``ContextMapArtifact`` is reproducible end to end while a generative backend participates in
+  the chain, because that is not what was demonstrated.
+* ``reproducibility.semantic_rerun_agreement`` is a new :attr:`GateKind.REPORT` gate owned by
+  ``visual_perception``: the measured agreement is reported with its denominator and no pass
+  threshold, so the negative evidence is counted rather than dropped. A report gate never gates
+  a release by itself, which is the existing design of :func:`unmet_required_gates`.
+* :class:`ExperimentalComponent` declares the Qwen3-VL semantic interpretation backend
+  experimental for this release, naming the property v0.1.0 does not guarantee, the measurement
+  and issue #556, which stays open outside the release blocker.
+* ``visual_perception.semantic_quality`` now requires ``semantic.parse_failure_rate``. This was
+  deliberately deferred from 1.0.4: adding a metric to a frozen gate demands a new version, and
+  retroactively requiring it would have mixed two experimental definitions in one campaign. It
+  becomes required here because a run that records the contractual failures stream can measure
+  it completely.
+
+No dataset, stage, backend selection or ablation-only decision changes in 1.0.5.
 """
 
 CROSS_STAGE = "cross_stage"
@@ -201,6 +233,57 @@ class AblationOnlyOption:
     def to_record(self) -> dict[str, Any]:
         """Return the JSON-compatible record."""
         return {"component_id": self.component_id, "option": self.option, "reason": self.reason}
+
+
+@dataclass(frozen=True, kw_only=True)
+class ExperimentalComponent:
+    """A canonical-run component whose named output property the release does not guarantee.
+
+    This is not an :class:`AblationOnlyOption`: the component runs inside the canonical
+    pipeline and its evidence reaches the final map. What this declares is narrower, and a
+    release contract has to say it out loud: which property of the component's output the
+    scenario does **not** require, the real measurement that motivated the declaration, and
+    where the open question is tracked. A consumer of the artifact must not assume the named
+    property holds.
+
+    Declaring a component experimental never edits a previous scenario version's verdict. The
+    version that measured a violation keeps reporting it; a later version may move the property
+    out of its own release contract, which is a new frozen decision and therefore a new digest.
+
+    Attributes:
+        component_id: Variation point the component is selected at.
+        option: The selected backend.
+        unguaranteed_property: The property the scenario does not require of its output.
+        measurement: The real measurement behind the declaration, with its denominator.
+        follow_up: Where the open question is tracked.
+    """
+
+    component_id: str
+    option: str
+    unguaranteed_property: str
+    measurement: str
+    follow_up: str
+
+    def __post_init__(self) -> None:
+        """Reject a blank field: an unguaranteed property with no measurement is an opinion."""
+        for name, value in (
+            ("component_id", self.component_id),
+            ("option", self.option),
+            ("unguaranteed_property", self.unguaranteed_property),
+            ("measurement", self.measurement),
+            ("follow_up", self.follow_up),
+        ):
+            require_text(f"{name} of the experimental component {self.option!r}", value)
+
+    def to_record(self) -> dict[str, Any]:
+        """Return the JSON-compatible record."""
+        return {
+            "component_id": self.component_id,
+            "option": self.option,
+            "unguaranteed_property": self.unguaranteed_property,
+            "measurement": self.measurement,
+            "follow_up": self.follow_up,
+        }
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -415,6 +498,8 @@ class E2EScenario:
         subject: The recorded input and the strength of its evidence.
         stages: The canonical run, in topology order.
         ablation_only: Implemented options that stay outside the canonical run.
+        experimental: Canonical components whose named output property the release does not
+            guarantee.
         gates: The acceptance matrix.
     """
 
@@ -423,6 +508,7 @@ class E2EScenario:
     subject: ScenarioSubject
     stages: tuple[ScenarioStage, ...]
     ablation_only: tuple[AblationOnlyOption, ...]
+    experimental: tuple[ExperimentalComponent, ...] = ()
     gates: tuple[AcceptanceGate, ...]
 
     def __post_init__(self) -> None:
@@ -456,6 +542,7 @@ class E2EScenario:
             "subject": self.subject.to_record(),
             "stages": [stage.to_record() for stage in self.stages],
             "ablation_only": [option.to_record() for option in self.ablation_only],
+            "experimental": [component.to_record() for component in self.experimental],
             "gates": self.matrix_record(),
         }
 

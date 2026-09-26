@@ -1,0 +1,3 @@
+{"contradiction_ids":[],"entity_ref":{"entity_id":"a","semantic_map_id":"semantic-map--0001"},"resolved_entity_id":"resolved--0acfa62539fb879c","unresolved_neighbor_refs":[{"entity_id":"c","semantic_map_id":"semantic-map--0001"}]}
+{"contradiction_ids":[],"entity_ref":{"entity_id":"b","semantic_map_id":"semantic-map--0001"},"resolved_entity_id":"resolved--0acfa62539fb879c","unresolved_neighbor_refs":[{"entity_id":"c","semantic_map_id":"semantic-map--0001"}]}
+{"contradiction_ids":[],"entity_ref":{"entity_id":"c","semantic_map_id":"semantic-map--0001"},"resolved_entity_id":"resolved--9fc8d41a887beed9","unresolved_neighbor_refs":[{"entity_id":"b","semantic_map_id":"semantic-map--0001"}]}

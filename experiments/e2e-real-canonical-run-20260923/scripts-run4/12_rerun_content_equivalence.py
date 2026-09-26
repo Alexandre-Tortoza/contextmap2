@@ -151,7 +151,7 @@ def compare(
 
 
 def main() -> None:
-    workspace = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+    workspace = Path(__file__).resolve().parents[3] / "outputs"
     ok = compare(
         "run-0004 (hand-chained context_map over run-0003's chain) vs run-0008 "
         "(run_plan()/resume_plan()-orchestrated), both under the fixed ContextMapExecutor "

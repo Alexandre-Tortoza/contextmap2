@@ -571,6 +571,18 @@ def default_metric_registry() -> MetricRegistry:
             evaluator="semantic-interpretation-evaluator",
         ),
         _quality(
+            "semantic.rerun_agreement.rate",
+            stage.SEMANTIC_INTERPRETATION,
+            "Fraction of canonical claims identical between two independent runs of one "
+            "configuration.",
+            population="canonical claims compared between the two runs over the same frames",
+            unit="ratio",
+            maximum=1.0,
+            direction=_HIGHER,
+            aggregation="exactly agreeing claims divided by compared claims",
+            evaluator="semantic-interpretation-evaluator",
+        ),
+        _quality(
             "semantic.ambiguity_preservation_rate",
             stage.SEMANTIC_INTERPRETATION,
             "Fraction of ambiguous targets whose alternatives the interpreter kept.",
@@ -785,5 +797,5 @@ def default_metric_registry() -> MetricRegistry:
         ),
     )
     return MetricRegistry(
-        registry_id="contextmap-stage-metrics", registry_version="2", definitions=definitions
+        registry_id="contextmap-stage-metrics", registry_version="3", definitions=definitions
     )

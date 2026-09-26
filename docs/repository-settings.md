@@ -144,7 +144,7 @@ O workflow `Commit policy` valida todos os commits de um pull request e exige:
 - subject compatível com Conventional Commits;
 - corpo não vazio com contexto da alteração.
 
-O workflow `CI` executa quality gates em pull requests e pushes de `main`, `dev` e `milestone/*`.
+O workflow `CI` executa em pull requests e pushes de `main`, `dev` e `milestone/*` e também é reutilizado pelo workflow de release. Seus jobs são `quality` (lint, formatação, mypy e testes em Python 3.11), `python-compatibility` (testes em 3.12 a 3.14), `package` (sdist e wheel, `twine check` e smoke de instalação em ambientes novos) e `lightweight-install` (suíte contra a wheel instalada só com NumPy e os extras `ros1`/`ros2`). Nenhum job novo altera o nome de `quality`.
 
 ## Checks obrigatórios
 
@@ -193,3 +193,28 @@ Recursos recomendados:
 - private vulnerability reporting;
 - CodeQL scanning;
 - regras de proteção para `main`, `dev` e, quando viável, padrão `milestone/*`.
+
+## Estado verificado em 2026-09-26
+
+Este documento descreve as configurações **esperadas**. A tabela abaixo confronta cada uma com o que a API do GitHub devolveu, por leitura (`GET`) com as credenciais do mantenedor; nenhuma configuração foi alterada. Uma configuração que a API não permite ler com esse acesso é marcada como não verificável, e nenhuma é dada como ativa sem evidência.
+
+Releitura completa em **2026-09-26**, para o congelamento do escopo do v0.1.0 ([release-v0.1.0.md](release-v0.1.0.md)): **nada mudou** desde a leitura de 2026-09-21. `main` continua não existindo, `dev` continua sem proteção e sem ruleset, os três métodos de merge seguem habilitados, descrição e tópicos seguem vazios, e não há tag nem release. Toda divergência da tabela abaixo permanece divergente.
+
+| Configuração | Esperado | Observado | Situação |
+| --- | --- | --- | --- |
+| Branch `main` | existe, é o padrão e origem das tags | **não existe** no remoto; o padrão é `dev` | divergente, e bloqueia a release: o gate do workflow `Release` exige a tag em `main` |
+| Proteção de `main` e `dev` | PR obrigatório, CI obrigatório, sem force push | `dev` sem proteção (a API responde "Branch not protected"); nenhum ruleset (`[]`) | **não ativa** |
+| Checks obrigatórios (`CI / quality`, `Branch policy / validate`, `Commit policy / validate`) | exigidos por regra de proteção | sem regra de proteção, nada os exige | **não ativos**; os workflows existem e rodam |
+| Métodos de merge | squash e rebase; merge commit desabilitado | squash, rebase **e** merge commit habilitados | divergente; o fluxo de milestones usa merge commit, então o documento ou a configuração precisa mudar |
+| Excluir branch após o merge | habilitado | desabilitado | divergente |
+| Auto-merge | opcional | desabilitado | consistente |
+| Descrição e tópicos | descrição e tópicos sugeridos acima | descrição vazia; nenhum tópico | divergente |
+| Tags | somente em `main` | nenhuma tag existe | consistente com "sem release ainda" |
+| Secret scanning e push protection | recomendados | habilitados | consistente |
+| Dependabot alerts e security updates | recomendados | security updates desabilitado; o endpoint de alertas responde 404 (não habilitado); a atualização de versões por `.github/dependabot.yml` está ativa | divergente |
+| Private vulnerability reporting | recomendado | desabilitado | divergente |
+| CodeQL | habilitado | workflow ativo, análises existentes, nenhum alerta aberto | consistente |
+| Actions | permissões mínimas | Actions habilitadas, todas as actions permitidas, token padrão somente leitura, sem fixação obrigatória por SHA | parcial |
+| Licença detectada | AGPL-3.0 | AGPL-3.0 | consistente |
+
+Ações que dependem do mantenedor e que este repositório não executa: criar `main` (e decidir se ela passa a ser a branch padrão), ativar proteção ou rulesets com os checks acima, decidir os métodos de merge, preencher descrição e tópicos, habilitar o private vulnerability reporting e os Dependabot alerts.

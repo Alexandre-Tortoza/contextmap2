@@ -89,7 +89,7 @@ Capabilities implementadas que **não** fazem parte do run canônico. Uma opçã
 | `geometric_mapping.quality_report` | `geometric_mapping` | relatório | `geometry.scan_overlap.plane_distance.median` | — |
 | `visual_perception.evidence_completeness` | `visual_perception` | invariante | — | — |
 | `visual_perception.region_quality` | `visual_perception` | relatório | `region.iou.mean`, `region.recall.mean`, `region.duplicate_rate.mean` | `regions` |
-| `visual_perception.semantic_quality` | `visual_perception` | relatório | `semantic.acceptable_claim_rate`, `semantic.unsupported_claim_rate`, `semantic.ambiguity_preservation_rate` | `semantics` |
+| `visual_perception.semantic_quality` | `visual_perception` | relatório | `semantic.acceptable_claim_rate`, `semantic.unsupported_claim_rate`, `semantic.ambiguity_preservation_rate`, `semantic.parse_failure_rate` | `semantics` |
 | `sensor_association.projection_validity` | `sensor_association` | invariante | — | — |
 | `sensor_association.projection_quality` | `sensor_association` | relatório | `association.visible_support.ratio`, `association.reprojection_error.median`, `association.feature_anchoring.rate` | — |
 | `semantic_fusion.evidence_preservation` | `semantic_fusion` | invariante | — | — |
@@ -106,7 +106,10 @@ Capabilities implementadas que **não** fazem parte do run canônico. Uma opçã
 | `runtime.provenance_identity` | `runtime` | invariante | — | — |
 | `runtime.resource_reporting` | `runtime` | relatório | `runtime.wall_time`, `runtime.throughput`, `runtime.peak_memory`, `runtime.storage_size`, `runtime.failure_rate` | — |
 | `reproducibility.rerun_equivalence` | `runtime` | invariante | — | — |
+| `reproducibility.semantic_rerun_agreement` | `visual_perception` | relatório | `semantic.rerun_agreement.rate` | — |
 | `reproducibility.interruption_recovery` | `runtime` | invariante | — | — |
+
+`reproducibility.rerun_equivalence` é **condicionado**: ele exige equivalência entre runs repetidos *a partir do mesmo `PerceptionRunArtifact`*. A concordância das claims geradas por um backend generativo é medida separadamente, por `reproducibility.semantic_rerun_agreement`, que é gate de relatório e por definição não decide uma release sozinho. Ver a seção "Componentes experimentais".
 
 Os enunciados completos de cada gate (requisito e evidência) estão no snapshot JSON do cenário. Os gates `cross_stage.*` falam de uma **fronteira**: o resultado nomeia a capability que quebrou o contrato (por exemplo, `geometric_mapping` quando o frame do mapa diverge do da trajetória).
 
@@ -141,6 +144,16 @@ Regras de decisão:
 
 `tests/end_to_end/acceptance.py` monta com essa cadeia um `AcceptanceReport` sobre o cenário de CI. Doze gates passam com evidência `fake_contract` (integridade da sequência, cobertura da trajetória, validade da projeção, preservação de evidência na fusão, linhagem de identidade de Entity Resolution, integridade referencial de Spatial Relations, integridade do artifact final, equivalência entre reexecuções, e os quatro `cross_stage.*` -- `check_cross_stage()` já cobre toda fronteira até o `ContextMapArtifact`, #178); o gate de frame do mapa e os de qualidade que dependem de anotação de referência (`entity_resolution.identity_quality`, `spatial_relations.relation_quality`) ficam `not_evaluated` -- esta cadeia nunca fabrica um gate de qualidade que precisa de anotação; os demais ficam `not_evaluated`. Por ser contrato, `unmet_required_gates()` continua listando os 25 gates: **o ensaio de CI nunca valida a Solution 1**.
 
+## Componentes experimentais
+
+`E2EScenario.experimental` declara um componente que **roda no pipeline canônico** — sua evidência chega ao mapa final — mas cuja propriedade nomeada a release não garante. Não é `ablation_only`, que descreve uma opção que fica *fora* do run canônico.
+
+Cada `ExperimentalComponent` precisa nomear quatro coisas, e nenhuma delas pode ficar em branco: o componente, a propriedade não garantida, a **medição real com denominador** que motivou a declaração e onde a questão aberta é acompanhada. Uma propriedade não garantida sem medição é opinião, e o construtor a recusa.
+
+Declarar um componente experimental **nunca** reescreve o veredito de uma versão anterior: a versão que mediu a violação continua reportando-a. Tirar a propriedade do contrato de release é uma decisão congelada nova, logo um digest novo.
+
+No 1.0.5, o único componente experimental é o backend de interpretação semântica Qwen3-VL: 29/90 claims canônicas idênticas entre duas execuções reais independentes da mesma configuração greedy, com region discovery em 0/20 divergências e, a partir do mesmo `PerceptionRunArtifact`, os oito estágios a jusante exatamente reprodutíveis. A investigação do mecanismo é a issue #556, que segue aberta fora do bloqueio de release.
+
 ## Reprodutibilidade e versionamento
 
 O cenário é reproduzível a partir de entradas documentadas: a sequência (identidade e digest do manifesto), a seleção (identidade e janela), a entrada de pose (digest do arquivo), o perfil (backends) e a matriz. `digest` cobre o cenário inteiro e `matrix_digest` só a matriz.
@@ -153,7 +166,12 @@ Os snapshots JSON em [`scenarios/`](scenarios/) são a forma revisável do cená
 
 ### Histórico de versões
 
+O histórico completo, com o motivo de cada versão, é a docstring de `SCENARIO_VERSION` em `end_to_end.py` — fonte única, para as duas cópias não divergirem. Em resumo:
+
 - **1.0.0** — versão inicial: sujeito real `corridor-02-sample` sem reference set anotado, sujeito de CI sintético e matriz de 25 gates (16 invariantes e 9 de relatório) sem limiares de aprovação.
+- **1.0.1 a 1.0.3** — correções de completude da seleção de runtime e colapso de `canonical/2`/`canonical/3` em `canonical/1`. Nenhuma alterou dataset, gate, lista de ablation-only ou justificativa científica de estágio.
+- **1.0.4** — recongela o sujeito real sobre um `SequenceArtifact` novo e imutável (issue #554), com `MeiCameraModel` real na calibração RGB e correção de offset explícita nos timestamps. É o cenário da campanha de aceitação da milestone #19, e **permanece com `reproducibility.rerun_equivalence` reprovado**: é o registro autoritativo do que aquela campanha mediu.
+- **1.0.5** — contrato de release do v0.1.0. Estreita `reproducibility.rerun_equivalence` para a propriedade que a evidência sustenta (runs repetidos a partir do mesmo `PerceptionRunArtifact`), acrescenta o gate de relatório `reproducibility.semantic_rerun_agreement`, declara o backend Qwen3-VL experimental e passa a exigir `semantic.parse_failure_rate` no gate de qualidade semântica, métrica deliberadamente adiada pela 1.0.4. Dataset, estágios, backends e ablation-only inalterados.
 
 ## Validação real registrada
 

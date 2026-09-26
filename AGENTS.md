@@ -55,6 +55,7 @@ docs/module-api.md
 docs/shared-primitives.md
 docs/runtime-composition.md
 docs/development.md
+docs/troubleshooting.md
 ```
 
 Documentation may describe target architecture that is not implemented yet. Never infer that a capability, class, backend, or artifact exists only because it appears in documentation.

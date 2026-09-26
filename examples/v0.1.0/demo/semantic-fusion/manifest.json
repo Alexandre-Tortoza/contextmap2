@@ -1,0 +1,16 @@
+{
+  "file_inventory": [
+    {
+      "content_hash": "sha256:0f79d8ca8288899fadd9ab72d002511093eb27c504f2e815484b1b0f5506e23b",
+      "path": "outputs/records.jsonl",
+      "size_bytes": 72
+    },
+    {
+      "content_hash": "sha256:e23d7c62e30899d57606f559ae9c5093da1a792046f363f8390fcbe94c9f048b",
+      "path": "outputs/summary.json",
+      "size_bytes": 36
+    }
+  ],
+  "run_id": "semantic-fusion--run-0001",
+  "schema_version": "0.1.0"
+}

@@ -472,3 +472,5 @@ Dependências específicas de backends devem permanecer isoladas da API pública
 SDKs de modelos, ROS, provedores remotos e frameworks de ML não devem aparecer em contratos consumidos por outros módulos quando um tipo de domínio é suficiente.
 
 Dependências pesadas só devem ser adicionadas quando uma issue validada realmente precisa delas.
+
+A instalação base depende só de NumPy. Todo SDK opcional que o código importa precisa estar ligado a um extra do `pyproject.toml` (ou constar como runtime externo em `tests/packaging/test_dependencies.py`, com o motivo), e nenhum módulo pode importá-lo na importação, exceto adapters que já documentam essa exceção. Esse contrato é verificado por `tests/packaging/`; o inventário dos extras está em [installation.md](installation.md).

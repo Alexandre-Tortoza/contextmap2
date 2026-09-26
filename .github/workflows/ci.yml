@@ -11,6 +11,9 @@ on:
       - main
       - dev
       - "milestone/**"
+  # O workflow de release reutiliza estes jobs para que nada seja publicado sem
+  # que a mesma verificação passe sobre o commit da tag.
+  workflow_call:
 
 permissions:
   contents: read
@@ -20,6 +23,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # O nome deste job (CI / quality) é o check obrigatório documentado em
+  # docs/repository-settings.md: não renomear.
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -56,3 +61,137 @@ jobs:
         with:
           name: coverage
           path: coverage.xml
+
+  # As versões declaradas nos classifiers do pyproject.toml precisam ser testadas
+  # aqui; o piso (3.11) é o do job quality.
+  python-compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+
+      - name: Tests
+        run: pytest
+
+  # Constrói sdist e wheel, verifica os metadados e testa os dois instalados em
+  # ambientes novos. Sem cache de pip: o resultado não pode depender de um wheel
+  # que só existe em cache. O artifact ``dist`` é o que o release publica.
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+      - name: Reject oversized distributions
+        # Um dataset ou peso rastreado por engano entraria no sdist (setuptools-scm
+        # inclui tudo o que o git rastreia).
+        run: |
+          for file in dist/*; do
+            size="$(stat -c %s "${file}")"
+            echo "${file}: ${size} bytes"
+            if [ "${size}" -gt 5242880 ]; then
+              echo "::error::${file} exceeds 5 MiB; research data must not be packaged."
+              exit 1
+            fi
+          done
+
+      - name: Smoke test the wheel in a fresh environment
+        run: |
+          python -m venv "${RUNNER_TEMP}/wheel-venv"
+          "${RUNNER_TEMP}/wheel-venv/bin/python" -m pip install --no-cache-dir dist/*.whl
+          "${RUNNER_TEMP}/wheel-venv/bin/python" tests/packaging/smoke_installed_package.py
+
+      - name: Smoke test the sdist in a fresh environment
+        run: |
+          python -m venv "${RUNNER_TEMP}/sdist-venv"
+          "${RUNNER_TEMP}/sdist-venv/bin/python" -m pip install --no-cache-dir dist/*.tar.gz
+          "${RUNNER_TEMP}/sdist-venv/bin/python" tests/packaging/smoke_installed_package.py
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # A suíte inteira contra a wheel instalada só com as dependências base (NumPy),
+  # e cada extra contra os testes que dependem dele. Cobre os round-trips de
+  # artifact sem nenhuma dependência opcional e prova que os extras instalam o
+  # que anunciam.
+  lightweight-install:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Test the base install (NumPy only)
+        run: |
+          python -m venv "${RUNNER_TEMP}/base-venv"
+          "${RUNNER_TEMP}/base-venv/bin/python" -m pip install --no-cache-dir dist/*.whl "pytest>=9.1.1"
+          "${RUNNER_TEMP}/base-venv/bin/python" -m pytest -p no:cacheprovider
+
+      # Cada extra roda o smoke da instalação e só os testes que ele habilita: os
+      # extras de ROS destravam os adapters de bag; o do Gemini, os testes de
+      # contrato contra o SDK real, que sem ele ficam em skip permanente.
+      - name: Test the optional extras
+        run: |
+          wheel="$(ls dist/*.whl)"
+          ros_tests="tests/ingestion/adapters tests/state_estimation/test_state_estimation_fast_lio_process.py"
+          gemini_tests="tests/visual_perception/backends/test_gemini_sdk_contract.py tests/visual_perception/backends/test_gemini_client.py"
+          for extra in ros1 ros2 gemini; do
+            case "${extra}" in
+              gemini) extra_tests="${gemini_tests}" ;;
+              *) extra_tests="${ros_tests}" ;;
+            esac
+            env_dir="${RUNNER_TEMP}/extra-${extra}"
+            python -m venv "${env_dir}"
+            "${env_dir}/bin/python" -m pip install --no-cache-dir "${wheel}[${extra}]" "pytest>=9.1.1"
+            "${env_dir}/bin/python" tests/packaging/smoke_installed_package.py --extra "${extra}"
+            "${env_dir}/bin/python" -m pytest -p no:cacheprovider ${extra_tests}
+          done

@@ -94,6 +94,87 @@ def test_the_committed_scenario_snapshots_are_exactly_what_the_code_produces() -
         )
 
 
+# --- 1.0.5: o contrato de release separa o obrigatório do experimental -----------------------
+
+
+def test_the_release_scenario_declares_the_semantic_backend_experimental() -> None:
+    """1.0.5 diz em voz alta qual propriedade não exige, e de qual componente.
+
+    A campanha real mediu 29/90 de concordância exata de claims canônicas entre duas execuções
+    independentes da mesma configuração greedy. A 1.0.4 mantém isso como invariante FALHO; a
+    1.0.5 tira a propriedade do contrato de release em vez de afrouxar o veredito da 1.0.4.
+    """
+    scenario = canonical_real_scenario()
+
+    assert scenario.version == "1.0.5"
+    experimental = {component.option: component for component in scenario.experimental}
+    declared = experimental["qwen"]
+    assert declared.component_id == "visual_perception.semantic_interpretation"
+    # A medição tem denominador explícito: uma taxa sem população não é evidência.
+    assert "29/90" in declared.measurement
+    assert "556" in declared.follow_up
+
+
+def test_the_experimental_declaration_is_itself_a_frozen_decision() -> None:
+    scenario = canonical_real_scenario()
+
+    assert replace(scenario, experimental=()).digest != scenario.digest
+
+
+def test_rerun_equivalence_is_required_only_where_the_evidence_supports_it() -> None:
+    """O invariante é condicionado ao mesmo PerceptionRunArtifact; o resto é gate de relatório."""
+    gates = {gate.gate_id: gate for gate in canonical_real_scenario().gates}
+
+    invariant = gates["reproducibility.rerun_equivalence"]
+    assert invariant.kind is GateKind.INVARIANT
+    assert "PerceptionRunArtifact" in invariant.requirement
+
+    reported = gates["reproducibility.semantic_rerun_agreement"]
+    assert reported.kind is GateKind.REPORT
+    assert reported.capability == "visual_perception"
+    assert reported.metrics == ("semantic.rerun_agreement.rate",)
+
+
+def test_the_semantic_quality_gate_requires_the_parse_failure_rate_from_this_version_on() -> None:
+    """Adiada da 1.0.4 de propósito: exigir a métrica de um gate congelado pediria nova versão."""
+    gates = {gate.gate_id: gate for gate in canonical_real_scenario().gates}
+
+    assert "semantic.parse_failure_rate" in gates["visual_perception.semantic_quality"].metrics
+
+
+def test_a_run_meeting_every_invariant_is_release_ready_despite_the_semantic_disagreement() -> None:
+    """A discordância medida é relatada, não escondida, e não decide a release por si só."""
+    scenario = canonical_real_scenario()
+    results = []
+    for gate in scenario.gates:
+        if gate.gate_id == "reproducibility.semantic_rerun_agreement":
+            results.append(
+                GateResult.passed(
+                    gate.gate_id,
+                    evidence_class=EvidenceClass.REAL,
+                    evidence_refs=("artifact:perception-rerun",),
+                    detail="29/90 claims canônicas exatamente iguais entre duas execuções reais",
+                )
+            )
+        else:
+            results.append(_passed(gate.gate_id))
+    report = assemble_acceptance_report(
+        scenario, report_id="r", run_id="run", code_version="c", results=results
+    )
+
+    assert unmet_required_gates(scenario, report, kinds=frozenset({GateKind.INVARIANT})) == ()
+
+
+def test_the_superseded_scenario_snapshots_stay_on_disk_as_historical_evidence() -> None:
+    """A 1.0.4 continua sendo a evidência autoritativa da campanha que já terminou."""
+    frozen = sorted(path.name for path in SNAPSHOT_DIRECTORY.glob("*-1.0.4-*.json"))
+
+    assert frozen == [
+        "solution-1-canonical-1.0.4-ci-synthetic-subset.json",
+        "solution-1-canonical-1.0.4-corridor-02-sample.json",
+    ]
+
+
 def test_the_scenario_digest_is_deterministic_and_tracks_every_frozen_decision() -> None:
     scenario = canonical_real_scenario()
 

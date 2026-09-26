@@ -1,54 +1,86 @@
 name: Release
 
+# Publica a distribuição e cria a GitHub Release a partir de uma tag vMAJOR.MINOR.PATCH
+# que um mantenedor criou. O workflow nunca cria tags. Nada é publicado se a tag não
+# estiver em main, se a CI reutilizada falhar ou se a wheel não reportar a versão da tag.
 on:
   push:
     tags:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
-      - name: Validate tag
-        shell: bash
-        run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid release tag: ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-
+      # O histórico completo é necessário para saber se o commit da tag está em main.
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Verify the tag format and that the tagged commit is on main
+        run: bash .github/scripts/verify_release_tag.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+
+      # As notas são lidas do commit tagueado: precisam ter sido revisadas e não podem
+      # ser rascunho (docs/releases/<tag>.md) nem faltar a entrada datada no CHANGELOG.md.
+      - name: Verify the changelog entry and the release notes
+        run: bash .github/scripts/verify_release_notes.sh "${GITHUB_REF_NAME}"
+
+  # A mesma CI dos pull requests (quality, compatibilidade de Python, pacote e instalação
+  # leve), agora sobre o commit da tag. O job package produz o artifact ``dist``.
+  checks:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [verify, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install build tooling
-        run: python -m pip install build
-
-      - name: Build
-        run: python -m build
-
-      - name: Upload distribution artifact
-        uses: actions/upload-artifact@v7
+      - name: Download the distributions that CI built and tested
+        uses: actions/download-artifact@v8
         with:
-          name: dist-${{ github.ref_name }}
-          path: dist/
+          name: dist
+          path: dist
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
-          files: |
-            dist/*
+      - name: Verify that the wheel reports the tag version
+        run: |
+          python -m venv "${RUNNER_TEMP}/release-venv"
+          "${RUNNER_TEMP}/release-venv/bin/python" -m pip install --no-cache-dir dist/*.whl
+          "${RUNNER_TEMP}/release-venv/bin/python" tests/packaging/smoke_installed_package.py \
+            --expect-version "${GITHUB_REF_NAME#v}"
+
+      - name: Write checksums
+        run: (cd dist && sha256sum -- *.whl *.tar.gz) > SHA256SUMS
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--repo "${GITHUB_REPOSITORY}" --verify-tag --title "${GITHUB_REF_NAME}")
+          flags+=(--notes-file "docs/releases/${GITHUB_REF_NAME}.md")
+          # A série v0.x.y é de validação (docs/versioning.md).
+          if [[ "${GITHUB_REF_NAME}" == v0.* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/*.whl dist/*.tar.gz SHA256SUMS "${flags[@]}"

@@ -1,0 +1,181 @@
+{
+  "config": {
+    "components": {
+      "entity_resolution": {
+        "appearance": {
+          "backend": null
+        },
+        "geometry_comparison": {
+          "backend": "entity-geometry-comparison-v1",
+          "entity-geometry-comparison-v1": {}
+        },
+        "representation": {
+          "backend": null
+        },
+        "resolution": {
+          "backend": "conservative-staged-resolution-v1",
+          "conservative-staged-resolution-v1": {}
+        },
+        "retrieval": {
+          "backend": "entity-candidate-retrieval-v1",
+          "entity-candidate-retrieval-v1": {}
+        },
+        "semantic_compatibility": {
+          "backend": null
+        },
+        "temporal_compatibility": {
+          "backend": null
+        }
+      },
+      "geometric_mapping": {
+        "motion_correction": {
+          "backend": "motion-correction-v1",
+          "motion-correction-v1": {}
+        },
+        "pose_lookup": {
+          "backend": "lookup-policy-v1",
+          "lookup-policy-v1": {}
+        }
+      },
+      "ingestion": {
+        "source_adapter": {
+          "backend": "ros1_bag",
+          "ros1_bag": {}
+        }
+      },
+      "semantic_fusion": {
+        "accumulation": {
+          "backend": "baseline-evidence-accumulation-v1",
+          "baseline-evidence-accumulation-v1": {}
+        },
+        "support": {
+          "backend": "geometry-jaccard-support-v1",
+          "geometry-jaccard-support-v1": {}
+        }
+      },
+      "semantic_mapping": {
+        "geometry_summary": {
+          "backend": "entity-geometry-summary-v1",
+          "entity-geometry-summary-v1": {}
+        }
+      },
+      "sensor_association": {
+        "occlusion": {
+          "backend": "conservative-depth-support-v1",
+          "conservative-depth-support-v1": {}
+        },
+        "pose_policy": {
+          "backend": "lookup-policy-v1",
+          "lookup-policy-v1": {}
+        },
+        "tolerances": {
+          "backend": "diagnostic-tolerances-v1",
+          "diagnostic-tolerances-v1": {}
+        }
+      },
+      "spatial_relations": {
+        "candidate": {
+          "backend": "bounds-neighborhood-candidates-v1",
+          "bounds-neighborhood-candidates-v1": {}
+        },
+        "contact_predicate": {
+          "backend": null
+        },
+        "frame_conventions": {
+          "backend": "map-frame-conventions-v1",
+          "map-frame-conventions-v1": {}
+        },
+        "geometric_predicate": {
+          "backend": null
+        },
+        "geometry_summary": {
+          "backend": "entity-geometry-summary-v1",
+          "entity-geometry-summary-v1": {}
+        }
+      },
+      "state_estimation": {
+        "estimator": {
+          "backend": "external_pose",
+          "external_pose": {}
+        }
+      },
+      "visual_perception": {
+        "dense_features": {
+          "backend": "dinov2",
+          "dinov2": {
+            "device": "cpu",
+            "model": "facebook/dinov2-base"
+          }
+        },
+        "region_discovery": {
+          "backend": "sam2",
+          "sam2": {
+            "device": "cpu",
+            "model": "facebook/sam2.1-hiera-tiny"
+          }
+        },
+        "region_features": {
+          "backend": "clip",
+          "clip": {
+            "device": "cpu",
+            "model": "openai/clip-vit-large-patch14"
+          }
+        },
+        "semantic_interpretation": {
+          "backend": "qwen",
+          "qwen": {
+            "device": "cpu",
+            "model": "Qwen/Qwen3-VL-4B-Instruct"
+          }
+        }
+      }
+    },
+    "inputs": {
+      "named": {},
+      "selections": {},
+      "sequence": "REPLACE-WITH-YOUR-SEQUENCE-ARTIFACT-ID"
+    },
+    "pipeline": {
+      "preset": "canonical/1",
+      "stages": {
+        "context_map": true,
+        "entity_resolution": true,
+        "geometric_mapping": true,
+        "ingestion": true,
+        "point_representation": false,
+        "pose_ingestion": false,
+        "semantic_fusion": true,
+        "semantic_mapping": true,
+        "sensor_association": true,
+        "spatial_relations": true,
+        "state_estimation": true,
+        "visual_perception": true
+      }
+    },
+    "policies": {
+      "association_max_range_m": null,
+      "debug_level": "standard",
+      "trajectory_mode": "operational_only"
+    },
+    "resources": {
+      "device": "cpu",
+      "providers": {},
+      "workspace": "outputs/contextmap-workspace"
+    },
+    "schema_version": "0.1.0"
+  },
+  "digest": "sha256:d6e64119c982d64cdea4f6abe17f9e70b3ee1a2f4973256e17356193be534cd7",
+  "schema_version": "0.1.0",
+  "sources": [
+    {
+      "content_hash": null,
+      "identity": "canonical/1",
+      "kind": "profile"
+    },
+    {
+      "content_hash": "sha256:36360f6a5cae6b5a44b1fbad49283dfd52a630379bb4c39e391567fbfbded695",
+      "identity": "examples/v0.1.0/canonical-config.toml",
+      "kind": "file"
+    }
+  ]
+}

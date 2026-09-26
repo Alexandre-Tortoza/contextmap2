@@ -1,0 +1,107 @@
+{
+  "code_version": "test",
+  "counts": {
+    "by_state": {
+      "rejected": 6,
+      "supported": 4
+    },
+    "candidates": 5,
+    "evidence": 5,
+    "relations": 10
+  },
+  "created_at": "2026-09-25T22:55:49.184277+00:00",
+  "debug_level": "none",
+  "file_inventory": [
+    {
+      "content_hash": "sha256:8f3a55bd67b8f2de7797a6a3374e8511483331e2a953b505f99af6b8ca563220",
+      "path": "metrics/counts.json",
+      "size_bytes": 744
+    },
+    {
+      "content_hash": "sha256:9d3feca67efa7ea9847fef460d013498065ce5381f94cd94d87ca73c079fc8be",
+      "path": "outputs/entity-relation-index.jsonl",
+      "size_bytes": 1198
+    },
+    {
+      "content_hash": "sha256:ce585cd1e14d30cf07775cfb42069b3d51b80ae90829531d4ba6f9471b24d82e",
+      "path": "outputs/relation-candidates.jsonl",
+      "size_bytes": 5652
+    },
+    {
+      "content_hash": "sha256:03deba89a2262504ebe2af0205064ab1d1d32083e790e146171cd04d0afdedda",
+      "path": "outputs/relation-decisions.jsonl",
+      "size_bytes": 2609
+    },
+    {
+      "content_hash": "sha256:3fb9fdfe9740135f877c66c3f961058515fb08ee6e47b3fbc80cf42f880cc629",
+      "path": "outputs/relation-evidence.jsonl",
+      "size_bytes": 6273
+    },
+    {
+      "content_hash": "sha256:52978902982e8c28a7cb5429a15eed7dd6d9130b5d9265888932c77c5f98b9ee",
+      "path": "outputs/relations.jsonl",
+      "size_bytes": 7120
+    }
+  ],
+  "lineage": {
+    "entity_resolution_artifact_digest": "sha256:bb444245e92b1b9289886ab0f7d00ff99c109ae9c577faef506969d43937412c",
+    "entity_resolution_run_id": "entity-resolution--run-0001",
+    "entity_resolution_schema_version": "0.1.0",
+    "geometric_map_id": "corridor-02--map-run-0001"
+  },
+  "policies": {
+    "candidate": {
+      "fingerprint": "sha256:fdfff9062429f6c17049eea4fa87e95d53435ec93efd9a4921bec40f0bef65c8",
+      "parameters": {
+        "directional_radius_m": 2.0,
+        "predicates": [
+          "above",
+          "inside",
+          "next_to"
+        ],
+        "proximity_radius_m": 0.6
+      },
+      "policy_id": "bounds-neighborhood-candidates-v1"
+    },
+    "decision": {
+      "fingerprint": "sha256:7fcb07444335e32c872e5f558faef5b4b0872ce9883c37b4d3ebdbd4f097a98f",
+      "policy_id": "conservative-relation-decision-v1"
+    },
+    "frame_conventions": {
+      "fingerprint": "sha256:d3f5fe91c3fc3aa8ea66ea013f0bcee44f657f8a971fd998aff4dc4a39df0424",
+      "forward_axis": "+x",
+      "map_frame": "map",
+      "policy_id": "map-frame-conventions-v1",
+      "up_axis": "+z"
+    },
+    "geometric": {
+      "fingerprint": "sha256:b16265b3445d4b0a2b307fa0894afa4b4aaaeaabc351fa36f08b71f3a75ca69f",
+      "parameters": {
+        "adjacent_penetration_m": 0.05,
+        "boundary_tolerance_m": 0.02,
+        "containment_slack_m": 0.05,
+        "directional_overlap_fraction": 0.5,
+        "next_to_max_gap_m": 0.6
+      },
+      "policy_id": "bounds-geometric-predicates-v1"
+    },
+    "geometry_summary": {
+      "fingerprint": "sha256:942e536f536799b8f5729b6be5d6144e5b2c377a318ee4270c29ce2ad58d0f16",
+      "parameters": {
+        "connectivity_radius_m": 1000.0,
+        "max_connectivity_points": 10000,
+        "orientation": null,
+        "sparse_point_threshold": 3
+      },
+      "policy_id": "entity-geometry-summary-v1"
+    },
+    "observation": {
+      "fingerprint": "sha256:dab6dafd017d22660708da8c6328d27f558f039c9e8a965a45fc5e4861a22e53",
+      "rule_id": "upstream-statements-v1"
+    }
+  },
+  "run_id": "spatial-relations--run-0001",
+  "schema_version": "0.1.0",
+  "taxonomy_version": "spatial-relation-taxonomy-v1",
+  "warnings": []
+}

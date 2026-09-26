@@ -1,0 +1,36 @@
+{
+  "aggregation_rule": null,
+  "bounds": {
+    "frame_id": "map",
+    "maximum_m": [
+      12.499735593795776,
+      2.0,
+      0.6500000059604645
+    ],
+    "minimum_m": [
+      -2.4999706745147705,
+      -1.9999216794967651,
+      0.25
+    ]
+  },
+  "dropped_non_finite_count": 0,
+  "geometry_size_bytes": 64000,
+  "map_id": "corridor-02--map-run-0001",
+  "point_count": 1000,
+  "reduction_ratio": 1.0,
+  "scan_count": 10,
+  "scans_without_geometry": 0,
+  "source_point_count": 1000,
+  "time_bounds": {
+    "end": {
+      "clock_id": "fixture:header",
+      "nanoseconds": 900000000,
+      "seconds": 0
+    },
+    "start": {
+      "clock_id": "fixture:header",
+      "nanoseconds": 0,
+      "seconds": 0
+    }
+  }
+}

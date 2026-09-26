@@ -71,7 +71,7 @@ from contextmap.state_estimation.backends.external_pose import (
 )
 from contextmap.visual_perception import PerceptionRunReader
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 BAG_LOCATION = "ingest-real/sequences/corridor-02/720a486de8d44c16a9d3d2ff9fa7b1a4"
 POSE_LOCATION = "ingest-real/sequences/corridor-02-pose/e2d832c152b1493999082d4f67210b5b"
 PERCEPTION_LOCATION = "e2e-real/visual_perception/workspace/corridor-02/run-0001/visual_perception"

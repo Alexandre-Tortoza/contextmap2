@@ -16,7 +16,7 @@ from contextmap.entity_resolution import (
 from contextmap.runtime import ArtifactRef, StageRequest
 from contextmap.runtime.executors import EntityResolutionExecutor
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 SEMANTIC_MAPPING_ARTIFACT_ID = "9a21d63dd6d835b64ac923096693c700"
 OUTPUT_DIR = WORKSPACE / "e2e-real/run-0002/entity_resolution"
 

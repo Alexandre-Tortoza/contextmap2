@@ -1,0 +1,40 @@
+{
+  "by_predicate_state": {
+    "contains": {
+      "rejected": 3
+    },
+    "inside": {
+      "rejected": 3
+    },
+    "next_to": {
+      "supported": 4
+    }
+  },
+  "by_state": {
+    "rejected": 6,
+    "supported": 4
+  },
+  "candidates": 5,
+  "decisions_by_rule": {
+    "channels_conflict": 3,
+    "channels_support": 2,
+    "derived_by_symmetry": 2,
+    "derived_from_inverse": 3
+  },
+  "derived_relations": 5,
+  "entities_with_relations": 3,
+  "evaluated_relations": 5,
+  "evidence": 5,
+  "evidence_by_channel_status": {
+    "geometry": {
+      "conflicts": 3,
+      "supports": 2
+    }
+  },
+  "exclusions": 10,
+  "pairs_not_enumerated": 0,
+  "relations": 10,
+  "skipped_predicates": 0,
+  "unresolved_by_uncertainty": {},
+  "warnings": 0
+}

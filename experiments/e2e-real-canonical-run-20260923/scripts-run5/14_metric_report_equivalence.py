@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-WORKSPACE = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+WORKSPACE = Path(__file__).resolve().parents[3] / "outputs"
 
 # Fields that are legitimately run-specific identity/timestamps/digests/lineage references, never
 # expected to match between two independent, correct executions of the same real inputs.

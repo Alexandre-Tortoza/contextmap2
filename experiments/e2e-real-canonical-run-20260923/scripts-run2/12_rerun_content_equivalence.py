@@ -132,7 +132,7 @@ def compare(
 
 
 def main() -> None:
-    workspace = Path("/home/alexmrtr/Projects/contextmap2/outputs")
+    workspace = Path(__file__).resolve().parents[3] / "outputs"
     ok = compare(
         "run-0002 vs run-0004 (existing evidence, pre-code_version-fix regeneration)",
         workspace / "e2e-real/run-0002/context_map",
