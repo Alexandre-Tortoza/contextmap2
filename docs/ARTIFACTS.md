@@ -75,6 +75,8 @@ Contém os manifests/reports que referenciam runs imutáveis usados em comparaç
 
 O registro **versionado** de uma execução real fica no repositório, em `experiments/<experimento>/` (diretório de topo, fora de `src/` e `tests/`): um bundle leve com o manifest do experimento (identidades e SHA-256 completos das runs de entrada), a seleção, a configuração, os drivers e os relatórios finais, **sem** o dataset nem os artifacts grandes, que continuam fora do Git e são regenerados localmente. Os drivers ficam fora de `src/` e de `tests/` porque são scripts de pesquisa, não código do pacote nem testes, e alterá-los para passar nos gates do pacote quebraria o hash do que foi executado. O teste `tests/evaluation/test_experiment_bundles.py` confere cada bundle contra o próprio manifest (hashes completos, todo arquivo listado, menos de 1 MB, sem caminhos pessoais nem segredos). Exemplo: [`experiments/semantic-fusion-corridor-02-20260921/`](../experiments/semantic-fusion-corridor-02-20260921/README.md).
 
+Os artifacts que os drivers de um experimento produzem, inclusive os de cada braço, ficam **retidos** sob o `outputs/` do checkout, fora do Git, no layout `<experimento>/run-NNNN/<estágio ou braço>`, e o report os cita por caminho relativo a essa raiz: o experimento pode ser reinspecionado sem ser reexecutado. A convenção e o esqueleto comum dos drivers estão em [`src/contextmap/evaluation/docs/experiments.md`](../src/contextmap/evaluation/docs/experiments.md#drivers-de-experimento-e-retenção-dos-braços).
+
 Remote storage, S3, MinIO, database ou distributed registry não são requisitos do canonical pipeline.
 
 ### Contrato dos writers de estágio

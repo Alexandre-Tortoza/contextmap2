@@ -1,6 +1,6 @@
 # Experimentos, matrizes de ablação e execução
 
-Comparar modelos, políticas, canais de evidência ou estágios opcionais do DAG só faz sentido quando **tudo, exceto a variável declarada, é idêntico**. Este módulo define o manifesto de experimento (`contextmap.evaluation.experiments`) e a execução controlada (`contextmap.evaluation.experiment_runner`).
+Comparar modelos, políticas, canais de evidência ou estágios opcionais do DAG só faz sentido quando **tudo, exceto a variável declarada, é idêntico**. Este módulo define o manifesto de experimento (`contextmap.evaluation.experiments`), a execução controlada (`contextmap.evaluation.experiment_runner`) e o esqueleto comum dos drivers de experimento sobre dados reais (`contextmap.evaluation.experiment_driver`, ver [Drivers de experimento e retenção dos braços](#drivers-de-experimento-e-retenção-dos-braços)).
 
 Resolver uma configuração em um DAG é responsabilidade do `runtime`, que ainda não existe. A avaliação **recebe topologias já resolvidas** e apenas verifica que elas diferem só como declarado; o executor de cada arm é injetado (`ArmExecutor`).
 
@@ -98,6 +98,79 @@ O `ComparisonManifest` lista:
 - `physical_sample_count` (amostras físicas distintas) e `repetitions_per_sample`, separados.
 
 **Não há score geral nem vencedor.** Métricas distintas nunca são agregadas, qualidade e performance ficam em `kind` diferentes, e nada ranqueia os arms; a decisão de manter, adiar ou promover uma configuração é humana e explícita.
+
+## Drivers de experimento e retenção dos braços
+
+Uma execução real sobre dados reais é feita por **drivers**: scripts de pesquisa sob `experiments/<experimento>/` que montam à mão o `StageRequest` de um estágio, ou de um braço de um estágio, e chamam o executor. Cada rodada copiava os drivers e editava neles as mesmas três coisas: o número do run embutido no diretório de saída, nas `location` dos `ArtifactRef` e no `config_digest`; o caminho do workspace; e o runner que mede tempo e memória de um processo filho (achados EV-05 e EV-06 da auditoria 2026-09, issue #620). `contextmap.evaluation.experiment_driver` é a versão única e testada dessas três coisas, e só delas. O executor, as políticas e as entradas de cada estágio continuam no driver, porque são o assunto de cada experimento. Não há framework, registry nem plugin.
+
+As cópias históricas em `experiments/*/scripts*` e os reports existentes ficam **intactos**, como evidência do que cada rodada executou. Só experimentos novos usam o esqueleto.
+
+### Layout de um run: `DriverRun`
+
+| Valor | Para `DriverRun(experiment="e2e-real", run_number=3, outputs_root=R)` |
+|---|---|
+| `run_id` | `run-0003` |
+| `output_dir(nome)` | `R/e2e-real/run-0003/<nome>`, o diretório que o writer da capability cria e finaliza |
+| `location(nome)` | `e2e-real/run-0003/<nome>`, relativo a `R`: a `location` do `ArtifactRef` e o `run_dir` que o report registra |
+| `config_digest(nome)` | `e2e-real/run-0003/<nome>` |
+
+`<nome>` é o id do estágio ou, quando vários braços do mesmo estágio rodam lado a lado, o id do braço. O layout é o da runtime (`<workspace>/<dataset>/run-NNNN/<estágio>`, ver [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)) com `R` como workspace: `StageRequest.run_number()` lê o número de volta do `output_dir`, e `StageRequest.directory_of()` abre a `location`. O experimento, o nome e o número do run são validados: um nome com separador, `.` ou `..`, um número que não é inteiro positivo e uma raiz relativa são recusados.
+
+Uma rodada nova muda **só `run_number`**. O `config_digest` é um rótulo, porque um driver montado à mão não tem documento de configuração efetiva para hashear. Ele depende do run, para que uma reexecução tenha outra identidade. Depende também do nome do artifact porque a identidade de execução da runtime é estágio + `config_digest` + hashes das entradas: dois braços do mesmo estágio sobre as mesmas entradas, diferentes só na configuração, teriam a mesma identidade com um rótulo por run. Os drivers do run real canônico usavam um rótulo por run, o que bastava lá porque cada estágio era diferente.
+
+Esboço de um driver novo:
+
+```python
+from pathlib import Path
+
+from contextmap.evaluation import DriverRun
+from contextmap.runtime import ArtifactRef, StageRequest
+
+RUN = DriverRun.for_driver(Path(__file__), experiment="e2e-real", run_number=6)
+
+request = StageRequest(
+    stage_id="sensor_association",
+    inputs={
+        "trajectory": (
+            ArtifactRef(
+                stage_id="state_estimation",
+                contract="StateEstimationRunArtifact",
+                artifact_id=TRAJECTORY_ARTIFACT_ID,
+                content_hash=TRAJECTORY_CONTENT_HASH,
+                location=RUN.location("state_estimation"),
+            ),
+        ),
+        # ... as demais entradas do estágio
+    },
+    components={},
+    config_digest=RUN.config_digest("sensor_association"),
+    output_dir=RUN.output_dir("sensor_association"),
+    workspace=RUN.outputs_root,
+)
+```
+
+### Retenção dos braços sob `outputs/`
+
+Os artifacts dos braços de um experimento são **retidos**. Sem eles, o experimento pode ser reexecutado, mas não reinspecionado: auditar as associações de um braço custaria a execução inteira de novo. Foi o que aconteceu com `experiments/sensor-association-scaling-20260925/`, cujo `report.json` aponta para diretórios temporários que não existem mais.
+
+A convenção é a do run real canônico (`experiments/e2e-real-canonical-run-20260923/`):
+
+- **Onde.** Sob o `outputs/` do checkout que contém o driver, a raiz padrão de `DriverRun.for_driver()`. O checkout é reconhecido pelo layout, nunca por um caminho absoluto de máquina: é o pai do ancestral mais próximo do driver chamado `experiments`, desde que esse pai tenha um `pyproject.toml`. Um driver fora disso não tem raiz padrão e precisa de uma explícita.
+- **Diretório temporário só com raiz explícita.** `outputs_root=` aceita outra raiz, por exemplo um diretório temporário para um smoke run. Nada escolhe um diretório temporário implicitamente.
+- **O que o report registra.** O `run_dir` de cada braço é `run.location(<braço>)`, relativo ao `outputs/`. Ele continua válido em outra máquina que tenha os artifacts no mesmo lugar e não expõe caminho pessoal.
+- **Tempo de vida.** `outputs/` é ignorado pelo Git: os artifacts não são versionados nem entram no bundle leve do experimento (ver `experiments/` em [`docs/ARTIFACTS.md`](../../../../docs/ARTIFACTS.md)) e duram enquanto o `outputs/` daquele checkout durar. Um *worktree* do Git é outro checkout, e o `outputs/` dele some junto com ele. Um experimento cujos braços precisam ser retidos roda do checkout principal ou recebe explicitamente o `outputs/` dele.
+- **Contrato.** Nenhum contrato público de artifact muda: cada braço é um artifact comum do seu estágio, finalizado pelo writer da capability.
+
+### Medição por processo filho: `measure_child_process()`
+
+`measure_child_process(command)` executa um comando e devolve um `ChildProcessMeasurement` com o código de saída, o wall time (relógio monotônico, incluindo a partida do interpretador do filho), o pico de RSS em KiB e a saída capturada. Um filho que falha é medido, não levantado. Um comando vazio, um comando que nem começa e uma plataforma sem unidade conhecida são erro (`ExperimentDriverError`).
+
+O pico vem de `resource.getrusage(RUSAGE_CHILDREN).ru_maxrss`, o método do perfil de recursos do #181. Esse valor é um **máximo corrente sobre todos os filhos que um processo já esperou**: lido de um pai de vida longa, ele atribuiria a cada estágio ou braço o pico de todos os anteriores. Por isso a função nunca o lê no processo de quem chama. Um processo de medição novo executa o comando como **único** filho e reporta a leitura, e esse processo recusa medir se já tiver esperado qualquer outro filho. Chamar a função várias vezes do mesmo pai, como faz um orquestrador de braços, é seguro.
+
+- O pico é o do **maior processo isolado** entre o filho e os descendentes que ele esperou, não a soma de uma árvore de processos.
+- `ru_maxrss` é KiB só no Linux (no macOS é byte). Em outra plataforma a função recusa em vez de inflar o pico 1024 vezes.
+- `to_record()` devolve exatamente os campos que os dois runners anteriores registravam: `returncode`, `wall_time_seconds` com 3 casas e `peak_rss_mb` = KiB / 1024 com 1 casa. Os números novos continuam comparáveis com os do #181 e do #564.
+- O comando herda o ambiente e o diretório de trabalho. Para rodar um braço sob o `src/` de outra revisão, a variável vai no próprio comando (`["env", "PYTHONPATH=<src da revisão>", python, "arm.py", ...]`): `env` se substitui pelo alvo, que continua sendo o filho medido.
 
 ## Limitações e lacunas
 
