@@ -40,6 +40,7 @@ from contextmap.runtime.composition import (
     compose,
     compose_executors,
     resolve_provider,
+    resolve_semantic_request_policy,
 )
 from contextmap.runtime.config import (
     CONFIG_SCHEMA_VERSION,
@@ -269,6 +270,7 @@ __all__ = [
     "resolve_provider",
     "resolve_secrets",
     "resolve_selections",
+    "resolve_semantic_request_policy",
     "resume_plan",
     "run_plan",
     "write_effective_config",

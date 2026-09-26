@@ -16,6 +16,7 @@ from contextmap.evaluation.semantic_interpretation import (
 )
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     ClaimId,
     HypothesisRole,
@@ -27,7 +28,6 @@ from contextmap.visual_perception import (
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
-    SemanticPromptTemplate,
     SemanticRequestId,
     SemanticVisualView,
     VisualViewKind,
@@ -57,7 +57,7 @@ def _semantic_execution() -> SemanticInterpretationExecution:
         requested_output_schema="semantic-response/1",
         configuration_fingerprint="sha256:config",
     )
-    template = SemanticPromptTemplate.default_for(request.mode)
+    template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]
     rendered = render_semantic_prompt(
         request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY
     )

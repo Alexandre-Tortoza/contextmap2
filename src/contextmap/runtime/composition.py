@@ -75,9 +75,13 @@ if TYPE_CHECKING:
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
         FeatureExtractor,
+        GroundingQuery,
         PerceptionRunId,
         RegionDiscovery,
+        RegionGrounding,
+        RegionRefinement,
         SemanticInterpreter,
+        SemanticRequestPolicy,
     )
 
 RuntimeProvider = Callable[[Any, ResolvedSecrets], object]
@@ -142,6 +146,10 @@ def resolve_provider(component_id: str, target: str) -> RuntimeProvider:
 
 
 FeatureFactory = Callable[["FeatureBuildScope"], "FeatureExtractor"]
+GroundingFactory = Callable[[Path], "RegionGrounding"]
+"""Builds a run's grounding backend from the directory holding its prepared images."""
+RefinementFactory = Callable[[Path], "RegionRefinement"]
+"""Builds a run's grounding refiner from the directory holding its prepared images."""
 SourceAdapterFactory = Callable[["SourceAdapterConfig"], "SourceAdapter"]
 
 
@@ -173,6 +181,26 @@ class FeatureBuildScope:
 
 
 @dataclass(frozen=True, kw_only=True)
+class RegionGroundingPlan:
+    """The grounding backend of a run and the explicit queries it answers.
+
+    The queries come from the backend's reserved ``query_set`` parameter group, never from
+    the backend's own configuration, so they are part of the run's configuration identity
+    but not of the backend fingerprint. The executor turns each (image, query) pair into
+    one :class:`~contextmap.visual_perception.RegionGroundingRequest`.
+
+    Attributes:
+        queries: The queries, in configured order; unique and already validated against
+            the backend's declared capabilities.
+        factory: Builds the backend once per run, from the directory holding that run's
+            prepared images; the bundled runtime loads its model lazily, once.
+    """
+
+    queries: tuple[GroundingQuery, ...]
+    factory: GroundingFactory
+
+
+@dataclass(frozen=True, kw_only=True)
 class ComposedRuntime:
     """The implementations built for one effective configuration.
 
@@ -186,9 +214,18 @@ class ComposedRuntime:
             exist yet, with the reason. Nothing stands in for them.
         source_adapter: Builds the configured source adapter for one ingestion request.
         region_discovery: Region discovery backend.
+        region_grounding: Prompt-conditioned grounding backend and its queries, only when
+            the optional ``visual_perception.region_grounding`` component is selected.
+        region_refinement: Builds the run's refiner of grounding proposals, only when the
+            optional ``visual_perception.region_refinement`` component is selected (it
+            requires grounding).
         dense_features: Builds the dense feature extractor once a run scope exists.
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
+        semantic_request_policy: The resolved request policy of the run (#544): the prompt of
+            each interpreted mode (the configured ``prompt_policy`` of an instruction-following
+            backend, or Florence-2's task-native prompt for the one mode its task serves), the
+            configured ``view_policy`` and the scene-context switch, with one fingerprint.
         state_estimator: State estimation backend.
         geometric_mapping_pose_lookup: Pose lookup rule Geometric Mapping uses to place
             each scan.
@@ -220,9 +257,12 @@ class ComposedRuntime:
     unavailable_stages: Mapping[str, str] = field(default_factory=dict)
     source_adapter: SourceAdapterFactory | None = None
     region_discovery: RegionDiscovery | None = None
+    region_grounding: RegionGroundingPlan | None = None
+    region_refinement: RefinementFactory | None = None
     dense_features: FeatureFactory | None = None
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
+    semantic_request_policy: SemanticRequestPolicy | None = None
     state_estimator: StateEstimator | None = None
     geometric_mapping_pose_lookup: LookupPolicy | None = None
     motion_correction: MotionCorrectionPolicy | None = None
@@ -566,6 +606,66 @@ def _florence2_regions(context: _Context, component_id: str) -> RegionDiscovery:
     return Florence2RegionDiscovery(config=config, runtime=runtime, **extras)
 
 
+# --- visual perception: region grounding (run-scoped) ------------------------------
+
+
+def _locateanything(context: _Context, component_id: str) -> RegionGroundingPlan:
+    from contextmap.visual_perception import GroundingQuerySet, GroundingRequestError
+    from contextmap.visual_perception.backends.locateanything import (
+        LocateAnythingConfig,
+        LocateAnythingRegionGrounding,
+        TransformersLocateAnythingRuntime,
+        validate_locateanything_query,
+    )
+
+    config, extras = context.build(
+        component_id,
+        LocateAnythingConfig,
+        extras={"query_set": GroundingQuerySet},
+        required=("query_set",),
+    )
+    queries: tuple[GroundingQuery, ...] = extras["query_set"].queries
+    problems = []
+    for index, query in enumerate(queries):
+        try:
+            validate_locateanything_query(query)
+        except GroundingRequestError as error:
+            problems.append(f"query_set.queries[{index}]: {error}")
+    if problems:
+        raise BackendConfigurationError(component_id, "locateanything", problems)
+    context.ensure_available(component_id)
+
+    def build(prepared_image_root: Path) -> RegionGrounding:
+        runtime = context.optional_runtime(component_id, config)
+        if runtime is None:
+            runtime = TransformersLocateAnythingRuntime(
+                config=config, prepared_image_root=prepared_image_root
+            )
+        return LocateAnythingRegionGrounding(config=config, runtime=runtime)
+
+    return RegionGroundingPlan(queries=queries, factory=build)
+
+
+def _sam2_refinement(context: _Context, component_id: str) -> RefinementFactory:
+    from contextmap.visual_perception.backends.sam2 import (
+        Sam2PromptRefinement,
+        Sam2RefinementConfig,
+    )
+
+    config, _ = context.build(component_id, Sam2RefinementConfig)
+    context.ensure_available(component_id)
+    # O runtime recebe os bytes da imagem, não a raiz das imagens preparadas: um único runtime
+    # (um carregamento do SAM2) por composição serve o run inteiro.
+    runtime = context.runtime(component_id, config, "Sam2PromptRuntime")
+
+    def build(prepared_image_root: Path) -> RegionRefinement:
+        return Sam2PromptRefinement(
+            config=config, runtime=runtime, prepared_image_root=prepared_image_root
+        )
+
+    return build
+
+
 # --- visual perception: features (run-scoped) --------------------------------------
 
 
@@ -597,6 +697,30 @@ def _dinov3(context: _Context, component_id: str) -> FeatureFactory:
 
     def build(scope: FeatureBuildScope) -> FeatureExtractor:
         return DinoV3DenseFeatureBackend(
+            config=config,
+            run_id=scope.run_id,
+            feature_stage_id=scope.feature_stage_id,
+            source_artifact_id=scope.source_artifact_id,
+            payload_sink=scope.payload_sink,
+            runtime=context.optional_runtime(component_id, config),
+            prepared_image_root=scope.prepared_image_root,
+        )
+
+    return build
+
+
+def _siglip2(context: _Context, component_id: str) -> FeatureFactory:
+    from contextmap.visual_perception.backends.siglip2 import (
+        Siglip2Config,
+        Siglip2FeatureBackend,
+    )
+
+    # O slot de features densas fixa o escopo: um SigLIP2 GLOBAL não produz DenseFeatureMap.
+    config, _ = context.build(component_id, Siglip2Config, fixed={"scope": "dense"})
+    context.ensure_available(component_id)
+
+    def build(scope: FeatureBuildScope) -> FeatureExtractor:
+        return Siglip2FeatureBackend(
             config=config,
             run_id=scope.run_id,
             feature_stage_id=scope.feature_stage_id,
@@ -662,40 +786,220 @@ def _alphaclip(context: _Context, component_id: str) -> FeatureFactory:
 # --- visual perception: semantic interpretation ------------------------------------
 
 
-def _qwen(context: _Context, component_id: str) -> SemanticInterpreter:
+@dataclass(frozen=True, kw_only=True)
+class _SemanticInterpretation:
+    """A semantic interpreter with the resolved request policy its requests will follow."""
+
+    interpreter: SemanticInterpreter
+    request_policy: SemanticRequestPolicy
+
+
+def _semantic_interpretation(
+    context: _Context,
+    component_id: str,
+    *,
+    interpreter: SemanticInterpreter,
+    request_policy: SemanticRequestPolicy,
+) -> _SemanticInterpretation:
+    """Pair an interpreter with its request policy once it declares it can consume it.
+
+    Raises:
+        BackendConfigurationError: If the interpreter's capabilities refuse a prompted mode, a
+            view kind or number of views, or scene-context conditioning. The check reads only
+            the declaration, so no model is loaded for it.
+    """
+    from contextmap.visual_perception import check_request_policy_supported
+
+    try:
+        check_request_policy_supported(request_policy, interpreter.capabilities())
+    except ValueError as error:
+        backend = context.component(component_id).backend or ""
+        raise BackendConfigurationError(
+            component_id, backend, [f"semantic request policy: {error}"]
+        ) from error
+    return _SemanticInterpretation(interpreter=interpreter, request_policy=request_policy)
+
+
+_INSTRUCTION_FOLLOWING = frozenset({"qwen", "gemini", "eagle2_5"})
+"""Semantic backends that render a configured free-form ``prompt_policy``."""
+
+_SEMANTIC_COMPONENT = "visual_perception.semantic_interpretation"
+
+
+def resolve_semantic_request_policy(effective: EffectiveConfig) -> SemanticRequestPolicy:
+    """Resolve the semantic request policy an effective configuration selects (#544).
+
+    Reads only the configuration: no provider is called, no model or backend is built, so an
+    experiment manifest can name an arm's treatment by
+    :meth:`~contextmap.visual_perception.SemanticRequestPolicy.fingerprint` before anything
+    runs. :func:`compose` composes exactly this policy and additionally checks it against the
+    interpreter's declared capabilities.
+
+    Args:
+        effective: The resolved configuration.
+
+    Returns:
+        The prompt of each interpreted mode, the ordered views and the scene-context switch.
+
+    Raises:
+        ConfigurationError: If no semantic interpretation backend is selected.
+        BackendConfigurationError: If the backend's ``prompt_policy``/``view_policy`` groups
+            are missing, invalid or not accepted by that backend.
+    """
+    component = effective.config.components.get(_SEMANTIC_COMPONENT)
+    if component is None or component.backend is None:
+        raise ConfigurationError.single(
+            "no semantic interpretation backend is selected, so there is no semantic request "
+            "policy to resolve",
+            path=f"components.{_SEMANTIC_COMPONENT}",
+        )
+    return _request_policy(_SEMANTIC_COMPONENT, component)
+
+
+def _request_policy(component_id: str, component: ComponentConfig) -> SemanticRequestPolicy:
+    """Build the request policy from a semantic backend's reserved groups, and nothing else."""
+    from contextmap.visual_perception import (
+        SemanticInterpretationMode,
+        SemanticModePrompt,
+        SemanticPromptPolicy,
+        SemanticRequestPolicy,
+        SemanticViewPolicy,
+    )
+
+    backend = component.backend or ""
+    parameters = dict(component.parameters)
+    problems: list[str] = []
+    groups: dict[str, Any] = {}
+    wanted: dict[str, type[Any]] = {"view_policy": SemanticViewPolicy}
+    if backend in _INSTRUCTION_FOLLOWING:
+        wanted["prompt_policy"] = SemanticPromptPolicy
+    elif "prompt_policy" in parameters:
+        # Florence-2 consome o token da própria task; aceitar um prompt livre aqui seria
+        # registrá-lo como se tivesse sido consumido, então a limitação é reportada.
+        from contextmap.visual_perception.backends.florence2_semantic import TASK_PROMPT_POLICY
+
+        problems.append(
+            f"prompt_policy: Florence-2 consumes only its task-native prompt policy "
+            f"({TASK_PROMPT_POLICY}:<task>); select the task instead"
+        )
+    for name, group_type in wanted.items():
+        if name not in parameters:
+            problems.append(f"missing required parameter: {name}")
+            continue
+        try:
+            groups[name] = build_config(group_type, parameters[name])
+        except ParameterError as error:
+            problems.extend(f"{name}: {problem}" for problem in error.problems)
+    if problems:
+        raise BackendConfigurationError(component_id, backend, problems)
+    if backend in _INSTRUCTION_FOLLOWING:
+        return SemanticRequestPolicy.from_prompt_policy(
+            groups["prompt_policy"], views=groups["view_policy"]
+        )
+    from contextmap.visual_perception.backends.florence2_semantic import (
+        TASK_OUTPUT_SCHEMA,
+        Florence2SemanticConfig,
+        task_prompt_template_id,
+    )
+
+    # A task (e o modo que ela serve) é validada pela configuração do próprio Florence-2; o
+    # prompt nativo da task vale só para esse modo, e o outro fica sem prompt.
+    own = {name: value for name, value in parameters.items() if name not in wanted}
+    try:
+        config = build_config(Florence2SemanticConfig, own)
+    except ParameterError as error:
+        raise BackendConfigurationError(component_id, backend, list(error.problems)) from error
+    prompt = SemanticModePrompt(
+        template_id=task_prompt_template_id(config.task), output_schema=TASK_OUTPUT_SCHEMA
+    )
+    modes = config.supported_modes
+    return SemanticRequestPolicy(
+        views=groups["view_policy"],
+        scene=prompt if SemanticInterpretationMode.SCENE in modes else None,
+        region=prompt if SemanticInterpretationMode.REGION in modes else None,
+    )
+
+
+def _instruction_extras() -> dict[str, type[Any]]:
+    """Reserved groups of an instruction-following interpreter: both are always required."""
+    from contextmap.visual_perception import SemanticPromptPolicy, SemanticViewPolicy
+
+    return {"prompt_policy": SemanticPromptPolicy, "view_policy": SemanticViewPolicy}
+
+
+def _qwen(context: _Context, component_id: str) -> _SemanticInterpretation:
     from contextmap.visual_perception.backends.qwen import (
         QwenSemanticConfig,
         QwenSemanticInterpreter,
     )
 
-    config, _ = context.build(component_id, QwenSemanticConfig)
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, QwenSemanticConfig, extras=_instruction_extras())
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "QwenRuntime")
-    return QwenSemanticInterpreter(config=config, runtime=runtime)
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=QwenSemanticInterpreter(config=config, runtime=runtime),
+        request_policy=policy,
+    )
 
 
-def _gemini(context: _Context, component_id: str) -> SemanticInterpreter:
+def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
     from contextmap.visual_perception.backends.gemini import (
         GeminiSemanticConfig,
         GeminiSemanticInterpreter,
     )
 
-    config, _ = context.build(component_id, GeminiSemanticConfig)
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, GeminiSemanticConfig, extras=_instruction_extras())
     context.ensure_available(component_id)
     client = context.runtime(component_id, config, "GeminiClient")
-    return GeminiSemanticInterpreter(config=config, client=client)
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=GeminiSemanticInterpreter(config=config, client=client),
+        request_policy=policy,
+    )
 
 
-def _florence2_semantic(context: _Context, component_id: str) -> SemanticInterpreter:
+def _eagle2_5(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception.backends.eagle2_5 import (
+        EagleSemanticConfig,
+        EagleSemanticInterpreter,
+    )
+
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, EagleSemanticConfig, extras=_instruction_extras())
+    context.ensure_available(component_id)
+    runtime = context.runtime(component_id, config, "EagleRuntime")
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=EagleSemanticInterpreter(config=config, runtime=runtime),
+        request_policy=policy,
+    )
+
+
+def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception import SemanticViewPolicy
     from contextmap.visual_perception.backends.florence2_semantic import (
         Florence2SemanticConfig,
         Florence2SemanticInterpreter,
     )
 
-    config, _ = context.build(component_id, Florence2SemanticConfig)
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(
+        component_id, Florence2SemanticConfig, extras={"view_policy": SemanticViewPolicy}
+    )
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "Florence2SemanticRuntime")
-    return Florence2SemanticInterpreter(config=config, runtime=runtime)
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=Florence2SemanticInterpreter(config=config, runtime=runtime),
+        request_policy=policy,
+    )
 
 
 # --- state estimation --------------------------------------------------------------
@@ -963,12 +1267,19 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "sam3": _sam3,
         "florence2": _florence2_regions,
     },
-    "visual_perception.dense_features": {"dinov2": _dinov2, "dinov3": _dinov3},
+    "visual_perception.region_grounding": {"locateanything": _locateanything},
+    "visual_perception.region_refinement": {"sam2": _sam2_refinement},
+    "visual_perception.dense_features": {
+        "dinov2": _dinov2,
+        "dinov3": _dinov3,
+        "siglip2": _siglip2,
+    },
     "visual_perception.region_features": {"clip": _clip, "alphaclip": _alphaclip},
     "visual_perception.semantic_interpretation": {
         "qwen": _qwen,
         "gemini": _gemini,
         "florence2": _florence2_semantic,
+        "eagle2_5": _eagle2_5,
     },
     "state_estimation.estimator": {"external_pose": _external_pose, "fast_lio": _fast_lio},
     "geometric_mapping.pose_lookup": {"lookup-policy-v1": _lookup_policy},
@@ -1040,11 +1351,26 @@ def _compose_ingestion(context: _Context) -> dict[str, object]:
 
 
 def _compose_visual_perception(context: _Context) -> dict[str, object]:
-    return {
+    composed = {
         "region_discovery": _construct(context, "visual_perception.region_discovery"),
+        "region_grounding": _construct_optional(context, "visual_perception.region_grounding"),
+        "region_refinement": _construct_optional(context, "visual_perception.region_refinement"),
         "dense_features": _construct(context, "visual_perception.dense_features"),
         "region_features": _construct(context, "visual_perception.region_features"),
-        "semantic_interpreter": _construct(context, "visual_perception.semantic_interpretation"),
+    }
+    if composed["region_refinement"] is not None and composed["region_grounding"] is None:
+        raise ConfigurationError.single(
+            "region refinement refines grounding proposals: select a "
+            "visual_perception.region_grounding backend too, or no refinement",
+            path="components.visual_perception.region_refinement",
+        )
+    semantic: _SemanticInterpretation = _construct(
+        context, "visual_perception.semantic_interpretation"
+    )
+    return {
+        **composed,
+        "semantic_interpreter": semantic.interpreter,
+        "semantic_request_policy": semantic.request_policy,
     }
 
 
@@ -1196,7 +1522,9 @@ def compose_executors(
     - ``visual_perception`` is composed only when all four of its variation points
       (``region_discovery``, ``dense_features``, ``region_features``,
       ``semantic_interpretation``) are genuinely selected and available -- a partially
-      configured capability never gets a partial executor (#507).
+      configured capability never gets a partial executor (#507). Its optional
+      ``region_grounding`` point, when selected, is part of the same executor: a grounding
+      backend that cannot be built leaves the whole stage out, never a run without it.
     - ``point_representation`` has no real executor yet (its backend is GPU/model
       dependent): it stays absent, exactly as before.
     - ``semantic_fusion`` is composed only when the selected accumulation backend is the
@@ -1288,11 +1616,15 @@ def compose_executors(
         assert visual_perception.dense_features is not None
         assert visual_perception.region_features is not None
         assert visual_perception.semantic_interpreter is not None
+        assert visual_perception.semantic_request_policy is not None
         executors["visual_perception"] = VisualPerceptionExecutor(
             region_discovery=visual_perception.region_discovery,
             dense_features=visual_perception.dense_features,
             region_features=visual_perception.region_features,
             semantic_interpreter=visual_perception.semantic_interpreter,
+            semantic_request_policy=visual_perception.semantic_request_policy,
+            region_grounding=visual_perception.region_grounding,
+            region_refinement=visual_perception.region_refinement,
         )
 
     state_estimation = _compose_stage("state_estimation")

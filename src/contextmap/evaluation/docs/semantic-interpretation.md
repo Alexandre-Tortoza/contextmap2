@@ -102,12 +102,43 @@ hipótese primária da variante de referência (`primary_agreement_count` de
 de cada variante (tipos de view, features, scene context) são lidos dos requests,
 não do rótulo da variante, e os `prompt_template_id` de cada lado são listados,
 então uma ablação de prompt também é observável. `with/without SceneContext`
-exige um backend que aceite `scene_context_reference`; nenhum adapter atual o
-aceita.
+exige um backend que aceite `scene_context_reference`: desde #529, Qwen e Gemini
+aceitam (o contexto é renderizado por `region-scene-context/v1`), e o gancho roda
+sobre execuções reais desses adapters com runtimes/clients fake na CI; o
+Florence-2 continua sem suporte. Os dois braços usam o mesmo template, então a
+lista de `prompt_template_id` é idêntica e só o canal `scene_context` difere.
 
 `encode_semantic_evaluation_report()`, `encode_semantic_backend_comparison()` e
 `encode_evidence_variant_comparison()` devolvem primitivas JSON com todas as
 identidades.
+
+## Texto nativo de Region Discovery (#523)
+
+Tasks do Florence-2 como `<OD>`, `<DENSE_REGION_CAPTION>` e
+`<OPEN_VOCABULARY_DETECTION>` devolvem texto junto com a geometria. Esse texto
+chega como `RegionSemanticHint` (derivado em Visual Perception, ver
+[Region Discovery](../../visual_perception/docs/region-discovery.md#texto-nativo-das-tasks-do-florence-2-523)),
+não como claim, e tem entrada própria: `evaluate_region_semantic_hints()`.
+
+- Cada `RegionSemanticHintInput` associa um hint a uma `SemanticAnnotation`
+  opcional. Como em `SemanticEvaluationInput`, escolher a referência é decisão
+  de quem chama; ela deve descrever o que a **geometria da própria proposta**
+  cobre. O `contribution` de cada amostra (`representative`, `merged`,
+  `rejected`) mostra se aquela geometria é a da região congelada.
+- A correspondência usa o mesmo `casefold-exact/1` e as mesmas convenções de
+  anotação parcial: sem hipótese aceitável o hint fica não avaliado
+  (`acceptable=None`), e só `rejected_hypotheses` conta como verdade negativa.
+- Um report cobre **uma** configuração nativa (backend, versão, checkpoint,
+  digest, task e prompt), registrada no próprio report; misturar `<OD>` com
+  `<DENSE_REGION_CAPTION>` é recusado (`SemanticEvaluationError`), porque
+  categoria e descrição não formam uma taxa comum. Hint repetido ou lista vazia
+  também são recusados.
+- `encode_region_semantic_hint_report()` devolve primitivas JSON.
+
+Os hints vêm do mesmo `DiscoveryRunResult`/`NormalizationResult` que
+`RegionDiscoveryEvaluator` mede, então uma única inferência nativa é avaliada na
+geometria e no texto, sem segundo forward. Um arm só geométrico
+(`<REGION_PROPOSAL>`) não produz hints e não tem report de texto.
 
 ## Estado de validação e limitações
 

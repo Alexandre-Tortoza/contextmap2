@@ -1,8 +1,11 @@
 """Builders for experiment manifests, arms and fake arm executors in tests."""
 
+import copy
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from reference_set_builders import content_hash, make_annotation, make_valid_manifest, sample_id
 
@@ -403,6 +406,164 @@ def factorial_experiment(
     return _experiment(reference, **fields)  # type: ignore[arg-type]
 
 
+# --------------------------------------------------------- semantic request-policy ablations
+
+QWEN_REVISION = "1" * 40
+"""Immutable Hugging Face commit the Qwen arms are pinned to."""
+
+REQUEST_POLICY: dict[str, Any] = {
+    "prompt_policy": "region/v1",
+    "view_policy": ["tight_crop"],
+    "scene_context": "none",
+    "output_schema": "semantic-response/1",
+}
+"""Backend-neutral request policy of the semantic stage: what is asked, over which views."""
+
+INTERPRETERS: dict[str, tuple[str, dict[str, Any]]] = {
+    "qwen": (
+        "Qwen/Qwen3-VL-4B-Instruct",
+        {
+            "model": "Qwen/Qwen3-VL-4B-Instruct",
+            "revision": QWEN_REVISION,
+            "precision": "bfloat16",
+            "max_new_tokens": 256,
+            "temperature": 0.0,
+        },
+    ),
+    "gemini": (
+        "gemini-2.5-flash",
+        {"model": "gemini-2.5-flash", "max_output_tokens": 256, "temperature": 0.0},
+    ),
+}
+"""Model and backend parameters of each interpreter, as its effective configuration records them."""
+
+VIEWS = {
+    "tight_crop": ["tight_crop"],
+    "tight_crop+masked_subject": ["tight_crop", "masked_subject"],
+}
+
+PROMPT_POLICY = ExperimentVariable(
+    name="prompt_policy",
+    kind=VariationKind.POLICY,
+    touches=("semantic_interpretation",),
+    values=("region/v1", "region/v2"),
+    baseline_value="region/v1",
+    configuration_fields=("request_policy.prompt_policy",),
+    description="the canonical region prompt versus its revised wording",
+)
+VIEW_POLICY = ExperimentVariable(
+    name="view_policy",
+    kind=VariationKind.EVIDENCE_CHANNELS,
+    touches=("semantic_interpretation",),
+    values=tuple(VIEWS),
+    baseline_value="tight_crop",
+    configuration_fields=("request_policy.view_policy",),
+    description="the tight crop alone versus the tight crop followed by the masked subject",
+)
+INTERPRETER_BACKEND = ExperimentVariable(
+    name="semantic_backend",
+    kind=VariationKind.BACKEND,
+    touches=("semantic_interpretation",),
+    values=("qwen", "gemini"),
+    baseline_value="qwen",
+    configuration_fields=("interpreter",),
+    description="local Qwen versus Gemini under the same request policy",
+)
+
+
+def semantic_configuration(
+    backend: str = "qwen", changes: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Return the semantic stage's effective configuration with dotted-path ``changes`` applied."""
+    document: dict[str, Any] = {
+        "request_policy": copy.deepcopy(REQUEST_POLICY),
+        "interpreter": {"backend": backend, backend: copy.deepcopy(INTERPRETERS[backend][1])},
+    }
+    for path, value in (changes or {}).items():
+        *parents, leaf = path.split(".")
+        node = document
+        for key in parents:
+            node = node[key]
+        node[leaf] = value
+    return document
+
+
+def request_policy_topology(
+    backend: str = "qwen",
+    changes: Mapping[str, Any] | None = None,
+    *,
+    sequence: str = "sequence-0001",
+) -> ResolvedTopology:
+    """Return a topology whose semantic stage records its configuration field by field.
+
+    ``state_estimation`` (the pose) runs in every arm without being pinned: it is not upstream
+    of the semantic stage, so only the executed artifacts can show that every arm shares it.
+    """
+    return ResolvedTopology(
+        stages=(
+            stage("ingestion", "ingestion", "ros-adapter", artifact=pinned("sequence", sequence)),
+            stage(
+                "state_estimation", "state_estimation", "external-pose", depends_on=("ingestion",)
+            ),
+            stage(
+                "region_discovery",
+                "visual_perception",
+                "sam3",
+                depends_on=("ingestion",),
+                artifact=pinned("perception_run", "perception-run-0001"),
+            ),
+            TopologyStage(
+                stage_id="semantic_interpretation",
+                capability="visual_perception",
+                implementation=StageImplementation.from_configuration(
+                    backend_id=backend,
+                    backend_version="1",
+                    model=INTERPRETERS[backend][0],
+                    configuration=semantic_configuration(backend, changes),
+                ),
+                depends_on=("region_discovery",),
+            ),
+        )
+    )
+
+
+def request_policy_changes(assignment: Mapping[str, str]) -> dict[str, Any]:
+    """Return the configuration changes an assignment of request-policy variables makes."""
+    changes: dict[str, Any] = {}
+    if "prompt_policy" in assignment:
+        changes["request_policy.prompt_policy"] = assignment["prompt_policy"]
+    if "view_policy" in assignment:
+        changes["request_policy.view_policy"] = VIEWS[assignment["view_policy"]]
+    return changes
+
+
+def request_policy_experiment(
+    reference: ReferenceSetManifest,
+    variables: tuple[ExperimentVariable, ...] = (PROMPT_POLICY,),
+    *,
+    mode: AblationMode = AblationMode.ONE_AT_A_TIME,
+    **overrides: object,
+) -> ExperimentManifest:
+    """Return a semantic request-policy ablation whose arms differ only as declared."""
+    arms = arms_for(
+        variables,
+        mode,
+        lambda assignment: request_policy_topology(
+            assignment.get("semantic_backend", "qwen"), request_policy_changes(assignment)
+        ),
+    )
+    fields: dict[str, object] = {
+        "experiment_id": "semantic-request-policy",
+        "stage_id": EvaluationStage.SEMANTIC_INTERPRETATION,
+        "variables": variables,
+        "arms": arms,
+        "mode": mode,
+        "quality": ("semantic.acceptable_claim_rate", "semantic.unsupported_claim_rate"),
+    }
+    fields.update(overrides)
+    return _experiment(reference, **fields)  # type: ignore[arg-type]
+
+
 # ------------------------------------------------------------------------ executors
 
 
@@ -456,18 +617,43 @@ def make_report(
 
 
 def stage_artifacts_for(arm: ExperimentArm) -> tuple[StageArtifact, ...]:
-    """Report the pinned artifact of a reused stage and a fresh one for an executed stage."""
+    """Report the pinned artifact of a reused stage and a deterministic one for an executed stage.
+
+    An executed stage's output is identified by its own record and the artifacts it consumed,
+    like a deterministic pipeline: an unaffected stage produces the same content in every arm.
+    """
+    stages = {item.stage_id: item for item in arm.topology.stages}
+    produced: dict[str, ArtifactIdentity] = {}
+
+    def artifact_of(stage_id: str) -> ArtifactIdentity:
+        if stage_id not in produced:
+            item = stages[stage_id]
+            if item.artifact is not None:
+                produced[stage_id] = item.artifact
+            else:
+                inputs = [artifact_of(name).digest for name in item.depends_on]
+                digest = content_hash(json.dumps([item.to_record(), inputs], sort_keys=True))
+                produced[stage_id] = ArtifactIdentity(
+                    kind="stage_output", artifact_id=f"{stage_id}-{digest[7:19]}", digest=digest
+                )
+        return produced[stage_id]
+
     return tuple(
-        StageArtifact(
-            stage_id=item.stage_id,
-            artifact=item.artifact
-            or ArtifactIdentity(
-                kind="stage_output",
-                artifact_id=f"{arm.arm_id}--{item.stage_id}",
-                digest=content_hash(f"{arm.arm_id}/{item.stage_id}"),
-            ),
-        )
+        StageArtifact(stage_id=item.stage_id, artifact=artifact_of(item.stage_id))
         for item in arm.topology.stages
+    )
+
+
+def replace_stage_artifact(
+    execution: ArmExecution, stage_id: str, artifact: ArtifactIdentity
+) -> ArmExecution:
+    """Return ``execution`` reporting ``artifact`` for ``stage_id``."""
+    return replace(
+        execution,
+        stage_artifacts=tuple(
+            replace(item, artifact=artifact) if item.stage_id == stage_id else item
+            for item in execution.stage_artifacts
+        ),
     )
 
 

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from contextmap.visual_perception import (
     BackendProvenance,
     BoundingBox,
     InlineMask,
+    NativeRegionText,
     PreparedImage,
     RegionCandidate,
     RegionProvenance,
@@ -176,3 +178,46 @@ def test_finalized_stage_is_immutable(tmp_path: Path) -> None:
 
     assert (stage / "manifest.json").read_bytes() == original_manifest
     assert not list(tmp_path.glob(".20-region-discovery.tmp-*"))
+
+
+def _record_with_native_text() -> DiscoveryAuditRecord:
+    record = _record()
+    (candidate,) = record.discovery.candidates
+    labelled = replace(candidate, native_text=NativeRegionText(task="<OD>", text="monitor"))
+    return replace(record, discovery=replace(record.discovery, candidates=(labelled,)))
+
+
+def test_native_text_hints_are_contractual_and_deterministically_materialized(
+    tmp_path: Path,
+) -> None:
+    first = RegionDiscoveryEvidenceWriter().write(
+        tmp_path / "first", _record_with_native_text(), DebugLevel.NONE
+    )
+    second = RegionDiscoveryEvidenceWriter().write(
+        tmp_path / "second", _record_with_native_text(), DebugLevel.STANDARD
+    )
+
+    hints_path = first.stage_directory / "outputs" / "region-semantic-hints.jsonl"
+    (hint,) = [json.loads(line) for line in hints_path.read_text().splitlines()]
+    assert hint["candidate_id"] == "full-frame/proposal-1"
+    assert hint["region_id"] == "region-0001"
+    assert hint["contribution"] == "representative"
+    assert hint["native_text"] == {"task": "<OD>", "text": "monitor", "prompt": None}
+    assert hint["provenance"]["native_proposal_id"] == "proposal-1"
+    assert hint["provenance"]["checkpoint"] == "facebook/sam3"
+    assert hint["provenance"]["config_digest"] == "sha256:sam3"
+    assert (
+        hints_path.read_bytes()
+        == (second.stage_directory / "outputs" / "region-semantic-hints.jsonl").read_bytes()
+    )
+    manifest = json.loads(first.manifest_path.read_text())
+    assert "outputs/region-semantic-hints.jsonl" in {item["path"] for item in manifest["files"]}
+    regions = (first.stage_directory / "outputs" / "regions.jsonl").read_text()
+    assert "monitor" not in regions
+
+
+def test_geometry_only_discovery_writes_an_empty_hint_output(tmp_path: Path) -> None:
+    written = RegionDiscoveryEvidenceWriter().write(tmp_path / "stage", _record(), DebugLevel.NONE)
+
+    hints_path = written.stage_directory / "outputs" / "region-semantic-hints.jsonl"
+    assert hints_path.read_text() == ""

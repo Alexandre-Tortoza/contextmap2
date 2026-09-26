@@ -21,6 +21,7 @@ from contextmap.evaluation import (
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     CANONICAL_PRESET_V1,
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     BoundingBox2D,
     FailedSemanticInterpretation,
@@ -39,7 +40,6 @@ from contextmap.visual_perception import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticParseFailure,
-    SemanticPromptTemplate,
     SemanticRequestId,
     SemanticVisualView,
     StageOutcome,
@@ -114,7 +114,7 @@ def _request(run_id: str, request_id: str, view_name: str) -> SemanticInterpreta
 def _rendered(request: SemanticInterpretationRequest) -> RenderedSemanticPrompt:
     return render_semantic_prompt(
         request,
-        SemanticPromptTemplate.default_for(SemanticInterpretationMode.SCENE),
+        SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id],
         confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
     )
 

@@ -24,10 +24,10 @@ from contextmap.visual_perception.semantic_backend import (
 )
 from contextmap.visual_perception.semantic_prompt import (
     SemanticConfidencePolicy,
-    SemanticPromptTemplate,
     SemanticResponseParseError,
     parse_semantic_response,
     render_semantic_prompt,
+    semantic_prompt_template,
 )
 from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationMode,
@@ -193,18 +193,32 @@ class GeminiSemanticInterpreter:
             supported_modes=frozenset(SemanticInterpretationMode),
             supported_view_kinds=frozenset(VisualViewKind),
             accepts_visual_features=False,
-            accepts_scene_context=False,
+            # #529: o contexto de cena chega renderizado no prompt, pelo template que o request
+            # seleciona; um template que não o renderiza recusa o request antes da inferência.
+            accepts_scene_context=True,
         )
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
-        """Call Gemini with bounded retries and canonical parsing, never fallback."""
+        """Call Gemini with the request's own prompt policy, bounded retries and no fallback.
+
+        The prompt is the catalog template ``request.prompt_template_id`` names, rendered for
+        this request, exactly as every instruction-following adapter renders it.
+
+        Raises:
+            ValueError: Before any provider call, if the request is unsupported, was built for
+                another configuration, or names a prompt template that is unknown or whose mode
+                or output schema differs from the request's.
+            GeminiSemanticError: For terminal provider failures or exhausted retries.
+            SemanticInterpretationFailedError: If the observed response cannot be parsed.
+        """
         validate_semantic_request(request, self.capabilities())
         if request.configuration_fingerprint != self.configuration_fingerprint:
             raise ValueError("Gemini request configuration fingerprint does not match adapter")
-        template = SemanticPromptTemplate.default_for(request.mode)
+        # A política de prompt é a que o request seleciona, nunca um padrão do backend:
+        # identidade desconhecida, modo ou schema divergente falham aqui, antes da inferência.
         rendered = render_semantic_prompt(
             request,
-            template,
+            semantic_prompt_template(request.prompt_template_id),
             confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
         )
         started = time.monotonic()
@@ -230,8 +244,8 @@ class GeminiSemanticInterpreter:
         provenance = SemanticInferenceProvenance(
             backend=self.backend_provenance(),
             task_identity=f"gemini-{request.mode.value}-interpretation",
-            prompt_template_id=template.template_id,
-            output_schema_version=template.output_schema_version,
+            prompt_template_id=rendered.template_id,
+            output_schema_version=rendered.output_schema_version,
             raw_response_reference=(
                 f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
             ),

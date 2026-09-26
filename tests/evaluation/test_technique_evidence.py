@@ -18,11 +18,13 @@ from technique_builders import (
 )
 
 from contextmap.evaluation.experiment_runner import (
+    ArmExecution,
     ArmStatus,
     ArmUnavailableError,
     ComparisonManifest,
     read_verified_document,
 )
+from contextmap.evaluation.experiments import ExperimentArm, ExperimentManifest
 from contextmap.evaluation.metrics import EvaluationStage, MetricKind
 from contextmap.evaluation.reference_integrity import ValidatedReferenceSet
 from contextmap.evaluation.technique_evidence import (
@@ -413,6 +415,35 @@ def test_an_unavailable_enhancement_backend_stays_explicit(
         assert stage.incomplete_arms[0].status is ArmStatus.UNAVAILABLE
         assert "not installed" in stage.incomplete_arms[0].reason
     assert evidence.quality_regressions == ()
+
+
+def test_an_arm_that_is_not_a_matched_comparison_is_incomplete_evidence_with_its_reason(
+    validated: ValidatedReferenceSet, tmp_path: Path
+) -> None:
+    protocol = feature_resolution_protocol(validated.manifest)
+    execute = technique_executor(VALUES, costs=COSTS)
+
+    def other_code(manifest: ExperimentManifest, arm: ExperimentArm) -> ArmExecution:
+        result = execute(manifest, arm)
+        if arm.arm_id != "variant":
+            return result
+        metadata = replace(result.report.reproducibility, code_version="0.0.2")
+        return replace(result, report=replace(result.report, reproducibility=metadata))
+
+    evidence = build_technique_evidence(
+        protocol,
+        run_protocol(protocol, validated, tmp_path / "runs", other_code),
+        registry=REGISTRY,
+        reference_set=validated.manifest,
+        policy=POLICY,
+    )
+
+    assert not evidence.complete
+    for stage in evidence.stages:
+        assert stage.status is StageStatus.INCOMPLETE
+        (arm,) = stage.incomplete_arms
+        assert (arm.arm_id, arm.status) == ("variant", ArmStatus.COMPLETED)
+        assert "code version" in arm.reason
 
 
 def test_the_shared_upstream_artifacts_are_part_of_the_evidence(

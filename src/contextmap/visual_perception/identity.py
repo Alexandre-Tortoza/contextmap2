@@ -91,3 +91,72 @@ def claim_id_for(*, result_id: PerceptionResultId, index: int) -> ClaimId:
         The deterministic claim identity.
     """
     return ClaimId(f"{result_id}--claim-{index:04d}")
+
+
+def grounding_region_id_for(
+    *, result_id: PerceptionResultId, request_id: str, index: int
+) -> RegionId:
+    """Compute the identity of a region grounded by one request within a result.
+
+    The grounding request identity is a content digest of the request's inference
+    inputs (image, query, policy, geometry, configuration), so it namespaces the
+    region: a grounded region never collides with a discovered region
+    (:func:`region_id_for`) or with another request's output, and changing only the
+    query changes only the identities that depend on it. Including ``result_id``
+    keeps the evidence local: the same request answered in another run produces
+    distinct regions.
+
+    Args:
+        result_id: The owning result.
+        request_id: Identity of the grounding request that produced the region.
+        index: Position of the output in the parsed backend response.
+
+    Returns:
+        The deterministic region identity.
+    """
+    if not request_id:
+        raise ValueError("request_id must not be empty")
+    return RegionId(f"{result_id}--{request_id}-region-{index:04d}")
+
+
+def grounding_point_id_for(*, result_id: PerceptionResultId, request_id: str, index: int) -> str:
+    """Compute the identity of a point grounded by one request within a result.
+
+    A grounded point is not a region (no canonical point contract exists), but a
+    refinement prompt still needs to name it; this is the point counterpart of
+    :func:`grounding_region_id_for`, over the same request namespace and output index.
+
+    Args:
+        result_id: The owning result.
+        request_id: Identity of the grounding request that produced the point.
+        index: Position of the output in the parsed backend response.
+
+    Returns:
+        The deterministic point identity.
+    """
+    if not request_id:
+        raise ValueError("request_id must not be empty")
+    return f"{result_id}--{request_id}-point-{index:04d}"
+
+
+def refined_region_id_for(
+    *, result_id: PerceptionResultId, proposal_id: str, configuration_fingerprint: str
+) -> RegionId:
+    """Compute the identity of the region a refiner produced from one proposal.
+
+    The identity digests the proposal and the refiner configuration fingerprint, so a
+    refined region never collides with its proposal, and the same proposal refined under
+    another configuration gets another identity. ``result_id`` keeps it local.
+
+    Args:
+        result_id: The owning result.
+        proposal_id: Identity of the refined proposal (a grounded region or point).
+        configuration_fingerprint: Fingerprint of the refiner configuration.
+
+    Returns:
+        The deterministic region identity.
+    """
+    if not proposal_id or not configuration_fingerprint:
+        raise ValueError("proposal_id and configuration_fingerprint must not be empty")
+    digest = hashlib.sha256(f"{proposal_id}\n{configuration_fingerprint}".encode()).hexdigest()
+    return RegionId(f"{result_id}--refinement-{digest}")

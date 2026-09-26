@@ -494,7 +494,14 @@ class TestSecrets:
         document = _document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
-            "gemini": {"model": "g", "timeout_s": 1, "max_retries": 1, "temperature": 0.0},
+            "gemini": {
+                "model": "g",
+                "timeout_s": 1,
+                "max_retries": 1,
+                "temperature": 0.0,
+                "prompt_policy": {"scene": "scene/v1", "region": "region/v1"},
+                "view_policy": {"region_views": ["tight_crop"]},
+            },
         }
         return document
 

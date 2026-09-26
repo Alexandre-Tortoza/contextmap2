@@ -11,6 +11,12 @@ from contextmap.runtime import EffectiveConfig, resolve_effective_config
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
+CANONICAL_PROMPT_POLICY = {"scene": "scene/v1", "region": "region/v1"}
+"""The canonical semantic prompt policy, declared explicitly as every run must (#542)."""
+
+TIGHT_CROP_VIEW_POLICY = {"region_views": ["tight_crop"]}
+"""One tight crop per region request, declared explicitly as every run must (#524)."""
+
 SUPPORT_POLICY = {
     "support_type": "neighborhood",
     "method": "radius",
@@ -48,6 +54,8 @@ def selected_document() -> dict[str, Any]:
                         "precision": "float32",
                         "max_new_tokens": 256,
                         "temperature": 0.0,
+                        "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+                        "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
                     },
                 },
             },

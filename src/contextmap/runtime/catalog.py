@@ -230,6 +230,22 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
     ),
     _component(
         "visual_perception",
+        "region_grounding",
+        BackendSpec(
+            backend_id="locateanything",
+            requires=("torch", "transformers", "PIL"),
+            device_parameter="device",
+        ),
+        optional=True,
+    ),
+    _component(
+        "visual_perception",
+        "region_refinement",
+        BackendSpec(backend_id="sam2", device_parameter="device"),
+        optional=True,
+    ),
+    _component(
+        "visual_perception",
         "dense_features",
         BackendSpec(
             backend_id="dinov2",
@@ -238,6 +254,11 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         ),
         BackendSpec(
             backend_id="dinov3",
+            requires=("torch", "transformers", "PIL"),
+            device_parameter="device",
+        ),
+        BackendSpec(
+            backend_id="siglip2",
             requires=("torch", "transformers", "PIL"),
             device_parameter="device",
         ),
@@ -262,6 +283,7 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="qwen", device_parameter="device"),
         BackendSpec(backend_id="gemini", secrets=("GEMINI_API_KEY",)),
         BackendSpec(backend_id="florence2", device_parameter="device"),
+        BackendSpec(backend_id="eagle2_5", device_parameter="device"),
     ),
     _component(
         "state_estimation",
@@ -419,6 +441,8 @@ CANONICAL_PRESET = RuntimePreset(
             capability="visual_perception",
             components=(
                 "visual_perception.region_discovery",
+                "visual_perception.region_grounding",
+                "visual_perception.region_refinement",
                 "visual_perception.dense_features",
                 "visual_perception.region_features",
                 "visual_perception.semantic_interpretation",

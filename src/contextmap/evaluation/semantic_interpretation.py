@@ -4,6 +4,10 @@ The evaluator consumes canonical executions and never changes a claim, picks a w
 applies Semantic Fusion. Annotations are partial: an absent annotation means "not annotated",
 so its claims are *unassessed*, never wrong. Only ``rejected_hypotheses`` are negative truth.
 Quality, cost, outcomes and repeat stability are separate blocks of the report.
+
+Task-native text that a discovery backend attached to a proposal (``RegionSemanticHint``) is
+scored by its own entry point under the same matching policy and annotation conventions,
+without being turned into a claim.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from typing import Any
 from contextmap.visual_perception import (
     BackendProvenance,
     HypothesisRole,
+    RegionSemanticHint,
     SemanticInterpretationExecution,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -855,6 +860,167 @@ def encode_evidence_variant_comparison(comparison: EvidenceVariantComparison) ->
     encoded = _plain(comparison)
     assert isinstance(encoded, dict)
     return encoded
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegionSemanticHintInput:
+    """One task-native region hint and the reference it is scored against.
+
+    Attributes:
+        hint: Text a region-producing task emitted with one discovery proposal.
+        annotation: Reference expectations for what the proposal's own geometry covers;
+            ``None`` leaves the hint unassessed. Choosing that reference is the caller's
+            decision, as it is for ``SemanticEvaluationInput``.
+    """
+
+    hint: RegionSemanticHint
+    annotation: SemanticAnnotation | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegionSemanticHintSample:
+    """Traceable ``casefold-exact/1`` outcome of one native hint.
+
+    Attributes:
+        acceptable: Whether the text matches an acceptable hypothesis; ``None`` when the
+            annotation states none, so the hint is unassessed rather than wrong.
+        rejected: Whether the text matches a rejected hypothesis, the only negative truth;
+            ``None`` when the annotation states none.
+    """
+
+    source_observation_id: str
+    perception_result_id: str
+    candidate_id: str
+    discovery_pass_id: str
+    native_proposal_id: str
+    region_id: str | None
+    contribution: str
+    text: str
+    annotated: bool
+    acceptable: bool | None
+    rejected: bool | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegionSemanticHintReport:
+    """Quality of task-native region text produced by one native discovery configuration.
+
+    Every hint shares backend, checkpoint, configuration digest, task and prompt, so the
+    rates describe one inference setup. Rates are ``None`` when nothing could be assessed.
+    Hints are not claims: this report sits beside, never inside, a semantic claim report.
+    """
+
+    context: SemanticEvaluationContext
+    matching_policy: str
+    backend_id: str
+    backend_version: str
+    checkpoint: str
+    config_digest: str
+    task: str
+    prompt: str | None
+    samples: tuple[RegionSemanticHintSample, ...]
+    hint_count: int
+    annotated_hint_count: int
+    assessed_hint_count: int
+    acceptable_hint_rate: float | None
+    unsupported_hint_rate: float | None
+    rejected_hint_rate: float | None
+
+
+def evaluate_region_semantic_hints(
+    *,
+    context: SemanticEvaluationContext,
+    inputs: tuple[RegionSemanticHintInput, ...],
+) -> RegionSemanticHintReport:
+    """Score task-native region text against references with ``casefold-exact/1``.
+
+    The hints come from the same discovery inference whose geometry Region Discovery
+    evaluation measures, so no second model forward is needed to assess the text.
+
+    Raises:
+        SemanticEvaluationError: If there is no hint, a hint repeats, or the hints mix
+            native configurations (backend, checkpoint, digest, task or prompt).
+    """
+    if not inputs:
+        raise SemanticEvaluationError("region semantic hint evaluation requires at least one hint")
+    keys = [
+        (item.hint.source_observation_id, item.hint.perception_result_id, item.hint.candidate_id)
+        for item in inputs
+    ]
+    duplicated = [key for key, count in Counter(keys).items() if count > 1]
+    if duplicated:
+        raise SemanticEvaluationError(f"duplicate region semantic hint: {duplicated[0]}")
+    configurations = {_native_configuration(item.hint) for item in inputs}
+    if len(configurations) != 1:
+        raise SemanticEvaluationError(
+            "region semantic hints mix native configurations: "
+            f"{sorted(repr(configuration) for configuration in configurations)}"
+        )
+    ((backend_id, backend_version, checkpoint, config_digest, task, prompt),) = configurations
+    samples = tuple(_hint_sample(item) for item in inputs)
+    assessed = [sample.acceptable for sample in samples if sample.acceptable is not None]
+    rejected = [sample.rejected for sample in samples if sample.rejected is not None]
+    return RegionSemanticHintReport(
+        context=context,
+        matching_policy=MATCHING_POLICY,
+        backend_id=backend_id,
+        backend_version=backend_version,
+        checkpoint=checkpoint,
+        config_digest=config_digest,
+        task=task,
+        prompt=prompt,
+        samples=samples,
+        hint_count=len(samples),
+        annotated_hint_count=sum(sample.annotated for sample in samples),
+        assessed_hint_count=len(assessed),
+        acceptable_hint_rate=_rate(sum(assessed), len(assessed)),
+        unsupported_hint_rate=_rate(len(assessed) - sum(assessed), len(assessed)),
+        rejected_hint_rate=_rate(sum(rejected), len(rejected)),
+    )
+
+
+def encode_region_semantic_hint_report(report: RegionSemanticHintReport) -> dict[str, Any]:
+    """Encode a region semantic hint report into JSON primitives."""
+    encoded = _plain(report)
+    assert isinstance(encoded, dict)
+    return encoded
+
+
+def _native_configuration(hint: RegionSemanticHint) -> tuple[str, str, str, str, str, str | None]:
+    provenance = hint.provenance
+    return (
+        provenance.backend_id,
+        provenance.backend_version,
+        provenance.checkpoint,
+        provenance.config_digest,
+        hint.native_text.task,
+        hint.native_text.prompt,
+    )
+
+
+def _hint_sample(item: RegionSemanticHintInput) -> RegionSemanticHintSample:
+    hint = item.hint
+    annotation = item.annotation
+    text = _normalize(hint.native_text.text)
+    acceptable = (
+        {_normalize(value) for value in annotation.acceptable_hypotheses} if annotation else set()
+    )
+    rejected = (
+        {_normalize(value) for value in annotation.rejected_hypotheses} if annotation else set()
+    )
+    return RegionSemanticHintSample(
+        source_observation_id=hint.source_observation_id,
+        perception_result_id=hint.perception_result_id,
+        candidate_id=hint.candidate_id,
+        discovery_pass_id=hint.provenance.discovery_pass_id,
+        native_proposal_id=hint.provenance.native_proposal_id,
+        region_id=None if hint.region_id is None else str(hint.region_id),
+        contribution=hint.contribution.value,
+        text=hint.native_text.text,
+        annotated=annotation is not None,
+        acceptable=text in acceptable if acceptable else None,
+        rejected=text in rejected if rejected else None,
+    )
 
 
 def _evaluate_sample(item: SemanticEvaluationInput) -> SemanticSampleReport:

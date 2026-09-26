@@ -48,6 +48,12 @@ Medir qualidade, regressões e custo das capabilities do ContextMap2 sem alterar
   mesmas observações, regiões, modos e variants (falhas incluídas, com identidade
   física completa) e o mesmo reference-set, seleção, run de percepção, versão do
   evaluator e matching policy, para Qwen, Gemini e Florence-2.
+- `evaluate_region_semantic_hints()`, `RegionSemanticHintInput`,
+  `RegionSemanticHintReport`/`RegionSemanticHintSample` e
+  `encode_region_semantic_hint_report()` — pontuam o texto nativo que uma task
+  de Region Discovery (Florence-2 `<OD>`, `<DENSE_REGION_CAPTION>`, ...) devolveu
+  com cada proposta, com o mesmo `casefold-exact/1`, sem transformá-lo em claim e
+  com uma configuração nativa por report.
 
 ### State Estimation
 
@@ -176,10 +182,13 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 
 ### Experimentos e ablações
 
+- `PhaseSpec`/`expand_phase()`/`PhaseManifest` — fases nomeadas do experimento de percepção (#527) expandidas em configurações comuns do runtime, sem carregar modelos: cada arm resolve pelo runtime, a fiação é conferida contra a matriz, arms bloqueados e duplicados ficam registrados com motivo e os executáveis viram um `ExperimentManifest` em modo `selected`. Ver [`experiment-phases.md`](experiment-phases.md).
+- `CAPABILITY_MATRIX`/`Capability`/`Composition` — matriz versionada de capacidades nativas e de compatibilidade produtor → consumidor do experimento de percepção (#522): status (`supported` preso ao catálogo do runtime, `planned`, `blocked`, `out_of_scope`), grupos de comparação por tarefa + condicionamento + geometria e `require_supported_composition()` para excluir composições inválidas antes de carregar modelos. Ver [`capability-matrix.md`](capability-matrix.md).
 - `ExperimentManifest`/`ExperimentVariable`/`ExperimentArm`/`ResolvedTopology` — manifesto versionado e hasheado de uma comparação controlada: seleção exata de amostras do reference set, topologia resolvida por arm, artifacts upstream pinados, variáveis sob teste, controles fixos, métricas e política de captura de recursos. Só se constrói se **apenas as variáveis declaradas variam** e se o trecho variado consome artifacts imutáveis pinados.
 - `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.
 - `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.
 - `run_experiment()`/`ExperimentRun`/`ArmExecutor` — executa cada arm por um executor injetado e emite um run manifest e um relatório por arm mais um `ComparisonManifest`; arms indisponíveis ou com resultado inconsistente ficam explícitos e tornam a comparação incompleta (`require_complete_comparison()`), sem fallback e sem score geral.
+- `arm_differences()`/`ArmDifference`/`DifferenceKind` e `ArmMatch`/`MatchStatus` — braços pareados (#545): a configuração de um estágio pode ser registrada campo a campo e cada variável declara os campos que muda (`configuration_fields`), então uma ablação de prompt, vista, contexto, orçamento visual ou backend que também muda revisão do modelo, schema de saída ou geração é recusada com o campo e os dois valores; na execução, cada arm é pareado com o baseline, e um estágio não afetado com outro conteúdo ou outro evaluator/código/schemas torna o par `invalid` e o tira das métricas. Contagens de pares e motivos ficam em `comparison.json`.
 
 ### QA das anotações e reprodutibilidade
 
@@ -225,6 +234,7 @@ pipeline principal.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
 - [`end-to-end.md`](end-to-end.md) — cenário canônico congelado, perfil de backends, opções só por ablação, matriz de aceitação por estágio, relatório sem score global e regras de versionamento.
+- [`score-calibration.md`](score-calibration.md) — scores nativos ficam diagnósticos até haver calibração; par de splits de calibração/avaliação retida que recusa vazamento.
 - [`reference-integrity.md`](reference-integrity.md) — catálogo de checagens (blockers e warnings), política de split, auditoria de proveniência e entradas que recusam reference sets inválidos.
 - [`annotations.md`](annotations.md) — famílias de anotação, parcialidade e verdade negativa explícita, normalização open-vocabulary, identidade/relações e ligação com observações físicas.
 - [`reference-set.md`](reference-set.md) — manifesto do reference set, regras de identidade, trust e proveniência, digest/versão e persistência.

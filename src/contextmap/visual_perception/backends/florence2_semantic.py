@@ -1,10 +1,12 @@
 """Florence-2 adapter for canonical Semantic Interpretation requests.
 
 Florence-2 is driven by task tokens and answers in plain text, while the canonical
-boundary exchanges ``semantic-response/1`` JSON. The adapter therefore owns an explicit,
-versioned mapping (``florence2-task-envelope/1``): the task text becomes exactly one
-primary claim, verbatim, and the resulting JSON goes through the shared parser like the
-output of any other interpreter. Nothing is inferred from the text.
+boundary exchanges ``semantic-response/1`` JSON. The adapter therefore owns two explicit,
+versioned rules. ``florence2-task-prompt/1`` is its task-native prompt policy: the model
+input is the configured task token (plus the whole-view box for region tasks), never a
+free-form instruction template. ``florence2-task-envelope/1`` maps the answer: the task
+text becomes exactly one primary claim, verbatim, and the resulting JSON goes through the
+shared parser like the output of any other interpreter. Nothing is inferred from the text.
 """
 
 from __future__ import annotations
@@ -35,12 +37,12 @@ from contextmap.visual_perception.semantic_backend import (
     semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
+    SEMANTIC_RESPONSE_SCHEMA,
+    RenderedSemanticPrompt,
     SemanticConfidencePolicy,
     SemanticParseDiagnostic,
-    SemanticPromptTemplate,
     SemanticResponseParseError,
     parse_semantic_response,
-    render_semantic_prompt,
 )
 from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationMode,
@@ -54,12 +56,25 @@ from contextmap.visual_perception.semantic_requests import (
 TASK_ENVELOPE_POLICY = "florence2-task-envelope/1"
 """Versioned rule that turns Florence-2 task text into a canonical response."""
 
+TASK_PROMPT_POLICY = "florence2-task-prompt/1"
+"""Versioned task-native prompt policy: the model input is the task token plus task input.
+
+A request to Florence-2 names ``"<TASK_PROMPT_POLICY>:<task>"`` as its prompt template, so
+the recorded prompt is the text the model actually consumed.
+"""
+
+
+TASK_OUTPUT_SCHEMA = SEMANTIC_RESPONSE_SCHEMA
+"""The output schema :data:`TASK_ENVELOPE_POLICY` produces from the task text."""
+
+
+def task_prompt_template_id(task: str) -> str:
+    """Return the task-native prompt policy a Florence-2 request of ``task`` names."""
+    return f"{TASK_PROMPT_POLICY}:{task}"
+
+
 _WHOLE_VIEW_REGION = "<loc_0><loc_0><loc_999><loc_999>"
 _LOCATION_TOKEN = re.compile(r"<loc_\d+>")
-_PROMPT_NOT_CONSUMED_NOTICE = (
-    "Florence-2 receives the task token and image only; the canonical prompt is recorded "
-    "for the response contract but is not model input."
-)
 _PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
 
 
@@ -234,7 +249,16 @@ class Florence2SemanticRuntime(Protocol):
 
 
 class Florence2SemanticInterpreter:
-    """Interpret scene/region evidence through a distinct Florence-2 capability adapter."""
+    """Interpret scene/region evidence through a distinct Florence-2 capability adapter.
+
+    Attributes:
+        configuration_fingerprint: Identity of the effective configuration; a request must
+            carry it.
+        prompt_template_id: The task-native prompt policy (:data:`TASK_PROMPT_POLICY` and the
+            configured task) every request must name. Florence-2 cannot consume a free-form
+            instruction template, so a request naming one is refused, never ignored.
+        output_schema_version: The schema :data:`TASK_ENVELOPE_POLICY` produces.
+    """
 
     def __init__(
         self, *, config: Florence2SemanticConfig, runtime: Florence2SemanticRuntime
@@ -246,6 +270,16 @@ class Florence2SemanticInterpreter:
         encoded = json.dumps(config.to_dict(), sort_keys=True, separators=(",", ":"))
         self.configuration_fingerprint = (
             "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        )
+        self.prompt_template_id = task_prompt_template_id(config.task)
+        self.output_schema_version = TASK_OUTPUT_SCHEMA
+        # O prompt nativo depende só da task configurada, nunca do request: renderizado uma vez.
+        task_prompt = f"{config.task}{self._task.task_input}"
+        self._rendered_prompt = RenderedSemanticPrompt(
+            template_id=self.prompt_template_id,
+            output_schema_version=self.output_schema_version,
+            text=task_prompt,
+            fingerprint="sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest(),
         )
 
     def backend_provenance(self) -> BackendProvenance:
@@ -260,38 +294,52 @@ class Florence2SemanticInterpreter:
         )
 
     def capabilities(self) -> SemanticInterpreterCapabilities:
-        """Declare the single mode and the views the configured task can interpret."""
+        """Declare the single mode, the views the task can interpret, and one view at most."""
         return SemanticInterpreterCapabilities(
             supported_modes=self._config.supported_modes,
             supported_view_kinds=self._task.view_kinds,
             accepts_visual_features=False,
             accepts_scene_context=False,
+            max_visual_views=1,
         )
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
-        """Run the configured task and parse it through the shared canonical boundary."""
+        """Run the configured task and parse it through the shared canonical boundary.
+
+        Raises:
+            ValueError: Before inference, if the request is unsupported (including more than
+                the one view the capabilities declare), was built for another
+                configuration, names a prompt policy other than
+                :attr:`prompt_template_id`, or asks for an output schema the task envelope
+                does not produce.
+            SemanticInterpretationFailedError: If the mapped response cannot be parsed.
+        """
         validate_semantic_request(request, self.capabilities())
         if request.configuration_fingerprint != self.configuration_fingerprint:
             raise ValueError("Florence-2 request configuration fingerprint does not match adapter")
-        if len(request.visual_views) != 1:
-            raise ValueError("Florence-2 semantic tasks consume exactly one visual view")
-        template = SemanticPromptTemplate.default_for(request.mode)
-        rendered = render_semantic_prompt(
-            request,
-            template,
-            confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
-        )
+        if request.prompt_template_id != self.prompt_template_id:
+            raise ValueError(
+                f"Florence-2 consumes only its task-native prompt policy "
+                f"{self.prompt_template_id!r}; the request names {request.prompt_template_id!r}"
+            )
+        if request.requested_output_schema != self.output_schema_version:
+            raise ValueError(
+                f"Florence-2 answers through {TASK_ENVELOPE_POLICY} in "
+                f"{self.output_schema_version!r}; the request asks for "
+                f"{request.requested_output_schema!r}"
+            )
+        rendered = self._rendered_prompt
         started = time.monotonic()
         response = self._runtime.generate(
             visual_views=request.visual_views,
-            task_prompt=f"{self._config.task}{self._task.task_input}",
+            task_prompt=rendered.text,
             config=self._config,
         )
         provenance = SemanticInferenceProvenance(
             backend=self.backend_provenance(),
             task_identity=f"florence2-{self._config.task}-{request.mode.value}",
-            prompt_template_id=template.template_id,
-            output_schema_version=template.output_schema_version,
+            prompt_template_id=rendered.template_id,
+            output_schema_version=rendered.output_schema_version,
             raw_response_reference=(
                 f"debug/40-semantic-interpretation/{request.request_id}/raw-response.txt"
             ),
@@ -338,7 +386,7 @@ class Florence2SemanticInterpreter:
                 ),
             ),
         )
-        warnings = [_PROMPT_NOT_CONSUMED_NOTICE]
+        warnings: list[str] = []
         if not task_text:
             warnings.append("task produced empty text; mapped to an explicit abstention")
         warnings.extend(response.warnings)

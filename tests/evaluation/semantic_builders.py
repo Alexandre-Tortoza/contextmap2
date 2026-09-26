@@ -8,9 +8,11 @@ from typing import Any
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     PerceptionResultId,
     RegionId,
+    SceneContext,
     SemanticBackendDiagnostics,
     SemanticConfidencePolicy,
     SemanticEvidenceReference,
@@ -78,7 +80,31 @@ def execution(
     is_scene = mode is SemanticInterpretationMode.SCENE
     kind = view_kind or (VisualViewKind.FULL_FRAME if is_scene else VisualViewKind.TIGHT_CROP)
     region_id = None if is_scene else RegionId(region or "region-1")
-    default_template = SemanticPromptTemplate.default_for(mode)
+    default_template = SEMANTIC_PROMPT_TEMPLATES[
+        "region-scene-context/v1" if scene_context_reference else f"{mode.value}/v1"
+    ]
+    scene_context = (
+        SceneContext(
+            source_observation_id=SourceObservationId(frame),
+            perception_result_id=PerceptionResultId(f"result-{frame}"),
+            provenance=SemanticInferenceProvenance(
+                backend=BackendProvenance(
+                    backend_id=backend_id,
+                    capability="semantic_interpreter",
+                    provider="test",
+                    model="model",
+                    version="1",
+                    configuration_fingerprint="sha256:config",
+                ),
+                task_identity=f"{backend_id}-scene",
+                prompt_template_id="scene/v1",
+                output_schema_version="semantic-response/1",
+            ),
+            scene_type="warehouse",
+        )
+        if scene_context_reference
+        else None
+    )
     request = SemanticInterpretationRequest(
         request_id=SemanticRequestId(request_id),
         source_observation_id=SourceObservationId(frame),
@@ -103,12 +129,14 @@ def execution(
             if scene_context_reference
             else None
         ),
+        scene_context=scene_context,
     )
     template = SemanticPromptTemplate(
         template_id=request.prompt_template_id,
         mode=mode,
         output_schema_version=default_template.output_schema_version,
         instructions=default_template.instructions,
+        scene_context_instructions=default_template.scene_context_instructions,
     )
     rendered = render_semantic_prompt(
         request, template, confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY

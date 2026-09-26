@@ -42,13 +42,14 @@ O core de Feature Extraction está materializado e exportado por `contextmap.vis
 - diagnostics obrigatórios separados de previews de debug;
 - `FeatureResolutionEnhancement` como estágio opcional `DenseFeatureMap -> DenseFeatureMap`, fora do preset canônico;
 - `DinoV2DenseFeatureBackend` e `DinoV3DenseFeatureBackend` para mapas densos em resolução nativa;
+- `Siglip2FeatureBackend` para o vision encoder SigLIP2 FixRes, com um escopo por instância: mapa denso nativo (`DENSE`) ou vetor da cabeça de pooling (`GLOBAL`);
 - `ClipVisualFeatureBackend` para features globais ou de região;
 - `AlphaClipRegionFeatureBackend` para features de região condicionadas por máscara;
 - protocolo de avaliação determinístico em `contextmap.evaluation`.
 
 `CANONICAL_PRESET_V1` possui os estágios `dense_feature_extraction` e `region_feature_extraction`, ambos resolvidos pelo capability port `feature_extractor`. Isso define topologia e contrato, mas não implica que um modelo concreto esteja disponível.
 
-Os quatro adapters concretos ficam em `visual_perception/backends/` e satisfazem o mesmo port sem expor PyTorch, Transformers, AlphaCLIP, Pillow ou arrays na API pública da capability. Carregamento é lazy, checkpoints locais são o default e falhas de dependência, device, checkpoint e inferência permanecem explícitas. Os testes usam runtimes determinísticos injetados e não baixam pesos. Os adapters DINOv2 e CLIP foram executados com pesos reais em 2026-09-20 (resultados em `dinov2.md` e `clip.md`) e o DINOv3 em 2026-09-21 (`dinov3.md` e [`dinov3-validation.md`](dinov3-validation.md)); AlphaCLIP (checkpoints ausentes) ainda não tem execução real e não deve ser tratado como validado. Os adapters de Hugging Face fazem o resize no Pillow e deixam ao processor só rescale e normalização, para que o vetor não dependa do backend do processor.
+Os cinco adapters concretos ficam em `visual_perception/backends/` e satisfazem o mesmo port sem expor PyTorch, Transformers, AlphaCLIP, Pillow ou arrays na API pública da capability. Carregamento é lazy, checkpoints locais são o default e falhas de dependência, device, checkpoint e inferência permanecem explícitas. Os testes usam runtimes determinísticos injetados e não baixam pesos. Os adapters DINOv2 e CLIP foram executados com pesos reais em 2026-09-20 (resultados em `dinov2.md` e `clip.md`) e o DINOv3 em 2026-09-21 (`dinov3.md` e [`dinov3-validation.md`](dinov3-validation.md)); AlphaCLIP (checkpoints ausentes) e SigLIP2 ([`siglip2.md`](siglip2.md)) ainda não têm execução real e não devem ser tratados como validados. Os adapters de Hugging Face fazem o resize no Pillow e deixam ao processor só rescale e normalização, para que o vetor não dependa do backend do processor.
 
 As execuções reais validam os adapters e a reprodutibilidade numérica nas configurações registradas; não constituem comparação científica da qualidade dos embeddings.
 

@@ -200,7 +200,7 @@ class MetricEvidence:
 
 @dataclass(frozen=True, kw_only=True)
 class IncompleteArm:
-    """An arm that did not complete, with the reason it stayed explicit."""
+    """An arm that contributes no metrics (not completed, or not a matched comparison), and why."""
 
     arm_id: str
     status: ArmStatus
@@ -578,7 +578,7 @@ def build_technique_evidence(
             IncompleteArm(
                 arm_id=arm.arm_id,
                 status=arm.status,
-                reason="" if arm.failure is None else arm.failure.message,
+                reason=arm.exclusion_reason or "",
             )
             for arm in comparison.arms
             if not arm.comparable

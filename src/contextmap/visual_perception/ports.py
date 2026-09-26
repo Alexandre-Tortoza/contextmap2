@@ -2,7 +2,7 @@
 
 A port is a typed `Protocol` for one real substitution point — a concrete
 model (SAM2, SAM3, Florence-2, DINOv2, DINOv3, CLIP, AlphaCLIP, Qwen,
-Gemini, ...) is an adapter that satisfies one or more of these ports.
+Gemini, LocateAnything, ...) is an adapter that satisfies one or more of these ports.
 Ports never encode a mandatory execution order between capabilities;
 :mod:`contextmap.visual_perception.service` resolves the actual stage
 graph and decides ordering. No port constructs a concrete backend or
@@ -20,6 +20,11 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from contextmap.visual_perception.dense_region_association import DenseFeatureMap
+from contextmap.visual_perception.grounding import (
+    RegionGroundingCapabilities,
+    RegionGroundingExecution,
+    RegionGroundingRequest,
+)
 from contextmap.visual_perception.models import (
     BackendProvenance,
     FeatureScope,
@@ -28,6 +33,11 @@ from contextmap.visual_perception.models import (
     SemanticClaim,
     SemanticScore,
     VisualFeature,
+)
+from contextmap.visual_perception.refinement import (
+    RegionRefinementCapabilities,
+    RegionRefinementExecution,
+    RegionRefinementRequest,
 )
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
 from contextmap.visual_perception.semantic_requests import (
@@ -57,6 +67,79 @@ class RegionDiscovery(Protocol):
         Returns:
             Discovered regions, accepted and/or rejected (see
             :attr:`~contextmap.visual_perception.models.Region2D.is_accepted`).
+        """
+        ...
+
+
+@runtime_checkable
+class RegionGrounding(Protocol):
+    """Capability port: localize what an explicit language query refers to in an image.
+
+    Distinct from :class:`RegionDiscovery`, which proposes regions from the image alone:
+    here the query is a first-class, validated, persisted inference input of each
+    request, never backend configuration.
+    """
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Report this backend's identity and effective configuration.
+
+        Returns:
+            Provenance whose capability is ``"region_grounding"``.
+        """
+        ...
+
+    def capabilities(self) -> RegionGroundingCapabilities:
+        """Declare the query policies (task and geometry) this backend serves."""
+        ...
+
+    def ground(self, request: RegionGroundingRequest) -> RegionGroundingExecution:
+        """Answer one grounding request.
+
+        Args:
+            request: The image, the query and the configuration fingerprint.
+
+        Returns:
+            The request, rendered prompt, raw response, parsed outputs and diagnostics.
+
+        Raises:
+            GroundingRequestError: Before any inference, when the backend does not declare
+                the requested policy, task or geometry.
+        """
+        ...
+
+
+@runtime_checkable
+class RegionRefinement(Protocol):
+    """Capability port: refine grounding proposals into mask-backed regions.
+
+    A proposal is only a segmentation prompt: the refiner's mask becomes a separately
+    identified region whose contributor is the proposal, and the grounding evidence is
+    never mutated.
+    """
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Report this refiner's identity and effective configuration.
+
+        Returns:
+            Provenance whose capability is ``"region_refinement"``.
+        """
+        ...
+
+    def capabilities(self) -> RegionRefinementCapabilities:
+        """Declare the prompt geometries this refiner accepts."""
+        ...
+
+    def refine(self, request: RegionRefinementRequest) -> RegionRefinementExecution:
+        """Refine every prompt of one request.
+
+        Args:
+            request: The prepared image, the prompts and the configuration fingerprint.
+
+        Returns:
+            One refined region or explicit rejection per prompt, with diagnostics.
+
+        Raises:
+            RefinementRequestError: Before any inference, for an unaccepted prompt geometry.
         """
         ...
 

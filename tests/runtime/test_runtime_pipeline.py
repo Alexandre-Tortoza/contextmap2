@@ -164,6 +164,48 @@ class TestCanonicalDag:
         )
         assert changed.digest != base.digest
 
+    def test_changing_only_the_prompt_policy_changes_only_the_semantic_stage_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """#542: a prompt ablation recomputes perception, never the geometry path upstream."""
+        base = resolve_plan(effective_from(tmp_path, _document()))
+        document = _document()
+        qwen = document["components"]["visual_perception"]["semantic_interpretation"]["qwen"]
+        qwen["prompt_policy"] = {"scene": "scene/v1", "region": "region-abstention/v1"}
+
+        changed = resolve_plan(effective_from(tmp_path, document))
+
+        assert changed.digest != base.digest
+        assert changed.config_digest != base.config_digest
+        differing = {
+            stage.stage_id
+            for stage in changed.stages
+            if stage.config_digest != base.stage(stage.stage_id).config_digest
+        }
+        assert differing == {"visual_perception"}
+
+    def test_changing_only_the_view_policy_changes_only_the_semantic_stage_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """#524: a view ablation recomputes perception, never the geometry path upstream."""
+        base = resolve_plan(effective_from(tmp_path, _document()))
+        document = _document()
+        qwen = document["components"]["visual_perception"]["semantic_interpretation"]["qwen"]
+        qwen["view_policy"] = {
+            "region_views": ["masked_subject", "tight_crop"],
+            "mask_fill_rgb": [0, 0, 0],
+        }
+
+        changed = resolve_plan(effective_from(tmp_path, document))
+
+        assert changed.digest != base.digest
+        differing = {
+            stage.stage_id
+            for stage in changed.stages
+            if stage.config_digest != base.stage(stage.stage_id).config_digest
+        }
+        assert differing == {"visual_perception"}
+
     @pytest.mark.usefixtures("unavailable_future_stage")
     def test_unavailable_stages_stay_in_the_topology_with_their_reason(
         self, tmp_path: Path
@@ -507,7 +549,14 @@ class TestScopeAndExecution:
         document = _document()
         document["components"]["visual_perception"]["semantic_interpretation"] = {
             "backend": "gemini",
-            "gemini": {"model": "g", "timeout_s": 1, "max_retries": 1, "temperature": 0.0},
+            "gemini": {
+                "model": "g",
+                "timeout_s": 1,
+                "max_retries": 1,
+                "temperature": 0.0,
+                "prompt_policy": {"scene": "scene/v1", "region": "region/v1"},
+                "view_policy": {"region_views": ["tight_crop"]},
+            },
         }
         plan = resolve_plan(effective_from(tmp_path, document))
         executors = _executors(plan, [])

@@ -51,10 +51,75 @@ O construtor rejeita:
 - identidades vazias de prompt, schema ou configuração.
 
 `SemanticInterpreterCapabilities` declara modes e tipos de view suportados, se
-o backend aceita features/contexto e quais views são obrigatórias.
+o backend aceita features/contexto, quais views são obrigatórias e, quando
+existe, o número máximo de views por request (`max_visual_views`).
 `validate_semantic_request()` compara o request com essa declaração antes de
 qualquer chamada local ou remota. Evidência não suportada causa erro explícito;
 ela não é descartada silenciosamente.
+
+## Política de views de evidência (#524)
+
+`SemanticViewPolicy` é a política versionada que diz quais views um request de
+região carrega, em que ordem, e como cada uma é cortada da imagem preparada.
+`materialize_region_views()` e `materialize_scene_view()` a aplicam sobre os
+pixels RGB da imagem preparada e a região congelada, sem alterar a geometria da
+região. Uma ablação de views é só uma mudança de configuração: nenhum código de
+request é escrito à mão.
+
+- **Views declaradas, em ordem.** `region_views` é uma tupla ordenada e sem
+  repetição de `VisualViewKind`, com ao menos uma view presa à região
+  (`MASKED_SUBJECT`, `TIGHT_CROP` ou `CONTEXTUAL_CROP`). O request de região
+  carrega exatamente essas views, nessa ordem, e o runtime de Qwen/Gemini as
+  recebe nessa ordem antes do prompt. Nenhum frame inteiro é acrescentado sem
+  que a política o declare; quando declarado, o `FULL_FRAME` da região é a mesma
+  view (mesmo `view_id`, bytes e SHA-256) do request de cena do frame. O request
+  de cena carrega sempre exatamente um `FULL_FRAME`.
+- **Variantes.** Qualquer combinação válida é expressável; as do experimento
+  (#521) são `masked`, `tight`, `contextual`, `full+tight`, `masked+tight`,
+  `masked+contextual`, `tight+contextual`, `masked+tight+contextual` e
+  `full+masked+tight+contextual`.
+- **Recorte.** `TIGHT_CROP` e `MASKED_SUBJECT` cobrem a caixa da região
+  arredondada para fora (piso da borda mínima, teto da máxima) e limitada à
+  imagem. `CONTEXTUAL_CROP` expande a caixa por `context_margin_ratio` vezes a
+  largura (esquerda/direita) e a altura (cima/baixo) da própria caixa, com o
+  mesmo arredondamento; na borda da imagem o recorte é truncado, nunca
+  preenchido, então o sujeito pode ficar descentralizado.
+- **Máscara.** `MASKED_SUBJECT` mantém os pixels da máscara inline da região e
+  pinta o resto com `mask_fill_rgb`. Uma região só com caixa (sem máscara
+  inline) é recusada com erro explícito; a caixa nunca substitui a máscara em
+  silêncio.
+- **Contorno.** `context_boundary` (`rgb`, `width_px`) desenha, no recorte
+  contextual, um anel logo fora da caixa da região, sem pintar pixels do
+  sujeito; `None` não desenha nada.
+- **Parâmetros vivos.** Um parâmetro só existe para a view que ele molda:
+  `mask_fill_rgb` é obrigatório exatamente quando `MASKED_SUBJECT` é declarado,
+  `context_margin_ratio` exatamente quando `CONTEXTUAL_CROP` é declarado, e
+  `context_boundary` só é aceito com o recorte contextual. Assim duas políticas
+  que constroem as mesmas views têm a mesma identidade.
+- **Identidade.** `to_document()` registra todas as regras, inclusive as fixas
+  da versão `semantic-views/1` (arredondamento, sem redimensionamento — as views
+  mantêm a grade de pixels da imagem preparada; o orçamento de resolução do
+  modelo é de #526 — e codificação PNG RGB8, filtro 0, zlib 9), e
+  `fingerprint()` é o SHA-256 desse documento. Mudar qualquer regra fixa é uma
+  versão nova.
+- **Bytes e linhagem.** Cada view é um PNG determinístico: pixels, região e
+  política idênticos produzem bytes idênticos, identificados pelo `sha256` da
+  view. `SemanticVisualView.construction` (`SemanticViewConstruction`) registra
+  o fingerprint da política, o SHA-256 da imagem de origem e a janela de pixels
+  `(x_min, y_min, x_max, y_max)` usada; junto com `source_observation_id` e
+  `region_id`, isso reconstrói de onde cada byte veio. Esse registro é
+  persistido com o request e não entra no prompt renderizado.
+- **Preflight.** `check_view_policy_supported()` compara a política com as
+  capacidades do intérprete antes de qualquer inferência (tipos de view, número
+  máximo e views obrigatórias, só nos modos que o intérprete suporta). O
+  Florence-2 declara `max_visual_views=1` e só views que a região preenche, então
+  uma política com duas views, recorte contextual ou frame inteiro falha na
+  composição do runtime.
+- **Seleção por configuração.** O runtime lê a política do grupo reservado
+  obrigatório `view_policy` do backend semântico (ver
+  [composição do runtime](../../runtime/docs/composition.md#política-de-views-semânticas-524));
+  ela entra na configuração efetiva e na identidade do estágio
+  `visual_perception`.
 
 ## Integridade das views na inferência
 
@@ -65,8 +130,8 @@ bytes diferentes dos registrados. A verificação por `add_semantic_view_payload
 acontece na persistência do run, depois da inferência, e continua existindo como
 segunda barreira do artifact; ela não substitui a verificação abaixo.
 
-Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime` e
-`GeminiClient`) recebem a **identidade completa das views**
+Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime`,
+`EagleRuntime` e `GeminiClient`) recebem a **identidade completa das views**
 (`visual_views: tuple[SemanticVisualView, ...]`) em vez de apenas
 `payload_reference`. A leitura e a validação dos bytes são centralizadas em
 `read_view_payload(view_root, view)` (`backends/_semantic_views.py`, interno à
@@ -79,15 +144,15 @@ capability, fora da API pública):
    cujo hash difere de `SemanticVisualView.sha256`;
 4. devolve os próprios bytes verificados.
 
-Cada runtime decodifica ou transmite **somente esses bytes**: Qwen e Florence-2
-abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
+Cada runtime decodifica ou transmite **somente esses bytes**: Qwen, Florence-2 e
+Eagle 2.5 abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
 parte inline. Assim, o que foi verificado é exatamente o que é consumido, sem
 janela entre a checagem e o uso, e a verificação precede a abertura da imagem e
 o envio ao provider. No Gemini, todas as views são verificadas antes da primeira
 chamada de rede, então um payload divergente nunca sai da máquina.
 
 Um payload divergente é uma falha explícita e terminal (`QwenInferenceError`,
-`Florence2InferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
+`Florence2InferenceError`, `EagleInferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
 inferência parcial. Quem implementa esses seams com outro runtime, gateway ou
 fake precisa usar `read_view_payload` (ou uma checagem equivalente); o contrato
 está registrado nas docstrings dos protocolos.
@@ -118,10 +183,60 @@ apenas torna explícita a entrada que eles recebem.
 ## Prompt e parsing versionados
 
 `SemanticPromptTemplate` identifica de forma inseparável o texto de instrução,
-o modo (`SCENE`/`REGION`) e o schema de saída. Os defaults `scene/v1` e
-`region/v1` produzem um `RenderedSemanticPrompt` determinístico, incluindo um
+o modo (`SCENE`/`REGION`) e o schema de saída. As políticas canônicas `scene/v1`
+e `region/v1` produzem um `RenderedSemanticPrompt` determinístico, incluindo um
 fingerprint SHA-256 do texto efetivo. Template, modo e schema devem coincidir
 com o request antes da renderização.
+
+### Política de prompt explícita (#542)
+
+A política de prompt é uma entrada da execução, selecionada antes da inferência;
+nenhum backend escolhe o prompt. Isso permite uma ablação controlada (mesma
+observação, região, views, modelo e configuração; só a política muda) sem editar
+código nem criar comportamento específico de backend.
+
+- **Catálogo versionado.** `SEMANTIC_PROMPT_TEMPLATES` é o catálogo fechado e
+  imutável de templates de instrução, indexado pela identidade de cada um.
+  `scene/v1` e `region/v1` são as políticas canônicas. `region-abstention/v1` é
+  uma alternativa **não canônica e não avaliada**: varia só a instrução de
+  abstenção em relação a `region/v1` e existe para que a seleção seja exercitável
+  ponta a ponta; as famílias reais de prompt são avaliadas em #525. Uma identidade
+  nomeia exatamente um texto de instrução e um schema de saída: uma política nova
+  é uma entrada nova, nunca a edição de uma existente.
+- **O request seleciona.** `SemanticInterpretationRequest.prompt_template_id` é a
+  seleção. Qwen, Gemini e Eagle 2.5 renderizam exatamente o template do catálogo com
+  essa identidade e entregam ao modelo exatamente esse texto. Não existe mais
+  `SemanticPromptTemplate.default_for()` nem padrão interno de backend.
+  Identidade desconhecida, modo divergente ou `requested_output_schema` diferente
+  do schema do template falham com `ValueError` antes de qualquer chamada ao
+  modelo ou provider.
+- **Schema explícito.** `SemanticPromptTemplate` só aceita
+  `output_schema_version="semantic-response/1"`, o único schema que o renderer e
+  o parser implementam: um template não pode prometer ao modelo um contrato que
+  ninguém analisa. Prompt e parser continuam separados; o parser não conhece a
+  política que produziu a resposta.
+- **Evidência coerente.** `RenderedSemanticPrompt` recusa um `fingerprint` que não
+  seja o SHA-256 do próprio `text`, e `SemanticInterpretationExecution`/
+  `FailedSemanticInterpretation` recusam um prompt renderizado cujo `template_id`
+  ou `output_schema_version` difira do que o request selecionou. Nenhum adapter,
+  atual ou futuro, consegue publicar evidência que afirme a política pedida tendo
+  renderizado outra, e o prompt consumido é reconstruível do próprio registro da
+  execução (`rendered_prompt.text`, também quando o parser rejeita a resposta).
+- **Seleção por configuração.** `SemanticPromptPolicy(scene=..., region=...)` é a
+  seleção declarativa por modo que uma execução configura para um interpretador
+  que segue instruções; cada identidade é validada contra o catálogo e o modo. O
+  runtime a lê do grupo reservado obrigatório `prompt_policy` da configuração do
+  backend (ver [composição do runtime](../../runtime/docs/composition.md#política-de-prompt-semântico-542)),
+  então ela entra na configuração efetiva, no seu digest e na identidade do
+  estágio `visual_perception`, independentemente do backend, das configurações de
+  geração e das views.
+- **Florence-2 é nativo da task.** Ele não consome templates livres; sua política
+  é o prompt da task ([abaixo](#decisão-de-design-task-token-versus-json-canônico)).
+
+Renderizar a mesma política para o mesmo request é determinístico (JSON com
+chaves ordenadas), e `region/v1`/`scene/v1` continuam produzindo exatamente os
+mesmos bytes de antes de se tornarem políticas explícitas: um teste fixa os
+fingerprints renderizados.
 
 `parse_semantic_response()` aceita somente o objeto JSON do schema
 `semantic-response/1`. O schema renderizado é específico ao modo: REGION exige
@@ -148,11 +263,69 @@ existe porque modelos reais descrevem corretamente a região mas omitem a chave 
 de 3 respostas de região, issue #340).
 
 `SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
-prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
+prompt/parser. Qwen, Gemini e Eagle 2.5 usam `UNSCORED_ONLY`, apresentam apenas `null` no
 schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
 fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
 número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
 bruta é registrado separadamente dos outputs canônicos.
+
+## Condicionamento por contexto de cena (#529)
+
+Um request de região pode ser condicionado ao `SceneContext` que o request de cena
+da mesma observação produziu. O contexto continua sendo evidência/hipótese de uma
+inferência anterior, nunca truth.
+
+- **Contexto nomeado e carregado.** `scene_context_reference` nomeia o contexto e
+  `scene_context` carrega exatamente o `SceneContext` nomeado; os dois vêm juntos
+  ou nenhum vem. A referência precisa nomear o `perception_result_id` do contexto
+  carregado, e o contexto precisa ser da mesma observação do request. O run
+  artifact recusa, na finalização, um request cujo contexto carregado difira do
+  `SceneContext` persistido para aquele resultado: o contexto renderizado é o
+  contexto citado.
+- **Sem ciclo.** Um request de cena nunca é condicionado a contexto de cena, e só
+  um template de região pode renderizar contexto; a dependência é sempre
+  cena → região, nunca o contrário.
+- **Renderização versionada.** `region-scene-context/v1` tem as instruções de
+  `region/v1` mais `scene_context_instructions`. O prompt ganha uma seção
+  `Scene context (scene-context/1)`: as instruções de enquadramento ("hipótese
+  anterior, não truth; use só para desambiguar a região") seguidas do contexto em
+  JSON canônico (chaves ordenadas): os seis campos estruturados e, por claim,
+  hipótese, role, categoria, region kind e atributos. A confiança nunca é
+  renderizada. `region/v1` continua byte a byte igual: não tem seção de contexto.
+- **Desligável para uma ablação pareada.** `SemanticPromptPolicy.region_scene_context`
+  liga o condicionamento (exige um template de região que renderize contexto).
+  Desligado com o mesmo template, o request não carrega contexto e a seção diz
+  explicitamente que nenhum foi fornecido; os dois braços usam o mesmo template e
+  diferem só no insumo de contexto. Com `region/v1` não há contexto nenhum.
+- **Nunca descartado em silêncio.** Um template que não renderiza contexto recusa
+  um request que carrega um, antes da inferência.
+- **Adapters.** Qwen e Gemini declaram `accepts_scene_context=True` desde que esse
+  caminho existe e está testado; Florence-2 continua sem suporte (não aceita
+  `prompt_policy`, e sua declaração segue `False`). O runtime recusa, na
+  composição, `region_scene_context` para um intérprete que não aceita contexto.
+- **Runtime.** A bridge guarda só o `SceneContext` do frame corrente, produzido
+  pelo request de cena (que roda antes das regiões do mesmo frame na ordem
+  topológica determinística do preset). Se o frame não tem contexto (cena falhou,
+  abstenção ou não executada), cada request de região condicionado falha com erro
+  explícito em vez de seguir sem o contexto pedido.
+- **Avaliação.** O gancho com/sem contexto de `compare_evidence_variants()` roda
+  sobre execuções reais de Qwen e Gemini (runtimes/clients fake na CI): o canal
+  `scene_context` vem do request, e o template é o mesmo nos dois braços.
+
+## Política de request resolvida (#544)
+
+`SemanticRequestPolicy` reúne o que molda todos os requests semânticos de um run: o
+prompt de cada modo interpretado (`SemanticModePrompt`: `template_id` e schema de saída;
+um modo sem prompt não é interpretado e nunca recebe um padrão), a `SemanticViewPolicy`
+e o interruptor `region_scene_context`. `SemanticRequestPolicy.from_prompt_policy()` a
+resolve a partir da `SemanticPromptPolicy` e da política de views de um intérprete que
+segue instruções; o Florence-2 recebe o prompt nativo da task só no modo que ela serve.
+`to_document()` registra todas as escolhas (inclusive as regras das views) sob a versão
+`semantic-request-policy/1`, e `fingerprint()` é o SHA-256 desse documento: seleções
+equivalentes têm a mesma identidade, e mudar prompt, views, ordem das views ou contexto a
+muda. `check_request_policy_supported()` recusa, antes de qualquer inferência, uma política
+que o intérprete declara não consumir. O backend, o modelo e o orçamento visual continuam
+configuração do backend, fora da política.
 
 ## Materialização e persistência
 
@@ -163,7 +336,10 @@ identidades da observação e do resultado. Ao receber os mesmos outcomes,
 `PerceptionRunWriter` persiste a execução em
 `outputs/semantic-interpretations.jsonl` e materializa a resposta bruta no path
 de debug declarado pela proveniência. Assim, execução, evidência canônica e
-artifact permanecem ligados pelo mesmo request id.
+artifact permanecem ligados pelo mesmo request id. Os diagnostics persistidos
+incluem `visual_inputs` (`null` quando o backend não mede o que o processor
+fez de cada view); um registro gravado antes do #526, sem a chave, é lido como
+não medido, e artifacts do schema 0.5.0 continuam legíveis.
 
 `SemanticDebugLevel` controla apenas o conteúdo humano em
 `debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
@@ -201,14 +377,16 @@ O preset canônico não escolhe um scorer automaticamente.
 `QwenSemanticInterpreter` é o adapter local substituível. Ele recebe apenas o
 request canônico, valida as capacidades e o fingerprint de configuração,
 renderiza o template compartilhado, delega a geração a `QwenRuntime` e usa o
-parser canônico. Modelo, device, precision, quantização, token limit e
-temperature formam o fingerprint e permanecem disponíveis na configuração
-efetiva da execução.
+parser canônico. Modelo, device, precision, quantização, token limit,
+temperature e, quando configurado, o orçamento de entrada visual
+(`min_pixels`/`max_pixels`) formam o fingerprint e permanecem disponíveis na
+configuração efetiva da execução.
 
 O seam de runtime mantém Transformers/Torch e objetos Qwen fora dos contratos.
 Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito.
-Métricas de tokens, latência, memória e warnings são registradas quando o
-runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
+Métricas de tokens, latência, memória, warnings e o que cada view virou na
+entrada do modelo (`visual_inputs`) são registradas quando o runtime consegue
+medi-las. A cobertura CI usa runtime fake determinístico. Um
 diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
 registrada para `scene_context` omitido (#340).
 
@@ -236,9 +414,34 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   `top_p`/`top_k` herdados do `generation_config` do checkpoint; um valor
   positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
   pela revisão).
+- **Orçamento de entrada visual (#526).** `min_pixels`/`max_pixels` limitam a
+  contagem de pixels (altura × largura) de **cada** view depois do resize do
+  processor, que preserva o aspecto e arredonda cada lado para múltiplo de
+  `patch_size × merge_size` (28 px no Qwen2.5-VL, 32 px no Qwen3-VL); cada
+  quadrado com esse lado é um token visual. O orçamento não limita o total do
+  request: com N views, o custo visual é a soma das N. Os dois limites são
+  configurados juntos ou nenhum, porque um orçamento parcial deixaria o outro
+  limite no default não registrado do checkpoint. Configurado, o orçamento é
+  passado a `AutoProcessor.from_pretrained(min_pixels=..., max_pixels=...)`, o
+  caminho documentado pelo Qwen2.5-VL: no transformers 5.x essas chaves
+  substituem as do `preprocessor_config.json` e viram
+  `image_processor.size = {shortest_edge, longest_edge}`, também no Qwen3-VL
+  (passar só `size` seria sobrescrito pelas chaves do Qwen2.5-VL). Antes de
+  carregar os pesos, o runtime confere em `image_processor.size` que o orçamento
+  foi aplicado; um processor que o ignorou, ou um `max_pixels` menor que
+  `(patch_size × merge_size)²` (o menor tamanho que o processor produz), é
+  `QwenModelLoadError`. Sem orçamento, nada é passado ao processor e vale o
+  default do checkpoint na revisão fixada (Qwen2.5-VL: 3 136 a 12 845 056 px;
+  Qwen3-VL-4B: 65 536 a 16 777 216 px, isto é, até 16 384 tokens visuais por
+  imagem); as chaves ficam fora da configuração efetiva, e o fingerprint de uma
+  configuração anterior ao #526 não muda. O resize do processor é o único: o
+  runtime entrega a imagem decodificada dos bytes verificados, sem resize
+  próprio. Não existe limite de tokens visuais por request, porque o processor
+  não o aplica e impô-lo exigiria uma política de resize do próprio runtime.
 - **Evidência e prompt.** As views chegam como imagens, na ordem do request,
-  seguidas do prompt canônico renderizado (`region/v1` ou `scene/v1`). O runtime
-  não acrescenta instrução própria. As referências são resolvidas dentro de
+  seguidas do prompt renderizado da política que o request seleciona
+  (`region/v1`, `scene/v1` ou outra entrada do catálogo). O runtime não acrescenta
+  instrução própria. As referências são resolvidas dentro de
   `view_root` e não podem escapar dele, e cada imagem é decodificada dos bytes
   cujo SHA-256 foi verificado contra `SemanticVisualView.sha256`
   ([Integridade das views](#integridade-das-views-na-inferência)).
@@ -248,6 +451,24 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   gera um warning, porque o JSON provavelmente foi truncado e essa falha de
   parsing não é falha semântica do modelo. `load()` permite carregar antes de
   medir latência, para que o load único não seja atribuído à primeira request.
+- **Entrada visual medida.** `SemanticBackendDiagnostics.visual_inputs` traz,
+  para cada view e na ordem do request, altura e largura em pixels depois do
+  resize e os tokens visuais, medidos do `image_grid_thw` do processor
+  (`h·patch_size × w·patch_size` px e `t·h·w / merge_size²` tokens);
+  `input_tokens` já inclui esses tokens. Um processor que não devolve
+  exatamente um grid por view é `QwenInferenceError`: nenhuma imagem é
+  descartada ou acrescentada em silêncio. As medições são diagnóstico da
+  execução, nunca identidade. Assim, cada registro de execução (e de falha de
+  parsing) guarda juntos o número de views (o request), o orçamento
+  (configuração efetiva) e o que cada view virou (diagnostics).
+- **Falta de memória.** `torch.cuda.OutOfMemoryError` durante a request vira
+  `QwenOutOfMemoryError`, subclasse de `QwenInferenceError`; não há retry,
+  resize nem fallback. Como o estágio que falha guarda só a mensagem, ela nomeia
+  o número de views, o orçamento em vigor (o configurado ou o default do
+  checkpoint, lido do processor carregado), o que cada view mediu,
+  `input_tokens` e o pico de memória: um arm que estoura memória é atribuível a
+  um orçamento registrado, não a um default desconhecido. Falta de memória em
+  CPU não tem tipo próprio no torch e continua `QwenInferenceError`.
 
 O runtime não corrige nem reinterpreta a resposta: o texto gerado segue para o
 parser canônico, e uma resposta fora do schema continua sendo falha explícita de
@@ -255,8 +476,8 @@ parsing.
 
 ## Adapter Gemini
 
-`GeminiSemanticInterpreter` usa o mesmo request, template e parser do adapter
-local. `GeminiSemanticConfig` contém somente model, timeout, retries e settings
+`GeminiSemanticInterpreter` usa o mesmo request, a mesma política de prompt
+selecionada pelo request e o mesmo parser do adapter local. `GeminiSemanticConfig` contém somente model, timeout, retries e settings
 de geração/raciocínio; credenciais pertencem ao `GeminiClient` injetado e nunca
 entram no fingerprint, outputs ou debug. Falhas transitórias possuem retries
 limitados e contados; resposta vazia/bloqueada e retries esgotados terminam com
@@ -264,8 +485,8 @@ erro explícito, sem substituição por outro backend. Usage, latência, warning
 identidade do provider permanecem auditáveis.
 
 `GeminiSemanticConfig` também registra `structured_output` (pede
-`response_mime_type=application/json`; o schema continua no prompt canônico
-versionado, porque a API aceita só um subconjunto de JSON Schema e não há como
+`response_mime_type=application/json`; o schema continua no prompt renderizado
+da política versionada, porque a API aceita só um subconjunto de JSON Schema e não há como
 validá-lo sem chamada real) e `retry_backoff_s`, a base do backoff exponencial
 entre tentativas (tentativa `n` espera `retry_backoff_s * 2**(n-1)`, limitada a
 60 s). Sem `retry_wait` injetado, o adapter dorme esse tempo, para que um 429
@@ -287,7 +508,7 @@ podem sair da máquina.
   poderia ecoar a chave. Nada da credencial entra no fingerprint, na
   configuração efetiva, nos outputs nem no debug.
 - **Requisição.** As views seguem em ordem como partes inline (`png`, `jpeg` ou
-  `webp`, pelo sufixo do payload), depois o prompt canônico. `temperature`,
+  `webp`, pelo sufixo do payload), depois o prompt renderizado. `temperature`,
   `thinking_budget`, `structured_output` e o timeout por tentativa
   (`timeout_s`, em milissegundos no SDK) vêm da configuração.
 - **Views verificadas antes do envio.** O cliente lê e confere o SHA-256 de todas
@@ -314,6 +535,20 @@ fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
 SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
 fixam o formato da requisição e o mapeamento dos erros reais sem rede.
 
+## Adapter Eagle 2.5
+
+`EagleSemanticInterpreter` executa o VLM Eagle 2.5 (NVlabs) pelo mesmo request, a mesma
+política de prompt selecionada pelo request e o mesmo parser `UNSCORED_ONLY` de Qwen e Gemini,
+sem modelo de evidência próprio. Declara os modos `SCENE`/`REGION` e todos os tipos de view,
+sem features nem contexto de cena. Várias views viram várias imagens de uma mesma mensagem, na
+ordem do request. `EagleSemanticConfig` exige, além de modelo, revisão, device, precisão e
+geração, o orçamento visual do processor `eagle_2_5_vl` (`max_dynamic_tiles`, mais
+`min_dynamic_tiles` e `use_thumbnail`), que entra no fingerprint; o runtime transformers
+(`HuggingFaceEagleRuntime`, `trust_remote_code` só na revisão fixada e só do cache local) envia
+esse orçamento explicitamente ao processor e recusa, antes da geração, tiles que o excedam.
+Detalhes, o que vem do upstream e o que é adaptado, e a licença não comercial dos pesos estão em
+[`eagle2_5.md`](eagle2_5.md). Não há execução real registrada.
+
 ## Adapter Florence-2
 
 `Florence2SemanticInterpreter` é separado de `Florence2RegionDiscovery` mesmo
@@ -321,7 +556,9 @@ quando ambos compartilham lifecycle/modelo no composition root. Sua
 `Florence2SemanticConfig` fixa checkpoint, revisão imutável, task, modes
 suportados, device, precision e geração. A task e o mode entram em
 `task_identity`; checkpoint, revisão e configuração entram na provenance e no
-fingerprint. A saída passa pelo mesmo parser canônico com `UNSCORED_ONLY`.
+fingerprint. A task também é a política de prompt (`prompt_template_id`
+`florence2-task-prompt/1:<task>`). A saída passa pelo mesmo parser canônico com
+`UNSCORED_ONLY`.
 
 ### Decisão de design: task token versus JSON canônico
 
@@ -348,11 +585,20 @@ algo que o modelo entenda. A decisão foi:
    `raw_response_sha256` referem-se ao texto nativo da task; o envelope é
    reconstruível pela política e sua aplicação fica registrada no diagnostic
    `wrapped_task_text` do parsing.
-4. **O prompt canônico não é input do modelo.** Ele continua renderizado no
-   `SemanticInterpretationExecution` (o request o exige), mas o modelo recebe só
-   o task token e a imagem. Um warning constante em cada execução registra isso,
-   para que o fingerprint do prompt não sugira uma instrução que o Florence-2
-   nunca viu.
+4. **O prompt registrado é o prompt consumido (#542).** A política de prompt do
+   Florence-2 é nativa da task (`florence2-task-prompt/1`): o input do modelo é o
+   task token configurado, mais a caixa da view inteira nas tasks de região. O
+   adapter expõe essa identidade em `prompt_template_id`
+   (`florence2-task-prompt/1:<task>`, por exemplo
+   `florence2-task-prompt/1:<REGION_TO_CATEGORY>`); todo request precisa nomeá-la,
+   e o `RenderedSemanticPrompt` da execução registra exatamente o texto entregue ao
+   runtime, com o fingerprint desse texto. Um request que nomeie um template livre
+   (`region/v1`, `region-abstention/v1`, ...) é recusado antes da inferência, em
+   vez de o template ser registrado como se o Florence-2 o tivesse visto; o
+   runtime também recusa `prompt_policy` na configuração do Florence-2. Antes de
+   #542 o adapter renderizava `region/v1`/`scene/v1` só como contrato de resposta,
+   com um warning constante dizendo que aquilo não era input do modelo: numa
+   ablação de prompt, o Florence-2 pareceria variar um input que nunca recebe.
 5. **Tasks declaradas.** `FLORENCE2_SEMANTIC_TASKS` lista as tasks de texto:
    `<CAPTION>`, `<DETAILED_CAPTION>` e `<MORE_DETAILED_CAPTION>` (modo `scene`,
    view `FULL_FRAME`) e `<REGION_TO_CATEGORY>` e `<REGION_TO_DESCRIPTION>` (modo
@@ -364,7 +610,8 @@ algo que o modelo entenda. A decisão foi:
    (`<loc_0><loc_0><loc_999><loc_999>`), pois o request não carrega a caixa da
    região dentro de um frame completo ou de um crop contextual. Por isso só
    `TIGHT_CROP` e `MASKED_SUBJECT` são aceitos; qualquer outra view é rejeitada
-   antes do modelo, assim como requests com mais de uma view.
+   antes do modelo, assim como requests com mais de uma view (limite declarado em
+   `max_visual_views=1`, que o preflight da política de views também verifica).
 
 **Trade-offs aceitos.**
 
@@ -398,7 +645,7 @@ ou checkpoint disponível, falha com erro explícito.
 ## Avaliação
 
 `contextmap.evaluation.semantic_interpretation` fornece um report comum para
-Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+Qwen, Gemini, Florence-2 e Eagle 2.5. O contexto registra reference-set, seleção, run,
 artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
 região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
 custo permanecem em blocos distintos. O baseline usa a policy versionada
@@ -421,6 +668,8 @@ O branch de integração materializa:
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
 - Florence-2 implementa o mesmo boundary por adapter separado de Region
   Discovery;
+- Eagle 2.5 implementa o mesmo boundary com orçamento visual explícito e
+  verificado, ainda sem execução real;
 - os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
   SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
@@ -448,7 +697,10 @@ O branch de integração materializa:
   Runtime e adapters também têm testes com módulos SDK falsos, e o harness de
   avaliação usa execuções canônicas construídas em teste. Isso valida contratos,
   mapeamentos, falhas, redação de segredos e a aritmética do avaliador, não a
-  qualidade de um backend.
+  qualidade de um backend. O orçamento de entrada visual do Qwen (#526) também
+  só foi validado com processor e modelo falsos: o perfil real (1 a 4 views,
+  vários orçamentos, nf4 e um arm não nf4, com tokens visuais, latência, pico
+  de VRAM, taxa de OOM e qualidade do parser) exige GPU e continua pendente.
 
 Não há anotações semânticas humanas para a amostra, então correção,
 alucinação, abstenção esperada, campos de cena e visibilidade são N/A e nenhum

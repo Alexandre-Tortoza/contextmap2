@@ -14,6 +14,7 @@ import json
 from collections.abc import Sequence
 
 from contextmap.visual_perception import (
+    SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
     BoundingBox2D,
     FeatureScope,
@@ -32,7 +33,6 @@ from contextmap.visual_perception import (
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreterCapabilities,
-    SemanticPromptTemplate,
     VisualFeature,
     VisualViewKind,
     parse_semantic_response,
@@ -155,7 +155,7 @@ class FakeSemanticInterpreter:
         )
 
     def interpret(self, request: SemanticInterpretationRequest) -> SemanticInterpretationExecution:
-        template = SemanticPromptTemplate.default_for(request.mode)
+        template = SEMANTIC_PROMPT_TEMPLATES[request.prompt_template_id]
         rendered = render_semantic_prompt(
             request,
             template,
