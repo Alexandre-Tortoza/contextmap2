@@ -188,6 +188,26 @@ def test_a_region_with_no_associated_geometry_marks_the_unavailable_components()
     assert all(reason for reason in quality.unavailable.values())
 
 
+def test_an_accepted_empty_mask_never_reaches_the_quality_derivation() -> None:
+    # Regressão SA-01: antes, associate_regions aceitava a região e a densidade dividia por 0.
+    result = make_result(
+        [
+            make_region("region-A", rect_mask(640, 480, 90, 40, 210, 110)),
+            make_region("region-B", rect_mask(640, 480, 0, 0, 0, 0)),
+        ]
+    )
+    membership = associate_regions(resolve_visibility(scene_frame(*POINTS), POLICY), result)
+    observations = build_spatial_observations(
+        membership, configuration_fingerprint="sha256:cfg", code_version="test"
+    )
+
+    qualities = derive_observation_quality(membership, observations)
+
+    assert [quality.spatial_observation_id for quality in qualities] == [
+        observations[0].spatial_observation_id
+    ]
+
+
 def test_the_reprojection_residual_is_never_fabricated() -> None:
     _, without, _ = _quality()
     _, with_reference, _ = _quality(REFERENCE)
