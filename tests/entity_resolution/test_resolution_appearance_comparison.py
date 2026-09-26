@@ -32,6 +32,8 @@ from contextmap.entity_resolution import (
     UnavailableReason,
 )
 from contextmap.entity_resolution._codec import from_record, to_record
+from contextmap.entity_resolution._vectors import dot as raw_dot
+from contextmap.entity_resolution._vectors import unit as raw_unit
 from contextmap.ingestion import SourceObservationId
 from contextmap.semantic_mapping import Entity
 from contextmap.visual_perception import (
@@ -261,6 +263,22 @@ def test_a_view_from_a_different_angle_widens_the_pair_range() -> None:
 
     assert measurement is not None
     assert measurement.pair_similarity_min < measurement.pair_similarity_max
+
+
+def test_identical_prototypes_yield_similarity_one_without_error() -> None:
+    # Regressão ER-01: o produto interno cru de um vetor unitário consigo mesmo passa de 1.0
+    # por arredondamento, e o clamp assimétrico deixava pair_similarity_min > max.
+    vector = unit(1, 1, 1)
+    prototype = raw_unit(vector, what="precondition")
+    assert raw_dot(prototype, prototype) > 1.0
+    first, second, source = build({10: [vector]}, {40: [vector]})
+
+    measurement = AppearanceComparator(source, POLICY).compare(first, second).measurement
+
+    assert measurement is not None
+    assert measurement.similarity == 1.0
+    assert measurement.pair_similarity_min == 1.0
+    assert measurement.pair_similarity_max == 1.0
 
 
 def test_opposing_prototypes_cancel_and_the_channel_is_unavailable() -> None:
