@@ -67,6 +67,14 @@ from contextmap.runtime.config import (
     resolve_secrets,
     write_effective_config,
 )
+from contextmap.runtime.context_branch import (
+    ContextBranch,
+    ContextBranchError,
+    ContextBranchMember,
+    append_to_branch,
+    create_branch,
+    open_branch,
+)
 from contextmap.runtime.context_run import (
     CONTEXT_STAGES,
     ContextArtifact,
@@ -194,6 +202,9 @@ __all__ = [
     "ConfigurationError",
     "ConfigurationSource",
     "ContextArtifact",
+    "ContextBranch",
+    "ContextBranchError",
+    "ContextBranchMember",
     "ContextRun",
     "ContextRunError",
     "ContextRunId",
@@ -272,6 +283,7 @@ __all__ = [
     "StaticCatalog",
     "StoreLookup",
     "ValidationPolicy",
+    "append_to_branch",
     "capture_environment",
     "categorize_failure",
     "check_availability",
@@ -282,7 +294,9 @@ __all__ = [
     "compose",
     "compose_executors",
     "context_scope",
+    "create_branch",
     "load_catalog",
+    "open_branch",
     "parse_override",
     "predict_reuse",
     "preflight",
