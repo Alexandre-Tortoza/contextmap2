@@ -182,6 +182,7 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 
 ### Experimentos e ablações
 
+- `CAPABILITY_MATRIX`/`Capability`/`Composition` — matriz versionada de capacidades nativas e de compatibilidade produtor → consumidor do experimento de percepção (#522): status (`supported` preso ao catálogo do runtime, `planned`, `blocked`, `out_of_scope`), grupos de comparação por tarefa + condicionamento + geometria e `require_supported_composition()` para excluir composições inválidas antes de carregar modelos. Ver [`capability-matrix.md`](capability-matrix.md).
 - `ExperimentManifest`/`ExperimentVariable`/`ExperimentArm`/`ResolvedTopology` — manifesto versionado e hasheado de uma comparação controlada: seleção exata de amostras do reference set, topologia resolvida por arm, artifacts upstream pinados, variáveis sob teste, controles fixos, métricas e política de captura de recursos. Só se constrói se **apenas as variáveis declaradas variam** e se o trecho variado consome artifacts imutáveis pinados.
 - `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.
 - `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.

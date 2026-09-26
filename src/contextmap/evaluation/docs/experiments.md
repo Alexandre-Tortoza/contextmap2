@@ -173,6 +173,10 @@ Artifacts de estágios não afetados são comparados por `kind` + `digest`: uma 
 
 Um arm que falhou, estourou memória ou ficou indisponível aparece em `arms` com status e motivo, com o par `incomplete` e seus `factors` e `declared_differences`; nunca é removido para fabricar um conjunto pareado. A comparação fica `complete: false`.
 
+## Matriz de capacidades
+
+Quais backends e composições podem entrar num arm, e quais operações se comparam diretamente, está em [`capability-matrix.md`](capability-matrix.md) (#522): um manifesto só deve combinar arestas `supported` e comparar entradas do mesmo grupo de comparação.
+
 ## Limitações e lacunas
 
 - **Sem ligação com o runtime.** A topologia é a resolvida que se fornece. Ao gerar arms a partir de configurações resolvidas (#527), a configuração registrada de um estágio deve ser a do plano do runtime (`PlannedStage.component_configs`: backend e parâmetros de cada ponto de variação) mais a política de requisição semântica quando ela existir na configuração (#544), sem mudar as regras de verificação.
