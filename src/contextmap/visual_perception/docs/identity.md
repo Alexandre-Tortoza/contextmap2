@@ -59,6 +59,20 @@ feature_id_for(result_id=rid, producer_id="dense_feature_extraction", index=0)
 feature_id_for(result_id=rid, producer_id="global_feature_extraction", index=0)
 ```
 
+`grounding_region_id_for()` identifica uma região produzida por grounding. O
+namespace é o `request_id` do grounding — um digest das entradas da inferência
+(observação, conteúdo da imagem, query completa, política, geometria e fingerprint
+de configuração) — mais a posição da saída na resposta:
+
+```text
+grounding_region_id_for(result_id=rid, request_id="grounding-<sha256>", index=0)
+    → "<rid>--grounding-<sha256>-region-0000"
+```
+
+Uma região de grounding nunca colide com uma região de discovery nem com a saída de
+outro request, e mudar só a query muda só as identidades que dependem dela. Ver
+[`region-grounding.md`](region-grounding.md).
+
 ## Runs repetidos permanecem distintos
 
 Duas execuções (`run_id` diferente) sobre a **mesma** `SourceObservation` produzem `PerceptionResultId`s diferentes (o `run_id` faz parte da chave), mas ambas preservam o mesmo `source_observation_id` — exatamente a distinção central da issue #48/#50: reprocessamento nunca é uma nova observação física.

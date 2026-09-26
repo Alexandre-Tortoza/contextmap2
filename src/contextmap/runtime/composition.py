@@ -75,8 +75,10 @@ if TYPE_CHECKING:
     from contextmap.state_estimation import LookupPolicy, StateEstimator
     from contextmap.visual_perception import (
         FeatureExtractor,
+        GroundingQuery,
         PerceptionRunId,
         RegionDiscovery,
+        RegionGrounding,
         SemanticInterpretationMode,
         SemanticInterpreter,
         SemanticPromptPolicy,
@@ -145,6 +147,8 @@ def resolve_provider(component_id: str, target: str) -> RuntimeProvider:
 
 
 FeatureFactory = Callable[["FeatureBuildScope"], "FeatureExtractor"]
+GroundingFactory = Callable[[Path], "RegionGrounding"]
+"""Builds a run's grounding backend from the directory holding its prepared images."""
 SourceAdapterFactory = Callable[["SourceAdapterConfig"], "SourceAdapter"]
 
 
@@ -197,6 +201,26 @@ class SemanticRequestPrompt:
 
 
 @dataclass(frozen=True, kw_only=True)
+class RegionGroundingPlan:
+    """The grounding backend of a run and the explicit queries it answers.
+
+    The queries come from the backend's reserved ``query_set`` parameter group, never from
+    the backend's own configuration, so they are part of the run's configuration identity
+    but not of the backend fingerprint. The executor turns each (image, query) pair into
+    one :class:`~contextmap.visual_perception.RegionGroundingRequest`.
+
+    Attributes:
+        queries: The queries, in configured order; unique and already validated against
+            the backend's declared capabilities.
+        factory: Builds the backend once per run, from the directory holding that run's
+            prepared images; the bundled runtime loads its model lazily, once.
+    """
+
+    queries: tuple[GroundingQuery, ...]
+    factory: GroundingFactory
+
+
+@dataclass(frozen=True, kw_only=True)
 class ComposedRuntime:
     """The implementations built for one effective configuration.
 
@@ -210,6 +234,8 @@ class ComposedRuntime:
             exist yet, with the reason. Nothing stands in for them.
         source_adapter: Builds the configured source adapter for one ingestion request.
         region_discovery: Region discovery backend.
+        region_grounding: Prompt-conditioned grounding backend and its queries, only when
+            the optional ``visual_perception.region_grounding`` component is selected.
         dense_features: Builds the dense feature extractor once a run scope exists.
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
@@ -250,6 +276,7 @@ class ComposedRuntime:
     unavailable_stages: Mapping[str, str] = field(default_factory=dict)
     source_adapter: SourceAdapterFactory | None = None
     region_discovery: RegionDiscovery | None = None
+    region_grounding: RegionGroundingPlan | None = None
     dense_features: FeatureFactory | None = None
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
@@ -598,6 +625,46 @@ def _florence2_regions(context: _Context, component_id: str) -> RegionDiscovery:
     return Florence2RegionDiscovery(config=config, runtime=runtime, **extras)
 
 
+# --- visual perception: region grounding (run-scoped) ------------------------------
+
+
+def _locateanything(context: _Context, component_id: str) -> RegionGroundingPlan:
+    from contextmap.visual_perception import GroundingQuerySet, GroundingRequestError
+    from contextmap.visual_perception.backends.locateanything import (
+        LocateAnythingConfig,
+        LocateAnythingRegionGrounding,
+        TransformersLocateAnythingRuntime,
+        validate_locateanything_query,
+    )
+
+    config, extras = context.build(
+        component_id,
+        LocateAnythingConfig,
+        extras={"query_set": GroundingQuerySet},
+        required=("query_set",),
+    )
+    queries: tuple[GroundingQuery, ...] = extras["query_set"].queries
+    problems = []
+    for index, query in enumerate(queries):
+        try:
+            validate_locateanything_query(query)
+        except GroundingRequestError as error:
+            problems.append(f"query_set.queries[{index}]: {error}")
+    if problems:
+        raise BackendConfigurationError(component_id, "locateanything", problems)
+    context.ensure_available(component_id)
+
+    def build(prepared_image_root: Path) -> RegionGrounding:
+        runtime = context.optional_runtime(component_id, config)
+        if runtime is None:
+            runtime = TransformersLocateAnythingRuntime(
+                config=config, prepared_image_root=prepared_image_root
+            )
+        return LocateAnythingRegionGrounding(config=config, runtime=runtime)
+
+    return RegionGroundingPlan(queries=queries, factory=build)
+
+
 # --- visual perception: features (run-scoped) --------------------------------------
 
 
@@ -832,6 +899,29 @@ def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
         context,
         component_id,
         interpreter=GeminiSemanticInterpreter(config=config, client=client),
+        prompts=_instruction_prompts(extras["prompt_policy"]),
+        view_policy=extras["view_policy"],
+    )
+
+
+def _eagle2_5(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception.backends.eagle2_5 import (
+        EagleSemanticConfig,
+        EagleSemanticInterpreter,
+    )
+
+    config, extras = context.build(
+        component_id,
+        EagleSemanticConfig,
+        extras=_instruction_extras(),
+        required=("prompt_policy", "view_policy"),
+    )
+    context.ensure_available(component_id)
+    runtime = context.runtime(component_id, config, "EagleRuntime")
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=EagleSemanticInterpreter(config=config, runtime=runtime),
         prompts=_instruction_prompts(extras["prompt_policy"]),
         view_policy=extras["view_policy"],
     )
@@ -1143,6 +1233,7 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "sam3": _sam3,
         "florence2": _florence2_regions,
     },
+    "visual_perception.region_grounding": {"locateanything": _locateanything},
     "visual_perception.dense_features": {
         "dinov2": _dinov2,
         "dinov3": _dinov3,
@@ -1153,6 +1244,7 @@ _FACTORIES: Mapping[str, Mapping[str, Factory]] = {
         "qwen": _qwen,
         "gemini": _gemini,
         "florence2": _florence2_semantic,
+        "eagle2_5": _eagle2_5,
     },
     "state_estimation.estimator": {"external_pose": _external_pose, "fast_lio": _fast_lio},
     "geometric_mapping.pose_lookup": {"lookup-policy-v1": _lookup_policy},
@@ -1226,6 +1318,7 @@ def _compose_ingestion(context: _Context) -> dict[str, object]:
 def _compose_visual_perception(context: _Context) -> dict[str, object]:
     composed = {
         "region_discovery": _construct(context, "visual_perception.region_discovery"),
+        "region_grounding": _construct_optional(context, "visual_perception.region_grounding"),
         "dense_features": _construct(context, "visual_perception.dense_features"),
         "region_features": _construct(context, "visual_perception.region_features"),
     }
@@ -1388,7 +1481,9 @@ def compose_executors(
     - ``visual_perception`` is composed only when all four of its variation points
       (``region_discovery``, ``dense_features``, ``region_features``,
       ``semantic_interpretation``) are genuinely selected and available -- a partially
-      configured capability never gets a partial executor (#507).
+      configured capability never gets a partial executor (#507). Its optional
+      ``region_grounding`` point, when selected, is part of the same executor: a grounding
+      backend that cannot be built leaves the whole stage out, never a run without it.
     - ``point_representation`` has no real executor yet (its backend is GPU/model
       dependent): it stays absent, exactly as before.
     - ``semantic_fusion`` is composed only when the selected accumulation backend is the
@@ -1489,6 +1584,7 @@ def compose_executors(
             semantic_interpreter=visual_perception.semantic_interpreter,
             semantic_prompts=visual_perception.semantic_prompts,
             semantic_view_policy=visual_perception.semantic_view_policy,
+            region_grounding=visual_perception.region_grounding,
         )
 
     state_estimation = _compose_stage("state_estimation")

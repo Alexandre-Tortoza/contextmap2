@@ -25,6 +25,7 @@ from contextmap.visual_perception.region_models import JsonScalar
 from contextmap.visual_perception.semantic_backend import (
     SemanticBackendDiagnostics,
     SemanticInterpretationExecution,
+    SemanticVisualInputMeasurement,
     semantic_failure_from_parse_error,
 )
 from contextmap.visual_perception.semantic_prompt import (
@@ -64,6 +65,14 @@ class QwenInferenceError(QwenBackendError):
     """Raised for view loading, generation, or decoding failures."""
 
 
+class QwenOutOfMemoryError(QwenInferenceError):
+    """Raised when a request exhausts device memory.
+
+    Its message names the number of views, the visual input budget in effect and what each
+    view measured, so a failed arm is attributable to a recorded budget.
+    """
+
+
 @dataclass(frozen=True, kw_only=True)
 class QwenSemanticConfig:
     """Effective local Qwen generation configuration.
@@ -82,6 +91,13 @@ class QwenSemanticConfig:
             part of the configuration fingerprint.
         revision: Immutable Hugging Face commit SHA. The transformers runtime requires it
             so that every output is traceable to exact weights; the seam itself does not.
+        min_pixels: Smallest pixel count (height x width) of each view after the processor's
+            aspect-preserving resize. Set together with ``max_pixels`` or not at all.
+        max_pixels: Largest pixel count of each view after that resize. The two bound every
+            view on its own, never the request total, and form the visual input budget:
+            the processor rounds each edge to a multiple of ``patch_size x merge_size``
+            (28 px for Qwen2.5-VL, 32 px for Qwen3-VL), and each such square is one visual
+            token. Unset, the pinned checkpoint's processor default applies unchanged.
     """
 
     model: str
@@ -91,6 +107,8 @@ class QwenSemanticConfig:
     temperature: float
     quantization: str | None = None
     revision: str | None = None
+    min_pixels: int | None = None
+    max_pixels: int | None = None
 
     def __post_init__(self) -> None:
         """Validate model/runtime settings before model construction."""
@@ -109,10 +127,31 @@ class QwenSemanticConfig:
             raise ValueError("Qwen quantization must be None, '4bit', or '8bit'")
         if self.revision is not None:
             validate_huggingface_commit_revision(self.revision)
+        if (self.min_pixels is None) != (self.max_pixels is None):
+            raise ValueError(
+                "Qwen min_pixels and max_pixels must be set together: a partial budget would "
+                "leave the other bound at the checkpoint processor's unrecorded default"
+            )
+        if self.min_pixels is not None and self.max_pixels is not None:
+            if self.min_pixels <= 0:
+                raise ValueError("Qwen min_pixels must be positive")
+            if self.max_pixels <= 0:
+                raise ValueError("Qwen max_pixels must be positive")
+            if self.min_pixels > self.max_pixels:
+                raise ValueError("Qwen min_pixels must not exceed max_pixels")
 
     def to_dict(self) -> dict[str, JsonScalar]:
-        """Return a secret-free, JSON-compatible effective configuration."""
-        return cast_config(asdict(self))
+        """Return a secret-free, JSON-compatible effective configuration.
+
+        The budget keys appear only when a budget is configured, so every configuration
+        written before the budget existed keeps its effective configuration and fingerprint.
+        """
+        values = asdict(self)
+        if self.max_pixels is None:
+            # Sem orçamento, vale o default do processor do checkpoint fixado pela revisão;
+            # omitir as chaves preserva a identidade das configurações anteriores ao #526.
+            del values["min_pixels"], values["max_pixels"]
+        return cast_config(values)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -124,6 +163,7 @@ class QwenGenerationResponse:
     output_tokens: int | None = None
     peak_memory_bytes: int | None = None
     warnings: tuple[str, ...] = ()
+    visual_inputs: tuple[SemanticVisualInputMeasurement, ...] | None = None
 
 
 class QwenRuntime(Protocol):
@@ -141,6 +181,8 @@ class QwenRuntime(Protocol):
         An implementation must obtain each view's bytes through ``read_view_payload`` (or
         an equivalent check) and must not decode a payload whose SHA-256 differs from
         ``SemanticVisualView.sha256``: the request identifies its evidence by that hash.
+        One that can measure what its processor made of each view reports it in
+        ``visual_inputs``, one entry per view in request order.
         """
         ...
 
@@ -225,6 +267,7 @@ class QwenSemanticInterpreter:
             output_tokens=response.output_tokens,
             peak_memory_bytes=response.peak_memory_bytes,
             warnings=response.warnings,
+            visual_inputs=response.visual_inputs,
         )
         configuration: Mapping[str, JsonScalar] = MappingProxyType(self._config.to_dict())
         try:
@@ -260,14 +303,67 @@ class QwenSemanticInterpreter:
 _PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
 
 
+@dataclass(frozen=True, kw_only=True)
+class _ProcessorImageGeometry:
+    """Resize bounds and patch geometry of the loaded Qwen2-VL-family image processor.
+
+    Attributes:
+        min_pixels: ``size["shortest_edge"]``, the per-image lower pixel bound in effect.
+        max_pixels: ``size["longest_edge"]``, the per-image upper pixel bound in effect.
+        patch_size: Edge, in pixels, of one vision-encoder patch.
+        merge_size: Patches merged along each axis into one language-model token.
+    """
+
+    min_pixels: int | None
+    max_pixels: int | None
+    patch_size: int
+    merge_size: int
+
+    def describe_budget(self, config: QwenSemanticConfig) -> str:
+        """Name the visual input budget in effect and where it comes from."""
+        if config.max_pixels is not None:
+            return (
+                f"configured visual input budget min_pixels={config.min_pixels}, "
+                f"max_pixels={config.max_pixels}"
+            )
+        return (
+            f"checkpoint processor default visual input budget min_pixels={self.min_pixels}, "
+            f"max_pixels={self.max_pixels}"
+        )
+
+    def measure(
+        self, image_grid_thw: Any, visual_views: tuple[SemanticVisualView, ...]
+    ) -> tuple[SemanticVisualInputMeasurement, ...]:
+        """Measure each view from the processor's ``(t, h, w)`` patch grid, in view order.
+
+        Raises:
+            ValueError: If the processor did not produce exactly one grid per view.
+        """
+        rows = image_grid_thw.tolist()
+        if len(rows) != len(visual_views):
+            raise ValueError(
+                f"the processor produced {len(rows)} image grid(s) for {len(visual_views)} view(s)"
+            )
+        return tuple(
+            SemanticVisualInputMeasurement(
+                view_id=view.view_id,
+                height_px=int(height) * self.patch_size,
+                width_px=int(width) * self.patch_size,
+                visual_tokens=int(frames) * int(height) * int(width) // self.merge_size**2,
+            )
+            for view, (frames, height, width) in zip(visual_views, rows, strict=True)
+        )
+
+
 class HuggingFaceQwenRuntime:
     """Lazy transformers implementation of :class:`QwenRuntime`.
 
     The runtime is bound to one effective configuration and loads the exact pinned
     checkpoint on the first request. Quantization is applied through bitsandbytes at load
     time and verified afterwards, so a configuration that says ``4bit`` can never silently
-    run in full precision. Nothing leaves the process: weights come from the local
-    Hugging Face cache unless ``local_files_only`` is disabled explicitly.
+    run in full precision. A configured visual input budget is applied when the processor is
+    constructed and verified the same way. Nothing leaves the process: weights come from the
+    local Hugging Face cache unless ``local_files_only`` is disabled explicitly.
     """
 
     def __init__(
@@ -295,6 +391,7 @@ class HuggingFaceQwenRuntime:
         self._torch: Any = None
         self._image_module: Any = None
         self._processor: Any = None
+        self._geometry: _ProcessorImageGeometry | None = None
         self._model: Any = None
 
     def generate(
@@ -308,19 +405,26 @@ class HuggingFaceQwenRuntime:
 
         Every view is decoded from bytes whose SHA-256 was verified against
         ``SemanticVisualView.sha256`` first, so a payload that changed after the request was
-        built is rejected instead of being interpreted.
+        built is rejected instead of being interpreted. The processor's own aspect-preserving
+        resize, under the budget in effect, is the only resize; what each view became is
+        measured from the processor's ``image_grid_thw`` and returned in ``visual_inputs``.
 
         Raises:
             ValueError: If ``config`` differs from the configuration the runtime is bound to.
+            QwenOutOfMemoryError: If the request exhausts device memory.
             QwenBackendError: For dependency, device, load, or inference failures, including
                 a view payload that is missing, escapes the view root, or does not match its
-                recorded SHA-256.
+                recorded SHA-256, and a processor output that does not hold one image per view.
         """
         if config != self._config:
             raise ValueError("Qwen runtime was built for another configuration")
         self.load()
         torch = self._torch
+        geometry = self._geometry
+        assert geometry is not None  # load() o define junto com o processor
         on_cuda = config.device.startswith("cuda")
+        visual_inputs: tuple[SemanticVisualInputMeasurement, ...] | None = None
+        prompt_tokens: int | None = None
         try:
             content: list[dict[str, Any]] = []
             for view in visual_views:
@@ -328,13 +432,15 @@ class HuggingFaceQwenRuntime:
                 with self._image_module.open(io.BytesIO(payload)) as image:
                     content.append({"type": "image", "image": image.convert("RGB")})
             content.append({"type": "text", "text": prompt})
-            inputs = self._processor.apply_chat_template(
+            encoded = self._processor.apply_chat_template(
                 [{"role": "user", "content": content}],
                 tokenize=True,
                 add_generation_prompt=True,
                 return_dict=True,
                 return_tensors="pt",
-            ).to(config.device)
+            )
+            visual_inputs = geometry.measure(encoded["image_grid_thw"], visual_views)
+            inputs = encoded.to(config.device)
             prompt_tokens = int(inputs["input_ids"].shape[1])
             if on_cuda:
                 torch.cuda.reset_peak_memory_stats(config.device)
@@ -343,6 +449,19 @@ class HuggingFaceQwenRuntime:
             peak_memory = int(torch.cuda.max_memory_allocated(config.device)) if on_cuda else None
             new_tokens = generated[:, prompt_tokens:]
             text = self._processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+        except torch.cuda.OutOfMemoryError as error:
+            peak = int(torch.cuda.max_memory_allocated(config.device)) if on_cuda else None
+            raise QwenOutOfMemoryError(
+                _out_of_memory_message(
+                    config=config,
+                    visual_views=visual_views,
+                    budget=geometry.describe_budget(config),
+                    visual_inputs=visual_inputs,
+                    input_tokens=prompt_tokens,
+                    peak_memory_bytes=peak,
+                    error=error,
+                )
+            ) from error
         except Exception as error:
             references = [view.payload_reference for view in visual_views]
             raise QwenInferenceError(
@@ -363,6 +482,7 @@ class HuggingFaceQwenRuntime:
             output_tokens=output_tokens,
             peak_memory_bytes=peak_memory,
             warnings=warnings,
+            visual_inputs=visual_inputs,
         )
 
     def load(self) -> None:
@@ -372,7 +492,9 @@ class HuggingFaceQwenRuntime:
         that the one-time load is not attributed to the first request.
 
         Raises:
-            QwenBackendError: For dependency, device, or checkpoint loading failures.
+            QwenBackendError: For dependency, device, or checkpoint loading failures,
+                including a configured visual input budget the processor did not apply or
+                cannot honor.
         """
         if self._model is not None:
             return
@@ -412,18 +534,30 @@ class HuggingFaceQwenRuntime:
         if config.quantization is not None:
             # O bitsandbytes quantiza durante o load, então o modelo já nasce no device.
             load_kwargs["device_map"] = {"": config.device}
+        budget: dict[str, Any] = {}
+        if config.max_pixels is not None:
+            # min/max_pixels, e não ``size``: o preprocessor_config.json do Qwen2.5-VL grava
+            # essas chaves, que no __init__ do Qwen2VLImageProcessor sobrescreveriam um ``size``
+            # passado; como kwargs elas substituem as do checkpoint e viram ``size`` também no
+            # Qwen3-VL, cujo config só tem ``size``. Sem orçamento, nada é passado.
+            budget = {"min_pixels": config.min_pixels, "max_pixels": config.max_pixels}
         try:
             processor = transformers.AutoProcessor.from_pretrained(
                 config.model,
                 revision=config.revision,
                 local_files_only=self._local_files_only,
+                **budget,
             )
+            # O orçamento é conferido antes dos pesos: um que não vale falha sem carregar o modelo.
+            geometry = _processor_image_geometry(processor, config)
             model = transformers.AutoModelForImageTextToText.from_pretrained(
                 config.model, **load_kwargs
             )
             if config.quantization is None:
                 model = model.to(config.device)
             model = model.eval()
+        except QwenBackendError:
+            raise
         except ImportError as error:
             raise QwenDependencyError(
                 "Qwen could not import a package required by the Hugging Face processor "
@@ -443,7 +577,82 @@ class HuggingFaceQwenRuntime:
         self._torch = torch
         self._image_module = image_module
         self._processor = processor
+        self._geometry = geometry
         self._model = model
+
+
+def _processor_image_geometry(
+    processor: Any, config: QwenSemanticConfig
+) -> _ProcessorImageGeometry:
+    """Read the loaded processor's budget and patch geometry and verify the configured budget.
+
+    Raises:
+        QwenModelLoadError: If the processor does not expose a Qwen2-VL image budget, did not
+            apply the configured one, or cannot honor its ``max_pixels``.
+    """
+    try:
+        image_processor = processor.image_processor
+        size = image_processor.size
+        geometry = _ProcessorImageGeometry(
+            min_pixels=size.get("shortest_edge"),
+            max_pixels=size.get("longest_edge"),
+            patch_size=int(image_processor.patch_size),
+            merge_size=int(image_processor.merge_size),
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise QwenModelLoadError(
+            f"the processor of {config.model} does not expose a Qwen2-VL image budget "
+            f"(image_processor.size, patch_size, merge_size): {error}"
+        ) from error
+    if config.max_pixels is None:
+        return geometry
+    if (geometry.min_pixels, geometry.max_pixels) != (config.min_pixels, config.max_pixels):
+        raise QwenModelLoadError(
+            f"visual input budget min_pixels={config.min_pixels}, "
+            f"max_pixels={config.max_pixels} was requested for {config.model} but was not "
+            f"applied by the loaded processor, which resizes to min_pixels="
+            f"{geometry.min_pixels}, max_pixels={geometry.max_pixels}"
+        )
+    edge = geometry.patch_size * geometry.merge_size
+    if config.max_pixels < edge * edge:
+        raise QwenModelLoadError(
+            f"{config.model} cannot honor max_pixels={config.max_pixels}: its processor never "
+            f"resizes an image edge below patch_size x merge_size = {edge} px, so every view "
+            f"has at least {edge * edge} pixels"
+        )
+    return geometry
+
+
+def _out_of_memory_message(
+    *,
+    config: QwenSemanticConfig,
+    visual_views: tuple[SemanticVisualView, ...],
+    budget: str,
+    visual_inputs: tuple[SemanticVisualInputMeasurement, ...] | None,
+    input_tokens: int | None,
+    peak_memory_bytes: int | None,
+    error: BaseException,
+) -> str:
+    """Describe an exhausted device with everything needed to attribute it to a budget.
+
+    A failed stage keeps only this text, so it names the number of views, the budget in
+    effect and what each view measured before the allocation failed.
+    """
+    references = [view.payload_reference for view in visual_views]
+    measured = (
+        "not measured"
+        if visual_inputs is None
+        else "; ".join(
+            f"{item.view_id}: {item.height_px}x{item.width_px} px (HxW), "
+            f"{item.visual_tokens} visual tokens"
+            for item in visual_inputs
+        )
+    )
+    return (
+        f"Qwen ran out of device memory on {config.device} for {len(visual_views)} view(s) "
+        f"{references} under the {budget}; measured visual inputs: {measured}; "
+        f"input_tokens={input_tokens}; peak_memory_bytes={peak_memory_bytes}: {error}"
+    )
 
 
 def _generation_settings(config: QwenSemanticConfig) -> dict[str, Any]:

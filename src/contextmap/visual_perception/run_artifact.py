@@ -46,6 +46,11 @@ from contextmap.visual_perception.feature_store import (
     FeatureStoreWriter,
     write_feature_index,
 )
+from contextmap.visual_perception.grounding import (
+    RegionGroundingExecution,
+    decode_region_grounding_execution,
+    encode_region_grounding_execution,
+)
 from contextmap.visual_perception.mask_store import (
     MASK_INDEX_FILENAME,
     MaskStoreReader,
@@ -105,6 +110,8 @@ _SEMANTIC_EXECUTIONS_FILENAME = "outputs/semantic-interpretations.jsonl"
 _SEMANTIC_FAILURES_FILENAME = "outputs/semantic-interpretation-failures.jsonl"
 _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
+_GROUNDING_EXECUTIONS_FILENAME = "outputs/region-grounding.jsonl"
+_GROUNDING_RAW_DIRNAME = "outputs/region-grounding-raw"
 _MASKS_DIRNAME = "outputs/masks"
 
 
@@ -258,6 +265,8 @@ class PerceptionRunWriter:
         self._feature_payloads: list[tuple[VisualFeature, SourceObservationId]] = []
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
+        self._grounding_executions: list[RegionGroundingExecution] = []
+        self._grounding_request_ids: set[str] = set()
         self._finalized = False
 
     def add_result(self, result: PerceptionResult) -> None:
@@ -431,6 +440,32 @@ class PerceptionRunWriter:
         # identidade e de evidencia de entrada que valem para as execucoes bem-sucedidas.
         self._semantic_failures.append(failed)
 
+    def add_region_grounding(self, execution: RegionGroundingExecution) -> None:
+        """Queue one prompt-conditioned grounding execution to be written by :meth:`finalize`.
+
+        The execution is persisted in its own contractual stream
+        (``outputs/region-grounding.jsonl``), with the verbatim raw response in a separate
+        file under ``outputs/region-grounding-raw/``, so the parsed evidence and the text it
+        was parsed from stay separately inspectable. Its box regions must also be part of
+        the owning result (see
+        :func:`~contextmap.visual_perception.grounding.with_grounded_regions`); point
+        outputs live only in the grounding stream.
+
+        Args:
+            execution: The execution to persist.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`, or if this run already
+                carries an execution of the same request.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add region grounding after finalize()")
+        request_id = str(execution.request_id)
+        if request_id in self._grounding_request_ids:
+            raise RunArtifactError(f"duplicate grounding request in perception run: {request_id!r}")
+        self._grounding_request_ids.add(request_id)
+        self._grounding_executions.append(execution)
+
     def add_feature_payload(
         self,
         feature: VisualFeature,
@@ -510,6 +545,7 @@ class PerceptionRunWriter:
             self._validate_semantic_execution_materialization()
             self._validate_failed_semantic_interpretations()
             self._validate_semantic_view_payloads()
+            self._validate_region_grounding_materialization()
 
             self._ensure_staging()
             manifest = self._write_contents()
@@ -820,6 +856,51 @@ class PerceptionRunWriter:
         if unused:
             raise RunArtifactError(f"semantic view payloads are not referenced: {unused!r}")
 
+    def _validate_region_grounding_materialization(self) -> None:
+        """Require every grounding execution to belong to one result that holds its regions."""
+        for execution in self._grounding_executions:
+            request = execution.request
+            matches = [
+                result
+                for result in self._results
+                if result.result_id == request.perception_result_id
+                and result.source_observation_id == request.source_observation_id
+            ]
+            if len(matches) != 1:
+                raise RunArtifactError(
+                    "grounding request does not resolve to exactly one result: "
+                    f"request_id={request.request_id!r}, matches={len(matches)}"
+                )
+            missing = [
+                region.region_id for region in execution.regions if region not in matches[0].regions
+            ]
+            if missing:
+                raise RunArtifactError(
+                    f"grounded regions were not materialized in their result: {missing!r}"
+                )
+
+    def _write_region_grounding(self, file_entries: list[RunArtifactFileEntry]) -> None:
+        """Write the grounding stream and each raw response next to it, when there is any."""
+        if not self._grounding_executions:
+            return
+        records: list[str] = []
+        for execution in self._grounding_executions:
+            raw_reference = _grounding_raw_response_reference(execution)
+            raw_bytes = execution.raw_response.encode("utf-8")
+            raw_path = self._tmp_dir / raw_reference
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_bytes(raw_bytes)
+            file_entries.append(_file_entry(raw_reference, raw_bytes))
+            record = encode_region_grounding_execution(
+                execution, raw_response_reference=raw_reference
+            )
+            records.append(f"{json.dumps(record, sort_keys=True)}\n")
+        content = "".join(records).encode("utf-8")
+        stream_path = self._tmp_dir / _GROUNDING_EXECUTIONS_FILENAME
+        stream_path.parent.mkdir(parents=True, exist_ok=True)
+        stream_path.write_bytes(content)
+        file_entries.append(_file_entry(_GROUNDING_EXECUTIONS_FILENAME, content))
+
     def _write_mask_index(self, file_entries: list[RunArtifactFileEntry]) -> None:
         """Index the masks already persisted by :meth:`_persist_result_masks`.
 
@@ -851,6 +932,7 @@ class PerceptionRunWriter:
         file_entries: list[RunArtifactFileEntry] = []
 
         self._write_mask_index(file_entries)
+        self._write_region_grounding(file_entries)
 
         results_content = "".join(
             f"{json.dumps(encode_perception_result(result), sort_keys=True)}\n"
@@ -1151,6 +1233,35 @@ class PerceptionRunReader:
         """Return every observed-but-unparsed interpretation of this run."""
         return list(self.iter_failed_semantic_interpretations())
 
+    def iter_region_groundings(self) -> Iterator[RegionGroundingExecution]:
+        """Yield each persisted grounding execution, with its raw response re-verified.
+
+        Empty when the run carries no grounding stream (grounding was not enabled).
+
+        Raises:
+            RunArtifactError: If a record is invalid or its raw response file is missing or
+                no longer matches the recorded SHA-256.
+        """
+        stream_path = self._root / _GROUNDING_EXECUTIONS_FILENAME
+        if not stream_path.is_file():
+            return
+        with stream_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                    raw_path = _resolve_inside(self._root, record["raw_response_reference"])
+                    raw_response = raw_path.read_bytes().decode("utf-8")
+                    yield decode_region_grounding_execution(record, raw_response=raw_response)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    raise RunArtifactError(f"invalid region grounding record: {error}") from error
+
+    def list_region_groundings(self) -> list[RegionGroundingExecution]:
+        """Return every persisted grounding execution of this run."""
+        return list(self.iter_region_groundings())
+
     def list_semantic_executions(self) -> list[SemanticInterpretationExecution]:
         """Return persisted semantic requests, prompts, responses, and diagnostics."""
         return list(self.iter_semantic_executions())
@@ -1220,6 +1331,19 @@ def _semantic_raw_response_reference(execution: SemanticInterpretationExecution)
     if request_path.name != request_id or request_id in {".", ".."}:
         raise RunArtifactError(f"semantic request_id is not a safe path segment: {request_id!r}")
     return f"{_SEMANTIC_DEBUG_ROOT}/{request_id}/raw-response.txt"
+
+
+def _grounding_raw_response_reference(execution: RegionGroundingExecution) -> str:
+    # O request_id é um digest ("grounding-<hex>"), então é sempre um segmento de caminho seguro.
+    return f"{_GROUNDING_RAW_DIRNAME}/{execution.request_id}.txt"
+
+
+def _resolve_inside(root: Path, reference: str) -> Path:
+    """Resolve an artifact-relative reference, refusing one that escapes the artifact."""
+    relative = PurePosixPath(reference)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"reference escapes the artifact: {reference!r}")
+    return root / relative
 
 
 def _validate_semantic_raw_response_reference(

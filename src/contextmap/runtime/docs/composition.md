@@ -24,7 +24,7 @@ flowchart LR
 ## API
 
 - `compose(effective, providers=..., stages=..., environ=..., module_available=..., on_provider_override=...)` devolve um `ComposedRuntime`.
-- `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `dense_features`, `region_features`, `semantic_interpreter`, `semantic_prompts` (a política de prompt por modo, ver "Política de prompt semântico"), `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances`, `association_pose_policy`, `entity_retrieval_policy`, `entity_comparison_channels`, `entity_resolution_policy` e `spatial_relations_policies` (que já inclui a política de geometry summary — `SpatialRelationsExecutor` a lê só dali, nunca de um segundo parâmetro, revisão do PR #540). Um campo é `None` quando seu estágio não foi composto.
+- `ComposedRuntime` guarda `effective`, os `stages` compostos, os `unavailable_stages` (estágios habilitados sem capability implementada, com o motivo) e as implementações: `source_adapter`, `region_discovery`, `region_grounding` (`RegionGroundingPlan`: queries + factory run-scoped, `None` quando não selecionado), `dense_features`, `region_features`, `semantic_interpreter`, `semantic_prompts` (a política de prompt por modo, ver "Política de prompt semântico"), `state_estimator`, `geometric_mapping_pose_lookup`, `motion_correction`, `point_encoder`, `support_policy`, `accumulation_policy`, `occlusion_policy`, `association_tolerances`, `association_pose_policy`, `entity_retrieval_policy`, `entity_comparison_channels`, `entity_resolution_policy` e `spatial_relations_policies` (que já inclui a política de geometry summary — `SpatialRelationsExecutor` a lê só dali, nunca de um segundo parâmetro, revisão do PR #540). Um campo é `None` quando seu estágio não foi composto.
 - `compose_executors(effective, providers=..., environ=..., module_available=..., on_provider_override=...)` devolve um `dict[str, StageExecutor]`: é a contraparte automática de `compose()` para o DAG (ver seção própria abaixo).
 - `RuntimeProvider` é `Callable[[config, ResolvedSecrets], runtime]`: recebe a configuração da capability, já validada, e **somente** os segredos que aquele backend declara.
 - `resolve_provider(component_id, target)` resolve um alvo `"module:attribute"` declarado em `resources.providers` (configuração) no `RuntimeProvider` que ele nomeia — ver a seção própria abaixo. `on_provider_override(component_id)` é chamado quando um `providers=` explícito vence um alvo declarado para o **mesmo** componente (nunca em uma execução comum pelo `contextmap` instalado, que nunca passa `providers=`).
@@ -36,9 +36,10 @@ flowchart LR
 |---|---|---|
 | `ingestion.source_adapter` | `ros1_bag`, `ros2_bag` | adapter construído a cada pedido (`SourceAdapterConfig`); exige `rosbags`; um pedido de outra família de source é recusado |
 | `visual_perception.region_discovery` | `sam2`, `sam3`, `florence2` | **provider** (`Sam2Runtime`, `Sam3Runtime`, `Florence2Runtime`) |
+| `visual_perception.region_grounding` (**opcional**) | `locateanything` | loader empacotado `TransformersLocateAnythingRuntime` (lazy; `torch`, `transformers`, `Pillow`, código remoto do modelo na revisão fixada) ou provider (`LocateAnythingRuntime`); é uma factory run-scoped (`RegionGroundingPlan.factory(prepared_image_root)`), então o modelo carrega uma vez por run; `None` quando não selecionado |
 | `visual_perception.dense_features` | `dinov2`, `dinov3`, `siglip2` | loader Hugging Face empacotado (lazy; `torch`, `transformers`, `Pillow`) ou provider; `siglip2` tem escopo `dense` **fixado** pelo slot |
 | `visual_perception.region_features` | `clip`, `alphaclip` | loader empacotado (HF / oficial) ou provider; `clip` tem escopo `region` **fixado** pelo slot; `alphaclip` exige `mask_source` no escopo |
-| `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2` | **provider** (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime`); `gemini` declara o segredo `GEMINI_API_KEY` |
+| `visual_perception.semantic_interpretation` | `qwen`, `gemini`, `florence2`, `eagle2_5` | **provider** (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime`, `EagleRuntime`); `gemini` declara o segredo `GEMINI_API_KEY`; `eagle2_5` exige o orçamento visual `max_dynamic_tiles` ([Eagle 2.5](../../visual_perception/docs/eagle2_5.md)) |
 | `state_estimation.estimator` | `external_pose`, `fast_lio` | `external_pose` não precisa de runtime; `fast_lio` usa o runner por subprocesso empacotado, descrito no grupo `runner` (`command`, `timeout_s`, `work_root`), ou um provider |
 | `geometric_mapping.pose_lookup`, `sensor_association.pose_policy` | `lookup-policy-v1` | nenhum; constrói um `state_estimation.LookupPolicy` (o tipo é de `state_estimation`, mas cada estágio que o consome declara seu próprio componente — ver "Estágios") |
 | `geometric_mapping.motion_correction` | `motion-correction-v1` | nenhum; constrói um `MotionCorrectionPolicy` |
@@ -56,7 +57,28 @@ Um provider fornecido para um backend que também empacota um loader **substitui
 
 ## Grupos de parâmetros reservados
 
-Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `prompt_policy` nos interpretadores semânticos Qwen e Gemini e `view_policy` nos três interpretadores semânticos (obrigatórios, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
+Alguns backends recebem, além da própria configuração, um segundo objeto de configuração. Ele é escrito como um grupo dentro do bloco do backend: `pass_config` e `normalization_config` nos backends de Region Discovery; `support_policy` nos encoders de Point Representation (obrigatório); `runner` no FAST-LIO; `query_set` no LocateAnything (obrigatório); `prompt_policy` nos interpretadores semânticos Qwen, Gemini e Eagle 2.5 e `view_policy` em todo interpretador semântico (obrigatórios, ver abaixo). Cada grupo é validado pela dataclass que a capability já define.
+
+`query_set` (`GroundingQuerySet`) é a lista ordenada de queries de grounding que o run faz a **toda** imagem. Ela nunca chega à configuração do backend nem ao fingerprint dele: o executor transforma cada par (imagem, query) em um `RegionGroundingRequest` explícito, cuja identidade inclui a query. Por estar no bloco do componente, a query ainda entra no digest do estágio, então mudar uma query gera outro run de percepção em vez de reutilizar um run com outra pergunta. Cada query é validada contra as políticas declaradas pelo LocateAnything **na composição**, antes de qualquer modelo:
+
+```toml
+[components.visual_perception.region_grounding]
+backend = "locateanything"
+[components.visual_perception.region_grounding.locateanything]
+model = "nvidia/LocateAnything-3B"
+revision = "<commit SHA de 40 caracteres>"
+dtype = "bfloat16"
+generation_mode = "hybrid"
+max_new_tokens = 8192
+temperature = 0.0
+text_attention = "sdpa"
+vision_attention = "flash_attention_2"
+[[components.visual_perception.region_grounding.locateanything.query_set.queries]]
+task = "category_detection"
+policy_id = "locateanything.category-detection/1"
+geometry = "box"
+categories = ["chair", "table", "door"]
+```
 
 ### Política de prompt semântico (#542)
 
@@ -74,15 +96,15 @@ temperature = 0.0
 prompt_policy = { scene = "scene/v1", region = "region/v1" }
 ```
 
-- **Obrigatória para Qwen e Gemini.** O grupo `prompt_policy` é validado por `visual_perception.SemanticPromptPolicy`: cada identidade precisa existir em `SEMANTIC_PROMPT_TEMPLATES` e pertencer ao seu modo. Sem o grupo, ou com uma identidade desconhecida ou de outro modo, `compose()` levanta `BackendConfigurationError` antes de pedir o runtime do modelo. Não há padrão: a política canônica é declarada explicitamente (`scene/v1`/`region/v1`) e reproduz byte a byte o prompt anterior a #542. A mesma política vale para os dois backends, que a renderizam de forma idêntica.
-- **Contexto de cena (#529).** `prompt_policy.region_scene_context = true` condiciona cada request de região ao `SceneContext` do request de cena do mesmo frame; exige um template de região que renderize contexto (`region-scene-context/v1`) e um intérprete que o aceite (Qwen, Gemini), e é recusado na composição caso contrário. Ausente ou `false`, nada é anexado; com `region-scene-context/v1` o prompt então diz que nenhum contexto foi fornecido, o braço desligado de uma ablação pareada.
+- **Obrigatória para Qwen, Gemini e Eagle 2.5.** O grupo `prompt_policy` é validado por `visual_perception.SemanticPromptPolicy`: cada identidade precisa existir em `SEMANTIC_PROMPT_TEMPLATES` e pertencer ao seu modo. Sem o grupo, ou com uma identidade desconhecida ou de outro modo, `compose()` levanta `BackendConfigurationError` antes de pedir o runtime do modelo. Não há padrão: a política canônica é declarada explicitamente (`scene/v1`/`region/v1`) e reproduz byte a byte o prompt anterior a #542. A mesma política vale para os três backends, que a renderizam de forma idêntica.
+- **Contexto de cena (#529).** `prompt_policy.region_scene_context = true` condiciona cada request de região ao `SceneContext` do request de cena do mesmo frame; exige um template de região que renderize contexto (`region-scene-context/v1`) e um intérprete que o aceite (Qwen, Gemini; não o Eagle 2.5), e é recusado na composição caso contrário. Ausente ou `false`, nada é anexado; com `region-scene-context/v1` o prompt então diz que nenhum contexto foi fornecido, o braço desligado de uma ablação pareada.
 - **Florence-2 é nativo da task.** Sua política é o prompt da task configurada (`florence2-task-prompt/1:<task>`), válida só para o modo que a task serve; um `prompt_policy` no bloco `florence2` é recusado com essa explicação, em vez de ser registrado como se o modelo o consumisse.
 - **Composição.** `ComposedRuntime.semantic_prompts` mapeia cada modo para um `SemanticRequestPrompt` (`template_id`, `output_schema`), que o `VisualPerceptionExecutor` copia para `prompt_template_id`/`requested_output_schema` de cada request. Um modo sem entrada (o modo que a task do Florence-2 não serve) falha explicitamente ao montar o request, nunca recebe um padrão.
 - **Identidade e reuso.** Como qualquer parâmetro de backend, `prompt_policy` entra na configuração efetiva, no seu digest e no `config_digest` do estágio `visual_perception`. Trocar só a política recalcula `visual_perception` e, pelas entradas, os estágios que dependem dele; `ingestion`, `state_estimation` e `geometric_mapping` mantêm a identidade e continuam reutilizáveis. A granularidade é a do estágio: Region Discovery e features são recalculados junto, porque Semantic Interpretation ainda não é um estágio próprio do runtime.
 
 ### Política de views semânticas (#524)
 
-A política de views de evidência também é selecionada pela configuração, como grupo reservado obrigatório `view_policy` no bloco de **qualquer** backend semântico (Qwen, Gemini e Florence-2), validado por `visual_perception.SemanticViewPolicy`:
+A política de views de evidência também é selecionada pela configuração, como grupo reservado obrigatório `view_policy` no bloco de **qualquer** backend semântico (Qwen, Gemini, Eagle 2.5 e Florence-2), validado por `visual_perception.SemanticViewPolicy`:
 
 ```toml
 [components.visual_perception.semantic_interpretation.qwen]
@@ -96,6 +118,26 @@ view_policy = { region_views = ["masked_subject", "tight_crop", "contextual_crop
 - **Composição.** `ComposedRuntime.semantic_view_policy` guarda a política; o `VisualPerceptionExecutor` a entrega à bridge, que só monta requests: os bytes e a linhagem de cada view vêm de `materialize_region_views()`/`materialize_scene_view()`, da capability. A bridge decodifica a imagem preparada (Pillow, como antes) e identifica seus bytes pelo SHA-256 para a linhagem das views.
 - **Identidade e reuso.** Como `prompt_policy`, `view_policy` entra na configuração efetiva, no seu digest e no `config_digest` de `visual_perception`, sem mudar a identidade de `ingestion`, `state_estimation` e `geometric_mapping` nem o fingerprint de configuração do backend.
 - **Extensão (#544).** `prompt_policy` e `view_policy` são grupos irmãos no bloco do backend; a política de request unificada de #544 pode agrupá-los (com o contexto de cena de #529) sem mudar o significado de nenhum dos dois.
+
+### Orçamento de entrada visual do Qwen (#526)
+
+O custo visual de uma request Qwen com várias views é controlado por dois parâmetros comuns do bloco `qwen`, não por um grupo reservado:
+
+```toml
+[components.visual_perception.semantic_interpretation.qwen]
+model = "Qwen/Qwen3-VL-4B-Instruct"
+precision = "bfloat16"
+max_new_tokens = 256
+temperature = 0.0
+min_pixels = 262144    # 256 tokens visuais de 32 px por view
+max_pixels = 1310720   # 1280 tokens visuais de 32 px por view
+prompt_policy = { scene = "scene/v1", region = "region/v1" }
+```
+
+- **Validação antes do runtime.** `QwenSemanticConfig` exige os dois juntos (ou nenhum), positivos e com `min_pixels ≤ max_pixels`; qualquer outro caso é `BackendConfigurationError` em `compose()`, antes de o provider ser chamado. O provider recebe o orçamento dentro do `QwenSemanticConfig`, e o `HuggingFaceQwenRuntime` o aplica e o confere ao construir o processor ([Adapter Qwen](../../visual_perception/docs/semantic-interpretation.md#runtime-transformers-huggingfaceqwenruntime)).
+- **Por view, não por request.** Os limites valem para cada imagem depois do resize do processor; o custo de uma request é a soma das views. Não há parâmetro de total por request, porque o processor não o aplica.
+- **Identidade.** O orçamento entra na configuração efetiva, no fingerprint do intérprete e no `config_digest` de `visual_perception`: uma ablação de orçamento recalcula só esse estágio. Sem os dois parâmetros, configuração efetiva, digest e fingerprint são os de antes do #526, e vale o default do processor do checkpoint na revisão fixada. Num manifesto de experimento, o fator é declarado nos campos `interpreter.qwen.min_pixels`/`interpreter.qwen.max_pixels`.
+- **Diagnóstico, não identidade.** O tamanho que cada view atingiu e seus tokens visuais ficam em `SemanticBackendDiagnostics.visual_inputs` de cada execução; um estouro de memória é `QwenOutOfMemoryError`, cuja mensagem nomeia o número de views e o orçamento em vigor.
 
 ## Ordem de validação
 

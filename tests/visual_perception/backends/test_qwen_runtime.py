@@ -34,9 +34,11 @@ from contextmap.visual_perception.backends.qwen import (
     QwenDeviceError,
     QwenInferenceError,
     QwenModelLoadError,
+    QwenOutOfMemoryError,
     QwenSemanticConfig,
     QwenSemanticInterpreter,
 )
+from contextmap.visual_perception.semantic_backend import SemanticVisualInputMeasurement
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 VIEW_REFERENCE = "outputs/semantic-views/region-0007.png"
@@ -68,9 +70,36 @@ class FakeInputs(dict[str, Any]):
         return self
 
 
+class FakeGrid:
+    """Stands in for the ``image_grid_thw`` tensor: one ``(t, h, w)`` patch grid per image."""
+
+    def __init__(self, rows: list[list[int]]) -> None:
+        self.rows = rows
+
+    def tolist(self) -> list[list[int]]:
+        return [list(row) for row in self.rows]
+
+
+# O default do preprocessor_config.json do Qwen3-VL-4B-Instruct: 256 a 16384 tokens visuais.
+CHECKPOINT_SIZE = {"shortest_edge": 65_536, "longest_edge": 16_777_216}
+DEFAULT_GRID = [1, 16, 20]
+"""A 256x320 px image in 16 px patches: 320 patches, merged 2x2 into 80 visual tokens."""
+
+
+class FakeImageProcessor:
+    """The Qwen2-VL image processor surface the runtime reads: budget and patch geometry."""
+
+    def __init__(self) -> None:
+        self.size: dict[str, int] = dict(CHECKPOINT_SIZE)
+        self.patch_size = 16
+        self.merge_size = 2
+
+
 class FakeProcessor:
-    def __init__(self, *, prompt_tokens: int = 7) -> None:
+    def __init__(self, *, prompt_tokens: int = 7, grid_rows: list[list[int]] | None = None) -> None:
         self.prompt_tokens = prompt_tokens
+        self.grid_rows = grid_rows
+        self.image_processor = FakeImageProcessor()
         self.messages: list[dict[str, Any]] = []
         self.template_kwargs: dict[str, Any] = {}
         self.inputs: FakeInputs | None = None
@@ -79,7 +108,11 @@ class FakeProcessor:
     def apply_chat_template(self, messages: list[dict[str, Any]], **kwargs: Any) -> FakeInputs:
         self.messages = messages
         self.template_kwargs = kwargs
-        self.inputs = FakeInputs(input_ids=FakeTokens([[1] * self.prompt_tokens]))
+        images = [part for part in messages[0]["content"] if part["type"] == "image"]
+        rows = self.grid_rows if self.grid_rows is not None else [DEFAULT_GRID for _ in images]
+        self.inputs = FakeInputs(
+            input_ids=FakeTokens([[1] * self.prompt_tokens]), image_grid_thw=FakeGrid(rows)
+        )
         return self.inputs
 
     def batch_decode(self, tokens: FakeTokens, *, skip_special_tokens: bool) -> list[str]:
@@ -88,12 +121,19 @@ class FakeProcessor:
 
 
 class FakeModel:
-    def __init__(self, *, quantization_config: object | None, new_tokens: int = 5) -> None:
+    def __init__(
+        self,
+        *,
+        quantization_config: object | None,
+        new_tokens: int = 5,
+        generate_error: Exception | None = None,
+    ) -> None:
         # Um PretrainedConfig sem quantização não possui o atributo, em vez de guardar None.
         self.config = SimpleNamespace(
             **({} if quantization_config is None else {"quantization_config": quantization_config})
         )
         self.new_tokens = new_tokens
+        self.generate_error = generate_error
         self.moved_to: str | None = None
         self.evaluating = False
         self.generate_kwargs: dict[str, Any] = {}
@@ -108,6 +148,8 @@ class FakeModel:
 
     def generate(self, **kwargs: Any) -> FakeTokens:
         self.generate_kwargs = kwargs
+        if self.generate_error is not None:
+            raise self.generate_error
         prompt = kwargs["input_ids"].rows[0]
         return FakeTokens([[*prompt, *([9] * self.new_tokens)]])
 
@@ -126,11 +168,16 @@ class FakeTransformers(ModuleType):
         report_quantization: bool = True,
         new_tokens: int = 5,
         model_error: Exception | None = None,
+        generate_error: Exception | None = None,
+        processor: FakeProcessor | None = None,
+        apply_budget: bool = True,
     ) -> None:
         super().__init__("transformers")
         self.report_quantization = report_quantization
         self.model_error = model_error
-        self.processor = FakeProcessor()
+        self.generate_error = generate_error
+        self.apply_budget = apply_budget
+        self.processor = processor or FakeProcessor()
         self.model: FakeModel | None = None
         self.new_tokens = new_tokens
         self.processor_kwargs: dict[str, Any] = {}
@@ -145,6 +192,13 @@ class FakeTransformers(ModuleType):
 
     def _load_processor(self, model: str, **kwargs: Any) -> FakeProcessor:
         self.processor_kwargs = {"model": model, **kwargs}
+        if self.apply_budget:
+            # Como o Qwen2VLImageProcessor do transformers 5.x: min/max_pixels viram ``size``.
+            size = self.processor.image_processor.size
+            if "min_pixels" in kwargs:
+                size["shortest_edge"] = kwargs["min_pixels"]
+            if "max_pixels" in kwargs:
+                size["longest_edge"] = kwargs["max_pixels"]
         return self.processor
 
     def _load_model(self, model: str, **kwargs: Any) -> FakeModel:
@@ -152,7 +206,11 @@ class FakeTransformers(ModuleType):
         if self.model_error is not None:
             raise self.model_error
         applied = kwargs.get("quantization_config") if self.report_quantization else None
-        self.model = FakeModel(quantization_config=applied, new_tokens=self.new_tokens)
+        self.model = FakeModel(
+            quantization_config=applied,
+            new_tokens=self.new_tokens,
+            generate_error=self.generate_error,
+        )
         return self.model
 
     @property
@@ -164,7 +222,13 @@ class FakeTransformers(ModuleType):
         return SimpleNamespace(from_pretrained=self._load_model)
 
 
+class FakeOutOfMemoryError(RuntimeError):
+    """Stands in for ``torch.cuda.OutOfMemoryError``."""
+
+
 class FakeCuda:
+    OutOfMemoryError = FakeOutOfMemoryError
+
     def __init__(self, *, available: bool = True, peak: int = 4_000_000_000) -> None:
         self.available = available
         self.peak = peak
@@ -661,3 +725,183 @@ def test_one_diverging_view_among_several_prevents_the_inference(
     assert transformers.processor.messages == []
     assert transformers.model is not None
     assert transformers.model.generate_kwargs == {}
+
+
+# --- visual input budget (#526) ------------------------------------------------------
+
+BUDGET = {"min_pixels": 256 * 32 * 32, "max_pixels": 1280 * 32 * 32}
+
+
+def _second_view(tmp_path: Path) -> SemanticVisualView:
+    reference = "outputs/semantic-views/region-0007-context.png"
+    payload = b"contextual crop bytes"
+    (tmp_path / reference).write_bytes(payload)
+    return SemanticVisualView(
+        view_id="contextual-crop",
+        kind=VisualViewKind.CONTEXTUAL_CROP,
+        payload_reference=reference,
+        source_observation_id=SourceObservationId("frame-0124"),
+        region_id=RegionId("region-0007"),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def test_an_unset_budget_constructs_the_processor_exactly_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backward-identical default: the checkpoint's own processor budget, nothing added."""
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    config = _config()
+
+    _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    assert transformers.processor_kwargs == {
+        "model": "Qwen/Qwen3-VL-4B-Instruct",
+        "revision": REVISION,
+        "local_files_only": True,
+    }
+    assert transformers.processor.image_processor.size == CHECKPOINT_SIZE
+
+
+def test_a_configured_budget_is_applied_when_the_processor_is_constructed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    config = _config(**BUDGET)
+
+    _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    assert transformers.processor_kwargs["min_pixels"] == 262_144
+    assert transformers.processor_kwargs["max_pixels"] == 1_310_720
+    assert transformers.processor.image_processor.size == {
+        "shortest_edge": 262_144,
+        "longest_edge": 1_310_720,
+    }
+
+
+def test_a_processor_that_ignores_the_budget_fails_before_any_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Like quantization: a configuration that names a budget never runs under another one."""
+    transformers, _ = _install(monkeypatch, transformers=FakeTransformers(apply_budget=False))
+    _view(tmp_path)
+    config = _config(**BUDGET)
+
+    with pytest.raises(QwenModelLoadError, match=r"visual input budget.*not applied"):
+        _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    assert transformers.model is None, "the weights are never loaded for an unapplied budget"
+
+
+def test_a_budget_below_one_merged_patch_cannot_be_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every edge is at least patch_size x merge_size, so 32x32 px is the smallest image."""
+    transformers, _ = _install(monkeypatch)
+    _view(tmp_path)
+    config = _config(min_pixels=256, max_pixels=32 * 32 - 1)
+
+    with pytest.raises(QwenModelLoadError, match=r"max_pixels=1023.*1024"):
+        _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    assert transformers.model is None, "the weights are never loaded for an unenforceable budget"
+
+
+def test_each_view_records_the_size_and_visual_tokens_the_processor_produced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processor = FakeProcessor(grid_rows=[[1, 16, 20], [1, 28, 14]])
+    _install(monkeypatch, transformers=FakeTransformers(processor=processor))
+    _view(tmp_path)
+    config = _config(**BUDGET)
+    views = (_visual_view(), _second_view(tmp_path))
+
+    response = HuggingFaceQwenRuntime(config=config, view_root=tmp_path).generate(
+        visual_views=views, prompt="canonical prompt", config=config
+    )
+
+    assert response.visual_inputs == (
+        SemanticVisualInputMeasurement(
+            view_id="tight-crop", height_px=256, width_px=320, visual_tokens=80
+        ),
+        SemanticVisualInputMeasurement(
+            view_id="contextual-crop", height_px=448, width_px=224, visual_tokens=98
+        ),
+    )
+
+
+def test_a_processor_output_that_does_not_account_for_every_view_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No image is silently dropped or added between the request and the model."""
+    processor = FakeProcessor(grid_rows=[[1, 16, 20]])
+    transformers, _ = _install(monkeypatch, transformers=FakeTransformers(processor=processor))
+    _view(tmp_path)
+    config = _config()
+    views = (_visual_view(), _second_view(tmp_path))
+
+    with pytest.raises(QwenInferenceError, match=r"1 image grid.*2 view"):
+        HuggingFaceQwenRuntime(config=config, view_root=tmp_path).generate(
+            visual_views=views, prompt="canonical prompt", config=config
+        )
+
+    assert transformers.model is not None
+    assert transformers.model.generate_kwargs == {}
+
+
+def test_running_out_of_device_memory_is_attributed_to_the_recorded_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(
+        monkeypatch,
+        transformers=FakeTransformers(generate_error=FakeOutOfMemoryError("CUDA out of memory")),
+    )
+    _view(tmp_path)
+    config = _config(**BUDGET)
+
+    with pytest.raises(QwenOutOfMemoryError) as raised:
+        _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    message = str(raised.value)
+    assert isinstance(raised.value, QwenInferenceError)
+    assert "out of device memory on cuda" in message
+    assert "1 view" in message
+    assert "configured visual input budget min_pixels=262144, max_pixels=1310720" in message
+    assert "tight-crop: 256x320 px (HxW), 80 visual tokens" in message
+    assert "input_tokens=7" in message
+    assert "peak_memory_bytes=4000000000" in message
+    assert "CUDA out of memory" in message
+
+
+def test_without_a_budget_an_out_of_memory_failure_names_the_checkpoint_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The processor default in effect is recorded, never left as an unknown."""
+    _install(
+        monkeypatch,
+        transformers=FakeTransformers(generate_error=FakeOutOfMemoryError("CUDA out of memory")),
+    )
+    _view(tmp_path)
+    config = _config()
+
+    with pytest.raises(
+        QwenOutOfMemoryError,
+        match=r"checkpoint processor default visual input "
+        r"budget min_pixels=65536, max_pixels=16777216",
+    ):
+        _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+
+def test_other_generation_failures_are_not_reported_as_out_of_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(monkeypatch, transformers=FakeTransformers(generate_error=RuntimeError("boom")))
+    _view(tmp_path)
+    config = _config()
+
+    with pytest.raises(QwenInferenceError, match="boom") as raised:
+        _generate(HuggingFaceQwenRuntime(config=config, view_root=tmp_path), config)
+
+    assert not isinstance(raised.value, QwenOutOfMemoryError)
