@@ -30,6 +30,7 @@ from contextmap.semantic_fusion import (
     ScoreReference,
     SupportSignalKind,
     accumulate_baseline_evidence,
+    label_key,
 )
 from contextmap.sensor_association import SpatialObservationId
 from contextmap.visual_perception import (
@@ -329,6 +330,42 @@ def test_spelling_differences_are_typographic_and_synonyms_are_not_assumed() -> 
     assert [hypothesis.label for hypothesis in fused.hypotheses] == ["pallet", "wooden pallet"]
     supporting = [i for i in fused.hypotheses[0].evidence if i.stance is EvidenceStance.SUPPORTING]
     assert len(supporting) == 3
+
+
+@pytest.mark.parametrize(
+    ("proposed", "key"),
+    [
+        ("\ufb01re extinguisher", "fire extinguisher"),  # ligadura "fi" (NFKC)
+        ("\uff30\uff41\uff4c\uff4c\uff45\uff54", "pallet"),  # letras de largura total (NFKC)
+        ("shelf \uff11\uff12", "shelf 12"),  # dígitos de largura total (NFKC)
+        ("pallet\u00a0jack", "pallet jack"),  # espaço sem quebra (NBSP)
+        ("  Pallet \u3000 Jack\t", "pallet jack"),  # espaço ideográfico, tab e espaços extras
+        ("Stra\u00dfe", "strasse"),  # case folding, não só minúsculas: o eszett alemão vira "ss"
+        ("STRASSE", "strasse"),
+    ],
+)
+def test_the_label_key_removes_unicode_typography_and_nothing_else(proposed: str, key: str) -> None:
+    assert label_key(proposed) == key
+
+
+def test_unicode_spellings_of_one_label_support_one_hypothesis() -> None:
+    scenario = build_scenario(
+        [
+            View("run-a", "frame-0120", (ClaimSpec("fire extinguisher"),)),
+            View("run-a", "frame-0121", (ClaimSpec("fire  extinguisher"),)),
+            View("run-a", "frame-0122", (ClaimSpec("\ufb01re extinguisher"),)),
+            View("run-a", "frame-0123", (ClaimSpec("FIRE\u00a0EXTINGUISHER"),)),
+            View("run-a", "frame-0124", (ClaimSpec("\uff26\uff29\uff32\uff25 extinguisher"),)),
+        ]
+    )
+
+    fused = _accumulate(scenario)
+
+    (hypothesis,) = fused.hypotheses
+    # O rótulo exibido continua sendo uma grafia proposta (a mais comum), nunca a chave.
+    assert hypothesis.label == "fire extinguisher"
+    supporting = [i for i in hypothesis.evidence if i.stance is EvidenceStance.SUPPORTING]
+    assert len(supporting) == 5
 
 
 def test_the_label_is_the_most_common_spelling() -> None:
