@@ -608,6 +608,29 @@ class TestRun:
         assert status["status"] == "blocked"
         assert not (tmp_path / "ws" / "S1" / "run-0001" / "execution.json").exists()
 
+    def test_a_run_blocked_by_a_composition_failure_reports_its_cause(self, tmp_path: Path) -> None:
+        # Issue #602: o motivo real, não só "no executor is registered for it".
+        document = _document()
+        document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
+            "max_reprojection_invalid_rate"
+        ] = 2.0
+
+        code, out, err = cli(
+            "run",
+            "-c",
+            str(_config(tmp_path, document)),
+            "--stage",
+            "sensor_association",
+            "--workspace",
+            str(tmp_path / "ws"),
+        )
+
+        assert code == 1
+        text = out + err
+        assert "components.sensor_association.tolerances" in text
+        assert "max_reprojection_invalid_rate" in text
+        assert "stages.sensor_association" not in text
+
     def test_a_failing_stage_reports_what_completed_and_leaves_a_failure_record(
         self, tmp_path: Path
     ) -> None:

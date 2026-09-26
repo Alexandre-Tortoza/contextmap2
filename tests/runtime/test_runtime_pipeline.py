@@ -12,6 +12,8 @@ from runtime_fixtures import unavailable_future_stage  # noqa: F401
 
 from contextmap.runtime import (
     ArtifactRef,
+    BackendConfigurationError,
+    ConfigProblem,
     EffectiveConfig,
     PipelinePlan,
     PlanDocumentError,
@@ -525,6 +527,53 @@ class TestScopeAndExecution:
         assert "state_estimation" in text and "executor" in text
         assert "GEMINI_API_KEY" in text
         assert "torch" in text
+
+    def test_a_run_blocked_by_a_composition_failure_reports_its_cause(self, tmp_path: Path) -> None:
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        log: list[str] = []
+        executors = _executors(plan, log)
+        del executors["state_estimation"]
+        failure = BackendConfigurationError(
+            "state_estimation.estimator", "external_pose", ["reference_frame: must not be empty"]
+        )
+
+        with pytest.raises(PreflightError) as error:
+            run_plan(
+                plan.scope(targets=["state_estimation"]),
+                executors,
+                environ={},
+                module_available=_ready,
+                provided_runtimes=_ALL_PROVIDED,
+                composition_failures={"state_estimation": failure},
+            )
+
+        assert log == []
+        assert error.value.report.problems == (
+            ConfigProblem(
+                path="components.state_estimation.estimator",
+                message=f"no executor could be composed for stage 'state_estimation': {failure}",
+            ),
+        )
+
+    def test_a_composition_failure_does_not_matter_once_the_stage_has_an_executor(
+        self, tmp_path: Path
+    ) -> None:
+        # O executor injetado pelo chamador vence o composto: a falha deste não bloqueia nada.
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        failure = BackendConfigurationError(
+            "state_estimation.estimator", "external_pose", ["reference_frame: must not be empty"]
+        )
+
+        report = preflight(
+            plan.scope(targets=["state_estimation"]),
+            executors=_executors(plan, []),
+            environ={},
+            module_available=_ready,
+            provided_runtimes=_ALL_PROVIDED,
+            composition_failures={"state_estimation": failure},
+        )
+
+        assert report.ok
 
     def test_an_incomplete_backend_selection_blocks_only_the_stages_in_scope(
         self, tmp_path: Path

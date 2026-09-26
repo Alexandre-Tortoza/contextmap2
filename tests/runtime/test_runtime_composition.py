@@ -13,7 +13,13 @@ from runtime_fixtures import unavailable_future_stage  # noqa: F401
 from contextmap.geometric_mapping import GeometricMapArtifactManifest
 from contextmap.ingestion import SourceAdapterConfig, SourceTopicMapping
 from contextmap.point_representation.backends.geometric_descriptor import GeometricDescriptorEncoder
-from contextmap.runtime import ConfigurationError
+from contextmap.runtime import (
+    ConfigProblem,
+    ConfigurationError,
+    PreflightReport,
+    preflight,
+    resolve_plan,
+)
 from contextmap.runtime.composition import (
     ComposedRuntime,
     FeatureBuildScope,
@@ -28,6 +34,7 @@ from contextmap.runtime.errors import (
     BackendConfigurationError,
     BackendRuntimeMissingError,
     BackendUnavailableError,
+    CompositionError,
     ProviderConfigurationError,
     StageUnavailableError,
 )
@@ -1562,6 +1569,128 @@ class TestComposeExecutors:
             (context_map_output_dir / "manifest.json").read_text(encoding="utf-8")
         )
         assert manifest_record["entity_count"] == 2
+
+
+class TestCompositionFailuresReachPreflight:
+    """Issue #602 (RT-02): why a stage could not be composed reaches the preflight report.
+
+    ``compose_executors`` still leaves such a stage out and never raises; the cause it used to
+    swallow is now handed to its caller, and ``preflight`` reports it at the component it
+    failed on instead of only saying that no executor is registered.
+    """
+
+    def _preflight(
+        self,
+        tmp_path: Path,
+        document: dict[str, Any],
+        targets: list[str],
+        providers: dict[str, RuntimeProvider] | None = None,
+    ) -> PreflightReport:
+        effective = effective_from(tmp_path, document)
+        failures: dict[str, CompositionError | ConfigurationError] = {}
+        executors = compose_executors(
+            effective,
+            providers=providers,
+            module_available=lambda _name: True,
+            environ={},
+            on_composition_failure=failures.__setitem__,
+        )
+        return preflight(
+            resolve_plan(effective).scope(targets=targets),
+            executors=executors,
+            environ={},
+            module_available=lambda _name: True,
+            composition_failures=failures,
+        )
+
+    def test_a_rejected_backend_parameter_is_reported_at_its_component(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
+            "max_reprojection_invalid_rate"
+        ] = 2.0
+
+        report = self._preflight(tmp_path, document, ["sensor_association"])
+
+        paths = [problem.path for problem in report.problems]
+        assert "components.sensor_association.tolerances" in paths
+        cause = report.problems[paths.index("components.sensor_association.tolerances")]
+        assert "sensor_association" in cause.message
+        assert "max_reprojection_invalid_rate" in cause.message
+        assert "stages.sensor_association" not in paths
+        # ingestion nunca é composto aqui e não tem causa capturada: o problema genérico fica.
+        generic = ConfigProblem(path="stages.ingestion", message="no executor is registered for it")
+        assert generic in report.problems
+
+    def test_an_invalid_provider_target_is_reported_with_the_target_and_the_reason(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        document["resources"]["providers"] = {REGION: "no-attribute-here"}
+
+        report = self._preflight(
+            tmp_path,
+            document,
+            ["visual_perception"],
+            providers={INTERPRETER: _Recorder().provider("qwen")},
+        )
+
+        causes = [p for p in report.problems if p.path == f"components.{REGION}"]
+        assert len(causes) == 1
+        assert "'no-attribute-here'" in causes[0].message
+        assert "must look like 'module:attribute'" in causes[0].message
+        assert "stages.visual_perception" not in [p.path for p in report.problems]
+
+    def test_a_missing_model_runtime_is_reported_at_its_component(self, tmp_path: Path) -> None:
+        report = self._preflight(tmp_path, selected_document(), ["visual_perception"])
+
+        causes = [p for p in report.problems if p.path == f"components.{REGION}"]
+        assert len(causes) == 1
+        assert "has no bundled model loader" in causes[0].message
+
+    def test_a_cause_preflight_already_reports_is_not_repeated(self, tmp_path: Path) -> None:
+        # Seleção incompleta: o próprio preflight já aponta o componente; o estágio segue
+        # reportado como sem executor, sem duplicar a causa.
+        document = selected_document()
+        del document["components"]["entity_resolution"]["geometry_comparison"]
+
+        report = self._preflight(tmp_path, document, ["entity_resolution"])
+
+        paths = [problem.path for problem in report.problems]
+        assert paths.count("components.entity_resolution.geometry_comparison") == 1
+        assert "stages.entity_resolution" in paths
+
+    def test_the_cause_is_handed_over_without_costing_another_stage_its_executor(
+        self, tmp_path: Path
+    ) -> None:
+        document = selected_document()
+        document["components"]["sensor_association"]["tolerances"]["diagnostic-tolerances-v1"][
+            "max_reprojection_invalid_rate"
+        ] = 2.0
+        failures: dict[str, CompositionError | ConfigurationError] = {}
+
+        executors = compose_executors(
+            effective_from(tmp_path, document),
+            providers=_providers(_Recorder()),
+            module_available=lambda _name: True,
+            environ={},
+            on_composition_failure=failures.__setitem__,
+        )
+
+        assert set(failures) == {"sensor_association"}
+        failure = failures["sensor_association"]
+        assert isinstance(failure, BackendConfigurationError)
+        assert failure.component_id == "sensor_association.tolerances"
+        assert set(executors) == {
+            "visual_perception",
+            "state_estimation",
+            "geometric_mapping",
+            "semantic_fusion",
+            "entity_resolution",
+            "spatial_relations",
+            "context_map",
+        }
 
 
 class TestComposeVisualPerceptionExecutor:

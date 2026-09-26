@@ -649,6 +649,42 @@ def test_preflight_reports_every_problem_at_once(tmp_path: Path) -> None:
     assert "scene_graph" not in report.missing_executors
 
 
+# Issue #602: `DiagnosticTolerances` recusa uma taxa acima de 1, então o estágio não compõe.
+REJECTED_TOLERANCE = (
+    "components.sensor_association.tolerances.diagnostic-tolerances-v1"
+    ".max_reprojection_invalid_rate=2.0"
+)
+
+
+def test_preflight_reports_why_a_stage_could_not_be_composed(tmp_path: Path) -> None:
+    runtime = Runtime(workspace=tmp_path / "ws", module_available=_ready, environ={})
+    config = _config(runtime, tmp_path, REJECTED_TOLERANCE)
+
+    report = runtime.preflight(config, targets=TARGET)
+
+    causes = [p for p in report.problems if p.path == "components.sensor_association.tolerances"]
+    assert len(causes) == 1
+    assert "max_reprojection_invalid_rate" in causes[0].message
+    assert "sensor_association" in report.missing_executors
+
+
+def test_a_run_blocked_by_a_composition_failure_records_its_cause(tmp_path: Path) -> None:
+    runtime, world = _runtime(tmp_path, executors=False)
+    config = _config(runtime, tmp_path, REJECTED_TOLERANCE)
+
+    result = runtime.run(config, targets=TARGET)
+
+    assert result.status == "blocked"
+    assert world.runs == []
+    causes = [
+        p
+        for p in result.record.blocked_problems
+        if p.path == "components.sensor_association.tolerances"
+    ]
+    assert len(causes) == 1
+    assert "max_reprojection_invalid_rate" in causes[0].message
+
+
 def test_preflight_names_a_missing_secret_without_any_value(tmp_path: Path) -> None:
     runtime, _ = _runtime(tmp_path)
     config = _config(

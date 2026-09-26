@@ -12,6 +12,7 @@ from runtime_worlds import World, source_identities
 
 from contextmap.runtime import (
     ArtifactRef,
+    BackendRuntimeMissingError,
     FileArtifactStore,
     PreflightError,
     ReusePolicy,
@@ -550,6 +551,31 @@ class TestPreflightAndPrediction:
             "reuse.identities.ingestion.source"
         ]
         assert "another-recording" in report.problems[0].message
+
+    def test_a_certainly_reused_stage_needs_no_executor_despite_a_composition_failure(
+        self, tmp_path: Path
+    ) -> None:
+        # Sem provider para sam3, visual_perception não compõe; reaproveitado, nada dele roda.
+        world = World()
+        _run(tmp_path, world, _document())
+        plan = resolve_plan(effective_from(tmp_path, _document()))
+        executors = world.executors(plan)
+        del executors["visual_perception"]
+        failure = BackendRuntimeMissingError(
+            "visual_perception.region_discovery", "sam3", "Sam3Runtime"
+        )
+        policy = ReusePolicy(store=world.store(tmp_path / "index"), code_identity=CODE)
+
+        report = preflight(
+            plan.scope(targets=["semantic_fusion"]),
+            executors=executors,
+            environ={},
+            module_available=_ready,
+            reuse=policy,
+            composition_failures={"visual_perception": failure},
+        )
+
+        assert report.problems == ()
 
     def test_a_run_without_a_reuse_policy_records_no_decision(self, tmp_path: Path) -> None:
         world = World()
