@@ -291,10 +291,20 @@ testes registram a ordem das chamadas sem torch real (issue #338). Em qualquer p
 chamadas do SDK rodam também dentro de `torch.inference_mode()`, sem depender de o SDK desligar o
 autograd por conta própria; sem torch instalado, a inferência falha explicitamente (#617).
 
-Antes de chamar o SDK, o runtime confere o device do modelo exposto pelo processor
-(`processor.model`) contra `Sam3Config.device`. O dtype dos pesos ainda não é conferido: a precisão
-do SAM3 é realizada por autocast, e o SDK oficial roda com pesos `float32` sob autocast `bfloat16`
-(#338), então a regra de dtype sob autocast é uma decisão pendente da #617.
+Antes de chamar o SDK, o runtime confere o modelo exposto pelo processor (`processor.model`) contra
+a configuração: ele precisa estar em `Sam3Config.device`, e o dtype dos pesos precisa ser um dos que
+realizam a `precision` configurada (#617):
+
+| `precision` | pesos aceitos | por quê |
+| --- | --- | --- |
+| `float32` | `float32` | sem autocast, o dtype dos pesos é a precisão da inferência |
+| `float16` | `float32` ou `float16` | o autocast converte pesos `float32` para `float16` nas operações |
+| `bfloat16` | `float32` ou `bfloat16` | idem; é a configuração que funciona com o SDK oficial (#338) |
+
+Pesos em outro dtype reduzido, como `float16` sob `bfloat16` ou sob `float32`, falham com
+`ValueError` antes da inferência, porque a precisão registrada deixaria de ser a precisão real. A
+regra não depende de medir o SDK: o dtype que o SAM3 real reporta no primeiro parâmetro é uma
+caracterização útil, mas não muda o que o autocast realiza.
 
 ### Geometria das propostas SAM3
 

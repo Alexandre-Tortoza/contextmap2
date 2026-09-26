@@ -195,16 +195,23 @@ class Sam3ImageProcessorRuntime:
 
         Raises:
             ValueError: If the strategy is not ``text_prompt``, if the prompt is missing,
-                or if the processor's model is not on ``config.device``.
+                or if the processor's model is not on ``config.device`` or holds weights
+                the configured precision does not accept: ``float32`` weights, or weights
+                already in the configured autocast dtype.
         """
         if config.strategy is not Sam3Strategy.TEXT_PROMPT:
             raise ValueError("official SAM3 image runtime supports only text_prompt strategy")
         if config.prompt is None:
             raise ValueError("official SAM3 image runtime requires a text prompt")
-        # Só o device é conferido: a precisão do SAM3 é realizada por autocast sobre os pesos
-        # carregados, e a regra de dtype sob autocast ainda não foi decidida (#617).
+        # O autocast realiza float16/bfloat16 sobre pesos float32 (o SDK oficial roda assim sob
+        # bfloat16, #338) ou já no próprio dtype; pesos em outro dtype reduzido tornariam falsa
+        # a precisão registrada. Em float32 não há autocast, então só pesos float32 servem.
         verify_model_placement(
-            self._processor.model, device=config.device, precision=None, backend="SAM3"
+            self._processor.model,
+            device=config.device,
+            precision=config.precision,
+            backend="SAM3",
+            accepted_dtypes=frozenset({"float32", config.precision}),
         )
 
         image = self._image_loader(discovery_input)
