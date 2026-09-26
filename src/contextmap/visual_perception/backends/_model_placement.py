@@ -4,7 +4,12 @@ from __future__ import annotations
 
 
 def verify_model_placement(
-    model: object, *, device: str, precision: str | None, backend: str
+    model: object,
+    *,
+    device: str,
+    precision: str,
+    backend: str,
+    accepted_dtypes: frozenset[str] | None = None,
 ) -> object:
     """Compare the model's first parameter with the configured device and precision.
 
@@ -16,16 +21,18 @@ def verify_model_placement(
         model: Loaded torch module exposing ``parameters()``.
         device: Configured torch device, such as ``"cuda"`` or ``"cuda:0"``. Without an
             index, any index of that device type matches, as ``model.to("cuda")`` does.
-        precision: Configured dtype name, such as ``"float32"``, or ``None`` when the
-            runtime realizes the precision some other way and the dtype is not compared.
+        precision: Configured precision name, such as ``"float32"``.
         backend: Backend name used in the error message.
+        accepted_dtypes: Weight dtype names under which the runtime really infers in
+            ``precision``. Defaults to ``{precision}``, right for a runtime without
+            autocast, where the weight dtype is the inference precision.
 
     Returns:
         The dtype of the verified parameter, to cast inputs to without importing torch.
 
     Raises:
         ValueError: If the model has no parameter to inspect, or if it sits on another
-            device or in another dtype than the configuration declares.
+            device or holds weights in a dtype the configured precision does not accept.
     """
     parameters = getattr(model, "parameters", None)
     parameter = next(iter(parameters()), None) if callable(parameters) else None
@@ -41,9 +48,10 @@ def verify_model_placement(
             f"declares device {device!r}"
         )
     dtype = parameter.dtype
-    if precision is not None and str(dtype).removeprefix("torch.") != precision:
+    accepted = accepted_dtypes or frozenset({precision})
+    if str(dtype).removeprefix("torch.") not in accepted:
         raise ValueError(
             f"{backend} model parameters are {dtype}, but the configuration declares "
-            f"precision {precision!r}"
+            f"precision {precision!r}, which accepts weights in {', '.join(sorted(accepted))}"
         )
     return dtype

@@ -562,6 +562,50 @@ def test_official_sam3_runtime_rejects_a_model_on_another_device(device: str) ->
     assert events == []
 
 
+@pytest.mark.parametrize(
+    ("weights", "precision"),
+    [("float16", "bfloat16"), ("float16", "float32"), ("bfloat16", "float32")],
+)
+def test_official_sam3_runtime_rejects_weights_that_autocast_does_not_realize(
+    weights: str, precision: str
+) -> None:
+    events: list[str] = []
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events, model=FakeLoadedModel("cuda:0", weights)),
+        image_loader=_materialized_image,
+    )
+
+    with pytest.raises(ValueError, match=f"precision '{precision}'"):
+        runtime.predict(_input(), _text_prompt_config(precision))
+
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("weights", "precision"),
+    [
+        ("float32", "float32"),
+        # Configuração que funciona com o SDK oficial (#338): pesos float32 sob autocast bfloat16.
+        ("float32", "bfloat16"),
+        ("bfloat16", "bfloat16"),
+        ("float32", "float16"),
+        ("float16", "float16"),
+    ],
+)
+def test_official_sam3_runtime_accepts_float32_or_autocast_dtype_weights(
+    weights: str, precision: str
+) -> None:
+    events: list[str] = []
+    runtime = Sam3ImageProcessorRuntime(
+        processor=RecordingProcessor(events, model=FakeLoadedModel("cuda:0", weights)),
+        image_loader=_materialized_image,
+    )
+
+    runtime.predict(_input(), _text_prompt_config(precision))
+
+    assert events == ["image", "threshold", "prompt"]
+
+
 @pytest.mark.parametrize("seed", BACKEND_SEEDS)
 def test_sam3_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
     # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
