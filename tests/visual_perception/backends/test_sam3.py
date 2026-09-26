@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import json
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
 from types import SimpleNamespace
+from typing import Any
 
+import numpy as np
 import pytest
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam3_candidates
 
@@ -12,6 +16,7 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
+    InlineMask,
     PreparedImage,
     Region2D,
     RegionDiscovery,
@@ -75,10 +80,7 @@ class FakeSam3Runtime:
                 Sam3NativeProposal(
                     proposal_id="proposal-3",
                     box=(1.0, 1.0, 4.0, 3.0),
-                    mask=(False,) * 6
-                    + (True, True, True, False, False)
-                    + (True, True, True, False, False)
-                    + (False,) * 4,
+                    mask=_mask_5x4(x_range=range(1, 4), y_range=range(1, 3)),
                     score_name="mask_score",
                     score=0.93,
                     query_id="query-1",
@@ -211,7 +213,7 @@ def test_official_sam3_text_processor_output_is_detached_and_thresholded() -> No
         ("prompt", "movable item"),
     ]
     assert output.proposals[0].box == (1.0, 1.0, 4.0, 3.0)
-    assert output.proposals[0].mask[1:3] == (True, True)
+    assert output.proposals[0].mask.as_array()[0, 1:3].tolist() == [True, True]
     assert output.proposals[0].score == 0.92
     assert output.proposals[0].query_id == "text-prompt-000000"
 
@@ -247,7 +249,7 @@ def _config() -> Sam3Config:
     )
 
 
-def _proposal(box: tuple[float, float, float, float], mask: tuple[bool, ...]) -> Sam3NativeProposal:
+def _proposal(box: tuple[float, float, float, float], mask: InlineMask) -> Sam3NativeProposal:
     return Sam3NativeProposal(
         proposal_id="proposal-1",
         box=box,
@@ -266,8 +268,10 @@ class ProposalRuntime:
         return Sam3NativeOutput(proposals=self._proposals)
 
 
-def _mask_5x4(*, x_range: range, y_range: range) -> tuple[bool, ...]:
-    return tuple(x in x_range and y in y_range for y in range(4) for x in range(5))
+def _mask_5x4(*, x_range: range, y_range: range) -> InlineMask:
+    return InlineMask(
+        np.array([[x in x_range and y in y_range for x in range(5)] for y in range(4)])
+    )
 
 
 def test_sam3_derives_the_candidate_box_from_the_mask_and_keeps_the_native_box() -> None:
@@ -304,7 +308,7 @@ def test_sam3_native_box_outside_the_image_does_not_abort_discovery() -> None:
 
 
 def test_sam3_empty_masks_are_rejected_explicitly_by_normalization() -> None:
-    empty = (False,) * 20
+    empty = InlineMask(np.zeros((4, 5), dtype=bool))
     inside = _proposal((1.0, 1.0, 3.0, 3.0), empty)
     outside = Sam3NativeProposal(
         proposal_id="proposal-2",
@@ -433,3 +437,55 @@ def test_official_sam3_runtime_default_context_is_torch_autocast(
 def test_sam3_mask_conversion_matches_the_recorded_behaviour(seed: int) -> None:
     # #593: do resultado nativo do SDK ao RegionCandidate, registrado antes da vetorização.
     assert digest(sam3_candidates(seed)) == GOLDEN["sam3"][str(seed)]
+
+
+def test_sam3_tensor_masks_are_detached_to_the_cpu_in_double_precision() -> None:
+    # #593: o tensor do SDK (GPU, bfloat16) vira um array de uma vez, nunca uma lista por pixel.
+    calls: list[object] = []
+
+    class FakeTensor:
+        def __init__(self, array: np.ndarray[Any, Any]) -> None:
+            self._array = array
+
+        def detach(self) -> FakeTensor:
+            calls.append("detach")
+            return self
+
+        def to(self, device: str) -> FakeTensor:
+            calls.append(("to", device))
+            return self
+
+        def double(self) -> FakeTensor:
+            calls.append("double")
+            return FakeTensor(self._array.astype(np.float64))
+
+        def numpy(self) -> np.ndarray[Any, Any]:
+            calls.append("numpy")
+            return self._array
+
+        def tolist(self) -> object:
+            raise AssertionError("a tensor mask must not become one Python object per pixel")
+
+    logits = np.full((1, 1, 4, 5), 0.2, dtype=np.float32)
+    logits[0, 0, 1, 1:4] = 0.9
+
+    class Processor:
+        def set_image(self, image: object) -> object:
+            return {}
+
+        def set_confidence_threshold(self, threshold: float, state: object = None) -> object:
+            return state
+
+        def set_text_prompt(self, *, state: object, prompt: str) -> Mapping[str, object]:
+            return {
+                "boxes": [[1.0, 1.0, 4.0, 2.0]],
+                "scores": [0.9],
+                "masks_logits": FakeTensor(logits),
+            }
+
+    runtime = Sam3ImageProcessorRuntime(processor=Processor(), image_loader=_materialized_image)
+
+    output = runtime.predict(_input(), _config())
+
+    assert calls == ["detach", ("to", "cpu"), "double", "numpy"]
+    assert output.proposals[0].mask.as_array()[1].tolist() == [False, True, True, True, False]

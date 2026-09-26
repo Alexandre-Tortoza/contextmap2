@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from hashlib import sha256
 
+import numpy as np
 import pytest
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, florence2_candidates
 
@@ -11,6 +12,7 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
+    InlineMask,
     PreparedImage,
     Region2D,
     RegionDiscovery,
@@ -79,9 +81,9 @@ class FakeFlorence2Runtime:
                     proposal_id="mask-2",
                     box=(3.0, 0.0, 5.0, 2.0),
                     score=0.9,
-                    mask=(False, False, False, True, True, False)
-                    + (False, False, False, True, True, False)
-                    + (False,) * 12,
+                    mask=InlineMask(
+                        np.array([[x in (3, 4) and y < 2 for x in range(6)] for y in range(4)])
+                    ),
                     parsed_text="second parsed region",
                 ),
             ),
@@ -144,7 +146,7 @@ def test_florence2_invalid_native_mask_fails_with_parsing_context() -> None:
                         proposal_id="bad-mask",
                         box=(0.0, 0.0, 2.0, 2.0),
                         score=0.8,
-                        mask=(True,),
+                        mask=InlineMask(np.ones((1, 1), dtype=bool)),
                     ),
                 )
             )
@@ -154,7 +156,7 @@ def test_florence2_invalid_native_mask_fails_with_parsing_context() -> None:
         runtime=InvalidRuntime(),
     )
 
-    with pytest.raises(ValueError, match=r"bad-mask.*mask length"):
+    with pytest.raises(ValueError, match=r"bad-mask.*mask dimensions"):
         backend.discover_candidates(_input())
 
 
@@ -263,7 +265,7 @@ def test_official_florence2_runtime_rasterizes_parsed_polygons() -> None:
     region = output.regions[0]
     assert region.box == (1.0, 1.0, 4.0, 3.0)
     assert region.mask is not None
-    assert sum(region.mask) == 6
+    assert region.mask.area == 6
     assert region.parsed_text == "requested geometry"
     assert dict(output.parsing_diagnostics)["polygon_count"] == 1
 

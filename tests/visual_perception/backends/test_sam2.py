@@ -1,7 +1,9 @@
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
+import numpy as np
 import pytest
 from mask_cases import BACKEND_SEEDS, GOLDEN, digest, sam2_candidates
 
@@ -9,6 +11,7 @@ from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     ArtifactReference,
     BoundingBox,
+    InlineMask,
     PreparedImage,
     Region2D,
     RegionDiscovery,
@@ -64,6 +67,12 @@ def _input() -> DiscoveryInput:
     )
 
 
+def _mask(width: int, height: int, inside: Callable[[int, int], bool]) -> InlineMask:
+    return InlineMask(
+        np.array([[inside(x, y) for x in range(width)] for y in range(height)], dtype=bool)
+    )
+
+
 class FakeSam2Runtime:
     def __init__(self) -> None:
         self.received: list[DiscoveryInput] = []
@@ -78,14 +87,14 @@ class FakeSam2Runtime:
             Sam2NativeProposal(
                 proposal_id="sam2-1",
                 box=(0.0, 0.0, 2.0, 2.0),
-                mask=tuple(x < 2 and y < 2 for y in range(height) for x in range(width)),
+                mask=_mask(width, height, lambda x, y: x < 2 and y < 2),
                 predicted_iou=0.91,
                 stability_score=0.87,
             ),
             Sam2NativeProposal(
                 proposal_id="sam2-low",
                 box=(2.0, 2.0, 4.0, 4.0),
-                mask=tuple(x >= 2 and y >= 2 for y in range(height) for x in range(width)),
+                mask=_mask(width, height, lambda x, y: x >= 2 and y >= 2),
                 predicted_iou=0.2,
                 stability_score=0.4,
             ),
@@ -147,7 +156,7 @@ def test_sam2_native_shape_errors_fail_explicitly() -> None:
                 Sam2NativeProposal(
                     proposal_id="bad",
                     box=(0.0, 0.0, 2.0, 2.0),
-                    mask=(True,),
+                    mask=InlineMask(np.ones((1, 1), dtype=bool)),
                     predicted_iou=0.9,
                     stability_score=0.9,
                 ),
@@ -155,7 +164,7 @@ def test_sam2_native_shape_errors_fail_explicitly() -> None:
 
     backend = Sam2RegionDiscovery(config=Sam2Config(checkpoint="sam2"), runtime=InvalidRuntime())
 
-    with pytest.raises(ValueError, match="mask length"):
+    with pytest.raises(ValueError, match="mask dimensions"):
         backend.discover_candidates(_input())
 
 
@@ -205,7 +214,14 @@ def test_sam2_official_automatic_mask_output_is_isolated_as_scalars() -> None:
     assert generator.received == [MaterializedImage((4, 4), ("pixels", "tile-0002"))]
     # A caixa canônica é semiaberta: a borda exclusiva é o último índice inclusivo + 1.
     assert proposals[0].box == (0.0, 0.0, 2.0, 2.0)
-    assert proposals[0].mask[:6] == (True, True, False, False, False, True)
+    assert proposals[0].mask.as_array().reshape(-1)[:6].tolist() == [
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+    ]
     assert proposals[0].predicted_iou == 0.91
     assert dict(proposals[0].metadata)["area_pixels"] == 3
 

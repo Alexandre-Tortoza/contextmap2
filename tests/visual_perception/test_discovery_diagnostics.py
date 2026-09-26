@@ -164,7 +164,13 @@ def test_full_level_writes_per_region_mask_and_record(tmp_path: Path) -> None:
 
     region_directory = stage / "debug" / "regions" / "region-0001"
     assert (region_directory / "region.json").is_file()
-    assert (region_directory / "mask.pbm").read_text().startswith("P1\n4 3\n")
+    mask = _record().normalization.regions[0].mask
+    assert mask is not None
+    rows = [
+        " ".join("1" if mask.value_at(x, y) else "0" for x in range(mask.width))
+        for y in range(mask.height)
+    ]
+    assert (region_directory / "mask.pbm").read_text() == "P1\n4 3\n" + "\n".join(rows) + "\n"
 
 
 def test_finalized_stage_is_immutable(tmp_path: Path) -> None:

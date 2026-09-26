@@ -9,7 +9,7 @@ from hashlib import sha256
 from importlib import import_module
 from math import isfinite
 from time import perf_counter
-from typing import Protocol, cast
+from typing import Protocol
 
 from ..discovery import (
     BackendDiagnostics,
@@ -71,11 +71,11 @@ class Sam2Config:
 
 @dataclass(frozen=True, slots=True)
 class Sam2NativeProposal:
-    """SDK-isolated SAM2 proposal normalized to Python scalar containers."""
+    """SDK-isolated SAM2 proposal: Python scalars and the mask as an immutable ``InlineMask``."""
 
     proposal_id: str
     box: tuple[float, float, float, float]
-    mask: tuple[bool, ...]
+    mask: InlineMask
     predicted_iou: float
     stability_score: float
     metadata: tuple[tuple[str, JsonScalar], ...] = ()
@@ -251,10 +251,8 @@ class Sam2RegionDiscovery:
         height: int,
     ) -> RegionCandidate:
         """Convert one scalar SAM2 proposal without leaking native model objects."""
-        import numpy as np
-
-        if len(proposal.mask) != width * height:
-            raise ValueError("SAM2 proposal mask length must match discovery pass dimensions")
+        if (proposal.mask.width, proposal.mask.height) != (width, height):
+            raise ValueError("SAM2 proposal mask dimensions must match discovery pass dimensions")
         return RegionCandidate(
             candidate_id=proposal.proposal_id,
             source_observation_id=discovery_input.prepared_image.source_observation_id,
@@ -268,7 +266,7 @@ class Sam2RegionDiscovery:
                 x_max=proposal.box[2],
                 y_max=proposal.box[3],
             ),
-            mask=InlineMask(np.array(proposal.mask, dtype=np.bool_).reshape(height, width)),
+            mask=proposal.mask,
             score=BackendScore(
                 name="predicted_iou",
                 value=proposal.predicted_iou,
@@ -316,22 +314,38 @@ def _parse_automatic_mask_record(
     )
 
 
-def _binary_mask(value: object, *, width: int, height: int) -> tuple[bool, ...]:
-    native = value.tolist() if hasattr(value, "tolist") else value
-    if not isinstance(native, Sequence) or isinstance(native, (str, bytes)):
+def _binary_mask(value: object, *, width: int, height: int) -> InlineMask:
+    """Validate one SDK segmentation as a ``(height, width)`` binary mask.
+
+    The SDK hands over an array; it is read as one, never as a Python list per pixel. Nested
+    sequences and ``tolist()``-only values are accepted too.
+
+    Raises:
+        TypeError: If the segmentation is not a sequence, or holds non-binary values.
+        ValueError: If its dimensions differ from the discovery pass.
+    """
+    import numpy as np
+
+    native = value
+    if not hasattr(value, "__array__") and hasattr(value, "tolist"):
+        native = value.tolist()
+    if not hasattr(native, "__array__") and (
+        not isinstance(native, Sequence) or isinstance(native, (str, bytes))
+    ):
         raise TypeError("SAM2 segmentation must be a two-dimensional binary mask")
-    rows = cast(Sequence[object], native)
-    if len(rows) != height:
+    try:
+        pixels = np.asarray(native)
+    except ValueError as error:  # linhas de comprimentos diferentes
+        raise ValueError(
+            "SAM2 segmentation mask dimensions must match the discovery pass"
+        ) from error
+    if pixels.shape != (height, width):
         raise ValueError("SAM2 segmentation mask dimensions must match the discovery pass")
-    flattened: list[bool] = []
-    for row in rows:
-        if not isinstance(row, Sequence) or isinstance(row, (str, bytes)) or len(row) != width:
-            raise ValueError("SAM2 segmentation mask dimensions must match the discovery pass")
-        for item in row:
-            if item not in (False, True, 0, 1):
-                raise TypeError("SAM2 segmentation mask must contain binary values")
-            flattened.append(bool(item))
-    return tuple(flattened)
+    if pixels.dtype != np.bool_:
+        if pixels.dtype.kind not in "iuf" or not np.isin(pixels, (0, 1)).all():
+            raise TypeError("SAM2 segmentation mask must contain binary values")
+        pixels = pixels != 0
+    return InlineMask(pixels)
 
 
 def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, ...]:
