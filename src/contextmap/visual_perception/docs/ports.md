@@ -31,6 +31,7 @@ flowchart LR
     ACLIP -->|implementado| SS
     QWEN["Qwen"] -->|adapter canônico implementado| SI
     GEMINI["Gemini"] -->|adapter canônico implementado| SI
+    EAGLE["Eagle 2.5"] -->|adapter canônico implementado| SI
     ENH["Backend aprendido"] -. futuro e opcional .-> FRE
 ```
 
@@ -81,10 +82,11 @@ O port recebe um único `SemanticInterpretationRequest`, declara antecipadamente
 seus modes/views/evidências suportados e devolve
 `SemanticInterpretationExecution`. A execução mantém separados request, prompt
 renderizado, resposta bruta, parsing canônico, configuração efetiva e métricas.
-Nenhum objeto do SDK de Qwen, Gemini ou Florence-2 atravessa essa fronteira.
-`QwenSemanticInterpreter`, `GeminiSemanticInterpreter` e
-`Florence2SemanticInterpreter` implementam esse boundary hoje usando seams
-injetáveis (`QwenRuntime`, `GeminiClient` e `Florence2SemanticRuntime`). Esses
+Nenhum objeto do SDK de Qwen, Gemini, Florence-2 ou Eagle 2.5 atravessa essa fronteira.
+`QwenSemanticInterpreter`, `GeminiSemanticInterpreter`,
+`Florence2SemanticInterpreter` e `EagleSemanticInterpreter` implementam esse boundary hoje
+usando seams injetáveis (`QwenRuntime`, `GeminiClient`, `Florence2SemanticRuntime` e
+`EagleRuntime`). Esses
 seams recebem as `SemanticVisualView` completas e cada implementação precisa
 verificar o SHA-256 dos bytes da view antes de decodificá-los ou enviá-los a um
 provider (`read_view_payload`; ver

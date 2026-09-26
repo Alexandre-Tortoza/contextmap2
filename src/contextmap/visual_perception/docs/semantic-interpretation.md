@@ -65,8 +65,8 @@ bytes diferentes dos registrados. A verificação por `add_semantic_view_payload
 acontece na persistência do run, depois da inferência, e continua existindo como
 segunda barreira do artifact; ela não substitui a verificação abaixo.
 
-Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime` e
-`GeminiClient`) recebem a **identidade completa das views**
+Os seams internos de runtime/client (`QwenRuntime`, `Florence2SemanticRuntime`,
+`EagleRuntime` e `GeminiClient`) recebem a **identidade completa das views**
 (`visual_views: tuple[SemanticVisualView, ...]`) em vez de apenas
 `payload_reference`. A leitura e a validação dos bytes são centralizadas em
 `read_view_payload(view_root, view)` (`backends/_semantic_views.py`, interno à
@@ -79,15 +79,15 @@ capability, fora da API pública):
    cujo hash difere de `SemanticVisualView.sha256`;
 4. devolve os próprios bytes verificados.
 
-Cada runtime decodifica ou transmite **somente esses bytes**: Qwen e Florence-2
-abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
+Cada runtime decodifica ou transmite **somente esses bytes**: Qwen, Florence-2 e
+Eagle 2.5 abrem a imagem por `Image.open(BytesIO(bytes))` e o Gemini envia os bytes como
 parte inline. Assim, o que foi verificado é exatamente o que é consumido, sem
 janela entre a checagem e o uso, e a verificação precede a abertura da imagem e
 o envio ao provider. No Gemini, todas as views são verificadas antes da primeira
 chamada de rede, então um payload divergente nunca sai da máquina.
 
 Um payload divergente é uma falha explícita e terminal (`QwenInferenceError`,
-`Florence2InferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
+`Florence2InferenceError`, `EagleInferenceError` ou `GeminiSemanticError`): não há retry, fallback nem
 inferência parcial. Quem implementa esses seams com outro runtime, gateway ou
 fake precisa usar `read_view_payload` (ou uma checagem equivalente); o contrato
 está registrado nas docstrings dos protocolos.
@@ -139,8 +139,8 @@ código nem criar comportamento específico de backend.
   nomeia exatamente um texto de instrução e um schema de saída: uma política nova
   é uma entrada nova, nunca a edição de uma existente.
 - **O request seleciona.** `SemanticInterpretationRequest.prompt_template_id` é a
-  seleção. Qwen e Gemini renderizam exatamente o template do catálogo com essa
-  identidade e entregam ao modelo exatamente esse texto. Não existe mais
+  seleção. Qwen, Gemini e Eagle 2.5 renderizam exatamente o template do catálogo com
+  essa identidade e entregam ao modelo exatamente esse texto. Não existe mais
   `SemanticPromptTemplate.default_for()` nem padrão interno de backend.
   Identidade desconhecida, modo divergente ou `requested_output_schema` diferente
   do schema do template falham com `ValueError` antes de qualquer chamada ao
@@ -198,7 +198,7 @@ existe porque modelos reais descrevem corretamente a região mas omitem a chave 
 de 3 respostas de região, issue #340).
 
 `SemanticConfidencePolicy` torna a semântica de score explícita no boundary do
-prompt/parser. Qwen e Gemini usam `UNSCORED_ONLY`, apresentam apenas `null` no
+prompt/parser. Qwen, Gemini e Eagle 2.5 usam `UNSCORED_ONLY`, apresentam apenas `null` no
 schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
 fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
 número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
@@ -213,7 +213,10 @@ identidades da observação e do resultado. Ao receber os mesmos outcomes,
 `PerceptionRunWriter` persiste a execução em
 `outputs/semantic-interpretations.jsonl` e materializa a resposta bruta no path
 de debug declarado pela proveniência. Assim, execução, evidência canônica e
-artifact permanecem ligados pelo mesmo request id.
+artifact permanecem ligados pelo mesmo request id. Os diagnostics persistidos
+incluem `visual_inputs` (`null` quando o backend não mede o que o processor
+fez de cada view); um registro gravado antes do #526, sem a chave, é lido como
+não medido, e artifacts do schema 0.5.0 continuam legíveis.
 
 `SemanticDebugLevel` controla apenas o conteúdo humano em
 `debug/40-semantic-interpretation/<request_id>/`. `NONE` não grava debug,
@@ -251,14 +254,16 @@ O preset canônico não escolhe um scorer automaticamente.
 `QwenSemanticInterpreter` é o adapter local substituível. Ele recebe apenas o
 request canônico, valida as capacidades e o fingerprint de configuração,
 renderiza o template compartilhado, delega a geração a `QwenRuntime` e usa o
-parser canônico. Modelo, device, precision, quantização, token limit e
-temperature formam o fingerprint e permanecem disponíveis na configuração
-efetiva da execução.
+parser canônico. Modelo, device, precision, quantização, token limit,
+temperature e, quando configurado, o orçamento de entrada visual
+(`min_pixels`/`max_pixels`) formam o fingerprint e permanecem disponíveis na
+configuração efetiva da execução.
 
 O seam de runtime mantém Transformers/Torch e objetos Qwen fora dos contratos.
 Falha ou indisponibilidade de Qwen é propagada; não existe fallback implícito.
-Métricas de tokens, latência, memória e warnings são registradas quando o
-runtime consegue medi-las. A cobertura CI usa runtime fake determinístico. Um
+Métricas de tokens, latência, memória, warnings e o que cada view virou na
+entrada do modelo (`visual_inputs`) são registradas quando o runtime consegue
+medi-las. A cobertura CI usa runtime fake determinístico. Um
 diagnóstico com Qwen3-VL-4B real em três requests REGION motivou a tolerância
 registrada para `scene_context` omitido (#340).
 
@@ -286,6 +291,30 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   `top_p`/`top_k` herdados do `generation_config` do checkpoint; um valor
   positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
   pela revisão).
+- **Orçamento de entrada visual (#526).** `min_pixels`/`max_pixels` limitam a
+  contagem de pixels (altura × largura) de **cada** view depois do resize do
+  processor, que preserva o aspecto e arredonda cada lado para múltiplo de
+  `patch_size × merge_size` (28 px no Qwen2.5-VL, 32 px no Qwen3-VL); cada
+  quadrado com esse lado é um token visual. O orçamento não limita o total do
+  request: com N views, o custo visual é a soma das N. Os dois limites são
+  configurados juntos ou nenhum, porque um orçamento parcial deixaria o outro
+  limite no default não registrado do checkpoint. Configurado, o orçamento é
+  passado a `AutoProcessor.from_pretrained(min_pixels=..., max_pixels=...)`, o
+  caminho documentado pelo Qwen2.5-VL: no transformers 5.x essas chaves
+  substituem as do `preprocessor_config.json` e viram
+  `image_processor.size = {shortest_edge, longest_edge}`, também no Qwen3-VL
+  (passar só `size` seria sobrescrito pelas chaves do Qwen2.5-VL). Antes de
+  carregar os pesos, o runtime confere em `image_processor.size` que o orçamento
+  foi aplicado; um processor que o ignorou, ou um `max_pixels` menor que
+  `(patch_size × merge_size)²` (o menor tamanho que o processor produz), é
+  `QwenModelLoadError`. Sem orçamento, nada é passado ao processor e vale o
+  default do checkpoint na revisão fixada (Qwen2.5-VL: 3 136 a 12 845 056 px;
+  Qwen3-VL-4B: 65 536 a 16 777 216 px, isto é, até 16 384 tokens visuais por
+  imagem); as chaves ficam fora da configuração efetiva, e o fingerprint de uma
+  configuração anterior ao #526 não muda. O resize do processor é o único: o
+  runtime entrega a imagem decodificada dos bytes verificados, sem resize
+  próprio. Não existe limite de tokens visuais por request, porque o processor
+  não o aplica e impô-lo exigiria uma política de resize do próprio runtime.
 - **Evidência e prompt.** As views chegam como imagens, na ordem do request,
   seguidas do prompt renderizado da política que o request seleciona
   (`region/v1`, `scene/v1` ou outra entrada do catálogo). O runtime não acrescenta
@@ -299,6 +328,24 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   gera um warning, porque o JSON provavelmente foi truncado e essa falha de
   parsing não é falha semântica do modelo. `load()` permite carregar antes de
   medir latência, para que o load único não seja atribuído à primeira request.
+- **Entrada visual medida.** `SemanticBackendDiagnostics.visual_inputs` traz,
+  para cada view e na ordem do request, altura e largura em pixels depois do
+  resize e os tokens visuais, medidos do `image_grid_thw` do processor
+  (`h·patch_size × w·patch_size` px e `t·h·w / merge_size²` tokens);
+  `input_tokens` já inclui esses tokens. Um processor que não devolve
+  exatamente um grid por view é `QwenInferenceError`: nenhuma imagem é
+  descartada ou acrescentada em silêncio. As medições são diagnóstico da
+  execução, nunca identidade. Assim, cada registro de execução (e de falha de
+  parsing) guarda juntos o número de views (o request), o orçamento
+  (configuração efetiva) e o que cada view virou (diagnostics).
+- **Falta de memória.** `torch.cuda.OutOfMemoryError` durante a request vira
+  `QwenOutOfMemoryError`, subclasse de `QwenInferenceError`; não há retry,
+  resize nem fallback. Como o estágio que falha guarda só a mensagem, ela nomeia
+  o número de views, o orçamento em vigor (o configurado ou o default do
+  checkpoint, lido do processor carregado), o que cada view mediu,
+  `input_tokens` e o pico de memória: um arm que estoura memória é atribuível a
+  um orçamento registrado, não a um default desconhecido. Falta de memória em
+  CPU não tem tipo próprio no torch e continua `QwenInferenceError`.
 
 O runtime não corrige nem reinterpreta a resposta: o texto gerado segue para o
 parser canônico, e uma resposta fora do schema continua sendo falha explícita de
@@ -364,6 +411,20 @@ enviar frames a um serviço externo exige consentimento explícito. A validaçã
 fake/contract: testes com módulos SDK falsos (rodam na CI) e testes que usam o
 SDK real com `httpx.MockTransport` (pulados se o SDK não está instalado), que
 fixam o formato da requisição e o mapeamento dos erros reais sem rede.
+
+## Adapter Eagle 2.5
+
+`EagleSemanticInterpreter` executa o VLM Eagle 2.5 (NVlabs) pelo mesmo request, a mesma
+política de prompt selecionada pelo request e o mesmo parser `UNSCORED_ONLY` de Qwen e Gemini,
+sem modelo de evidência próprio. Declara os modos `SCENE`/`REGION` e todos os tipos de view,
+sem features nem contexto de cena. Várias views viram várias imagens de uma mesma mensagem, na
+ordem do request. `EagleSemanticConfig` exige, além de modelo, revisão, device, precisão e
+geração, o orçamento visual do processor `eagle_2_5_vl` (`max_dynamic_tiles`, mais
+`min_dynamic_tiles` e `use_thumbnail`), que entra no fingerprint; o runtime transformers
+(`HuggingFaceEagleRuntime`, `trust_remote_code` só na revisão fixada e só do cache local) envia
+esse orçamento explicitamente ao processor e recusa, antes da geração, tiles que o excedam.
+Detalhes, o que vem do upstream e o que é adaptado, e a licença não comercial dos pesos estão em
+[`eagle2_5.md`](eagle2_5.md). Não há execução real registrada.
 
 ## Adapter Florence-2
 
@@ -460,7 +521,7 @@ ou checkpoint disponível, falha com erro explícito.
 ## Avaliação
 
 `contextmap.evaluation.semantic_interpretation` fornece um report comum para
-Qwen, Gemini e Florence-2. O contexto registra reference-set, seleção, run,
+Qwen, Gemini, Florence-2 e Eagle 2.5. O contexto registra reference-set, seleção, run,
 artifact, pipeline digest e versão do evaluator. Cada amostra preserva request,
 região, evidence variant, backend/model/config, prompt e métricas. Qualidade e
 custo permanecem em blocos distintos. O baseline usa a policy versionada
@@ -483,6 +544,8 @@ O branch de integração materializa:
   `UNSCORED_ONLY` para não promover confidence auto-relatada pelo VLM;
 - Florence-2 implementa o mesmo boundary por adapter separado de Region
   Discovery;
+- Eagle 2.5 implementa o mesmo boundary com orçamento visual explícito e
+  verificado, ainda sem execução real;
 - os runtimes reais de Qwen e Florence-2 e o cliente do Gemini verificam o
   SHA-256 de cada view antes de abrir a imagem ou enviar bytes ao provider;
 - auditoria possui níveis explícitos e redaction de secrets;
@@ -510,7 +573,10 @@ O branch de integração materializa:
   Runtime e adapters também têm testes com módulos SDK falsos, e o harness de
   avaliação usa execuções canônicas construídas em teste. Isso valida contratos,
   mapeamentos, falhas, redação de segredos e a aritmética do avaliador, não a
-  qualidade de um backend.
+  qualidade de um backend. O orçamento de entrada visual do Qwen (#526) também
+  só foi validado com processor e modelo falsos: o perfil real (1 a 4 views,
+  vários orçamentos, nf4 e um arm não nf4, com tokens visuais, latência, pico
+  de VRAM, taxa de OOM e qualidade do parser) exige GPU e continua pendente.
 
 Não há anotações semânticas humanas para a amostra, então correção,
 alucinação, abstenção esperada, campos de cena e visibilidade são N/A e nenhum

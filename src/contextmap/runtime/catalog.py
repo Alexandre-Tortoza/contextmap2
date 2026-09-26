@@ -283,6 +283,7 @@ _COMPONENT_LIST: tuple[ComponentSpec, ...] = (
         BackendSpec(backend_id="qwen", device_parameter="device"),
         BackendSpec(backend_id="gemini", secrets=("GEMINI_API_KEY",)),
         BackendSpec(backend_id="florence2", device_parameter="device"),
+        BackendSpec(backend_id="eagle2_5", device_parameter="device"),
     ),
     _component(
         "state_estimation",
