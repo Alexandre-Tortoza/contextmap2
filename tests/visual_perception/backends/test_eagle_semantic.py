@@ -12,13 +12,16 @@ import pytest
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
     SEMANTIC_PROMPT_TEMPLATES,
+    BackendProvenance,
     FeatureId,
     FeatureScope,
     PerceptionResultId,
     RegionId,
+    SceneContext,
     SemanticConfidencePolicy,
     SemanticEvidenceReference,
     SemanticFeatureReference,
+    SemanticInferenceProvenance,
     SemanticInterpretationFailedError,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -289,6 +292,27 @@ class TestPromptPolicy:
         )
 
 
+def _prior_scene_context() -> SceneContext:
+    """The scene context a conditioned region request would carry (#529)."""
+    return SceneContext(
+        source_observation_id=SourceObservationId("frame-0124"),
+        perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+        provenance=SemanticInferenceProvenance(
+            backend=BackendProvenance(
+                backend_id="qwen_semantic",
+                capability="semantic_interpreter",
+                provider="qwen",
+                model="Qwen/Qwen-x",
+                version="1",
+            ),
+            task_identity="qwen-scene-interpretation",
+            prompt_template_id="scene/v1",
+            output_schema_version="semantic-response/1",
+        ),
+        scene_type="warehouse",
+    )
+
+
 class TestFailsBeforeInference:
     @pytest.mark.parametrize(
         ("changes", "message"),
@@ -314,7 +338,8 @@ class TestFailsBeforeInference:
                 {
                     "scene_context_reference": SemanticEvidenceReference(
                         evidence_type="scene_context", evidence_id="run-0001--frame-0124"
-                    )
+                    ),
+                    "scene_context": _prior_scene_context(),
                 },
                 "does not accept scene context",
             ),

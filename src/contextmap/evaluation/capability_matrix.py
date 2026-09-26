@@ -475,7 +475,7 @@ _SCORING_LIMITATIONS = (
     "another scorer's values (#530 evaluates it)",
 )
 
-CAPABILITY_MATRIX_VERSION = "1.2.0"
+CAPABILITY_MATRIX_VERSION = "1.4.0"
 """Version of :data:`CAPABILITY_MATRIX`; a changed entry is a new version."""
 
 CAPABILITY_MATRIX = CapabilityMatrix(
@@ -841,7 +841,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             input_evidence=("SemanticInterpretationRequest (SCENE, one FULL_FRAME view)",),
             output_evidence=("SemanticClaim (the caption as one primary hypothesis)",),
             geometry=Geometry.NONE,
-            prompt_controls=_set("task"),
+            prompt_controls=_set("task", "view_policy"),
             model_controls=_set(
                 "checkpoint", "revision", "precision", "max_new_tokens", "temperature"
             ),
@@ -874,13 +874,14 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             ),
             output_evidence=("SemanticClaim (one primary hypothesis)",),
             geometry=Geometry.NONE,
-            prompt_controls=_set("task"),
+            prompt_controls=_set("task", "view_policy"),
             model_controls=_set(
                 "checkpoint", "revision", "precision", "max_new_tokens", "temperature"
             ),
             provenance=_INTERPRETATION_PROVENANCE,
             limitations=(
-                "accepts exactly one region-filling view; no multi-view or scene context",
+                "accepts exactly one region-filling view (max_visual_views=1): view_policy must "
+                "declare a single tight_crop or masked_subject; no scene context",
                 "task-native prompt: not comparable with instruction-following VLMs",
             ),
             upstream_roles=(Role.SEMANTIC_VIEW_ASSEMBLY,),
@@ -906,7 +907,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             ),
             output_evidence=("SemanticClaim (the description as one primary hypothesis)",),
             geometry=Geometry.NONE,
-            prompt_controls=_set("task"),
+            prompt_controls=_set("task", "view_policy"),
             model_controls=_set(
                 "checkpoint", "revision", "precision", "max_new_tokens", "temperature"
             ),
@@ -1138,11 +1139,18 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             input_evidence=("PreparedImage", "Region2D"),
             output_evidence=("SemanticVisualView (sha256)",),
             geometry=Geometry.NONE,
-            prompt_controls=(_planned("view_policy", 524), _planned("request_policy", 544)),
-            provenance=("SemanticVisualView(kind, payload_reference, sha256, region_id)",),
+            provenance=(
+                "SemanticVisualView(kind, payload_reference, sha256, region_id, construction)",
+                "SemanticViewPolicy.fingerprint() (semantic-views/1)",
+                "SemanticRequestPolicy.fingerprint() (semantic-request-policy/1, #544)",
+            ),
             limitations=(
-                "today one FULL_FRAME view per scene request and one TIGHT_CROP (region box) per "
-                "region request; masked/contextual and multi-view policies arrive with #524",
+                "the ordered views come from the semantic backend's view_policy (#524): one "
+                "FULL_FRAME view per scene request; per region request exactly the declared "
+                "masked_subject/tight_crop/contextual_crop/full_frame views, in order",
+                "masked_subject needs a region with an inline mask (SAM2/SAM3), never a box",
+                "views keep the prepared image's pixel grid; resolution budgets are backend "
+                "configuration (#526)",
             ),
             upstream_roles=(Role.REGION_DISCOVERY, Role.REGION_GROUNDING, Role.REGION_REFINEMENT),
             downstream_roles=(Role.SEMANTIC_INTERPRETATION,),
@@ -1164,10 +1172,12 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 ),
                 geometry=Geometry.NONE,
                 prompt_controls=(
-                    *_set("prompt_policy"),
-                    _planned("view_policy", 524),
-                    *((_planned("scene_context", 529),) if mode == "region" else ()),
-                    _planned("request_policy", 544),
+                    *_set("prompt_policy", "view_policy"),
+                    *(
+                        _set("prompt_policy.region_scene_context")
+                        if mode == "region" and accepts_scene_context
+                        else ()
+                    ),
                 ),
                 model_controls=model_controls,
                 provenance=_INTERPRETATION_PROVENANCE,
@@ -1177,7 +1187,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 comparison_group=f"{mode}_interpretation.instruction_following",
                 metric_family=EvaluationStage.SEMANTIC_INTERPRETATION,
             )
-            for family, backend, adapter, model_controls, limitations in (
+            for family, backend, adapter, model_controls, limitations, accepts_scene_context in (
                 (
                     "qwen",
                     "Qwen",
@@ -1195,8 +1205,10 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                     (
                         "local; nf4/int8 quantization changes outputs and is part of the identity",
                         "self-reported confidence is never promoted (UNSCORED_ONLY)",
-                        "no scene-context conditioning yet (#529)",
+                        "region requests can be conditioned on the frame's scene context "
+                        "(region-scene-context/v1, #529)",
                     ),
+                    True,
                 ),
                 (
                     "gemini",
@@ -1214,7 +1226,10 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                         "remote: frames leave the machine; needs GEMINI_API_KEY and consent",
                         "the provider model is not pinnable to a commit; validated only with a "
                         "simulated transport",
+                        "region requests can be conditioned on the frame's scene context "
+                        "(region-scene-context/v1, #529)",
                     ),
+                    True,
                 ),
                 (
                     "eagle2_5",
@@ -1235,7 +1250,10 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                         "the visual tokens per view",
                         "single observation only: video/multi-observation requests are out of "
                         "scope (#571); never executed on real weights here",
+                        "declares accepts_scene_context=False: scene-context conditioning is "
+                        "refused at composition",
                     ),
+                    False,
                 ),
             )
             for mode in ("scene", "region")
@@ -1627,7 +1645,7 @@ CAPABILITY_MATRIX = CapabilityMatrix(
                 producer=producer,
                 consumer="contextmap2.semantic_view_assembly",
                 status=CompositionStatus.SUPPORTED,
-                note="each accepted region gets one TIGHT_CROP view of its box",
+                note="each accepted region gets the ordered views of the view_policy",
             )
             for producer in ("sam2.automatic_mask_generation", "florence2.object_detection")
         ),
@@ -1651,13 +1669,23 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             )
             for consumer, note in (
                 ("qwen.scene_interpretation", "one FULL_FRAME view per frame"),
-                ("qwen.region_interpretation", "one TIGHT_CROP view per region"),
+                ("qwen.region_interpretation", "the view_policy's ordered views per region"),
                 ("gemini.scene_interpretation", "one FULL_FRAME view, sent to the provider"),
-                ("gemini.region_interpretation", "one TIGHT_CROP view, sent to the provider"),
+                (
+                    "gemini.region_interpretation",
+                    "the view_policy's ordered views, sent to the provider",
+                ),
                 ("eagle2_5.scene_interpretation", "one FULL_FRAME view, tiled by the processor"),
-                ("eagle2_5.region_interpretation", "one TIGHT_CROP view, tiled by the processor"),
+                (
+                    "eagle2_5.region_interpretation",
+                    "the view_policy's ordered views, each tiled by the processor",
+                ),
                 ("florence2.scene_caption", "one FULL_FRAME view"),
-                ("florence2.region_category", "one TIGHT_CROP view, the only kind it accepts"),
+                (
+                    "florence2.region_category",
+                    "one tight_crop or masked_subject view; any other view_policy is refused at "
+                    "composition",
+                ),
             )
         ),
         # ---------------------------------------------------------------- semantic scoring

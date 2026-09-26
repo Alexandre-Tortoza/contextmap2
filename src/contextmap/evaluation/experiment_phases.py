@@ -73,12 +73,14 @@ from contextmap.evaluation.metrics import EvaluationStage, MetricRegistryIdentit
 from contextmap.evaluation.report_schema import ArtifactIdentity
 from contextmap.runtime import (
     CONFIG_SCHEMA_VERSION,
+    BackendConfigurationError,
     ConfigurationError,
     EffectiveConfig,
     PlannedStage,
     check_selection,
     resolve_effective_config,
     resolve_plan,
+    resolve_semantic_request_policy,
 )
 
 PHASE_SCHEMA = "contextmap.experiment-phase/v1"
@@ -92,6 +94,7 @@ BASELINE_ARM_ID = "baseline"
 
 _BACKEND_VERSION = f"runtime-config/{CONFIG_SCHEMA_VERSION}"
 _STAGE_BACKEND = "stage"
+_SEMANTIC_COMPONENT = "visual_perception.semantic_interpretation"
 _CONFIGURATION_KINDS = frozenset(
     {
         VariationKind.BACKEND,
@@ -452,6 +455,8 @@ class PhaseArm:
         topology_digest: Digest of the arm's resolved topology.
         capabilities: The matrix capabilities the arm uses.
         edges: The producer -> consumer wiring the arm uses.
+        request_policy_fingerprint: Identity of the semantic request policy (prompt, ordered
+            views, scene context) the arm resolves to, when it interprets semantics.
         duplicate_of: The arm this one duplicates, when skipped as a duplicate.
     """
 
@@ -464,6 +469,7 @@ class PhaseArm:
     topology_digest: str
     capabilities: tuple[str, ...]
     edges: tuple[tuple[str, str], ...]
+    request_policy_fingerprint: str | None
     duplicate_of: str | None = None
 
     def to_record(self) -> dict[str, Any]:
@@ -478,6 +484,7 @@ class PhaseArm:
             "topology_digest": self.topology_digest,
             "capabilities": list(self.capabilities),
             "edges": [list(edge) for edge in self.edges],
+            "request_policy_fingerprint": self.request_policy_fingerprint,
             "duplicate_of": self.duplicate_of,
         }
 
@@ -619,8 +626,24 @@ def _expand_arm(
         topology_digest=topology.digest(),
         capabilities=capabilities,
         edges=edges,
+        request_policy_fingerprint=_request_policy_fingerprint(effective, owned, arm_id),
     )
     return _Resolved(arm=arm, effective=effective, topology=topology, stage_of=stage_of)
+
+
+def _request_policy_fingerprint(
+    effective: EffectiveConfig, owned: set[str], arm_id: str
+) -> str | None:
+    """Return the identity of the arm's semantic request policy, resolved without a backend."""
+    component = effective.config.components.get(_SEMANTIC_COMPONENT)
+    if _SEMANTIC_COMPONENT not in owned or component is None or component.backend is None:
+        return None
+    try:
+        return resolve_semantic_request_policy(effective).fingerprint()
+    except (ConfigurationError, BackendConfigurationError) as error:
+        raise PhaseExpansionError(
+            f"the semantic request policy of arm {arm_id!r} does not resolve: {error}"
+        ) from error
 
 
 def _included_stages(

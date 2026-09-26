@@ -102,8 +102,11 @@ hipótese primária da variante de referência (`primary_agreement_count` de
 de cada variante (tipos de view, features, scene context) são lidos dos requests,
 não do rótulo da variante, e os `prompt_template_id` de cada lado são listados,
 então uma ablação de prompt também é observável. `with/without SceneContext`
-exige um backend que aceite `scene_context_reference`; nenhum adapter atual o
-aceita.
+exige um backend que aceite `scene_context_reference`: desde #529, Qwen e Gemini
+aceitam (o contexto é renderizado por `region-scene-context/v1`), e o gancho roda
+sobre execuções reais desses adapters com runtimes/clients fake na CI; o
+Florence-2 continua sem suporte. Os dois braços usam o mesmo template, então a
+lista de `prompt_template_id` é idêntica e só o canal `scene_context` difere.
 
 `encode_semantic_evaluation_report()`, `encode_semantic_backend_comparison()` e
 `encode_evidence_variant_comparison()` devolvem primitivas JSON com todas as

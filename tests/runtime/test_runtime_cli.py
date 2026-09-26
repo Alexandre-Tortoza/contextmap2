@@ -337,6 +337,7 @@ class TestDryRun:
                 "max_retries": 1,
                 "temperature": 0.0,
                 "prompt_policy": {"scene": "scene/v1", "region": "region/v1"},
+                "view_policy": {"region_views": ["tight_crop"]},
             },
         }
 
@@ -1155,6 +1156,7 @@ class TestLifecycleCommands:
                 "max_retries": 1,
                 "temperature": 0.0,
                 "prompt_policy": {"scene": "scene/v1", "region": "region/v1"},
+                "view_policy": {"region_views": ["tight_crop"]},
             },
         }
         world = World()

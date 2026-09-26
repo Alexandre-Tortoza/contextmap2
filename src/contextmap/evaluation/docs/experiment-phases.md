@@ -11,7 +11,7 @@
 | `FactorLevel` | overrides `components.*` e `pipeline.stages.*` da configuração do runtime, capacidades que nenhum componente seleciona (um scorer, uma fonte 3D bloqueada) e arestas produtor → consumidor |
 | `MatchedParameters` | parâmetros que todo arm executável dá ao backend selecionado de um componente (política de prompt e de views de Qwen × Eagle 2.5, por exemplo) |
 
-Os nomes dos campos da configuração são os do runtime (por exemplo `components.visual_perception.semantic_interpretation.<backend>.prompt_policy`, `...qwen.min_pixels`, `components.visual_perception.region_grounding.locateanything.query_set`); a camada não conhece nenhum campo específico, então políticas novas (#524, #529, #544) entram como overrides sem mudar o código.
+Os nomes dos campos da configuração são os do runtime: `components.visual_perception.semantic_interpretation.<backend>.prompt_policy` (com `region_scene_context` para Qwen e Gemini, #529), `...<backend>.view_policy` (`region_views` e os parâmetros de cada view, #524), `...qwen.min_pixels`/`max_pixels` e `components.visual_perception.region_grounding.locateanything.query_set`. A camada não conhece nenhum campo específico: uma política nova entra como override sem mudar o código.
 
 ## As onze fases
 
@@ -34,18 +34,19 @@ Mudança de topologia (inserir o refino, ligar o grounding) é sempre um fator `
 `expand_phase(spec)`:
 
 1. resolve cada arm pelo runtime: `resolve_effective_config` (base + overrides dos níveis), `resolve_plan` (problemas estruturais) e `check_selection` nos componentes dos estágios do arm. Um arm que não resolve **falha a fase**. Os parâmetros de cada backend só são validados na composição, que carrega o adapter; por isso não entram aqui;
-2. monta a topologia do arm: os alvos e todos os estágios a montante, com **um nó por ponto de variação selecionado** (`visual_perception.region_refinement`, ...), cuja configuração é o bloco resolvido do componente; um nó depende dos nós dos estágios de entrada, e os estágios pinados levam o artifact imutável;
-3. mapeia cada seleção inventariada pela matriz para suas capacidades (o `task` do Florence-2, a `strategy` do SAM3, o `policy_id` de cada query do LocateAnything). Uma seleção que a matriz não reconhece (SAM3 `automatic`, por exemplo) **falha a fase**;
-4. confere a fiação: uma aresta cujo extremo não está no arm, não declarada, `incompatible` ou `not_scientifically_comparable` **falha a fase**; uma capacidade ou aresta `planned`/`blocked` mantém o arm, `blocked`, com o motivo exato da matriz e a issue (scorers semânticos #527, prompt visual do LocateAnything #574, LocateAnything3D #575);
-5. deduplica de forma determinística: arms com o mesmo digest de configuração efetiva, a mesma topologia e a mesma fiação ficam `skipped`, com `duplicate_of` apontando o primeiro na ordem das células;
-6. confere os parâmetros casados e que uma substituição **só de backend** mantém a tarefa: cada capacidade trocada precisa de uma contraparte do mesmo grupo de comparação (Qwen × Florence-2 `<REGION_TO_CATEGORY>` é recusado);
-7. com dois ou mais arms executáveis, monta o `ExperimentManifest` em modo `selected`, cuja construção aplica o #545: qualquer diferença não declarada entre um arm e o baseline falha a fase. Os campos de configuração declarados vêm dos overrides de cada fator.
+2. quando o arm interpreta semântica, resolve sua política de requisição com `resolve_semantic_request_policy` (#544), sem compor backend, e registra `request_policy_fingerprint`; uma política inválida (template de região que não renderiza contexto de cena, `view_policy` ausente) **falha a fase**;
+3. monta a topologia do arm: os alvos e todos os estágios a montante, com **um nó por ponto de variação selecionado** (`visual_perception.region_refinement`, ...), cuja configuração é o bloco resolvido do componente; um nó depende dos nós dos estágios de entrada, e os estágios pinados levam o artifact imutável;
+4. mapeia cada seleção inventariada pela matriz para suas capacidades (o `task` do Florence-2, a `strategy` do SAM3, o `policy_id` de cada query do LocateAnything). Uma seleção que a matriz não reconhece (SAM3 `automatic`, por exemplo) **falha a fase**;
+5. confere a fiação: uma aresta cujo extremo não está no arm, não declarada, `incompatible` ou `not_scientifically_comparable` **falha a fase**; uma capacidade ou aresta `planned`/`blocked` mantém o arm, `blocked`, com o motivo exato da matriz e a issue (scorers semânticos #527, prompt visual do LocateAnything #574, LocateAnything3D #575);
+6. deduplica de forma determinística: arms com o mesmo digest de configuração efetiva, a mesma topologia e a mesma fiação ficam `skipped`, com `duplicate_of` apontando o primeiro na ordem das células;
+7. confere os parâmetros casados e que uma substituição **só de backend** mantém a tarefa: cada capacidade trocada precisa de uma contraparte do mesmo grupo de comparação (Qwen × Florence-2 `<REGION_TO_CATEGORY>` é recusado);
+8. com dois ou mais arms executáveis, monta o `ExperimentManifest` em modo `selected`, cuja construção aplica o #545: qualquer diferença não declarada entre um arm e o baseline falha a fase. Os campos de configuração declarados vêm dos overrides de cada fator.
 
 Um baseline bloqueado falha a fase: sem ele nada se compara.
 
 ## Manifesto da fase
 
-`write_phase_manifest(root, manifest)` publica `phase.json` (`contextmap.experiment-phase/v1`), imutável e com digest. Ele guarda a declaração inteira (experimento, fase, fatores e níveis, células, composições, restrições: alvos, pinados, parâmetros casados), o digest da configuração base, a identidade do reference set, a versão da matriz, a identidade do `ExperimentManifest` e, por arm: id, atribuição dos fatores, estado e motivo, issues, digest da configuração efetiva, digest da topologia, capacidades, fiação e `duplicate_of`. Reexpandir a mesma declaração produz o mesmo documento.
+`write_phase_manifest(root, manifest)` publica `phase.json` (`contextmap.experiment-phase/v1`), imutável e com digest. Ele guarda a declaração inteira (experimento, fase, fatores e níveis, células, composições, restrições: alvos, pinados, parâmetros casados), o digest da configuração base, a identidade do reference set, a versão da matriz, a identidade do `ExperimentManifest` e, por arm: id, atribuição dos fatores, estado e motivo, issues, digest da configuração efetiva, digest da topologia, identidade da política de requisição semântica, capacidades, fiação e `duplicate_of`. Reexpandir a mesma declaração produz o mesmo documento.
 
 | `ArmState` | Quando |
 |---|---|

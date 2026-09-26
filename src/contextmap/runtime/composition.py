@@ -80,9 +80,8 @@ if TYPE_CHECKING:
         RegionDiscovery,
         RegionGrounding,
         RegionRefinement,
-        SemanticInterpretationMode,
         SemanticInterpreter,
-        SemanticPromptPolicy,
+        SemanticRequestPolicy,
     )
 
 RuntimeProvider = Callable[[Any, ResolvedSecrets], object]
@@ -182,24 +181,6 @@ class FeatureBuildScope:
 
 
 @dataclass(frozen=True, kw_only=True)
-class SemanticRequestPrompt:
-    """The prompt policy every Semantic Interpretation request of one mode names (#542).
-
-    It is selected by configuration before any inference and copied into each request, so
-    ``SemanticInterpretationRequest.prompt_template_id`` identifies the policy the interpreter
-    actually renders. Nothing here renders a prompt: rendering, and refusing a policy it
-    cannot consume, is the interpreter's own capability.
-
-    Attributes:
-        template_id: Becomes the request's ``prompt_template_id``.
-        output_schema: Becomes the request's ``requested_output_schema``.
-    """
-
-    template_id: str
-    output_schema: str
-
-
-@dataclass(frozen=True, kw_only=True)
 class RegionGroundingPlan:
     """The grounding backend of a run and the explicit queries it answers.
 
@@ -241,10 +222,10 @@ class ComposedRuntime:
         dense_features: Builds the dense feature extractor once a run scope exists.
         region_features: Builds the region feature extractor once a run scope exists.
         semantic_interpreter: Semantic interpretation backend.
-        semantic_prompts: The prompt policy the requests of each mode name: the configured
-            ``prompt_policy`` of an instruction-following backend (Qwen, Gemini), or the
-            task-native policy of Florence-2 for the one mode its task serves. A mode absent
-            here has no policy, and a request for it is refused instead of given a default.
+        semantic_request_policy: The resolved request policy of the run (#544): the prompt of
+            each interpreted mode (the configured ``prompt_policy`` of an instruction-following
+            backend, or Florence-2's task-native prompt for the one mode its task serves), the
+            configured ``view_policy`` and the scene-context switch, with one fingerprint.
         state_estimator: State estimation backend.
         geometric_mapping_pose_lookup: Pose lookup rule Geometric Mapping uses to place
             each scan.
@@ -281,7 +262,7 @@ class ComposedRuntime:
     dense_features: FeatureFactory | None = None
     region_features: FeatureFactory | None = None
     semantic_interpreter: SemanticInterpreter | None = None
-    semantic_prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt] | None = None
+    semantic_request_policy: SemanticRequestPolicy | None = None
     state_estimator: StateEstimator | None = None
     geometric_mapping_pose_lookup: LookupPolicy | None = None
     motion_correction: MotionCorrectionPolicy | None = None
@@ -807,118 +788,217 @@ def _alphaclip(context: _Context, component_id: str) -> FeatureFactory:
 
 @dataclass(frozen=True, kw_only=True)
 class _SemanticInterpretation:
-    """A semantic interpreter together with the prompt policy its requests will name."""
+    """A semantic interpreter with the resolved request policy its requests will follow."""
 
     interpreter: SemanticInterpreter
-    prompts: Mapping[SemanticInterpretationMode, SemanticRequestPrompt]
+    request_policy: SemanticRequestPolicy
 
 
-def _instruction_prompts(
-    policy: SemanticPromptPolicy,
-) -> Mapping[SemanticInterpretationMode, SemanticRequestPrompt]:
-    """Name, for each mode, the catalog template a configured ``prompt_policy`` selects."""
-    from contextmap.visual_perception import SemanticInterpretationMode
+def _semantic_interpretation(
+    context: _Context,
+    component_id: str,
+    *,
+    interpreter: SemanticInterpreter,
+    request_policy: SemanticRequestPolicy,
+) -> _SemanticInterpretation:
+    """Pair an interpreter with its request policy once it declares it can consume it.
 
-    return {
-        mode: SemanticRequestPrompt(
-            template_id=policy.template_for(mode).template_id,
-            output_schema=policy.template_for(mode).output_schema_version,
+    Raises:
+        BackendConfigurationError: If the interpreter's capabilities refuse a prompted mode, a
+            view kind or number of views, or scene-context conditioning. The check reads only
+            the declaration, so no model is loaded for it.
+    """
+    from contextmap.visual_perception import check_request_policy_supported
+
+    try:
+        check_request_policy_supported(request_policy, interpreter.capabilities())
+    except ValueError as error:
+        backend = context.component(component_id).backend or ""
+        raise BackendConfigurationError(
+            component_id, backend, [f"semantic request policy: {error}"]
+        ) from error
+    return _SemanticInterpretation(interpreter=interpreter, request_policy=request_policy)
+
+
+_INSTRUCTION_FOLLOWING = frozenset({"qwen", "gemini", "eagle2_5"})
+"""Semantic backends that render a configured free-form ``prompt_policy``."""
+
+_SEMANTIC_COMPONENT = "visual_perception.semantic_interpretation"
+
+
+def resolve_semantic_request_policy(effective: EffectiveConfig) -> SemanticRequestPolicy:
+    """Resolve the semantic request policy an effective configuration selects (#544).
+
+    Reads only the configuration: no provider is called, no model or backend is built, so an
+    experiment manifest can name an arm's treatment by
+    :meth:`~contextmap.visual_perception.SemanticRequestPolicy.fingerprint` before anything
+    runs. :func:`compose` composes exactly this policy and additionally checks it against the
+    interpreter's declared capabilities.
+
+    Args:
+        effective: The resolved configuration.
+
+    Returns:
+        The prompt of each interpreted mode, the ordered views and the scene-context switch.
+
+    Raises:
+        ConfigurationError: If no semantic interpretation backend is selected.
+        BackendConfigurationError: If the backend's ``prompt_policy``/``view_policy`` groups
+            are missing, invalid or not accepted by that backend.
+    """
+    component = effective.config.components.get(_SEMANTIC_COMPONENT)
+    if component is None or component.backend is None:
+        raise ConfigurationError.single(
+            "no semantic interpretation backend is selected, so there is no semantic request "
+            "policy to resolve",
+            path=f"components.{_SEMANTIC_COMPONENT}",
         )
-        for mode in SemanticInterpretationMode
-    }
+    return _request_policy(_SEMANTIC_COMPONENT, component)
+
+
+def _request_policy(component_id: str, component: ComponentConfig) -> SemanticRequestPolicy:
+    """Build the request policy from a semantic backend's reserved groups, and nothing else."""
+    from contextmap.visual_perception import (
+        SemanticInterpretationMode,
+        SemanticModePrompt,
+        SemanticPromptPolicy,
+        SemanticRequestPolicy,
+        SemanticViewPolicy,
+    )
+
+    backend = component.backend or ""
+    parameters = dict(component.parameters)
+    problems: list[str] = []
+    groups: dict[str, Any] = {}
+    wanted: dict[str, type[Any]] = {"view_policy": SemanticViewPolicy}
+    if backend in _INSTRUCTION_FOLLOWING:
+        wanted["prompt_policy"] = SemanticPromptPolicy
+    elif "prompt_policy" in parameters:
+        # Florence-2 consome o token da própria task; aceitar um prompt livre aqui seria
+        # registrá-lo como se tivesse sido consumido, então a limitação é reportada.
+        from contextmap.visual_perception.backends.florence2_semantic import TASK_PROMPT_POLICY
+
+        problems.append(
+            f"prompt_policy: Florence-2 consumes only its task-native prompt policy "
+            f"({TASK_PROMPT_POLICY}:<task>); select the task instead"
+        )
+    for name, group_type in wanted.items():
+        if name not in parameters:
+            problems.append(f"missing required parameter: {name}")
+            continue
+        try:
+            groups[name] = build_config(group_type, parameters[name])
+        except ParameterError as error:
+            problems.extend(f"{name}: {problem}" for problem in error.problems)
+    if problems:
+        raise BackendConfigurationError(component_id, backend, problems)
+    if backend in _INSTRUCTION_FOLLOWING:
+        return SemanticRequestPolicy.from_prompt_policy(
+            groups["prompt_policy"], views=groups["view_policy"]
+        )
+    from contextmap.visual_perception.backends.florence2_semantic import (
+        TASK_OUTPUT_SCHEMA,
+        Florence2SemanticConfig,
+        task_prompt_template_id,
+    )
+
+    # A task (e o modo que ela serve) é validada pela configuração do próprio Florence-2; o
+    # prompt nativo da task vale só para esse modo, e o outro fica sem prompt.
+    own = {name: value for name, value in parameters.items() if name not in wanted}
+    try:
+        config = build_config(Florence2SemanticConfig, own)
+    except ParameterError as error:
+        raise BackendConfigurationError(component_id, backend, list(error.problems)) from error
+    prompt = SemanticModePrompt(
+        template_id=task_prompt_template_id(config.task), output_schema=TASK_OUTPUT_SCHEMA
+    )
+    modes = config.supported_modes
+    return SemanticRequestPolicy(
+        views=groups["view_policy"],
+        scene=prompt if SemanticInterpretationMode.SCENE in modes else None,
+        region=prompt if SemanticInterpretationMode.REGION in modes else None,
+    )
+
+
+def _instruction_extras() -> dict[str, type[Any]]:
+    """Reserved groups of an instruction-following interpreter: both are always required."""
+    from contextmap.visual_perception import SemanticPromptPolicy, SemanticViewPolicy
+
+    return {"prompt_policy": SemanticPromptPolicy, "view_policy": SemanticViewPolicy}
 
 
 def _qwen(context: _Context, component_id: str) -> _SemanticInterpretation:
-    from contextmap.visual_perception import SemanticPromptPolicy
     from contextmap.visual_perception.backends.qwen import (
         QwenSemanticConfig,
         QwenSemanticInterpreter,
     )
 
-    config, extras = context.build(
-        component_id,
-        QwenSemanticConfig,
-        extras={"prompt_policy": SemanticPromptPolicy},
-        required=("prompt_policy",),
-    )
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, QwenSemanticConfig, extras=_instruction_extras())
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "QwenRuntime")
-    return _SemanticInterpretation(
+    return _semantic_interpretation(
+        context,
+        component_id,
         interpreter=QwenSemanticInterpreter(config=config, runtime=runtime),
-        prompts=_instruction_prompts(extras["prompt_policy"]),
+        request_policy=policy,
     )
 
 
 def _gemini(context: _Context, component_id: str) -> _SemanticInterpretation:
-    from contextmap.visual_perception import SemanticPromptPolicy
     from contextmap.visual_perception.backends.gemini import (
         GeminiSemanticConfig,
         GeminiSemanticInterpreter,
     )
 
-    config, extras = context.build(
-        component_id,
-        GeminiSemanticConfig,
-        extras={"prompt_policy": SemanticPromptPolicy},
-        required=("prompt_policy",),
-    )
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, GeminiSemanticConfig, extras=_instruction_extras())
     context.ensure_available(component_id)
     client = context.runtime(component_id, config, "GeminiClient")
-    return _SemanticInterpretation(
+    return _semantic_interpretation(
+        context,
+        component_id,
         interpreter=GeminiSemanticInterpreter(config=config, client=client),
-        prompts=_instruction_prompts(extras["prompt_policy"]),
+        request_policy=policy,
     )
 
 
 def _eagle2_5(context: _Context, component_id: str) -> _SemanticInterpretation:
-    from contextmap.visual_perception import SemanticPromptPolicy
     from contextmap.visual_perception.backends.eagle2_5 import (
         EagleSemanticConfig,
         EagleSemanticInterpreter,
     )
 
-    config, extras = context.build(
-        component_id,
-        EagleSemanticConfig,
-        extras={"prompt_policy": SemanticPromptPolicy},
-        required=("prompt_policy",),
-    )
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(component_id, EagleSemanticConfig, extras=_instruction_extras())
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "EagleRuntime")
-    return _SemanticInterpretation(
+    return _semantic_interpretation(
+        context,
+        component_id,
         interpreter=EagleSemanticInterpreter(config=config, runtime=runtime),
-        prompts=_instruction_prompts(extras["prompt_policy"]),
+        request_policy=policy,
     )
 
 
 def _florence2_semantic(context: _Context, component_id: str) -> _SemanticInterpretation:
+    from contextmap.visual_perception import SemanticViewPolicy
     from contextmap.visual_perception.backends.florence2_semantic import (
-        TASK_PROMPT_POLICY,
         Florence2SemanticConfig,
         Florence2SemanticInterpreter,
     )
 
-    if "prompt_policy" in context.component(component_id).parameters:
-        # Florence-2 consome o token da própria task; aceitar um prompt livre aqui seria
-        # registrá-lo como se tivesse sido consumido, então a limitação é reportada.
-        raise BackendConfigurationError(
-            component_id,
-            "florence2",
-            [
-                f"prompt_policy: Florence-2 consumes only its task-native prompt policy "
-                f"({TASK_PROMPT_POLICY}:<task>); select the task instead"
-            ],
-        )
-    config, _ = context.build(component_id, Florence2SemanticConfig)
+    policy = _request_policy(component_id, context.component(component_id))
+    config, _ = context.build(
+        component_id, Florence2SemanticConfig, extras={"view_policy": SemanticViewPolicy}
+    )
     context.ensure_available(component_id)
     runtime = context.runtime(component_id, config, "Florence2SemanticRuntime")
-    interpreter = Florence2SemanticInterpreter(config=config, runtime=runtime)
-    prompt = SemanticRequestPrompt(
-        template_id=interpreter.prompt_template_id,
-        output_schema=interpreter.output_schema_version,
-    )
-    return _SemanticInterpretation(
-        interpreter=interpreter, prompts={mode: prompt for mode in config.supported_modes}
+    return _semantic_interpretation(
+        context,
+        component_id,
+        interpreter=Florence2SemanticInterpreter(config=config, runtime=runtime),
+        request_policy=policy,
     )
 
 
@@ -1290,7 +1370,7 @@ def _compose_visual_perception(context: _Context) -> dict[str, object]:
     return {
         **composed,
         "semantic_interpreter": semantic.interpreter,
-        "semantic_prompts": semantic.prompts,
+        "semantic_request_policy": semantic.request_policy,
     }
 
 
@@ -1536,13 +1616,13 @@ def compose_executors(
         assert visual_perception.dense_features is not None
         assert visual_perception.region_features is not None
         assert visual_perception.semantic_interpreter is not None
-        assert visual_perception.semantic_prompts is not None
+        assert visual_perception.semantic_request_policy is not None
         executors["visual_perception"] = VisualPerceptionExecutor(
             region_discovery=visual_perception.region_discovery,
             dense_features=visual_perception.dense_features,
             region_features=visual_perception.region_features,
             semantic_interpreter=visual_perception.semantic_interpreter,
-            semantic_prompts=visual_perception.semantic_prompts,
+            semantic_request_policy=visual_perception.semantic_request_policy,
             region_grounding=visual_perception.region_grounding,
             region_refinement=visual_perception.region_refinement,
         )

@@ -53,7 +53,7 @@ VP = "components.visual_perception"
 SEMANTIC = f"{VP}.semantic_interpretation"
 REVISION = "1" * 40
 PROMPTS = {"scene": "scene/v1", "region": "region/v1"}
-VIEWS = {"region": "tight-crop/1"}
+VIEWS = {"region_views": ["tight_crop"]}
 QWEN = {
     f"{SEMANTIC}.backend": "qwen",
     f"{SEMANTIC}.qwen.model": "Qwen/Qwen3-VL-4B-Instruct",
@@ -272,13 +272,53 @@ def test_qwen_and_eagle_are_compared_under_a_matched_prompt_and_view_policy(
         INTERPRETER_FACTOR.levels[0],
         level(
             "eagle2_5",
-            {**EAGLE, f"{SEMANTIC}.eagle2_5.view_policy": {"region": "masked+tight/1"}},
+            {
+                **EAGLE,
+                f"{SEMANTIC}.eagle2_5.view_policy": {
+                    "region_views": ["masked_subject", "tight_crop"],
+                    "mask_fill_rgb": [0, 0, 0],
+                },
+            },
             edges=INTERPRETER_FACTOR.levels[1].edges,
         ),
     )
     with pytest.raises(PhaseExpansionError, match="view_policy") as error:
         expand_phase(replace(spec, factors=(other_views,)))
-    assert "masked+tight/1" in str(error.value) and "tight-crop/1" in str(error.value)
+    assert "masked_subject" in str(error.value)
+
+
+def test_each_arm_names_its_resolved_semantic_request_policy(
+    validated: ValidatedReferenceSet,
+) -> None:
+    conditioned = {**PROMPTS, "region": "region-scene-context/v1", "region_scene_context": True}
+    context = factor(
+        "scene_context",
+        VariationKind.EVIDENCE_CHANNELS,
+        level("none", {f"{SEMANTIC}.qwen.prompt_policy": PROMPTS}),
+        level("scene", {f"{SEMANTIC}.qwen.prompt_policy": conditioned}),
+    )
+
+    manifest = expand_phase(phase(validated, kind=PhaseKind.SCENE_CONTEXT, factors=(context,)))
+
+    fingerprints = [item.request_policy_fingerprint for item in manifest.arms]
+    assert all(str(item).startswith("sha256:") for item in fingerprints)
+    assert len(set(fingerprints)) == 2
+    experiment = manifest.experiment
+    assert experiment is not None
+    fields = {item.field for item in arm_differences(experiment.variables, *experiment.arms)}
+    assert fields == {"qwen.prompt_policy.region", "qwen.prompt_policy.region_scene_context"}
+    # Um template de região que não renderiza contexto de cena é recusado antes de qualquer modelo.
+    broken = replace(
+        context,
+        levels=(
+            context.levels[0],
+            level(
+                "scene", {f"{SEMANTIC}.qwen.prompt_policy": {**conditioned, "region": "region/v1"}}
+            ),
+        ),
+    )
+    with pytest.raises(PhaseExpansionError, match="scene context"):
+        expand_phase(phase(validated, kind=PhaseKind.SCENE_CONTEXT, factors=(broken,)))
 
 
 def test_a_backend_substitution_that_changes_the_task_is_refused(
@@ -289,7 +329,14 @@ def test_a_backend_substitution_that_changes_the_task_is_refused(
         {
             f"{SEMANTIC}.backend": "florence2",
             f"{SEMANTIC}.florence2.checkpoint": "florence-community/Florence-2-large",
+            f"{SEMANTIC}.florence2.revision": REVISION,
             f"{SEMANTIC}.florence2.task": "<REGION_TO_CATEGORY>",
+            f"{SEMANTIC}.florence2.supported_modes": ["region"],
+            f"{SEMANTIC}.florence2.device": "cuda",
+            f"{SEMANTIC}.florence2.precision": "float16",
+            f"{SEMANTIC}.florence2.max_new_tokens": 32,
+            f"{SEMANTIC}.florence2.temperature": 0.0,
+            f"{SEMANTIC}.florence2.view_policy": VIEWS,
         },
         edges=(("contextmap2.semantic_view_assembly", "florence2.region_category"),),
     )

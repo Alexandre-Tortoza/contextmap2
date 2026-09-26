@@ -138,8 +138,10 @@ Falhas são explícitas e nunca acionam fallback para outro backend:
 ## Seleção pelo runtime
 
 O runtime compõe o Eagle 2.5 como backend `eagle2_5` do componente
-`visual_perception.semantic_interpretation`, com o mesmo grupo obrigatório `prompt_policy` de Qwen
-e Gemini ([composição do runtime](../../runtime/docs/composition.md#política-de-prompt-semântico-542)).
+`visual_perception.semantic_interpretation`, com os mesmos grupos obrigatórios `prompt_policy` e
+`view_policy` de Qwen e Gemini ([composição do runtime](../../runtime/docs/composition.md#política-de-prompt-semântico-542)).
+Como o Eagle declara `accepts_scene_context=False`, `prompt_policy.region_scene_context = true` é
+recusado na composição.
 O modelo é fornecido por um `RuntimeProvider` que devolve um `EagleRuntime` (por exemplo, um
 `HuggingFaceEagleRuntime` construído com o `view_root` do run).
 
@@ -155,9 +157,10 @@ max_new_tokens = 256
 temperature = 0.0
 max_dynamic_tiles = 6
 prompt_policy = { scene = "scene/v1", region = "region/v1" }
+view_policy = { region_views = ["tight_crop"] }
 ```
 
-Sem `prompt_policy` ou sem `max_dynamic_tiles`, `compose()` levanta `BackendConfigurationError`
+Sem `prompt_policy`, sem `view_policy` ou sem `max_dynamic_tiles`, `compose()` levanta `BackendConfigurationError`
 antes de pedir o runtime. Na data desta implementação o commit de `main` do repositório
 `nvidia/Eagle2.5-8B` era `61e45235a1e4a35222b86383479b3b004f4809d7`; ele não foi executado aqui e
 serve só como ponto de partida para fixar a revisão de uma execução real.

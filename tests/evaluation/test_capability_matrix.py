@@ -30,6 +30,7 @@ from contextmap.evaluation.capability_matrix import (
 from contextmap.evaluation.metrics import MetricKind, default_metric_registry
 from contextmap.runtime.catalog import CANONICAL_PRESET, COMPONENTS
 from contextmap.runtime.composition import composable_backends
+from contextmap.visual_perception import SemanticPromptPolicy, SemanticViewPolicy
 from contextmap.visual_perception.backends.florence2 import Florence2Config
 from contextmap.visual_perception.backends.florence2_semantic import FLORENCE2_SEMANTIC_TASKS
 from contextmap.visual_perception.backends.locateanything import (
@@ -94,20 +95,26 @@ _BACKEND_CONFIGURATION = {
     ),
     ("visual_perception.semantic_interpretation", "qwen"): (
         "contextmap.visual_perception.backends.qwen.QwenSemanticConfig",
-        {"prompt_policy"},
+        {"prompt_policy", "view_policy"},
     ),
     ("visual_perception.semantic_interpretation", "gemini"): (
         "contextmap.visual_perception.backends.gemini.GeminiSemanticConfig",
-        {"prompt_policy"},
+        {"prompt_policy", "view_policy"},
     ),
     ("visual_perception.semantic_interpretation", "eagle2_5"): (
         "contextmap.visual_perception.backends.eagle2_5.EagleSemanticConfig",
-        {"prompt_policy"},
+        {"prompt_policy", "view_policy"},
     ),
     ("visual_perception.semantic_interpretation", "florence2"): (
         "contextmap.visual_perception.backends.florence2_semantic.Florence2SemanticConfig",
-        set(),
+        {"view_policy"},
     ),
+}
+
+
+_GROUPS: dict[str, type] = {
+    "prompt_policy": SemanticPromptPolicy,
+    "view_policy": SemanticViewPolicy,
 }
 
 
@@ -238,6 +245,13 @@ def test_every_supported_control_is_a_parameter_the_backend_reads() -> None:
         path, reserved = _BACKEND_CONFIGURATION[(binding.component_id, str(binding.backend_id))]
         fields = {field.name for field in dataclasses.fields(_symbol(path))}  # type: ignore[arg-type]
         for control in controls:
+            group, _, field = control.name.partition(".")
+            if field:
+                # Campo de um grupo reservado: o grupo precisa ser lido e declarar o campo.
+                assert group in reserved, f"{item.capability_id}: {control.name}"
+                group_fields = {entry.name for entry in dataclasses.fields(_GROUPS[group])}
+                assert field in group_fields, f"{item.capability_id}: {control.name}"
+                continue
             assert control.name in fields | reserved, f"{item.capability_id}: {control.name}"
 
 
