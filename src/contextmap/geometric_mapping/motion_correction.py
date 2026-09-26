@@ -21,6 +21,7 @@ See ``src/contextmap/geometric_mapping/docs/motion-correction.md``.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -157,6 +158,11 @@ def verify_motion_correction(
 ) -> list[str]:
     """Check that a record agrees with the scan it describes.
 
+    The record must name the scan's observation, the scan's timestamp must lie in
+    the declared acquisition interval on the same clock and, for a ``CORRECTED``
+    record, the evidence's ``payload_hash`` must be the SHA-256 of the payload the
+    scan actually delivers.
+
     Args:
         record: The declared state.
         observation: The scan.
@@ -180,6 +186,13 @@ def verify_motion_correction(
             )
         elif not start.total_nanoseconds() <= stamp.total_nanoseconds() <= end.total_nanoseconds():
             problems.append("the scan timestamp lies outside its acquisition interval")
+    if record.evidence is not None:
+        actual = f"sha256:{hashlib.sha256(observation.data).hexdigest()}"
+        if record.evidence.payload_hash != actual:
+            problems.append(
+                f"the correction evidence names payload {record.evidence.payload_hash} but the "
+                f"scan delivers payload {actual}"
+            )
     return problems
 
 

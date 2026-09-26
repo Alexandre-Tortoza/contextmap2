@@ -32,7 +32,7 @@ Regras validadas na construção:
 - evidência em um scan `RAW` ou `UNKNOWN` é recusada: não se pode carregar um argumento de correção em um scan que não a tem;
 - o intervalo de aquisição deve ser completo, ordenado e em um único clock.
 
-`verify_motion_correction(record, observation)` confere o registro contra o scan e devolve uma lista de problemas legíveis: observação diferente, clock do scan diferente do clock do intervalo, e timestamp do scan fora do intervalo declarado. Lista vazia significa consistente.
+`verify_motion_correction(record, observation)` confere o registro contra o scan e devolve uma lista de problemas legíveis: observação diferente, clock do scan diferente do clock do intervalo, timestamp do scan fora do intervalo declarado e, para um registro `CORRECTED`, `payload_hash` da evidência diferente do SHA-256 do payload realmente entregue pelo scan (#595; a mensagem cita os dois hashes). Lista vazia significa consistente.
 
 ## `MotionCorrectionEvidence`
 
