@@ -30,6 +30,10 @@ from contextmap.runtime.errors import ReuseError
 REUSE_SCHEMA_VERSION = "0.1.0"
 """Version of the index entry and reuse key documents."""
 
+SOURCE_IDENTITY = "source"
+"""Name of the extra identity a stage without upstream inputs must declare to be reused: what it
+reads from outside the DAG (for ingestion, the recording, topics, window and synchronization)."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class ReuseKey:

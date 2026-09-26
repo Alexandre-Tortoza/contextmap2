@@ -814,11 +814,14 @@ class TestAsTheIngestionStageOfTheDag:
         service: IngestionService,
         *,
         stage_id: str = "ingestion",
+        request: IngestionRequest | None = None,
         **options: Any,
     ) -> Any:
         effective, execution = self._plan(tmp_path)
         journal = RunJournal.create(tmp_path / "ws", effective, execution)
-        executor = IngestionStageExecutor(service, make_request(tmp_path), stage_id=stage_id)
+        executor = IngestionStageExecutor(
+            service, request or make_request(tmp_path), stage_id=stage_id
+        )
         return journal, run_plan(
             execution,
             {"ingestion": executor},
@@ -873,10 +876,21 @@ class TestAsTheIngestionStageOfTheDag:
     ) -> None:
         (tmp_path / "a").mkdir()
         (tmp_path / "b").mkdir()
-        _, first = self._run(tmp_path / "a", _service())
-        _, second = self._run(tmp_path / "b", _service())
+        source = make_request(tmp_path)
+        _, first = self._run(tmp_path / "a", _service(), request=source)
+        _, second = self._run(tmp_path / "b", _service(), request=source)
 
         assert first.stages[0].output.artifact_id == second.stages[0].output.artifact_id
+
+    def test_the_artifact_identity_depends_on_the_source_it_ingests(self, tmp_path: Path) -> None:
+        # Regressão RT-01: a identidade do estágio-fonte era só stage + config, então dois bags
+        # diferentes publicavam o mesmo artifact_id.
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        _, first = self._run(tmp_path, _service(), request=make_request(tmp_path / "a"))
+        _, second = self._run(tmp_path, _service(), request=make_request(tmp_path / "b"))
+
+        assert first.stages[0].output.artifact_id != second.stages[0].output.artifact_id
 
     def test_the_same_ingestion_is_reused_by_identity_and_a_changed_one_is_recomputed(
         self, tmp_path: Path
@@ -886,14 +900,18 @@ class TestAsTheIngestionStageOfTheDag:
         def verify(ref: ArtifactRef) -> bool:
             return ref.location is not None and (tmp_path / "ws" / ref.location).is_dir()
 
-        policy = ReusePolicy(
-            store=FileArtifactStore(tmp_path / "index", verify=verify), code_identity="c1"
-        )
+        store = FileArtifactStore(tmp_path / "index", verify=verify)
         service = _service()
+        (tmp_path / "other").mkdir()
 
-        def run() -> Any:
+        def run(source: IngestionRequest) -> Any:
             journal = RunJournal.create(tmp_path / "ws", effective, execution)
-            executor = IngestionStageExecutor(service, make_request(tmp_path))
+            executor = IngestionStageExecutor(service, source)
+            policy = ReusePolicy(
+                store=store,
+                code_identity="c1",
+                identities={"ingestion": {"source": executor.source_identity}},
+            )
             return run_plan(
                 execution,
                 {"ingestion": executor},
@@ -903,11 +921,17 @@ class TestAsTheIngestionStageOfTheDag:
                 journal=journal,
             )
 
-        first, second = run(), run()
+        source = make_request(tmp_path)
+        first, second = run(source), run(source)
+        other = run(make_request(tmp_path / "other"))
 
         assert first.stages[0].output == second.stages[0].output
         assert second.stages[0].decision is not None and second.stages[0].decision.kind == "reused"
-        assert len(list((tmp_path / "ws" / "S1").glob("run-*/ingestion"))) == 1
+        # Regressão RT-01: outra fonte com a mesma configuração nunca reutiliza a primeira.
+        assert other.stages[0].decision is not None
+        assert other.stages[0].decision.kind == "recomputed"
+        assert other.stages[0].output.artifact_id != first.stages[0].output.artifact_id
+        assert len(list((tmp_path / "ws" / "S1").glob("run-*/ingestion"))) == 2
 
     def test_an_ingestion_failure_becomes_a_categorized_failure_record(
         self, tmp_path: Path

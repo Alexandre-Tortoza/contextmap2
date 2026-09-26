@@ -855,7 +855,7 @@ class Runtime:
             module_available=self._module_available,
             reuse=reuse,
         )
-        predicted = {} if reuse is None else predict_reuse(execution, reuse)
+        predicted = {} if reuse is None else predict_reuse(execution, reuse, executors=executors)
         return RuntimePreflightReport(
             ok=report.ok,
             problems=report.problems,

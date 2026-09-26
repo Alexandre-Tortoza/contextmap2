@@ -445,7 +445,10 @@ def test_a_third_run_reuses_every_stage_by_reference_and_copies_nothing(tmp_path
         tmp_path / "index",
         verify=lambda ref: ref.location is not None and (workspace / ref.location).is_dir(),
     )
-    policy = ReusePolicy(store=store, code_identity="code-1")
+    # A ingestion fake não nomeia a fonte que lê: a política a declara para o reuso.
+    policy = ReusePolicy(
+        store=store, code_identity="code-1", identities={"ingestion": {"source": "bag-A"}}
+    )
     _, first = _run(effective, execution, workspace, _executors(), reuse=policy)
 
     journal, second = _run(effective, execution, workspace, _executors(), reuse=policy)
@@ -468,7 +471,10 @@ def test_an_interrupted_run_is_resumed_from_the_completed_stages_and_leaves_no_p
         tmp_path / "index",
         verify=lambda ref: ref.location is not None and (workspace / ref.location).is_dir(),
     )
-    policy = ReusePolicy(store=store, code_identity="code-1")
+    # A ingestion fake não nomeia a fonte que lê: a política a declara para o reuso.
+    policy = ReusePolicy(
+        store=store, code_identity="code-1", identities={"ingestion": {"source": "bag-A"}}
+    )
     failing = _executors()
     failing["semantic_fusion"] = _Failing(failing["semantic_fusion"], "semantic_fusion", ["boom"])
 

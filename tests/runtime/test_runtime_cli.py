@@ -949,7 +949,8 @@ class TestLifecycleCommands:
         from contextmap.runtime.catalog import CANONICAL_PRESET
 
         return {
-            s.stage_id: world.executor(s.stage_id, s.output or "") for s in CANONICAL_PRESET.stages
+            s.stage_id: world.executor(s.stage_id, s.output or "", source=not s.inputs)
+            for s in CANONICAL_PRESET.stages
         }
 
     def _resumable(
@@ -1181,6 +1182,8 @@ class TestLifecycleCommands:
             "--code-identity",
             "code-1",
             "--json",
+            # O executor de ingestion nomeia a fonte: sem ele a previsão não saberia qual bag.
+            executors=self._world_executors(world),
             verifier=lambda ref: ref.artifact_id in world.existing,
             module_available=_ready,
         )

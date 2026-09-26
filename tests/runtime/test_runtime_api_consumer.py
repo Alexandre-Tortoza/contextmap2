@@ -55,6 +55,12 @@ class PureStage:
         )
 
 
+class PureSource(PureStage):
+    """A stage without inputs: it reads from outside the DAG and names that source."""
+
+    source_identity = "frontend-source"
+
+
 class TerminalRenderer:
     """What a terminal frontend does with the events: one line each, in order."""
 
@@ -95,7 +101,9 @@ def test_a_frontend_drives_discovery_configuration_preflight_run_and_inspection(
     plan = probe.resolve_plan(config, targets=["semantic_fusion"])
     assert plan.order is not None
     executors = {
-        stage.stage_id: PureStage(stage.stage_id, stage.output or "", produced)
+        stage.stage_id: (PureStage if stage.inputs else PureSource)(
+            stage.stage_id, stage.output or "", produced
+        )
         for stage in plan.stages
         if stage.available
     }

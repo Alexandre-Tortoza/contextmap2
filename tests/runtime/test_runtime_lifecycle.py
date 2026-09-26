@@ -338,9 +338,9 @@ class TestFailureRecords:
         world.fail_at = "ingestion"
         original = world.executor
 
-        def counting(stage_id: str, contract: str) -> Any:
+        def counting(stage_id: str, contract: str, *, source: bool = False) -> Any:
             calls.append(stage_id)
-            return original(stage_id, contract)
+            return original(stage_id, contract, source=source)
 
         world.executor = counting  # type: ignore[method-assign]
 
@@ -749,6 +749,8 @@ class TestResume:
         real = executors["ingestion"]
 
         class Cancelling:
+            source_identity = real.source_identity
+
             def execute(self, request: StageRequest) -> ArtifactRef:
                 artifact: ArtifactRef = real.execute(request)
                 token.cancel()
