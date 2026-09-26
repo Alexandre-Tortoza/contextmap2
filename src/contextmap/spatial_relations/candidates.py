@@ -19,10 +19,15 @@ predicate and direction, so the exclusion record grows with the pairs near each 
 bounded.
 
 Every precondition is a *necessary* condition for the corresponding evaluator to *support* the
-relation, on the assumption
-that the reaches of the policy cover the distance tolerances of the evaluators. If they do not, a
-true relation can be lost before it is measured; that loss is a candidate-retrieval failure and is
-measured separately from predicate quality.
+relation, on the assumption that the reaches of the policy cover the distance tolerances of the
+evaluators. If they did not, a true relation could be lost before it is measured. The assumption is
+verified where the policies of a run meet:
+:class:`~contextmap.spatial_relations.RelationsRunPolicies` refuses a ``proximity_radius_m`` below
+``next_to_max_gap_m`` or ``2 * containment_slack_m`` of the geometric evaluators, or below
+``contact_distance_m + contact_tolerance_m`` of the contact evaluators, for each evaluator the run
+declares. This module alone cannot check it, since it does not know the evaluators; a caller that
+pairs the policies without ``RelationsRunPolicies`` carries the assumption itself. A loss that
+remains is a candidate-retrieval failure and is measured separately from predicate quality.
 
 Preconditions are checked in a fixed order and the first that fails is the recorded reason:
 
@@ -118,7 +123,9 @@ class CandidatePolicy:
 
     There are no defaults: how far a relation may reach is a scientific choice that a profile
     declares. Both reaches should cover the distance tolerances of the evaluators they feed, or
-    true relations are lost before they are measured.
+    true relations are lost before they are measured. This policy only validates itself;
+    :class:`~contextmap.spatial_relations.RelationsRunPolicies` verifies the proximity reach
+    against the tolerances of the evaluators a run declares (see the module docstring).
 
     Attributes:
         predicates: The predicates to generate candidates for, unique, each one evaluated

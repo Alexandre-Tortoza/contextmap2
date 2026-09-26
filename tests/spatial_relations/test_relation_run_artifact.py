@@ -6,6 +6,7 @@ import dataclasses
 import hashlib
 import json
 import shutil
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -418,7 +419,7 @@ def test_evidence_without_its_declared_policy_is_refused(run: Run, tmp_path: Pat
     with pytest.raises(RelationsRunArtifactError, match="contact"):
         _write(run, tmp_path / "relations", policies=without_contact)
     changed = dataclasses.replace(
-        POLICIES, geometric=dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+        POLICIES, geometric=dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.55)
     )
     with pytest.raises(RelationsRunArtifactError, match="fingerprint"):
         _write(run, tmp_path / "relations", policies=changed)
@@ -436,6 +437,84 @@ def test_evidence_that_is_not_about_a_candidate_is_refused(run: Run, tmp_path: P
     )
     with pytest.raises(RelationsRunArtifactError, match="candidate"):
         _write(dataclasses.replace(run, candidates=fewer), tmp_path / "relations")
+
+
+def test_a_run_under_incoherent_policies_is_refused_before_anything_is_published(
+    run: Run, tmp_path: Path
+) -> None:
+    wider = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+    with pytest.raises(ValueError, match="next_to_max_gap_m"):
+        _write(
+            run,
+            tmp_path / "relations",
+            policies=dataclasses.replace(POLICIES, geometric=wider),
+        )
+    assert not (tmp_path / "relations").exists()
+
+
+# --- coherence of the candidate reach with the evaluators' tolerances ---
+
+
+def test_a_next_to_gap_beyond_the_proximity_reach_is_refused() -> None:
+    wider = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.9)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, geometric=wider)
+    message = str(error.value)
+    assert "next_to_max_gap_m=0.9 exceeds proximity_radius_m=0.6" in message
+    assert "NEXT_TO relations would be excluded" in message
+    assert "before evaluation" in message
+
+
+def test_a_contact_reach_beyond_the_proximity_reach_is_refused() -> None:
+    # Cada parâmetro cabe sozinho no alcance; é a soma, o raio de busca real do canal de contato,
+    # que passa dele.
+    farther = dataclasses.replace(CONTACT, contact_distance_m=0.5, contact_tolerance_m=0.2)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, contact=farther)
+    message = str(error.value)
+    assert "contact_distance_m + contact_tolerance_m = 0.7 (0.5 + 0.2)" in message
+    assert "exceeds proximity_radius_m=0.6" in message
+    assert "TOUCHING, ON_TOP_OF and LEANING_AGAINST relations would be excluded" in message
+
+
+def test_a_containment_slack_on_both_faces_beyond_the_proximity_reach_is_refused() -> None:
+    # containment_slack_m <= proximity_radius_m < 2 * containment_slack_m: o sujeito pode
+    # ultrapassar as duas faces de um eixo, então o avaliador aceita um excesso de extensão
+    # que a pré-condição de INSIDE já teria descartado.
+    looser = dataclasses.replace(GEOMETRIC, containment_slack_m=0.4)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, geometric=looser)
+    message = str(error.value)
+    assert "2 * containment_slack_m = 0.8" in message
+    assert "containment_slack_m=0.4" in message
+    assert "exceeds proximity_radius_m=0.6" in message
+    assert "INSIDE relations would be excluded" in message
+
+
+def test_every_incoherence_is_reported_at_once() -> None:
+    short = dataclasses.replace(CANDIDATES, proximity_radius_m=0.04)
+    with pytest.raises(ValueError) as error:
+        dataclasses.replace(POLICIES, candidate=short)
+    message = str(error.value)
+    for name in ("next_to_max_gap_m=", "2 * containment_slack_m", "contact_distance_m +"):
+        assert name in message
+
+
+def test_policies_whose_reach_covers_every_tolerance_are_accepted_silently() -> None:
+    # Os limites são inclusivos: um alcance exatamente igual à tolerância não perde nada.
+    geometric = dataclasses.replace(GEOMETRIC, next_to_max_gap_m=0.6, containment_slack_m=0.3)
+    contact = dataclasses.replace(CONTACT, contact_distance_m=0.5, contact_tolerance_m=0.1)
+    short = dataclasses.replace(CANDIDATES, proximity_radius_m=0.04)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        at_the_limit = dataclasses.replace(POLICIES, geometric=geometric, contact=contact)
+        # Um canal ausente não tem tolerância a cobrir, por menor que seja o alcance.
+        without_channels = dataclasses.replace(
+            POLICIES, candidate=short, geometric=None, contact=None
+        )
+    assert at_the_limit.geometric == geometric
+    assert at_the_limit.contact == contact
+    assert without_channels.candidate == short
 
 
 # --- reading errors ---

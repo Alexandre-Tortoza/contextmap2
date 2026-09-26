@@ -1642,6 +1642,31 @@ class TestCompositionFailuresReachPreflight:
         assert "must look like 'module:attribute'" in causes[0].message
         assert "stages.visual_perception" not in [p.path for p in report.problems]
 
+    def test_a_candidate_reach_short_of_an_evaluator_tolerance_is_reported_at_the_candidate(
+        self, tmp_path: Path
+    ) -> None:
+        # Issue #606: cada política é válida sozinha, mas o alcance de proximidade dos
+        # candidatos (0.6 m) não cobre o next_to_max_gap_m do avaliador geométrico.
+        document = selected_document()
+        document["components"]["spatial_relations"]["geometric_predicate"] = {
+            "backend": "bounds-geometric-predicates-v1",
+            "bounds-geometric-predicates-v1": {
+                "boundary_tolerance_m": 0.02,
+                "next_to_max_gap_m": 0.9,
+                "adjacent_penetration_m": 0.05,
+                "containment_slack_m": 0.05,
+                "directional_overlap_fraction": 0.5,
+            },
+        }
+
+        report = self._preflight(tmp_path, document, ["spatial_relations"])
+
+        paths = [problem.path for problem in report.problems]
+        assert "components.spatial_relations.candidate" in paths
+        cause = report.problems[paths.index("components.spatial_relations.candidate")]
+        assert "next_to_max_gap_m=0.9 exceeds proximity_radius_m=0.6" in cause.message
+        assert "stages.spatial_relations" not in paths
+
     def test_a_missing_model_runtime_is_reported_at_its_component(self, tmp_path: Path) -> None:
         report = self._preflight(tmp_path, selected_document(), ["visual_perception"])
 

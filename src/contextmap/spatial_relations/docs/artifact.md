@@ -41,6 +41,8 @@ O manifest não tem caminho absoluto nem segredo, então o run é **portável**:
 
 ## O que é validado na escrita
 
+Antes do escritor, `RelationsRunPolicies` recusa (`ValueError`) já na construção uma política de candidatos cujo `proximity_radius_m` não cobre as tolerâncias dos avaliadores declarados, então um run com políticas incoerentes nunca chega a ser publicado ([coerência entre alcance e tolerâncias](candidates.md#coerência-entre-alcance-e-tolerâncias-dos-avaliadores)).
+
 `SpatialRelationsRunWriter.write` recusa (`RelationsRunArtifactError`) antes de gravar qualquer coisa:
 
 - relação sobre entidade de **outro** run de resolução que o selecionado na linhagem;
