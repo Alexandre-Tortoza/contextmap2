@@ -43,6 +43,8 @@ separado e só compara claims regionais com a feature da mesma região congelada
 
 `OfficialAlphaClipRuntime` envolve o pacote oficial `alpha_clip`: `model.visual(image, alpha)`. PyTorch, AlphaCLIP e Pillow são importados apenas na primeira execução.
 
+Os requests de uma chamada são montados e codificados em lotes consecutivos de no máximo `max_batch_size` (default 32). Com `full_image`, cada região replica a imagem inteira como tensor próprio, então sem esse limite uma cena densa definiria sozinha a memória da inferência. As linhas da saída seguem a ordem dos requests, o resultado dos lotes é o mesmo do lote único e o pico de memória cobre todos os lotes. `max_batch_size` entra no fingerprint da configuração, porque em GPU o tamanho do lote pode mudar o arredondamento em ponto flutuante (#617).
+
 Para impedir download implícito, a configuração exige dois caminhos locais sob `checkpoint_root`:
 
 - base CLIP checkpoint;
