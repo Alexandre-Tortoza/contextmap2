@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import shutil
 import subprocess
@@ -70,6 +71,42 @@ def opened(tmp_path: Path, **kwargs: Any) -> tuple[RunInputs, Path, EntityResolu
 
 
 # --- round trip ---------------------------------------------------------------------------------
+
+
+def contractual_digest(directory: Path) -> str:
+    """Digest of every contractual file and of the manifest apart from its creation time."""
+    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest.pop("created_at")
+    files = {
+        path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.relative_to(directory).parts[0] in ("outputs", "metrics")
+    }
+    record = json.dumps({"manifest": manifest, "files": files}, sort_keys=True)
+    return hashlib.sha256(record.encode()).hexdigest()
+
+
+# #599 (ER-04): gravados antes de as tabelas passarem a ser streamadas; os bytes não mudam.
+RECORDED_RUNS = {
+    "contradiction-and-merge": (
+        build_inputs,
+        "2e55000765555f6efe27c6055d249012a9e439832ea5069ab88f0be5f30c1701",
+    ),
+    "two-contradictions": (
+        build_contradicted_inputs,
+        "29ce34ecca6b7d0360505b3224794eb494c9ce0140d10cf97759b0f4e5a32394",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(RECORDED_RUNS))
+def test_the_persisted_run_matches_the_recorded_bytes(tmp_path: Path, case: str) -> None:
+    build, recorded = RECORDED_RUNS[case]
+    directory = tmp_path / "artifact"
+
+    write_run(directory, build())
+
+    assert contractual_digest(directory) == recorded
 
 
 def test_everything_survives_a_round_trip_intact(tmp_path: Path) -> None:

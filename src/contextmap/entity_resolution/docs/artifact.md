@@ -64,7 +64,7 @@ Um artifact posterior (Spatial Relations) precisa de três valores deste run, to
 
 ## Métricas (separadas, nenhum score composto)
 
-`counts.json`: entidades de origem, conjuntos e pares candidatos, pares comparados e bloqueados, decisões por resultado, entidades resolvidas e fundidas, contradições, candidatos a divisão e, por canal, quantas comparações o mediram, tiveram o canal indisponível ou não o avaliaram. `distributions.json`: histograma do tamanho dos grupos de fusão, candidatos e entidades examinadas por entidade. `payload.json`: tamanho por arquivo e total. `runtime.json` (tempo e memória) só existe quando quem chamou mediu, e fica à parte de toda medida de qualidade.
+`counts.json`: entidades de origem, conjuntos e pares candidatos, pares comparados e bloqueados, decisões por resultado, entidades resolvidas e fundidas, contradições, candidatos a divisão e, por canal, quantas comparações o mediram, tiveram o canal indisponível ou não o avaliaram. `distributions.json`: histograma do tamanho dos grupos de fusão, candidatos e entidades examinadas por entidade. `payload.json`: tamanho por arquivo e total (as tabelas de `outputs/` são gravadas linha a linha, sem montar cada uma inteira em memória). `runtime.json` (tempo e memória) só existe quando quem chamou mediu, e fica à parte de toda medida de qualidade.
 
 ## Debug (não contratual)
 

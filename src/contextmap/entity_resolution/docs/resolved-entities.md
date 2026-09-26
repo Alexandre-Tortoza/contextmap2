@@ -39,6 +39,10 @@ Membros de mapas geométricos ou frames diferentes não podem ser agrupados: seu
 
 Por membro (`ResolvedMember`): a `EntityReference` original (com o `semantic_map_id`) e as decisões `MATCH` que o envolvem (`matched_by`). Por entidade: `resolution_decision_refs` (a união), `unresolved_neighbor_refs`, `contradiction_ids` e a `provenance` (política de materialização e versão do código). O resultado (`ResolvedEntityMaterialization`) traz o conjunto, as contradições e a política, com o fingerprint das regras versionadas.
 
+## Custo
+
+Os `MATCH` de um membro são lidos da adjacência do grafo (custo do grau do membro), e `ResolvedEntitySet.resolve`/`resolved_of` consultam índices por id e por membro construídos no primeiro uso (#599). Medido numa máquina de desenvolvimento, com 10 000 entidades em cadeias de quatro (7 500 `MATCH`, 2 500 `DISTINCT`): materializar levava 14,4 s e passou a 0,9 s; materializar e consultar o dono de cada entidade levava ~66 s no total. `tests/entity_resolution/test_resolution_scaling.py` mantém esse cenário no CI com contadores e um envelope largo.
+
 ## O que este módulo não faz
 
 Nenhuma relação espacial, nenhum rastreamento de objetos dinâmicos, nenhuma remoção ou alteração de entidade de origem e nenhuma fusão fora de uma decisão `MATCH` explícita. A detecção de candidatos a divisão (over-merge) é só diagnóstico, opcional e desligada por padrão ([`split-detection.md`](split-detection.md)).
