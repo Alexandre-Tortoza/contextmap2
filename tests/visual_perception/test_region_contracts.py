@@ -1,4 +1,7 @@
+import copy
+import pickle
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import numpy as np
 import pytest
@@ -44,9 +47,10 @@ def test_region_candidate_round_trips_backend_neutral_geometry() -> None:
         image_height=3,
         bounding_box=BoundingBox(x_min=1.0, y_min=0.0, x_max=3.0, y_max=2.0),
         mask=InlineMask(
-            width=4,
-            height=3,
-            data=(False, True, True, False, False, True, True, False, False, False, False, False),
+            np.array(
+                (False, True, True, False, False, True, True, False, False, False, False, False),
+                dtype=bool,
+            ).reshape(3, 4)
         ),
         score=BackendScore(
             name="predicted_iou",
@@ -165,9 +169,91 @@ def test_rejected_candidate_preserves_machine_readable_reason() -> None:
     assert rejected.to_dict()["reason"] == "invalid_geometry"
 
 
-@pytest.mark.xfail(strict=True, raises=AttributeError, reason="#593: a tuple of Python bools")
 def test_an_inline_mask_holds_one_byte_per_pixel() -> None:
     # #593: um tuple de bools custa ~2,36 MB numa máscara 640x480; um byte por pixel, ~300 KB.
     mask = inline_mask(np.zeros((480, 640), dtype=bool))
 
-    assert mask.as_array().nbytes == 640 * 480  # type: ignore[attr-defined]  # #593 remove
+    assert mask.as_array().nbytes == 640 * 480
+
+
+def _pixels() -> np.ndarray[Any, Any]:
+    pixels = np.zeros((3, 4), dtype=bool)
+    pixels[1, 2] = True
+    return pixels
+
+
+def test_an_inline_mask_owns_an_immutable_copy_of_its_pixels() -> None:
+    pixels = _pixels()
+    mask = InlineMask(pixels)
+    pixels[0, 0] = True  # o chamador continua dono do array que passou
+
+    view = mask.as_array()
+
+    assert view.tolist() == _pixels().tolist()
+    with pytest.raises(ValueError, match="read-only"):
+        view[0, 0] = True
+    base: object = view
+    while isinstance(base, np.ndarray):
+        # Nem a view nem nada abaixo dela pode voltar a ser gravável.
+        with pytest.raises(ValueError):
+            base.setflags(write=True)
+        base = base.base
+    view.shape = (4, 3)  # a view é do chamador: remodelá-la nunca alcança a máscara
+    assert mask.as_array().shape == (3, 4)
+
+
+def test_an_inline_mask_exposes_its_shape_area_and_pixels() -> None:
+    mask = InlineMask(_pixels())
+
+    assert (mask.width, mask.height, mask.area) == (4, 3, 1)
+    assert mask.value_at(2, 1) is True
+    assert mask.value_at(0, 0) is False
+    with pytest.raises(IndexError):
+        mask.value_at(4, 0)
+    with pytest.raises(FrozenInstanceError):
+        mask._pixels = np.ones((3, 4), dtype=bool)  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("pixels", "error"),
+    [
+        (np.zeros((3, 4), dtype=np.uint8), TypeError),
+        (np.zeros(12, dtype=bool), ValueError),
+        (np.zeros((0, 4), dtype=bool), ValueError),
+    ],
+)
+def test_an_inline_mask_refuses_pixels_that_are_not_a_boolean_image(
+    pixels: np.ndarray[Any, Any], error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        InlineMask(pixels)
+
+
+def test_inline_masks_are_values() -> None:
+    mask = InlineMask(_pixels())
+    same = InlineMask(_pixels().copy())
+
+    assert mask == same
+    assert hash(mask) == hash(same)
+    assert {mask: "region"}[same] == "region"
+    assert mask != InlineMask(~_pixels())
+    # Mesmos bytes, outra forma: não é a mesma máscara.
+    assert InlineMask(np.zeros((2, 6), dtype=bool)) != InlineMask(np.zeros((3, 4), dtype=bool))
+    assert mask != "mask"
+    assert copy.deepcopy(mask) == mask
+    assert pickle.loads(pickle.dumps(mask)) == mask
+
+
+def test_an_inline_mask_keeps_its_serialized_form() -> None:
+    mask = InlineMask(_pixels())
+
+    document = mask.to_dict()
+
+    assert document == {
+        "storage": "inline",
+        "width": 4,
+        "height": 3,
+        "data": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    }
+    assert all(type(value) is int for value in document["data"])  # type: ignore[attr-defined]
+    assert InlineMask.from_dict(document) == mask

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
+import numpy as np
+
 from contextmap.geometric_mapping import (
     DEFAULT_BLOCK_POINTS,
     Bounds3D,
@@ -362,18 +364,18 @@ def mask_with(width: int, height: int, *cells: tuple[int, int]) -> InlineMask:
     """A binary mask that is foreground exactly at the given ``(x, y)`` pixels."""
     marked = set(cells)
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple((x, y) in marked for y in range(height) for x in range(width)),
+        np.array(
+            tuple((x, y) in marked for y in range(height) for x in range(width)), dtype=bool
+        ).reshape(height, width)
     )
 
 
 def full_mask(width: int, height: int, *, hole: tuple[int, int] | None = None) -> InlineMask:
     """A mask that is foreground everywhere, except optionally at one pixel."""
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple((x, y) != hole for y in range(height) for x in range(width)),
+        np.array(
+            tuple((x, y) != hole for y in range(height) for x in range(width)), dtype=bool
+        ).reshape(height, width)
     )
 
 

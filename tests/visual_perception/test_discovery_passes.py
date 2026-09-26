@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from hashlib import sha256
 
+import numpy as np
 import pytest
 from mask_cases import GOLDEN, REMAP_SEEDS, digest, remap_case
 
@@ -90,7 +91,7 @@ class FakeDiscovery:
             image_width=width,
             image_height=height,
             bounding_box=box,
-            mask=InlineMask(width=width, height=height, data=mask_data),
+            mask=InlineMask(np.array(mask_data, dtype=bool).reshape(height, width)),
             provenance=RegionProvenance(
                 backend_id="fake",
                 backend_version="1",
@@ -241,3 +242,11 @@ def test_tile_mask_remapping_matches_the_recorded_behaviour(seed: int) -> None:
 
     remapped = {"resized": resized.to_dict(), "expanded": expanded.to_dict()}
     assert digest(remapped) == GOLDEN["remap"][str(seed)]
+
+
+def test_a_tile_mask_that_does_not_fit_the_image_is_refused() -> None:
+    # Antes, um tile fora da imagem dava a volta para a linha seguinte em silêncio.
+    tile = InlineMask(np.ones((2, 3), dtype=bool))
+
+    with pytest.raises(ValueError, match="does not lie inside"):
+        _expand_mask(tile, 4, 4, 2, 0)

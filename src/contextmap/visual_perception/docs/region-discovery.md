@@ -31,6 +31,19 @@ ser uma bounding box ou uma máscara `InlineMask` materializada. Uma `mask_refer
 junto da máscara materializada que a normalização realmente inspeciona; uma referência opaca não é
 publicada como geometria consumível.
 
+`InlineMask` é uma máscara da imagem inteira, imutável, com um byte por pixel (#593). Os pixels são
+copiados uma vez, na construção, para um buffer `bytes` da própria máscara, e `as_array()` devolve
+uma view `(height, width)` somente leitura desse buffer, sem cópia: nem a view nem nada abaixo dela
+pode voltar a ser gravável, então a máscara continua sendo um valor, com igualdade e hash por
+dimensões e pixels. Não há acesso a uma tupla de pixels: quem consome a máscara usa `as_array()`,
+`area` ou `value_at()`. `to_dict()`/`from_dict()` mantêm a forma serializada (lista plana de 0/1
+em ordem de linha), então nenhum artifact muda.
+
+A normalização trabalha sobre o recorte da máscara na caixa justa dos seus pixels (uma view) e só
+compara pixel a pixel duas propostas cujas caixas se encontram. Com os dois limiares de merge
+positivos, propostas de caixas disjuntas têm IoU e contenção 0 e não podem se fundir; com um limiar
+0, todo par é comparado, como antes.
+
 `Region2D` é o contrato único definido pelo Visual Perception Core e representa geometria aceita e
 congelada. O `region_id` é local ao `PerceptionResult`, que fornece os escopos de run e observação;
 portanto, dois resultados podem usar o mesmo `region_id` sem sugerir que representam o mesmo objeto

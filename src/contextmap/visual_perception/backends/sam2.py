@@ -251,6 +251,8 @@ class Sam2RegionDiscovery:
         height: int,
     ) -> RegionCandidate:
         """Convert one scalar SAM2 proposal without leaking native model objects."""
+        import numpy as np
+
         if len(proposal.mask) != width * height:
             raise ValueError("SAM2 proposal mask length must match discovery pass dimensions")
         return RegionCandidate(
@@ -266,7 +268,7 @@ class Sam2RegionDiscovery:
                 x_max=proposal.box[2],
                 y_max=proposal.box[3],
             ),
-            mask=InlineMask(width=width, height=height, data=proposal.mask),
+            mask=InlineMask(np.array(proposal.mask, dtype=np.bool_).reshape(height, width)),
             score=BackendScore(
                 name="predicted_iou",
                 value=proposal.predicted_iou,

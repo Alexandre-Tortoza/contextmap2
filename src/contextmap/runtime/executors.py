@@ -998,9 +998,7 @@ class _RegionInlineMaskSource:
                 f"region {region.region_id!r} has no inline mask: a mask-conditioned region "
                 "features backend needs a mask-based region discovery backend"
             )
-        full = np.asarray(region.mask.data, dtype=np.bool_).reshape(
-            region.mask.height, region.mask.width
-        )
+        full = region.mask.as_array()
         height, width = box_mask_shape(region.bounding_box)
         top = math.floor(region.bounding_box.y)
         left = math.floor(region.bounding_box.x)

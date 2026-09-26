@@ -82,7 +82,7 @@ from contextmap.state_estimation import (
     TrajectoryLookup,
     calibration_identity,
 )
-from contextmap.visual_perception import InlineMask, PreparedImage
+from contextmap.visual_perception import PreparedImage
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -595,15 +595,8 @@ def _supported(
     rows = np.floor(prepared_pixels[in_image, 1] + 0.5).astype(np.int64)
     allowed = np.ones(columns.shape, dtype=bool)
     if prepared_image.valid_region is not None:
-        allowed &= _mask_array(prepared_image.valid_region.mask)[rows, columns]
+        allowed &= prepared_image.valid_region.mask.as_array()[rows, columns]
     for exclusion in prepared_image.exclusion_regions:
-        allowed &= ~_mask_array(exclusion.mask)[rows, columns]
+        allowed &= ~exclusion.mask.as_array()[rows, columns]
     supported[in_image] = allowed
     return supported
-
-
-def _mask_array(mask: InlineMask) -> NDArray[Any]:
-    import numpy as np
-
-    array: NDArray[Any] = np.array(mask.data, dtype=bool).reshape(mask.height, mask.width)
-    return array

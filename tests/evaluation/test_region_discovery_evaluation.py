@@ -5,6 +5,7 @@ from functools import partial
 from hashlib import sha256
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from contextmap.evaluation import (
@@ -37,13 +38,14 @@ from contextmap.visual_perception import (
 
 def _mask(width: int, height: int, box: BoundingBox) -> InlineMask:
     return InlineMask(
-        width=width,
-        height=height,
-        data=tuple(
-            box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
-            for y in range(height)
-            for x in range(width)
-        ),
+        np.array(
+            tuple(
+                box.x_min <= x < box.x_max and box.y_min <= y < box.y_max
+                for y in range(height)
+                for x in range(width)
+            ),
+            dtype=bool,
+        ).reshape(height, width)
     )
 
 

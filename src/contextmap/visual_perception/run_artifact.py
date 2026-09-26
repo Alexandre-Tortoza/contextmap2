@@ -308,9 +308,10 @@ class PerceptionRunWriter:
     def _persist_result_masks(self, result: PerceptionResult) -> PerceptionResult:
         """Persist this result's masks now and return it carrying references instead of pixels.
 
-        A 640x480 ``InlineMask`` is a tuple of 307200 pointers (~2.36 MB measured), so
+        A 640x480 ``InlineMask`` was a tuple of 307200 pointers (~2.36 MB measured), so
         buffering every frame's masks until :meth:`finalize` cost ~18 GB on a real 360-frame
-        run. Writing them here lets the caller release the pixels as soon as this returns,
+        run; at one byte per pixel since #593 it would still be ~2.4 GB. Writing them here lets
+        the caller release the pixels as soon as this returns,
         exactly as :class:`~contextmap.ingestion.sequence_artifact.SequenceArtifactWriter`
         does for observation payloads.
         """

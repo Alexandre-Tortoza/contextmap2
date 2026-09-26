@@ -151,7 +151,7 @@ class MaskStoreWriter:
             raise MaskStoreError(f"duplicate payload_reference: {payload_reference!r}")
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
-        packed = np.packbits(np.array(mask.data, dtype=np.bool_))
+        packed = np.packbits(mask.as_array().reshape(-1))
         buffer = io.BytesIO()
         np.save(buffer, packed, allow_pickle=False)
         data = buffer.getvalue()
@@ -324,11 +324,7 @@ class MaskStoreReader:
             raise MaskPayloadIntegrityError(
                 f"mask payload for {entry.payload_reference} has fewer than {bit_count} bits"
             )
-        return InlineMask(
-            width=entry.width,
-            height=entry.height,
-            data=tuple(bool(value) for value in unpacked.tolist()),
-        )
+        return InlineMask(unpacked.reshape(entry.height, entry.width).astype(np.bool_))
 
 
 def write_mask_index(root: Path, entries: Sequence[MaskPayloadEntry]) -> None:

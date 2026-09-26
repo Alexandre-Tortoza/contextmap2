@@ -455,7 +455,10 @@ def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
             make_region("region-B", rect_mask(640, 480, 140, 90, 260, 110)),
         ]
     )
-    before = [(r, r.region_id, r.mask, r.mask.data if r.mask else None) for r in result.regions]
+    before = [
+        (r, r.region_id, r.mask, r.mask.as_array().tobytes() if r.mask else None)
+        for r in result.regions
+    ]
     copies = [copy.deepcopy(r) for r in result.regions]
 
     membership = associate_regions(resolve_visibility(frame, POLICY), result)
@@ -463,7 +466,8 @@ def test_associating_never_mutates_the_frozen_regions_or_their_masks() -> None:
 
     assert list(result.regions) == copies
     for region, region_id, mask, data in before:
-        assert (region.region_id, region.mask, region.mask.data if region.mask else None) == (
+        pixels = region.mask.as_array().tobytes() if region.mask else None
+        assert (region.region_id, region.mask, pixels) == (
             region_id,
             mask,
             data,
