@@ -475,7 +475,7 @@ def _sampling_for(
         "prepared_image": {
             "width": image.width,
             "height": image.height,
-            "transformations": list(image.transformations),
+            "transformations": [record.to_dict() for record in image.transformations],
         },
         "model_input": {
             "width": native.model_input_width,
