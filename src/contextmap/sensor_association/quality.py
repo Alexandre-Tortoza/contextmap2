@@ -101,9 +101,12 @@ class ReprojectionStatistics:
 
     Attributes:
         reference_id: Identity of the trusted correspondence set.
-        correspondence_count: Number of reference correspondences evaluated.
-        invalid_count: Of those, the ones that could not be projected (behind the camera or
-            outside the image), which contribute no residual.
+        correspondence_count: Number of reference correspondences the reference declared.
+        invalid_count: Of the evaluated ones, those the camera model could not project (outside
+            its viewing domain, e.g. behind a pinhole), which contribute no residual. A
+            correspondence that projects outside the image extent is **valid**: its residual is
+            measured like any other, because a reference names geometry that was really
+            observed and a large residual is what these statistics exist to expose.
         unevaluated_count: Correspondences whose geometry the frame's candidate policy did
             not evaluate at all, so the frame says nothing about them. They are reported
             rather than counted as invalid: not projected and not selected are different
