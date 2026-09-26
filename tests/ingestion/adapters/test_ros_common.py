@@ -1,3 +1,4 @@
+import random
 from types import SimpleNamespace
 
 import numpy as np
@@ -6,6 +7,8 @@ import pytest
 from contextmap.ingestion import (
     FrameId,
     ImageEncoding,
+    PointFieldDataType,
+    PointFieldDescriptor,
     SensorId,
     SourceObservationId,
     SourceProvenance,
@@ -205,3 +208,77 @@ def test_decode_pose_preserves_twist_and_covariances() -> None:
     assert observation.pose_covariance == tuple(float(i) for i in range(36))
     assert observation.linear_velocity == (1.0, 2.0, 3.0)
     assert observation.twist_covariance == tuple(float(i) for i in range(100, 136))
+
+
+def test_remove_row_padding_returns_an_unpadded_payload_without_copying() -> None:
+    data = bytes(range(6))
+
+    packed = _ros_common._remove_row_padding(
+        data, height=2, row_step=3, row_payload_size=3, payload_name="image"
+    )
+
+    assert packed is data
+
+
+def _reference_point_field_byte_order(
+    data: bytes, *, point_step: int, fields: tuple[PointFieldDescriptor, ...]
+) -> bytes:
+    """Laço escalar original, ponto a ponto e elemento a elemento: a referência de equivalência."""
+    normalized = bytearray(data)
+    for field in fields:
+        value_size = _ros_common.POINTFIELD_SIZE_BYTES[field.data_type]
+        if value_size == 1:
+            continue
+        for point_offset in range(0, len(normalized), point_step):
+            for element_index in range(field.count):
+                start = point_offset + field.offset_bytes + element_index * value_size
+                end = start + value_size
+                normalized[start:end] = normalized[start:end][::-1]
+    return bytes(normalized)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_point_field_byte_order_matches_the_scalar_reference_byte_for_byte(seed: int) -> None:
+    rng = random.Random(seed)
+    data_types = list(_ros_common.POINTFIELD_SIZE_BYTES)
+    fields: list[PointFieldDescriptor] = []
+    offset = rng.randrange(0, 3)
+    for index in range(rng.randrange(1, 6)):
+        data_type = rng.choice(data_types)
+        count = rng.randrange(1, 4)
+        fields.append(
+            PointFieldDescriptor(
+                name=f"field-{index}", offset_bytes=offset, data_type=data_type, count=count
+            )
+        )
+        offset += _ros_common.POINTFIELD_SIZE_BYTES[data_type] * count + rng.randrange(0, 3)
+    point_step = offset + rng.randrange(0, 4)
+    point_count = rng.randrange(1, 40)
+    data = bytes(rng.randrange(256) for _ in range(point_step * point_count))
+
+    normalized = _ros_common._normalize_point_field_byte_order(
+        data, point_step=point_step, fields=tuple(fields)
+    )
+
+    assert normalized == _reference_point_field_byte_order(
+        data, point_step=point_step, fields=tuple(fields)
+    )
+
+
+def test_point_field_byte_order_swaps_a_field_that_fills_the_whole_record() -> None:
+    # Campo contíguo ao registro inteiro: a view de origem e o destino são a mesma memória.
+    field = PointFieldDescriptor(
+        name="xyz", offset_bytes=0, data_type=PointFieldDataType.UINT16, count=3
+    )
+    data = bytes(range(12))
+
+    normalized = _ros_common._normalize_point_field_byte_order(data, point_step=6, fields=(field,))
+
+    assert normalized == bytes([1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10])
+
+
+def test_point_field_byte_order_still_rejects_a_field_beyond_point_step() -> None:
+    field = PointFieldDescriptor(name="range", offset_bytes=4, data_type=PointFieldDataType.FLOAT64)
+
+    with pytest.raises(ValueError, match="exceeds point_step=8"):
+        _ros_common._normalize_point_field_byte_order(bytes(16), point_step=8, fields=(field,))

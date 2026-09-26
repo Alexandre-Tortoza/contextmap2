@@ -21,6 +21,8 @@ from contextlib import AbstractContextManager
 from dataclasses import replace
 from typing import Any
 
+import numpy as np
+
 from contextmap.ingestion.calibration import (
     CalibrationEntry,
     CalibrationError,
@@ -422,7 +424,11 @@ def _remove_row_padding(
     row_payload_size: int,
     payload_name: str,
 ) -> bytes:
-    """Validate a ROS row layout and return a tightly packed payload."""
+    """Validate a ROS row layout and return a tightly packed payload.
+
+    A payload without row padding is already tightly packed and is returned as
+    the same object, never copied.
+    """
     if height <= 0 or row_payload_size <= 0:
         raise ValueError(f"{payload_name} dimensions must be positive")
     if row_step < row_payload_size:
@@ -434,6 +440,8 @@ def _remove_row_padding(
         raise ValueError(
             f"{payload_name} data size {len(data)} does not match height*row_step={expected_size}"
         )
+    if row_step == row_payload_size:
+        return data
     return b"".join(
         data[row_index * row_step : row_index * row_step + row_payload_size]
         for row_index in range(height)
@@ -453,8 +461,14 @@ def _normalize_point_field_byte_order(
     point_step: int,
     fields: tuple[PointFieldDescriptor, ...],
 ) -> bytes:
-    """Convert declared multibyte point fields from big- to little-endian."""
-    normalized = bytearray(data)
+    """Convert declared multibyte point fields from big- to little-endian.
+
+    ``data`` is tightly packed (a whole number of ``point_step`` records, as
+    :func:`_remove_row_padding` guarantees). Each field is swapped for every
+    point at once, as a ``(points, count, value_size)`` byte view reversed on
+    its last axis, with the same bytes as a per-point, per-element loop.
+    """
+    points = np.frombuffer(data, dtype=np.uint8).reshape(-1, point_step).copy()
     for field in fields:
         value_size = POINTFIELD_SIZE_BYTES[field.data_type]
         field_end = field.offset_bytes + value_size * field.count
@@ -462,12 +476,11 @@ def _normalize_point_field_byte_order(
             raise ValueError(f"point field {field.name!r} exceeds point_step={point_step}")
         if value_size == 1:
             continue
-        for point_offset in range(0, len(normalized), point_step):
-            for element_index in range(field.count):
-                start = point_offset + field.offset_bytes + element_index * value_size
-                end = start + value_size
-                normalized[start:end] = normalized[start:end][::-1]
-    return bytes(normalized)
+        values = points[:, field.offset_bytes : field_end].reshape(-1, field.count, value_size)
+        points[:, field.offset_bytes : field_end] = values[:, :, ::-1].reshape(
+            -1, field.count * value_size
+        )
+    return points.tobytes()
 
 
 def _with_raw_metadata(provenance: SourceProvenance, **metadata: object) -> SourceProvenance:
