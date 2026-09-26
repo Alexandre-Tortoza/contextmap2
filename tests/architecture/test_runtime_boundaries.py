@@ -4,9 +4,11 @@
 name concrete backends. These tests narrow that permission: the composition root may import
 capabilities, lazily; the ingestion application service and the stage executors may import the
 public root of the capabilities they run (and nothing below it, so never an adapter or a
-backend, and never eagerly from the package root); every other runtime module, meaning
-configuration, DAG, reuse, selection, lifecycle and CLI code, can never grow a dependency on a
-capability or on a concrete backend.
+backend, and never eagerly from the package root); the CLI may import only the public root of
+``contextmap.artifact``, lazily, to hand a ContextMapArtifact to that capability's own validator
+(``contextmap validate``); every other runtime module, meaning configuration, DAG, reuse,
+selection and lifecycle code, can never grow a dependency on a capability or on a concrete
+backend.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ COMPOSITION = RUNTIME / "composition.py"
 # Módulos de aplicação que podem importar a raiz pública de uma capability, e só ela.
 PUBLIC_ROOT_IMPORTERS = {
     "ingestion_service.py": {"contextmap.ingestion"},
+    # O `validate` delega um ContextMapArtifact ao validador do dono (issue #603); o import é
+    # tardio, e o teste de importação abaixo garante que carregar a CLI não o executa.
+    "cli.py": {"contextmap.artifact"},
     "executors.py": {
         "contextmap.artifact",
         "contextmap.entity_resolution",
