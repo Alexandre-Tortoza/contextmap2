@@ -55,9 +55,10 @@ from contextmap.spatial_relations._bounds import (
     bounds_gap_m,
     cross_section_axes,
     directed_interval,
+    widest_spread_axis,
 )
 from contextmap.spatial_relations._checks import require_finite
-from contextmap.spatial_relations.candidates import RelationCandidateSet
+from contextmap.spatial_relations.candidates import RelationCandidate, RelationCandidateSet
 from contextmap.spatial_relations.evidence import (
     EvidenceCaveat,
     EvidenceCaveatKind,
@@ -232,6 +233,10 @@ class _Contact:
     object_points: tuple[GeometryPoint, ...]
 
 
+_PointGrid = Mapping[tuple[int, int, int], Sequence[GeometryPoint]]
+"""Points bucketed by the cubic cell they fall in, keyed by integer cell coordinates."""
+
+
 def evaluate_contact_predicate(
     predicate: RelationPredicate,
     *,
@@ -279,7 +284,7 @@ def evaluate_contact_predicate(
         subject_points,
         object_entity_ref,
         object_geometry,
-        object_points,
+        _contact_grid(object_points, policy.search_radius_m),
         policy,
         conventions,
     )
@@ -293,10 +298,20 @@ def evaluate_contact_candidates(
     policy: ContactPredicatePolicy,
     conventions: FrameConventions,
 ) -> tuple[RelationEvidence, ...]:
-    """Evaluate the contact candidates of a candidate set, in candidate order.
+    """Evaluate the contact candidates of a candidate set, returned in candidate order.
 
     Candidates of the geometric channel are left to their own evaluator; nothing is dropped from
-    ``candidates``. The points of an entity are resolved once, however many candidates name it.
+    ``candidates``. The points of an entity are resolved once, however many candidates name it,
+    and bucketed into a contact grid at most once, the first time it is an object. Both are
+    released right after the last contact candidate that names the entity, and none is ever
+    resolved twice.
+
+    Candidate order follows entity identities, which say nothing about where the entities are, so
+    evaluating in that order would keep almost every entity of a dense scene resident. The
+    candidates are instead evaluated in sweep order (see :func:`_sweep_order`): an entity is then
+    needed only while the sweep crosses it and its neighbors, and only the entities around the
+    sweep front stay resident. Every evaluation is a pure function of its pair, so the order
+    changes what is resident, never the evidence.
 
     Args:
         candidates: The output of candidate generation.
@@ -318,6 +333,7 @@ def evaluate_contact_candidates(
         )
     _require_source_frame(geometry_source, conventions)
     points: dict[ResolvedEntityReference, tuple[GeometryPoint, ...]] = {}
+    grids: dict[ResolvedEntityReference, _PointGrid] = {}
 
     def resolved(reference: ResolvedEntityReference) -> tuple[GeometryPoint, ...]:
         if reference not in points:
@@ -326,21 +342,77 @@ def evaluate_contact_candidates(
             )
         return points[reference]
 
-    return tuple(
-        _evaluate(
+    def grid(reference: ResolvedEntityReference) -> _PointGrid:
+        # O raio de busca é o da política, fixo nesta chamada: a entidade basta como chave.
+        if reference not in grids:
+            grids[reference] = _contact_grid(resolved(reference), policy.search_radius_m)
+        return grids[reference]
+
+    contact = [item for item in candidates.candidates if item.predicate in CONTACT_PREDICATES]
+    order = _sweep_order(contact, entities)
+    # Posição, na varredura, do último candidato que nomeia cada entidade: depois dele, nem os
+    # pontos nem a grade dela servem a outro candidato, então são liberados.
+    last_use = {
+        reference: position
+        for position, index in enumerate(order)
+        for reference in (contact[index].subject_entity_ref, contact[index].object_entity_ref)
+    }
+    evidence: dict[int, RelationEvidence] = {}
+    for position, index in enumerate(order):
+        candidate = contact[index]
+        subject, obj = candidate.subject_entity_ref, candidate.object_entity_ref
+        evidence[index] = _evaluate(
             candidate.predicate,
-            candidate.subject_entity_ref,
-            entities[candidate.subject_entity_ref],
-            resolved(candidate.subject_entity_ref),
-            candidate.object_entity_ref,
-            entities[candidate.object_entity_ref],
-            resolved(candidate.object_entity_ref),
+            subject,
+            entities[subject],
+            resolved(subject),
+            obj,
+            entities[obj],
+            grid(obj),
             policy,
             conventions,
         )
-        for candidate in candidates.candidates
-        if candidate.predicate in CONTACT_PREDICATES
-    )
+        for reference in (subject, obj):
+            if last_use[reference] == position:
+                points.pop(reference, None)
+                grids.pop(reference, None)
+    return tuple(evidence[index] for index in range(len(contact)))
+
+
+def _sweep_order(
+    candidates: Sequence[RelationCandidate],
+    entities: Mapping[ResolvedEntityReference, EntityGeometry],
+) -> list[int]:
+    """Order candidates by where a sweep along the scene reaches both of their entities.
+
+    The sweep runs along the axis on which the entities are most spread out, and a candidate is
+    reached once the sweep has passed the lower face of both of its entities. An entity is then
+    first needed at its own lower face and last needed at the lower face of its farthest
+    neighbor, which lies within the candidate reach of its upper face, so the entities needed at
+    any point are the ones the sweep front is crossing.
+
+    Args:
+        candidates: The candidates to order.
+        entities: The geometry of every entity they name.
+
+    Returns:
+        The indexes of ``candidates``, in sweep order; ties keep candidate order.
+    """
+    if not candidates:
+        return []
+    named = {item.subject_entity_ref for item in candidates} | {
+        item.object_entity_ref for item in candidates
+    }
+    axis = widest_spread_axis([entities[reference].bounds for reference in named])
+
+    def reached(index: int) -> float:
+        candidate = candidates[index]
+        return max(
+            entities[candidate.subject_entity_ref].bounds.minimum_m[axis],
+            entities[candidate.object_entity_ref].bounds.minimum_m[axis],
+        )
+
+    return sorted(range(len(candidates)), key=lambda index: (reached(index), index))
 
 
 def _require_contact(predicate: RelationPredicate) -> None:
@@ -366,14 +438,14 @@ def _evaluate(
     subject_points: Sequence[GeometryPoint],
     object_entity_ref: ResolvedEntityReference,
     object_geometry: EntityGeometry,
-    object_points: Sequence[GeometryPoint],
+    object_grid: _PointGrid,
     policy: ContactPredicatePolicy,
     conventions: FrameConventions,
 ) -> RelationEvidence:
     spec = predicate_spec(predicate)
     conventions.require_evaluable(spec.frame_requirement, subject_geometry, object_geometry)
     contact = _measure_contact(
-        subject_points, object_points, policy.contact_distance_m, policy.search_radius_m
+        subject_points, object_grid, policy.contact_distance_m, policy.search_radius_m
     )
     assessment = _ASSESSORS[predicate](
         subject_geometry, object_geometry, contact, policy, conventions
@@ -412,30 +484,39 @@ def _evaluate(
     )
 
 
+def _contact_grid(points: Sequence[GeometryPoint], search_radius_m: float) -> _PointGrid:
+    """Bucket the points of an object in cubic cells whose side is the search radius.
+
+    The grid depends only on the points and the radius, so it can serve every subject measured
+    against the same object with the same radius.
+    """
+    grid: dict[tuple[int, int, int], list[GeometryPoint]] = defaultdict(list)
+    for point in points:
+        grid[_cell(point.coordinates_m, search_radius_m)].append(point)
+    return grid
+
+
 def _measure_contact(
     subject_points: Sequence[GeometryPoint],
-    object_points: Sequence[GeometryPoint],
+    object_grid: _PointGrid,
     contact_distance_m: float,
     search_radius_m: float,
 ) -> _Contact:
     """Find the point pairs within the search radius with a uniform grid.
 
-    Object points are bucketed in cells of the search radius, so every subject point only meets
-    the object points of the 27 cells around it. The result is exact for every pair within the
-    search radius and does not depend on the order the points are given in.
+    The object points are bucketed by :func:`_contact_grid` in cells of the same search radius,
+    so every subject point only meets the object points of the 27 cells around it. The result is
+    exact for every pair within the search radius and does not depend on the order the points are
+    given in.
     """
-    cell = search_radius_m
-    grid: dict[tuple[int, int, int], list[GeometryPoint]] = defaultdict(list)
-    for point in object_points:
-        grid[_cell(point.coordinates_m, cell)].append(point)
     nearest: float | None = None
     pairs = 0
     in_contact_subject: dict[str, GeometryPoint] = {}
     in_contact_object: dict[str, GeometryPoint] = {}
     for subject_point in subject_points:
-        cx, cy, cz = _cell(subject_point.coordinates_m, cell)
+        cx, cy, cz = _cell(subject_point.coordinates_m, search_radius_m)
         for dx, dy, dz in product((-1, 0, 1), repeat=3):
-            for object_point in grid.get((cx + dx, cy + dy, cz + dz), ()):
+            for object_point in object_grid.get((cx + dx, cy + dy, cz + dz), ()):
                 distance = math.dist(subject_point.coordinates_m, object_point.coordinates_m)
                 if distance > search_radius_m:
                     continue
