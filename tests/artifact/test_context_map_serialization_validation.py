@@ -47,6 +47,7 @@ from contextmap.artifact import (
     ValidationLevel,
     ValidationReport,
     ValidationStatus,
+    context_map_to_record,
     validate_context_map_artifact,
 )
 from contextmap.artifact.serialization.decoding import entity_lines, relation_lines
@@ -458,13 +459,13 @@ def test_a_spatial_relations_run_linked_to_a_different_entity_resolution_run_is_
 
 
 def _rewrite_entities(artifact: Path, context_map: ContextMap) -> None:
-    table = encode_record_table(entity_lines(context_map))
+    table = encode_record_table(entity_lines(context_map, context_map_to_record(context_map)))
     (artifact / "entities" / "entities.jsonl").write_bytes(table.payload)
     (artifact / "indexes" / "entity-index.jsonl").write_bytes(table.index)
 
 
 def _rewrite_relations(artifact: Path, context_map: ContextMap) -> None:
-    table = encode_record_table(relation_lines(context_map))
+    table = encode_record_table(relation_lines(context_map, context_map_to_record(context_map)))
     (artifact / "relations" / "relations.jsonl").write_bytes(table.payload)
     (artifact / "indexes" / "relation-index.jsonl").write_bytes(table.index)
 

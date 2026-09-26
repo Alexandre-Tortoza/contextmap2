@@ -133,9 +133,10 @@ class ContextMapArtifactWriter:
             raise ArtifactExistsError(f"the artifact already exists: {self._output_dir}")
         dependencies = self._dependencies(context_map, upstream_locations)
 
+        # O mapa é codificado uma vez só; documentos e tabelas são partes do mesmo registro.
         record = context_map_to_record(context_map)
-        entity_table = encode_record_table(entity_lines(context_map))
-        relation_table = encode_record_table(relation_lines(context_map))
+        entity_table = encode_record_table(entity_lines(context_map, record))
+        relation_table = encode_record_table(relation_lines(context_map, record))
         traversal_index = encode_entity_relation_index(
             (str(entity.entity_id) for entity in context_map.entities),
             (

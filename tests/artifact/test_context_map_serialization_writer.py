@@ -325,6 +325,26 @@ def test_the_published_artifact_matches_the_recorded_bytes(world: World, case: s
     assert _contractual_digest(output_dir) == recorded
 
 
+def test_the_writer_encodes_the_map_once(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    # #600 (ART-04): cada codificação completa do mapa é mais uma cópia dele inteira em memória.
+    context_map = make_context_map(world)
+    original = context_map_to_record
+    encoded: list[object] = []
+
+    def counting(value: Any) -> dict[str, Any]:
+        encoded.append(value)
+        return original(value)
+
+    # Cada módulo importa a função pelo nome, então ela é trocada em todo namespace que a guarda.
+    for name, module in list(sys.modules.items()):
+        if name.startswith("contextmap.") and vars(module).get("context_map_to_record") is original:
+            monkeypatch.setattr(module, "context_map_to_record", counting)
+
+    write_artifact(world, context_map=context_map)
+
+    assert len(encoded) == 1
+
+
 def test_a_different_map_has_a_different_identity(world: World) -> None:
     _, populated = write_artifact(world, name="populated")
     _, geometry_only = write_artifact(
