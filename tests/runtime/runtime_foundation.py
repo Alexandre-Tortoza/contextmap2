@@ -54,11 +54,22 @@ def _request(
     )
 
 
+class SyntheticIngestion:
+    """An ingestion stage that publishes the synthetic CI sequence where the runtime says."""
+
+    def execute(self, request: StageRequest) -> ArtifactRef:
+        assert request.output_dir is not None and request.workspace is not None
+        return _publish_sequence(request.output_dir, request.workspace, "seq-A")
+
+
 def write_sequence(
     workspace: Path, *, run: str = "run-0001", artifact_id: str = "seq-A"
 ) -> ArtifactRef:
     """Publish the synthetic CI sequence under ``<run>/ingestion``."""
-    output = workspace / DATASET / run / "ingestion"
+    return _publish_sequence(workspace / DATASET / run / "ingestion", workspace, artifact_id)
+
+
+def _publish_sequence(output: Path, workspace: Path, artifact_id: str) -> ArtifactRef:
     sequence = build_synthetic_sequence()
     with SequenceArtifactWriter(
         output_dir=output, sequence_name=CI_FIXTURE_ID, artifact_id=SequenceArtifactId(artifact_id)
@@ -83,7 +94,14 @@ def estimate(
     workspace: Path, sequence: ArtifactRef, *, run: str = "run-0001", digest: str = "se-1"
 ) -> ArtifactRef:
     """Run the real State Estimation executor over ``sequence`` with external poses."""
-    executor = StateEstimationExecutor(
+    return state_estimation_executor().execute(
+        _request(workspace, run, "state_estimation", {"sequence": sequence}, digest)
+    )
+
+
+def state_estimation_executor() -> StateEstimationExecutor:
+    """The real State Estimation executor, over the synthetic sequence's external poses."""
+    return StateEstimationExecutor(
         ExternalPoseEstimator(
             ExternalPoseConfig(reference_frame=FrameId("odom"), body_frame=FrameId("base_link"))
         ),
@@ -97,9 +115,6 @@ def estimate(
             ),
         ),
     )
-    return executor.execute(
-        _request(workspace, run, "state_estimation", {"sequence": sequence}, digest)
-    )
 
 
 def build_map(
@@ -111,15 +126,21 @@ def build_map(
     digest: str = "gm-1",
 ) -> ArtifactRef:
     """Run the real Geometric Mapping executor over ``sequence`` and ``trajectory``."""
-    executor = GeometricMappingExecutor(
+    inputs = {"sequence": sequence, "trajectory": trajectory}
+    return geometric_mapping_executor().execute(
+        _request(workspace, run, "geometric_mapping", inputs, digest)
+    )
+
+
+def geometric_mapping_executor() -> GeometricMappingExecutor:
+    """The real Geometric Mapping executor, with exact pose lookup."""
+    return GeometricMappingExecutor(
         pose_lookup=LookupPolicy.exact(),
         motion_correction=MotionCorrectionPolicy(
             raw=ScanDisposition.ACCEPT, unknown=ScanDisposition.WARN
         ),
         code_version="test",
     )
-    inputs = {"sequence": sequence, "trajectory": trajectory}
-    return executor.execute(_request(workspace, run, "geometric_mapping", inputs, digest))
 
 
 def foundation_refs(

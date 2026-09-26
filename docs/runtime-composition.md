@@ -627,7 +627,7 @@ Os documentos novos são do runtime e têm `schema_version` próprio, como `plan
 - **#500:** remove o limite de uma run do executor de fusão, deduplica refs e recusa duas associações sobre a mesma percepção; a seleção por catálogo não muda.
 - **#499:** integração e testes; o montador já é chamado pelo `ContextMapExecutor`. Soma a validação `FULL` depois de gravar.
 - **#501:** a inferência repetida usa configurações distintas.
-- **#502:** comandos `contextmap context branch create`, `context run`, `context build` e `context inspect`, sobre a CLI existente; `map create` da issue vira `context branch create`, que valida a fundação.
+- **#502:** comandos `contextmap context branch create`, `context run`, `context build` e `context inspect`, sobre a CLI existente; `map create` da issue vira `context branch create --from-run RUN`, que valida como fundação a sequência, a trajetória e o mapa do registro de execução de um run (`foundation_of_run`). Implementado; uso em [`cli.md`](../src/contextmap/runtime/docs/cli.md#context).
 - **#503, #504 e #505:** sem mudança de escopo.
 
 Grafo de dependências:

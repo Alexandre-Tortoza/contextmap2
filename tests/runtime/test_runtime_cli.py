@@ -10,8 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from runtime_context import Located
 from runtime_documents import selected_document
 from runtime_fixtures import unavailable_future_stage  # noqa: F401
+from runtime_foundation import (
+    SyntheticIngestion,
+    geometric_mapping_executor,
+    state_estimation_executor,
+)
 from runtime_ingestion import factory as fake_factory
 from runtime_worlds import World
 
@@ -1338,3 +1344,189 @@ class TestIngestCommand:
         )
 
         assert code == 2 and "KEY=TOPIC" in out + err
+
+
+class TestContextCommands:
+    """Issue #502: the incremental lifecycle through the installed CLI, over the runtime APIs."""
+
+    FRAMES = '{"kind": "frame_range", "start_frame_index": 0, "end_frame_index": 10}'
+    LATER = '{"kind": "frame_range", "start_frame_index": 10, "end_frame_index": 20}'
+
+    @staticmethod
+    def _executors(world: World) -> dict[str, Any]:
+        from contextmap.runtime.catalog import CANONICAL_PRESET
+
+        fakes = {
+            s.stage_id: Located(world.executor(s.stage_id, s.output or ""))
+            for s in CANONICAL_PRESET.stages
+        }
+        return {
+            **fakes,
+            "ingestion": SyntheticIngestion(),
+            "state_estimation": state_estimation_executor(),
+            "geometric_mapping": geometric_mapping_executor(),
+        }
+
+    def _cli(self, tmp_path: Path, world: World, *argv: str) -> tuple[int, dict[str, Any], str]:
+        code, out, err = cli(
+            *argv,
+            "-c",
+            str(_config(tmp_path)),
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--json",
+            executors=self._executors(world),
+        )
+        return code, (_json(out) if out.strip() else {}), out + err
+
+    def _branch(self, tmp_path: Path, world: World, target: str = "geometric_mapping") -> int:
+        self._cli(tmp_path, world, "run", "--stage", target)
+        code, _, _ = self._cli(
+            tmp_path, world, "context", "branch", "create", "corridor", "--from-run", "run-0001"
+        )
+        return code
+
+    def _context_run(self, tmp_path: Path, world: World, selection: str) -> dict[str, Any]:
+        code, document, text = self._cli(
+            tmp_path,
+            world,
+            "context",
+            "run",
+            "--branch",
+            "corridor",
+            "--set",
+            f"inputs.observation_selection={selection}",
+        )
+        assert code == 0, text
+        return document
+
+    def test_a_branch_is_created_over_the_foundation_of_a_run(self, tmp_path: Path) -> None:
+        world = World()
+        self._cli(tmp_path, world, "run", "--stage", "geometric_mapping")
+
+        code, document, text = self._cli(
+            tmp_path, world, "context", "branch", "create", "corridor", "--from-run", "run-0001"
+        )
+
+        assert code == 0, text
+        assert document["branch"] == {"name": "corridor", "dataset": "S1", "revision": 0}
+        assert document["foundation"]["identity"].startswith("sha256:")
+        assert (tmp_path / "ws" / "S1" / "branches" / "corridor" / "branch.json").is_file()
+
+    def test_a_run_without_a_map_cannot_found_a_branch(self, tmp_path: Path) -> None:
+        code = self._branch(tmp_path, World(), target="state_estimation")
+
+        assert code == 1
+
+    def test_context_runs_append_to_the_branch_and_report_each_stage(self, tmp_path: Path) -> None:
+        world = World()
+        assert self._branch(tmp_path, world) == 0
+
+        first = self._context_run(tmp_path, world, self.FRAMES)
+        second = self._context_run(tmp_path, world, self.LATER)
+
+        assert first["branch"] == {"name": "corridor", "revision": 1}
+        assert second["branch"] == {"name": "corridor", "revision": 2}
+        assert first["stages"] == {
+            "visual_perception": "produced",
+            "sensor_association": "produced",
+            "point_representation": "not selected",
+        }
+        assert first["context_run"]["context_run_id"] != second["context_run"]["context_run_id"]
+        assert (
+            first["context_run"]["foundation"]["identity"]
+            == (second["context_run"]["foundation"]["identity"])
+        )
+
+    def test_a_build_materializes_a_revision_and_names_its_map(self, tmp_path: Path) -> None:
+        world = World()
+        self._branch(tmp_path, world)
+        self._context_run(tmp_path, world, self.FRAMES)
+        self._context_run(tmp_path, world, self.LATER)
+
+        code, latest, text = self._cli(
+            tmp_path, world, "context", "build", "--branch", "corridor", "--code-identity", "c1"
+        )
+        _, earlier, _ = self._cli(
+            tmp_path,
+            world,
+            "context",
+            "build",
+            "--branch",
+            "corridor",
+            "--revision",
+            "1",
+            "--code-identity",
+            "c1",
+        )
+
+        assert code == 0, text
+        assert len(latest["context_build"]["context_run_ids"]) == 2
+        assert latest["context_map_id"].startswith("context_map-")
+        assert Path(latest["run_directory"], "context_build.json").is_file()
+        assert earlier["context_build"]["revision"] == 1
+        assert (
+            earlier["context_build"]["context_build_id"]
+            != (latest["context_build"]["context_build_id"])
+        )
+
+    def test_a_build_records_the_code_that_materializes_it(self, tmp_path: Path) -> None:
+        world = World()
+        self._branch(tmp_path, world)
+        self._context_run(tmp_path, world, self.FRAMES)
+
+        code, _, text = self._cli(tmp_path, world, "context", "build", "--branch", "corridor")
+
+        assert code == 2
+        assert "--code-identity" in text
+
+    def test_an_unknown_branch_is_reported(self, tmp_path: Path) -> None:
+        world = World()
+        self._branch(tmp_path, world)
+
+        code, _, text = self._cli(tmp_path, world, "context", "run", "--branch", "nope")
+
+        assert code == 1
+        assert "nope" in text
+
+    def test_inspection_reads_records_only(self, tmp_path: Path) -> None:
+        world = World()
+        self._branch(tmp_path, world)
+        run = self._context_run(tmp_path, world, self.FRAMES)
+        _, build, _ = self._cli(
+            tmp_path, world, "context", "build", "--branch", "corridor", "--code-identity", "c1"
+        )
+        workspace = str(tmp_path / "ws")
+        config = str(_config(tmp_path))
+
+        branch_code, branch_out, _ = cli(
+            "context",
+            "inspect",
+            "branch",
+            "corridor",
+            "-c",
+            config,
+            "--workspace",
+            workspace,
+            "--json",
+        )
+        run_code, run_out, _ = cli(
+            "context", "inspect", "run", run["run_directory"], "--workspace", workspace, "--json"
+        )
+        build_code, build_out, _ = cli(
+            "context",
+            "inspect",
+            "run",
+            build["run_directory"],
+            "--workspace",
+            workspace,
+            "--json",
+        )
+
+        assert (branch_code, run_code, build_code) == (0, 0, 0)
+        assert [m["context_run_id"] for m in _json(branch_out)["members"]] == [
+            run["context_run"]["context_run_id"]
+        ]
+        assert _json(run_out)["context_run"] == run["context_run"]
+        assert _json(build_out)["context_build"] == build["context_build"]
+        assert _json(build_out)["context_map_id"] == build["context_map_id"]

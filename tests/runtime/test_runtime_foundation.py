@@ -8,13 +8,27 @@ import shutil
 from pathlib import Path
 
 import pytest
-from runtime_foundation import build_map, estimate, foundation_refs, write_sequence
+from runtime_documents import effective_from, selected_document
+from runtime_foundation import (
+    SyntheticIngestion,
+    build_map,
+    estimate,
+    foundation_refs,
+    geometric_mapping_executor,
+    state_estimation_executor,
+    write_sequence,
+)
 
 from contextmap.runtime import (
     ArtifactRef,
+    RunJournal,
     SpatialFoundation,
     SpatialFoundationError,
+    foundation_of_run,
+    read_plan_document,
+    resolve_plan,
     resolve_spatial_foundation,
+    run_plan,
 )
 
 
@@ -142,6 +156,49 @@ class TestAMismatchedFoundation:
 
         roles = sorted(problem.split(":")[0] for problem in caught.value.problems)
         assert roles == ["geometry", "state_estimation"]
+
+
+class TestTheFoundationOfARun:
+    """Issue #502: a completed run that produced or used them names the three artifacts."""
+
+    @staticmethod
+    def _run(tmp_path: Path, target: str) -> Path:
+        effective = effective_from(tmp_path, selected_document())
+        execution = resolve_plan(effective).scope(targets=[target])
+        journal = RunJournal.create(tmp_path / "ws", effective, execution)
+        run_plan(
+            execution,
+            {
+                "ingestion": SyntheticIngestion(),
+                "state_estimation": state_estimation_executor(),
+                "geometric_mapping": geometric_mapping_executor(),
+            },
+            environ={},
+            module_available=lambda _name: True,
+            journal=journal,
+        )
+        return journal.directory
+
+    def test_the_run_that_built_the_map_is_a_foundation(self, tmp_path: Path) -> None:
+        run = self._run(tmp_path, "geometric_mapping")
+
+        foundation = foundation_of_run(tmp_path / "ws", run)
+
+        record = read_plan_document(run / "execution.json")
+        outputs = {stage["stage_id"]: stage["output"] for stage in record["stages"]}
+        assert foundation.geometry == ArtifactRef.from_document(outputs["geometric_mapping"])
+        assert foundation == resolve_spatial_foundation(
+            tmp_path / "ws",
+            sequence=foundation.sequence,
+            state_estimation=foundation.state_estimation,
+            geometry=foundation.geometry,
+        )
+
+    def test_a_run_without_a_map_is_not_a_foundation(self, tmp_path: Path) -> None:
+        run = self._run(tmp_path, "state_estimation")
+
+        with pytest.raises(SpatialFoundationError, match="geometric_mapping"):
+            foundation_of_run(tmp_path / "ws", run)
 
 
 def test_the_sequence_writer_helper_is_deterministic(tmp_path: Path) -> None:
