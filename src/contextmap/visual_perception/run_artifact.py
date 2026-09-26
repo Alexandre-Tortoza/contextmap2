@@ -99,7 +99,11 @@ SCHEMA_VERSION = "0.6.0"
 Bumped to ``0.6.0`` when every run started carrying the audit of its region
 discovery in ``outputs/region-discovery-audit.jsonl`` (#611): passes and
 per-pass backend diagnostics, rejected candidates, merge decisions and the
-normalization config digest, one record per frame. Bumped to ``0.5.0`` when a
+normalization config digest, one record per frame. The same unreleased version
+also gives every ``metrics/stage-timings.jsonl`` record ``error_type`` and
+``error_traceback`` and makes ``raw_response_reference`` name the contractual
+stream that holds the raw response (#619; see
+:data:`_PRE_AUDIT_SCHEMA_VERSION`). Bumped to ``0.5.0`` when a
 region's mask stopped being inlined as a JSON pixel array in
 ``outputs/results.jsonl`` and moved to a compact, lazily-loaded
 ``outputs/masks/`` store referenced by ``mask_reference`` (#378; see
@@ -110,10 +114,21 @@ contracts. This is a pre-1.0 schema; the only older version still read is
 """
 
 _PRE_AUDIT_SCHEMA_VERSION = "0.5.0"
-"""The schema v0.1.0 shipped, still opened: it is 0.6.0 without the region discovery audit.
+"""The schema v0.1.0 shipped, still opened.
 
-Nothing else differs, so reading it needs no branch beyond reporting that its audit was never
-recorded (:meth:`PerceptionRunReader.records_region_discovery_audit`).
+A 0.5.0 run differs from a 0.6.0 run in exactly three ways:
+
+- it has no ``outputs/region-discovery-audit.jsonl``;
+- its ``metrics/stage-timings.jsonl`` records carry no ``error_type`` nor ``error_traceback``;
+- its ``raw_response_reference`` values name the ``debug/`` copy of the raw response
+  (``debug/40-semantic-interpretation/<request-id>/raw-response.txt``, written only under
+  ``SemanticDebugLevel.FULL``) instead of the contractual stream that holds it.
+
+Everything else (masks, features, the README, and each result and semantic record apart from
+that reference) is written the same way. Reading one therefore branches only where those
+differences are observable: the reader reports its audit
+as never recorded (:meth:`PerceptionRunReader.records_region_discovery_audit`) and reads its raw
+response references as recorded instead of requiring the stream. It never decodes the metrics.
 """
 
 _MANIFEST_FILENAME = "manifest.json"
