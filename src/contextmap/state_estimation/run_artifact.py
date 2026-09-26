@@ -32,6 +32,7 @@ from contextmap.shared import (
     RunDirectoryError,
     SourceTimestamp,
     check_file_inventory,
+    is_run_relative_path,
 )
 from contextmap.state_estimation.lookup import ClockDomainMismatchError
 from contextmap.state_estimation.models import (
@@ -483,10 +484,13 @@ class StateEstimationRunReader:
 
         Raises:
             RunArtifactError: If the path is not a JSON record of a contractual
-                directory; ``debug/`` is never a valid source.
+                directory, or leaves it through ``..``; ``debug/`` is never a valid
+                source.
         """
-        if not relative_path.endswith(".json") or not relative_path.startswith(
-            ("outputs/", "metrics/")
+        if (
+            not is_run_relative_path(relative_path)
+            or not relative_path.endswith(".json")
+            or not relative_path.startswith(("outputs/", "metrics/"))
         ):
             raise RunArtifactError(f"not a contractual JSON record: {relative_path!r}")
         record: dict[str, Any] = json.loads(

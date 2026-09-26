@@ -123,6 +123,12 @@ def encode_trajectory_metadata(trajectory: Trajectory) -> dict[str, Any]:
             "selection_id": provenance.selection_id,
             "calibration_identity": provenance.calibration_identity,
             "code_version": provenance.code_version,
+            "auxiliary_sequence_artifact_id": (
+                None
+                if provenance.auxiliary_sequence_artifact_id is None
+                else str(provenance.auxiliary_sequence_artifact_id)
+            ),
+            "auxiliary_selection_id": provenance.auxiliary_selection_id,
         },
     }
 
@@ -165,6 +171,13 @@ def decode_trajectory(metadata: Mapping[str, Any], poses: Sequence[PoseEstimate]
             selection_id=provenance["selection_id"],
             calibration_identity=provenance["calibration_identity"],
             code_version=provenance["code_version"],
+            # Records gravados antes da #594 não carregam a linhagem auxiliar.
+            auxiliary_sequence_artifact_id=(
+                None
+                if provenance.get("auxiliary_sequence_artifact_id") is None
+                else SequenceArtifactId(provenance["auxiliary_sequence_artifact_id"])
+            ),
+            auxiliary_selection_id=provenance.get("auxiliary_selection_id"),
         ),
     )
 
