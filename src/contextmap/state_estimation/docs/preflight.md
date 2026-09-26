@@ -61,7 +61,7 @@ Grafo de frames conectados pelos `RigidTransform` estáticos da calibração can
 - `component_of(frame)` devolve os frames conectados;
 - `loop_inconsistencies(...)` verifica caminhos redundantes: uma árvore geradora define cada frame relativo a uma raiz, e cada aresta restante fecha um laço. Se compor o caminho pela árvore não reproduz a aresta, dois caminhos entre os mesmos frames discordam e o grafo é ambíguo. Um transform reverso duplicado só é consistente quando é de fato a inversa.
 
-Frames desconhecidos ou sem caminho estático levantam `FrameGraphError`.
+Frames desconhecidos ou sem caminho estático levantam `FrameGraphError`. `resolve` também recusa, com `FrameGraphError` nomeando a aresta e a norma medida, um transform **do caminho** cujo quaternion não é unitário além de `STATIC_ROTATION_NORM_TOLERANCE` (`1e-5`, o mesmo default de `rotation_orthonormality`): inverter pelo conjugado e compor assumem norma 1, e `compose_rigid` renormaliza a rotação, então o erro ficaria escondido só na translação. O quaternion nunca é renormalizado em silêncio. Um transform inválido fora do caminho não impede resolvê-lo (o preflight o reporta como calibração não usada), e o grafo continua construível com ele, para o preflight reportá-lo.
 
 ## Checagens
 

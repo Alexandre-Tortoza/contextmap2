@@ -28,9 +28,17 @@ from contextmap.shared import (
     compose_rigid,
     invert_rigid,
     quaternion_angle_between,
+    quaternion_norm,
 )
 
 _IDENTITY_ROTATION: Quaternion = (0.0, 0.0, 0.0, 1.0)
+
+STATIC_ROTATION_NORM_TOLERANCE = 1e-5
+"""Largest ``|norm(q) - 1|`` accepted for a static rotation the graph composes.
+
+Inverting and composing a transform assume a unit quaternion, so a larger deviation means
+wrong numbers, not a slightly imprecise rotation. The tolerance accepts text-precision
+calibration, the same default as the state-estimation preflight's rotation check."""
 
 
 class FrameGraphError(ValueError):
@@ -143,14 +151,24 @@ class StaticFrameGraph:
             The composed transform; the identity when both frames are the same.
 
         Raises:
-            FrameGraphError: If a frame is unknown or no static path connects them.
+            FrameGraphError: If a frame is unknown, no static path connects them, or a transform
+                on the path does not have a unit rotation quaternion.
         """
         self._require_frame(parent_frame)
         self._require_frame(child_frame)
-        _, from_root, _ = self._traverse(parent_frame)
+        _, from_root, reached_by = self._traverse(parent_frame)
         if child_frame not in from_root:
             raise FrameGraphError(
                 f"no static path between {parent_frame!r} and {child_frame!r} in the calibration"
+            )
+        # Só as arestas do caminho entram no resultado: uma extrínseca inválida que este caminho
+        # não usa não impede resolvê-lo (o preflight a reporta como calibração não usada).
+        frame = child_frame
+        while frame != parent_frame:
+            transform = self._transforms[reached_by[frame]]
+            _require_unit_rotation(transform)
+            frame = (
+                transform.parent_frame if transform.child_frame == frame else transform.child_frame
             )
         translation, rotation = from_root[child_frame]
         return ResolvedTransform(
@@ -183,7 +201,8 @@ class StaticFrameGraph:
         for root in sorted(self._adjacency, key=str):
             if root in visited:
                 continue
-            order, from_root, tree_edges = self._traverse(root)
+            order, from_root, reached_by = self._traverse(root)
+            tree_edges = set(reached_by.values())
             component = set(order)
             visited.update(component)
             for index, transform in enumerate(self._transforms):
@@ -227,18 +246,18 @@ class StaticFrameGraph:
 
     def _traverse(
         self, root: FrameId
-    ) -> tuple[list[FrameId], dict[FrameId, tuple[Vector3, Quaternion]], set[int]]:
+    ) -> tuple[list[FrameId], dict[FrameId, tuple[Vector3, Quaternion]], dict[FrameId, int]]:
         """Breadth-first spanning tree from ``root``.
 
         Returns:
-            The reached frames, ``T_root_frame`` for each of them, and the
-            indexes of the edges that form the tree.
+            The reached frames, ``T_root_frame`` for each of them, and, for each reached frame
+            other than ``root``, the index of the tree edge it was reached through.
         """
         from_root: dict[FrameId, tuple[Vector3, Quaternion]] = {
             root: ((0.0, 0.0, 0.0), _IDENTITY_ROTATION)
         }
         order = [root]
-        tree_edges: set[int] = set()
+        reached_by: dict[FrameId, int] = {}
         queue = deque([root])
         while queue:
             frame = queue.popleft()
@@ -259,7 +278,24 @@ class StaticFrameGraph:
                     inner_rotation=edge_rotation,
                 )
                 from_root[step.neighbor] = (translation, rotation)
-                tree_edges.add(step.edge_index)
+                reached_by[step.neighbor] = step.edge_index
                 order.append(step.neighbor)
                 queue.append(step.neighbor)
-        return order, from_root, tree_edges
+        return order, from_root, reached_by
+
+
+def _require_unit_rotation(transform: RigidTransform) -> None:
+    """Refuse a transform whose rotation quaternion is not unit within the tolerance.
+
+    Raises:
+        FrameGraphError: Naming the transform and the measured norm.
+    """
+    norm = quaternion_norm(transform.rotation)
+    # `not (x <= tol)` também recusa uma norma NaN, que `x > tol` deixaria passar.
+    if not abs(norm - 1.0) <= STATIC_ROTATION_NORM_TOLERANCE:
+        raise FrameGraphError(
+            f"static transform T_{transform.parent_frame}_{transform.child_frame} has a rotation "
+            f"quaternion of norm {norm:.6f}, not a unit quaternion within "
+            f"{STATIC_ROTATION_NORM_TOLERANCE}: composing or inverting it would give wrong "
+            "translations; fix the calibration instead of renormalizing it"
+        )
