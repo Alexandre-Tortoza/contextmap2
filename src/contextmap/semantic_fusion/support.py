@@ -345,11 +345,14 @@ def _support_of(
                 f"spatial observation {owner.spatial_observation_id!r} references geometry "
                 f"{reference.geometry_id!r}, which is not in map {reference.map_id!r}"
             ) from error
+    bounds = Bounds3D.enclosing(coordinates, frame_id=resolver.frame_id)
     count = len(coordinates)
-    centroid = (
-        math.fsum(point[0] for point in coordinates) / count,
-        math.fsum(point[1] for point in coordinates) / count,
-        math.fsum(point[2] for point in coordinates) / count,
+    mean = tuple(math.fsum(point[axis] for point in coordinates) / count for axis in range(3))
+    # A média está matematicamente dentro da caixa; o clamp só corrige o erro de arredondamento
+    # que, num eixo degenerado (ex.: piso em z constante), a deixaria 1 ulp fora dos bounds.
+    x, y, z = (
+        min(max(value, low), high)
+        for value, low, high in zip(mean, bounds.minimum_m, bounds.maximum_m, strict=True)
     )
     stamps: list[SourceTimestamp] = []
     for item in members:
@@ -364,8 +367,8 @@ def _support_of(
         geometric_map_id=references[0].map_id,
         geometry_support=tuple(references),
         spatial_observation_ids=tuple(item.spatial_observation_id for item in members),
-        bounds=Bounds3D.enclosing(coordinates, frame_id=resolver.frame_id),
-        centroid_m=centroid,
+        bounds=bounds,
+        centroid_m=(x, y, z),
         time_bounds=_time_bounds_of(stamps, owner=f"the observations of {support_id!r}"),
         provenance=provenance,
     )

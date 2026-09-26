@@ -78,6 +78,17 @@ def test_a_support_summarizes_geometry_time_and_policy() -> None:
     assert support.provenance.configuration_fingerprint == POLICY.fingerprint()
 
 
+def test_a_flat_support_keeps_its_centroid_inside_the_degenerate_bounds() -> None:
+    # Regressão SF-01: fsum([0.1] * 3) / 3 == 0.10000000000000002 > 0.1.
+    flat = InMemoryGeometrySource(MAP_ID, {i: (i * 0.1, 0.0, 0.1) for i in range(3)})
+
+    build = _build([_obs("frame-0120", range(3))], source=flat)
+
+    support = build.supports[0]
+    assert support.bounds.maximum_m[2] == 0.1
+    assert support.centroid_m[2] == 0.1
+
+
 def test_each_geometry_element_is_resolved_once_however_many_views_see_it() -> None:
     source = _source()
 
