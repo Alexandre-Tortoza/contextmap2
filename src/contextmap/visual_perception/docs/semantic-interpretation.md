@@ -232,6 +232,10 @@ runtime falha com `QwenDependencyError`, nunca com fallback para outro backend.
   `QwenModelLoadError` em vez de rodar silenciosamente em precisão plena.
   Quantização exige device CUDA. Como ela altera saída e custo, faz parte da
   configuração efetiva e do fingerprint.
+- **Device validado antes do load.** O tipo do device precisa ser `cpu`, `cuda`
+  ou `mps`, como nos adapters de features, e o índice continua opcional
+  (`cuda:1`). CUDA ou MPS indisponível falha com `QwenDeviceError` antes de
+  qualquer peso ser carregado (#617).
 - **Decoding explícito.** `temperature=0` usa decoding guloso e anula
   `top_p`/`top_k` herdados do `generation_config` do checkpoint; um valor
   positivo amostra com essa temperatura e usa os defaults do checkpoint (fixado
@@ -389,7 +393,8 @@ revisão fixada, com `Florence2ForConditionalGeneration` e `AutoProcessor`, sem
 `post_process_generation` da task e remove os tokens `<loc_*>` que ecoam a caixa
 de entrada nas tasks de região, pois repetem o input e não fazem parte da
 resposta. Registra tokens, pico de memória de GPU e o mesmo `load()` explícito
-do runtime Qwen. A imagem é decodificada dos bytes cujo SHA-256 foi verificado
+do runtime Qwen, com a mesma validação de device (tipo `cpu`, `cuda` ou `mps`,
+índice opcional; CUDA ou MPS indisponível é `Florence2DeviceError` antes do load). A imagem é decodificada dos bytes cujo SHA-256 foi verificado
 contra `SemanticVisualView.sha256`, e um payload divergente é
 `Florence2InferenceError` antes da inferência
 ([Integridade das views](#integridade-das-views-na-inferência)). Sem SDK, device

@@ -245,6 +245,7 @@ class QwenSemanticInterpreter:
 
 
 _PRECISIONS = frozenset({"float32", "float16", "bfloat16"})
+_DEVICE_TYPES = frozenset({"cpu", "cuda", "mps"})
 
 
 class HuggingFaceQwenRuntime:
@@ -374,9 +375,17 @@ class HuggingFaceQwenRuntime:
             ) from error
         if config.precision not in _PRECISIONS:
             raise QwenDeviceError(f"Qwen precision must be one of {sorted(_PRECISIONS)}")
-        on_cuda = config.device.startswith("cuda")
+        # O índice (cuda:1) continua permitido; o tipo segue o conjunto dos demais adapters.
+        device_type = config.device.split(":", 1)[0]
+        if device_type not in _DEVICE_TYPES:
+            raise QwenDeviceError(
+                f"Qwen device type must be one of: cpu, cuda, mps; got {config.device!r}"
+            )
+        on_cuda = device_type == "cuda"
         if on_cuda and not torch.cuda.is_available():
             raise QwenDeviceError("configured CUDA device is unavailable")
+        if device_type == "mps" and not torch.backends.mps.is_available():
+            raise QwenDeviceError("configured MPS device is unavailable")
         if config.quantization is not None and not on_cuda:
             raise QwenDeviceError("bitsandbytes quantization requires a CUDA device")
         if config.device == "cpu" and config.precision == "float16":

@@ -494,9 +494,9 @@ def _numeric_sequence(value: object, name: str, *, length: int) -> tuple[float, 
 
 
 def _finite_number(value: object, name: str) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if not isinstance(value, (int, float)):
+    # bool é subclasse de int, mas um bool nativo não é score nem coordenada: rejeitado como no
+    # SAM2 e no Florence-2 (#617).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"SAM3 {name} must be numeric")
     result = float(value)
     if not isfinite(result):
