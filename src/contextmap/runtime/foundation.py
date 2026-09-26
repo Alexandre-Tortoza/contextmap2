@@ -28,6 +28,7 @@ from contextmap.ingestion import (
 )
 from contextmap.runtime.artifacts import ArtifactRef, artifact_directory, inventory_digest
 from contextmap.runtime.catalog import GEOMETRY, SEQUENCE, TRAJECTORY
+from contextmap.runtime.pipeline import EXECUTION_FILENAME, read_plan_document
 
 SpatialFoundationId = NewType("SpatialFoundationId", str)
 """``"sha256:<hex>"`` over the contractual content of the three artifacts."""
@@ -229,6 +230,52 @@ def resolve_spatial_foundation(
         state_estimation=state_estimation,
         geometry=geometry,
     )
+
+
+def foundation_of_run(workspace: Path, run_directory: Path) -> SpatialFoundation:
+    """Validate as one foundation the sequence, trajectory and map a completed run named.
+
+    Each artifact is the one the run produced, or the one it was given to consume, as its
+    execution record says; nothing is inferred from directories.
+
+    Args:
+        workspace: The workspace the run's artifact locations are relative to.
+        run_directory: The directory of a completed runtime run.
+
+    Returns:
+        The foundation.
+
+    Raises:
+        SpatialFoundationError: If the run names no artifact for one of the three stages, or
+            the artifacts do not form one foundation.
+        PlanDocumentError: If the run has no readable execution record.
+    """
+    record = read_plan_document(run_directory / EXECUTION_FILENAME)
+    refs: dict[str, ArtifactRef] = {
+        stage["stage_id"]: ArtifactRef.from_document(stage["output"]) for stage in record["stages"]
+    }
+    for stage_id, supplied in record["reused"].items():
+        if len(supplied) == 1:
+            refs.setdefault(stage_id, ArtifactRef.from_document(supplied[0]))
+    missing = [
+        f"{stage_id}: run {run_directory.name!r} names no {stage_id} artifact"
+        for stage_id in _FOUNDATION_STAGES.values()
+        if stage_id not in refs
+    ]
+    if missing:
+        raise SpatialFoundationError(missing)
+    return resolve_spatial_foundation(
+        workspace,
+        **{role: refs[stage_id] for role, stage_id in _FOUNDATION_STAGES.items()},
+    )
+
+
+_FOUNDATION_STAGES = {
+    "sequence": "ingestion",
+    "state_estimation": "state_estimation",
+    "geometry": "geometric_mapping",
+}
+"""The stage that produces the artifact of each foundation role."""
 
 
 def _whole(sequence_artifact_id: SequenceArtifactId) -> str:

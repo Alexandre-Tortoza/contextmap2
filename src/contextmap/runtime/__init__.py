@@ -114,6 +114,7 @@ from contextmap.runtime.foundation import (
     SpatialFoundation,
     SpatialFoundationError,
     SpatialFoundationId,
+    foundation_of_run,
     resolve_spatial_foundation,
 )
 from contextmap.runtime.ingestion_service import (
@@ -308,6 +309,7 @@ __all__ = [
     "compose_executors",
     "context_scope",
     "create_branch",
+    "foundation_of_run",
     "load_catalog",
     "open_branch",
     "parse_override",

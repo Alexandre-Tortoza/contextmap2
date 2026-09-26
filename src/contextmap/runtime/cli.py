@@ -59,6 +59,28 @@ from contextmap.runtime.config import (
     resolve_effective_config,
     resolve_secrets,
 )
+from contextmap.runtime.context_branch import (
+    ContextBranch,
+    ContextBranchError,
+    append_to_branch,
+    create_branch,
+    open_branch,
+)
+from contextmap.runtime.context_build import (
+    CONTEXT_BUILD_FILENAME,
+    MATERIALIZATION_TARGET,
+    ContextBuildError,
+    plan_context_build,
+    publish_context_build,
+    read_context_build,
+)
+from contextmap.runtime.context_run import (
+    CONTEXT_STAGES,
+    ContextRunError,
+    context_scope,
+    publish_context_run,
+    read_context_run,
+)
 from contextmap.runtime.errors import (
     BackendUnavailableError,
     CompositionError,
@@ -66,6 +88,7 @@ from contextmap.runtime.errors import (
     PreflightError,
     RunRecordError,
 )
+from contextmap.runtime.foundation import SpatialFoundationError, foundation_of_run
 from contextmap.runtime.ingestion_service import (
     IngestionRequest,
     IngestionResult,
@@ -74,7 +97,9 @@ from contextmap.runtime.ingestion_service import (
 )
 from contextmap.runtime.lifecycle import ExecutionEvent
 from contextmap.runtime.pipeline import (
+    EXECUTION_FILENAME,
     ExecutionPlan,
+    ExecutionRecord,
     PipelinePlan,
     PreflightReport,
     StageExecutor,
@@ -246,6 +271,13 @@ def main(
             return session.fail("a selected backend is unavailable", error.problems)
         except (PipelineError, CompositionError, _Failure) as error:
             return session.fail(str(error))
+        except (
+            ContextBranchError,
+            ContextBuildError,
+            ContextRunError,
+            SpatialFoundationError,
+        ) as error:
+            return session.fail(str(error))
 
 
 # --- parser --------------------------------------------------------------------------
@@ -324,7 +356,95 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _path_argument(validate)
     validate.set_defaults(handler=_validate)
+
+    _context_parser(commands, config)
     return parser
+
+
+def _context_parser(commands: Any, config: argparse.ArgumentParser) -> None:
+    """Add ``context``: branches, context runs and builds of incremental context (#502)."""
+    context = commands.add_parser(
+        "context",
+        help="incremental context: branches, context runs and builds",
+        description=(
+            "Accumulate context evidence over a fixed spatial foundation and materialize "
+            "frozen revisions of it as ContextMaps."
+        ),
+    )
+    actions = context.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    branch = actions.add_parser("branch", help="create a branch over a spatial foundation")
+    branch_actions = branch.add_subparsers(dest="branch_action", required=True, metavar="ACTION")
+    create = branch_actions.add_parser(
+        "create",
+        parents=[config],
+        help="bind a new branch to the sequence, trajectory and map of a completed run",
+    )
+    create.add_argument("name", help="branch name, a lowercase slug unique in the dataset")
+    create.add_argument(
+        "--from-run",
+        required=True,
+        metavar="RUN",
+        help="completed run (a directory or a run id) whose sequence, trajectory and map "
+        "become the foundation",
+    )
+    create.set_defaults(handler=_context_branch_create)
+
+    run = actions.add_parser(
+        "run",
+        parents=[config],
+        help="run the context stages over a branch's foundation and append the ContextRun",
+        description=(
+            "Run visual perception and sensor association (and point representation when "
+            "enabled) over inputs.observation_selection, against the branch's foundation; "
+            "publish the ContextRun and append it to the branch. The foundation is never "
+            "recomputed."
+        ),
+    )
+    run.add_argument("--branch", required=True, metavar="NAME", help="the branch to append to")
+    _reuse_flags(run)
+    run.set_defaults(handler=_context_run)
+
+    build = actions.add_parser(
+        "build",
+        parents=[config],
+        help="freeze a branch revision and materialize its ContextMap",
+        description=(
+            "Freeze the ContextRuns of a branch revision (or an explicit subset), record them "
+            "before anything runs, then run semantic fusion through context_map over them."
+        ),
+    )
+    build.add_argument("--branch", required=True, metavar="NAME", help="the branch to build")
+    build.add_argument(
+        "--revision", type=int, metavar="N", help="revision to freeze (default: the current one)"
+    )
+    build.add_argument(
+        "--member",
+        action="append",
+        dest="members",
+        metavar="CONTEXT_RUN_ID",
+        help="build only this member of the revision; repeat for several",
+    )
+    _reuse_flags(build)
+    build.set_defaults(handler=_context_build)
+
+    inspect = actions.add_parser("inspect", help="show a branch or a context record, reading only")
+    subjects = inspect.add_subparsers(dest="subject", required=True, metavar="SUBJECT")
+    branch_subject = subjects.add_parser(
+        "branch", parents=[config], help="show a branch's foundation and members"
+    )
+    branch_subject.add_argument("name", help="the branch")
+    branch_subject.add_argument("--revision", type=int, metavar="N", help="an earlier revision")
+    branch_subject.set_defaults(handler=_context_inspect_branch)
+    record = subjects.add_parser(
+        "run", help="show the ContextRun or ContextBuild record of a run directory"
+    )
+    record.add_argument("path", type=Path, help="the run directory")
+    record.add_argument(
+        "--workspace", required=True, metavar="DIR", help="the workspace the run lives in"
+    )
+    _json_flag(record)
+    record.set_defaults(handler=_context_inspect_record)
 
 
 def _config_options() -> argparse.ArgumentParser:
@@ -437,6 +557,15 @@ def _execution_flags(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="show the resolved plan, inputs, outputs and preflight; load nothing, run nothing",
     )
+    reuse = _reuse_flags(parser)
+    reuse.add_argument(
+        "--resume",
+        metavar="RUN",
+        help="resume a failed, cancelled or interrupted run (a directory or a run id)",
+    )
+
+
+def _reuse_flags(parser: argparse.ArgumentParser) -> argparse._ArgumentGroup:
     reuse = parser.add_argument_group("reuse and resume (need --reuse-index)")
     reuse.add_argument("--reuse-index", metavar="DIR", help="index of completed artifacts to reuse")
     reuse.add_argument(
@@ -448,11 +577,7 @@ def _execution_flags(parser: argparse.ArgumentParser) -> None:
         metavar="STAGE",
         help="always recompute this stage; repeat for several",
     )
-    reuse.add_argument(
-        "--resume",
-        metavar="RUN",
-        help="resume a failed, cancelled or interrupted run (a directory or a run id)",
-    )
+    return reuse
 
 
 def _path_argument(parser: argparse.ArgumentParser) -> None:
@@ -681,9 +806,10 @@ def _execute(
         check_resumable(read_run(previous), execution)  # recusa antes de criar um run novo
     secrets = resolve_secrets(effective.config, environ=session.environ)
     journal = RunJournal.create(workspace, effective, execution, code_identity=args.code_identity)
-    try:
+
+    def execute() -> ExecutionRecord:
         if previous is not None and reuse is not None:
-            record = resume_plan(
+            return resume_plan(
                 previous,
                 execution,
                 executors,
@@ -694,26 +820,20 @@ def _execute(
                 journal=journal,
                 redact=secrets.redact,
             )
-        else:
-            record = run_plan(
-                execution,
-                executors,
-                environ=session.environ,
-                module_available=session.module_available,
-                provider_overrides=provider_overrides,
-                reuse=reuse,
-                journal=journal,
-                redact=secrets.redact,
-            )
-    except PreflightError as error:
-        return session.fail(
-            "the plan cannot run", error.report.problems, run_directory=journal.directory
+        return run_plan(
+            execution,
+            executors,
+            environ=session.environ,
+            module_available=session.module_available,
+            provider_overrides=provider_overrides,
+            reuse=reuse,
+            journal=journal,
+            redact=secrets.redact,
         )
-    except PipelineError as error:
-        return session.fail(str(error), run_directory=journal.directory)
-    except KeyboardInterrupt:
-        print(f"cancelled; run record: {journal.directory}", file=session.err)
-        return EXIT_INTERRUPTED
+
+    record = _journaled(session, journal, execute)
+    if isinstance(record, int):
+        return record
     result = {
         "ok": True,
         "run_directory": str(journal.directory),
@@ -731,6 +851,23 @@ def _execute(
         )
     session.emit(result, lines)
     return EXIT_OK
+
+
+def _journaled(
+    session: _Session, journal: RunJournal, execute: Callable[[], ExecutionRecord]
+) -> ExecutionRecord | int:
+    """Run into ``journal``; the exit code of the failure when the run did not complete."""
+    try:
+        return execute()
+    except PreflightError as error:
+        return session.fail(
+            "the plan cannot run", error.report.problems, run_directory=journal.directory
+        )
+    except PipelineError as error:
+        return session.fail(str(error), run_directory=journal.directory)
+    except KeyboardInterrupt:
+        print(f"cancelled; run record: {journal.directory}", file=session.err)
+        return EXIT_INTERRUPTED
 
 
 def _reuse_policy(session: _Session) -> ReusePolicy | None:
@@ -773,6 +910,231 @@ def _previous_run(datasets: Path, reference: str) -> Path:
     if under.is_dir():
         return under
     raise _Failure(f"no run record at {candidate} or {under}")
+
+
+# --- context ---------------------------------------------------------------------------
+
+
+def _context_place(session: _Session) -> tuple[EffectiveConfig, Path, str]:
+    """Resolve the configuration, the workspace and the dataset a context command works in."""
+    effective = _effective(session.args)
+    workspace = effective.config.resources.workspace
+    if workspace is None:
+        raise _UsageError("context records live in a workspace: pass --workspace DIR")
+    datasets = _dataset_directory(effective, workspace)
+    return effective, Path(workspace), datasets.name
+
+
+def _context_branch_create(session: _Session) -> int:
+    """Validate a completed run's sequence, trajectory and map as one foundation; bind a branch."""
+    args = session.args
+    _, workspace, dataset = _context_place(session)
+    run = _previous_run(workspace / dataset, args.from_run)
+    foundation = foundation_of_run(workspace, run)
+    branch = create_branch(workspace, dataset=dataset, name=args.name, foundation=foundation)
+    document = {
+        "ok": True,
+        "branch": {"name": branch.name, "dataset": dataset, "revision": branch.revision},
+        "foundation": foundation.to_document(),
+    }
+    lines = [
+        f"branch {branch.name} created in {dataset}, at revision 0",
+        f"  foundation: {foundation.identity}",
+        *(
+            f"  {role}: {getattr(foundation, role).artifact_id}"
+            for role in ("sequence", "state_estimation", "geometry")
+        ),
+    ]
+    session.emit(document, lines)
+    return EXIT_OK
+
+
+def _context_run(session: _Session) -> int:
+    """Run the context stages over the branch's foundation, publish and append the ContextRun."""
+    args = session.args
+    effective, workspace, dataset = _context_place(session)
+    branch = open_branch(workspace, dataset=dataset, name=args.branch)
+    execution = context_scope(resolve_plan(effective), branch.foundation)
+    reuse = _reuse_policy(session)
+    provider_overrides: list[str] = []
+    executors = _executors_for(session, effective, provider_overrides)
+    secrets = resolve_secrets(effective.config, environ=session.environ)
+    journal = RunJournal.create(workspace, effective, execution, code_identity=args.code_identity)
+    record = _journaled(
+        session,
+        journal,
+        lambda: run_plan(
+            execution,
+            executors,
+            environ=session.environ,
+            module_available=session.module_available,
+            provider_overrides=provider_overrides,
+            reuse=reuse,
+            journal=journal,
+            redact=secrets.redact,
+        ),
+    )
+    if isinstance(record, int):
+        return record
+    context = publish_context_run(
+        journal.directory,
+        workspace=workspace,
+        foundation=branch.foundation,
+        execution=execution,
+        record=record,
+    )
+    branch = append_to_branch(workspace, branch, context)
+    dispositions = {artifact.ref.stage_id: artifact.disposition for artifact in context.artifacts}
+    stages = {stage: dispositions.get(stage, "not selected") for stage in CONTEXT_STAGES}
+    document = {
+        "ok": True,
+        "run_directory": str(journal.directory),
+        "context_run": context.to_document(),
+        "branch": {"name": branch.name, "revision": branch.revision},
+        "stages": stages,
+    }
+    lines = [
+        f"context run {context.identity}: {journal.directory}",
+        f"  branch {branch.name} at revision {branch.revision}",
+        *(f"  {stage}: {disposition}" for stage, disposition in stages.items()),
+    ]
+    session.emit(document, lines)
+    return EXIT_OK
+
+
+def _context_build(session: _Session) -> int:
+    """Freeze a branch revision, record it, then materialize its ContextMap."""
+    args = session.args
+    if not args.code_identity:
+        raise _UsageError("a build records the code that materializes it: pass --code-identity ID")
+    effective, workspace, dataset = _context_place(session)
+    branch = open_branch(workspace, dataset=dataset, name=args.branch)
+    planned = plan_context_build(
+        workspace,
+        branch,
+        resolve_plan(effective),
+        code_identity=args.code_identity,
+        revision=args.revision,
+        context_run_ids=args.members,
+    )
+    reuse = _reuse_policy(session)
+    provider_overrides: list[str] = []
+    executors = _executors_for(session, effective, provider_overrides)
+    secrets = resolve_secrets(effective.config, environ=session.environ)
+    journal = RunJournal.create(
+        workspace, effective, planned.execution, code_identity=args.code_identity
+    )
+    # A entrada congelada é gravada antes do primeiro estágio de jusante.
+    publish_context_build(journal.directory, workspace=workspace, build=planned.build)
+    record = _journaled(
+        session,
+        journal,
+        lambda: run_plan(
+            planned.execution,
+            executors,
+            environ=session.environ,
+            module_available=session.module_available,
+            provider_overrides=provider_overrides,
+            reuse=reuse,
+            journal=journal,
+            redact=secrets.redact,
+        ),
+    )
+    if isinstance(record, int):
+        return record
+    context_map_id = _context_map_id(record.to_document())
+    document = {
+        "ok": True,
+        "run_directory": str(journal.directory),
+        "context_build": planned.build.to_document(),
+        "context_map_id": context_map_id,
+    }
+    lines = [
+        f"context build {planned.build.identity}: {journal.directory}",
+        f"  branch {branch.name} at revision {planned.build.revision}, "
+        f"{len(planned.build.context_run_ids)} context run(s)",
+        f"  context map: {context_map_id}",
+    ]
+    session.emit(document, lines)
+    return EXIT_OK
+
+
+def _context_inspect_branch(session: _Session) -> int:
+    """Show a branch's foundation and members, reading only its records."""
+    args = session.args
+    _, workspace, dataset = _context_place(session)
+    branch = open_branch(workspace, dataset=dataset, name=args.name)
+    if args.revision is not None:
+        branch = branch.at(args.revision)
+    document = _branch_document(branch)
+    lines = [
+        f"branch {branch.name} in {dataset}, at revision {branch.revision}",
+        f"  foundation: {branch.foundation.identity}",
+        *(
+            f"  {member.revision}: {member.context_run_id} ({member.run})"
+            for member in branch.members
+        ),
+    ]
+    session.emit(document, lines)
+    return EXIT_OK
+
+
+def _context_inspect_record(session: _Session) -> int:
+    """Show the ContextRun or ContextBuild record of a run, reading only records."""
+    args = session.args
+    directory, workspace = Path(args.path), Path(args.workspace)
+    if (directory / CONTEXT_BUILD_FILENAME).is_file():
+        build = read_context_build(directory, workspace=workspace)
+        execution = directory / EXECUTION_FILENAME
+        context_map_id = (
+            _context_map_id(read_plan_document(execution)) if execution.is_file() else None
+        )
+        document: dict[str, Any] = {
+            "context_build": build.to_document(),
+            "context_map_id": context_map_id,
+        }
+        lines = [
+            f"context build {build.identity}",
+            f"  branch {build.branch} at revision {build.revision}",
+            *(f"  context run: {run_id}" for run_id in build.context_run_ids),
+            f"  context map: {context_map_id or 'not materialized'}",
+        ]
+    else:
+        context = read_context_run(directory, workspace=workspace)
+        document = {"context_run": context.to_document()}
+        lines = [
+            f"context run {context.identity}",
+            f"  foundation: {context.foundation.identity}",
+            *(
+                f"  {artifact.ref.stage_id}: {artifact.ref.artifact_id} ({artifact.disposition})"
+                for artifact in context.artifacts
+            ),
+        ]
+    session.emit(document, lines)
+    return EXIT_OK
+
+
+def _branch_document(branch: ContextBranch) -> dict[str, Any]:
+    return {
+        "branch": {"name": branch.name, "dataset": branch.dataset, "revision": branch.revision},
+        "foundation": branch.foundation.to_document(),
+        "members": [
+            {
+                "revision": member.revision,
+                "context_run_id": member.context_run_id,
+                "run": member.run,
+            }
+            for member in branch.members
+        ],
+    }
+
+
+def _context_map_id(execution: Mapping[str, Any]) -> str | None:
+    """Return the ContextMapId a completed build produced, from its execution record."""
+    for stage in execution.get("stages", ()):
+        if stage.get("stage_id") == MATERIALIZATION_TARGET:
+            return str(stage["output"]["artifact_id"])
+    return None
 
 
 def _inspect_run(session: _Session) -> int:
