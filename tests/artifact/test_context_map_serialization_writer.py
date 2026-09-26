@@ -303,11 +303,13 @@ def _write_geometry_only(world: World) -> tuple[Path, ContextMapArtifactManifest
 
 
 # #600: gravados antes de o writer codificar o mapa uma vez só e gravar as tabelas em fluxo; os
-# bytes publicados não podem mudar.
+# bytes publicados não podem mudar. #601 regravou o "populated" quando o run de Spatial Relations
+# que ele cita passou ao schema 0.2.0: só mudaram a identidade de conteúdo desse run na linhagem e
+# o que dela deriva (identidade do mapa, lineage.json e o hash dele no manifest).
 _RECORDED_ARTIFACTS: dict[str, tuple[Callable[[World], tuple[Path, Any]], str]] = {
     "populated": (
         write_artifact,
-        "4b4d37e76ec92d8a8a62a8dc0f1cd68ef5cabdf53b112d1a5cbd2c4990af0860",
+        "cf3f11163ade398d8b8f0c112e8d43ec2ca03abf3532eb060f236e9603fc1d6f",
     ),
     "geometry-only": (
         _write_geometry_only,

@@ -69,6 +69,7 @@ from contextmap.evaluation.report_schema import (
 )
 from contextmap.spatial_relations import (
     PREDICATE_SPECS,
+    CandidateExclusionReason,
     Relation,
     RelationCandidateSet,
     RelationPredicate,
@@ -81,10 +82,14 @@ from contextmap.spatial_relations import (
 SPATIAL_RELATIONS_EVALUATOR_ID = "spatial-relations-evaluator"
 """Identity of the evaluator, as the metric registry names it."""
 
-SPATIAL_RELATIONS_EVALUATOR_VERSION = "2"
+SPATIAL_RELATIONS_EVALUATOR_VERSION = "3"
 """Version of the evaluation rules described in this module.
 
-Version 2 requires the identity evaluation's own reproducibility metadata
+Version 3 reads the exclusions a run lists in its summaries of ``(predicate, reason)`` groups past
+the listing ceiling (``SpatialRelationsRunArtifact`` 0.2.0), attributes a retrieval miss that may
+be among the unlisted exclusions to ``excluded_unlisted:<predicate>`` instead of calling it a pair
+that was never enumerated, and reports those groups (``unlisted_exclusions``). Version 2 requires
+the identity evaluation's own reproducibility metadata
 (``identity_reproducibility``) and validates its run id and artifact digest against this run's
 lineage before scoring, and also requires every resolved-entity reference the identity evaluation
 itself names to already scope to that same run; version 1 inferred the run id only from those
@@ -195,6 +200,39 @@ class RelationConsistencyViolation:
 
 
 @dataclass(frozen=True, kw_only=True)
+class RelationUnlistedExclusions:
+    """A group of exclusions the run counted but did not list, and what it still says about them.
+
+    A retrieval miss is ``excluded_unlisted:<predicate>`` when its pair is not listed and its
+    predicate has such a group: it may be one of these exclusions, or a pair the sweep never
+    enumerated, and the run cannot tell which. A miss whose predicate has no such group is never
+    an unlisted exclusion.
+
+    Attributes:
+        predicate: The predicate that was ruled out.
+        reason: The precondition that failed.
+        count: Every exclusion of the group.
+        listed: The nearest exclusions the run lists.
+        min_gap_m: The smallest bounds gap of the group, in meters.
+        max_gap_m: The largest bounds gap of the group, in meters.
+        digest: The run's order-independent digest of every exclusion of the group.
+    """
+
+    predicate: RelationPredicate
+    reason: CandidateExclusionReason
+    count: int
+    listed: int
+    min_gap_m: float
+    max_gap_m: float
+    digest: str
+
+    @property
+    def unlisted(self) -> int:
+        """The exclusions of the group the run does not list."""
+        return self.count - self.listed
+
+
+@dataclass(frozen=True, kw_only=True)
 class RelationUnmatchedReport:
     """What could not be compared, and whose failure it is.
 
@@ -242,6 +280,8 @@ class SpatialRelationsEvaluationReport:
         reference_relation_count: Relations the annotation set holds, before expansion.
         predicates: One evaluation per canonical predicate, in a fixed order.
         retrieval_misses: Reasons the candidate stage never produced a pair that holds, counted.
+        unlisted_exclusions: The exclusion groups the run counted but did not list whole, sorted
+            by predicate and reason.
         consistency_violations: Structural contradictions in the persisted relations.
         unmatched: What could not be compared and whose failure it is.
         code_version: Code revision of the evaluator run, when known.
@@ -260,6 +300,7 @@ class SpatialRelationsEvaluationReport:
     reference_relation_count: int
     predicates: tuple[RelationPredicateEvaluation, ...]
     retrieval_misses: tuple[tuple[str, int], ...]
+    unlisted_exclusions: tuple[RelationUnlistedExclusions, ...]
     consistency_violations: tuple[RelationConsistencyViolation, ...]
     unmatched: RelationUnmatchedReport
     code_version: str | None
@@ -290,6 +331,19 @@ class SpatialRelationsEvaluationReport:
             "predicates": [_encode_predicate(item) for item in self.predicates],
             "retrieval_misses": [
                 {"reason": reason, "count": count} for reason, count in self.retrieval_misses
+            ],
+            "unlisted_exclusions": [
+                {
+                    "predicate": item.predicate.value,
+                    "reason": item.reason.value,
+                    "count": item.count,
+                    "listed": item.listed,
+                    "unlisted": item.unlisted,
+                    "min_gap_m": item.min_gap_m,
+                    "max_gap_m": item.max_gap_m,
+                    "digest": item.digest,
+                }
+                for item in self.unlisted_exclusions
             ],
             "consistency_violations": [
                 {"kind": item.kind, "relation_ids": list(item.relation_ids), "detail": item.detail}
@@ -359,7 +413,8 @@ def evaluate_spatial_relations(
     identity_of_entity = dict(identity.identity_of_resolved_entity)
     entity_of_identity, shared = _invert(identity_of_entity)
     truth, unmapped, ambiguous, unknown, conflicting = _expand_reference(reference)
-    exclusions = _exclusion_reasons(reader.candidate_set())
+    candidate_set = reader.candidate_set()
+    exclusions = _exclusion_reasons(candidate_set)
     counters = {predicate: Counter[str]() for predicate in PREDICATE_SPECS}
     misses: Counter[str] = Counter()
     without_entity = 0
@@ -403,6 +458,18 @@ def evaluate_spatial_relations(
             for predicate in sorted(PREDICATE_SPECS, key=lambda item: item.value)
         ),
         retrieval_misses=tuple(sorted(misses.items())),
+        unlisted_exclusions=tuple(
+            RelationUnlistedExclusions(
+                predicate=item.predicate,
+                reason=item.reason,
+                count=item.count,
+                listed=len(item.nearest),
+                min_gap_m=item.min_gap_m,
+                max_gap_m=item.max_gap_m,
+                digest=item.digest,
+            )
+            for item in candidate_set.exclusion_summaries
+        ),
         consistency_violations=_consistency(relations),
         unmatched=RelationUnmatchedReport(
             reference_without_entity=without_entity,
@@ -690,9 +757,16 @@ class _Exclusions:
 
     by_pair: dict[_Key, str]
     skipped: frozenset[RelationPredicate]
+    unlisted: frozenset[RelationPredicate]
 
     def reason(self, key: _Key) -> str:
-        """Why a pair that holds was never a candidate, from what the run recorded."""
+        """Why a pair that holds was never a candidate, from what the run recorded.
+
+        The other direction of the pair is read too. When both directions of a pair are
+        excluded, the same precondition failed first for both (reach and footprint do not depend
+        on the direction, and the side and containment checks only exclude both directions when
+        both fail them), so its record explains the pair when the pair's own is not listed.
+        """
         subject, predicate, obj = key
         spec = predicate_spec(predicate)
         if spec.is_derived and spec.inverse is not None:
@@ -700,18 +774,26 @@ class _Exclusions:
         for pair in ((subject, predicate, obj), (obj, predicate, subject)):
             if pair in self.by_pair:
                 return f"excluded:{self.by_pair[pair]}"
+        if predicate in self.unlisted:
+            return f"excluded_unlisted:{predicate.value}"
         if predicate in self.skipped:
             return "skipped_predicate:frame_conventions"
         return "pair_not_enumerated_or_predicate_not_selected"
 
 
 def _exclusion_reasons(candidates: RelationCandidateSet) -> _Exclusions:
+    """Index every listed exclusion, and the predicates with exclusions the run did not list."""
+    listed = [
+        *candidates.exclusions,
+        *(item for summary in candidates.exclusion_summaries for item in summary.nearest),
+    ]
     return _Exclusions(
         by_pair={
             (item.subject_entity_ref, item.predicate, item.object_entity_ref): item.reason.value
-            for item in candidates.exclusions
+            for item in listed
         },
         skipped=frozenset(item.predicate for item in candidates.skipped_predicates),
+        unlisted=frozenset(item.predicate for item in candidates.exclusion_summaries),
     )
 
 

@@ -9,6 +9,7 @@ Uma entrada só recebe data quando a release é criada. O workflow `Release` rec
 ### Alterado
 
 - Schema do pedido de ingestão: `ingestion_request 0.1.0 → 0.2.0`. A correção de timestamp `constant_offset` passa a ser gravada como `offset_nanoseconds` inteiro, em vez de `offset_seconds` em ponto flutuante, para que o documento reconstrua exatamente a mesma correção (#618).
+- **Spatial relations:** `SpatialRelationsRunArtifact 0.1.0 → 0.2.0`. As exclusões de candidatos passaram a ter teto por grupo `(predicado, razão)`: um grupo com mais exclusões que o teto lista só as mais próximas (menor distância entre os limites) e guarda num registro `exclusion_summary` a contagem, as distâncias mínima e máxima e um digest de todas elas, e a memória da geração fica limitada. `metrics/counts.json` conta todas as exclusões e ganha `unlisted_exclusions`. O leitor continua abrindo runs `0.1.0`, que listam todas as exclusões. O avaliador de relações vai à versão 3 e atribui a `excluded_unlisted:<predicado>` a falha de recuperação que pode estar entre as exclusões não listadas (#601).
 
 ## [0.1.0] - 2026-09-25
 
