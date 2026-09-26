@@ -6,6 +6,10 @@ implementation, over the canonical JSON of what normalization, tile remapping an
 produce, so any difference in a region, a rejection, a merge decision, a remapped pixel or a
 persisted byte (even an ``int`` that became a ``float``) changes a digest.
 
+Issue #608 re-recorded the normalization digests on purpose: the merge representative became
+the largest-area member (``largest_area_v1``), and that policy joined the config digest every
+normalization digest covers.
+
 ``inline_mask`` is the only place these tests build a mask from pixels, so the representation
 change touches one helper and never the scenarios or the digests.
 """

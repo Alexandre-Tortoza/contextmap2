@@ -330,7 +330,7 @@ flowchart TD
     G --> AREA["filtros de área"]
     AREA --> CONS["valid/exclusion constraints"]
     CONS --> DUP["IoU / containment"]
-    DUP --> MERGE["merge + contributor lineage"]
+    DUP --> MERGE["merge, eleição do representante<br/>e contributor lineage"]
     MERGE --> BUDGET["maximum_regions"]
     BUDGET --> FREEZE["Region2D imutável"]
     G -. inválido .-> REJ["RejectedRegionCandidate"]
@@ -345,17 +345,36 @@ A chamada recebe o `BackendProvenance` exato reportado pelo adapter e valida sua
 as propostas. O mesmo value object acompanha cada `Region2D`; provider, model, versão e fingerprint
 não são reconstruídos a partir da provenance reduzida da proposta.
 
-A ordem canônica é pelo `candidate_id`, tornando IDs `region-0001`, `region-0002` e decisões de
-budget reproduzíveis. No merge, a primeira geometria canônica permanece como representante e todas
-as propostas contribuintes e respectivas provenances são preservadas. A proposta incorporada gera
-tanto `MergeDecision` quanto uma rejeição `merged_duplicate`, portanto não desaparece dos
-diagnostics.
+A ordem canônica de processamento é pelo `candidate_id`, tornando IDs `region-0001`,
+`region-0002` e decisões de budget reproduzíveis: cada grupo ocupa a posição do seu primeiro
+membro. Quem representa o grupo, e portanto a única geometria congelada na `Region2D`, não depende
+do nome dos candidatos: é decidido pela política versionada
+`NormalizationConfig.merge_representative_policy`. A política atual, `largest_area_v1`, elege o
+membro de maior `area_pixels`, com empate resolvido pelo menor `candidate_id`. Scores não são
+critério, porque não são comparáveis entre backends (o SAM2 reporta `predicted_iou`; o Florence-2
+pode não reportar score algum).
 
-Os thresholds e budgets vivem em `NormalizationConfig`; seu digest acompanha o resultado. Máscaras
-inline são avaliadas pixel a pixel. `RegionCandidate` não aceita uma máscara persistida opaca como
-substituta da geometria materializada, mesmo quando existe bounding box, evitando ignorar
-silenciosamente a máscara. Constraints só são aplicadas quando a `PreparedImage` as declara
-explicitamente.
+A eleição acontece a cada merge. Quando a proposta que chega vence o representante atual, ela
+assume a representação e o representante anterior passa a ser o incorporado. `MergeDecision` e a
+rejeição `merged_duplicate` registram o par comparado já resolvido pela eleição, então as decisões
+de um grupo formam uma cadeia que termina no representante final; IoU e containment são simétricos
+e continuam descrevendo o par registrado. Todas as propostas contribuintes e respectivas
+provenances permanecem em `contributor_candidate_ids` e `discovery_provenance`, na ordem de
+processamento, e nenhuma proposta incorporada desaparece dos diagnostics.
+
+Há um efeito colateral aceito: depois que um representante maior é eleito, os candidatos seguintes
+são comparados com a geometria dele, então o agrupamento pode mudar transitivamente, e uma proposta
+que antes formaria região própria pode ser incorporada ao grupo. Grupos já formados não são
+fundidos entre si. O resultado continua determinístico, porque a ordem de processamento e o
+desempate são fixos. A união das geometrias do grupo foi avaliada como alternativa e não foi
+implementada: exigiria recompor máscara e bounding box, e não é necessária para remover a
+arbitrariedade da ordem lexicográfica.
+
+Os thresholds, os budgets e a política de representante vivem em `NormalizationConfig`; seu digest
+acompanha o resultado e muda quando a política muda. Máscaras inline são avaliadas pixel a pixel.
+`RegionCandidate` não aceita uma máscara persistida opaca como substituta da geometria
+materializada, mesmo quando existe bounding box, evitando ignorar silenciosamente a máscara.
+Constraints só são aplicadas quando a `PreparedImage` as declara explicitamente.
 
 ## Evidência persistida e diagnostics
 
