@@ -29,13 +29,18 @@ from contextmap.runtime.catalog import PRESETS, RuntimePreset
 from contextmap.runtime.config import (
     ComponentConfig,
     ConfigProblem,
+    ConfigurationError,
     EffectiveConfig,
     check_component_availability,
     check_component_selection,
 )
 from contextmap.runtime.errors import (
+    BackendConfigurationError,
+    BackendRuntimeMissingError,
+    CompositionError,
     PlanDocumentError,
     PreflightError,
+    ProviderConfigurationError,
     RunCancelledError,
     StageExecutionError,
 )
@@ -636,6 +641,7 @@ def preflight(
     module_available: Callable[[str], bool] | None = None,
     provided_runtimes: Collection[str] = (),
     reuse: ReusePolicy | None = None,
+    composition_failures: Mapping[str, CompositionError | ConfigurationError] | None = None,
 ) -> PreflightReport:
     """Validate an execution before any stage runs or any model loads.
 
@@ -644,6 +650,14 @@ def preflight(
     stage to run is implemented, that each of its variation points has a backend and that
     the backend's optional modules and secrets are present, and, when executors are
     given, that each stage has one. Nothing is imported or loaded.
+
+    A stage without an executor is reported with the reason its composition failed when
+    ``composition_failures`` has one that names a component (a rejected parameter, a
+    missing model runtime, an unresolvable ``resources.providers`` target): the problem is
+    then at ``components.<capability>.<slot>`` and carries the error's message. Any other
+    failure (an incomplete selection, a missing module or secret, a disabled or unavailable
+    stage) is what the checks above already report, so such a stage keeps the generic "no
+    executor is registered" problem, exactly like a stage with no known failure.
 
     With a reuse policy, a stage that will certainly be reused (its exact inputs are
     known and an identical, still valid artifact is indexed) needs neither an executor
@@ -660,6 +674,11 @@ def preflight(
         provided_runtimes: Component identities whose model runtime the caller supplies,
             so their bundled modules are not required.
         reuse: The reuse policy of the execution, if any.
+        composition_failures: Why a stage could not be composed, by stage, as
+            :func:`~contextmap.runtime.composition.compose_executors` hands it to its
+            ``on_composition_failure``. Consulted only for a stage that will run and has no
+            executor: a stage whose executor was supplied some other way, or that will
+            certainly be reused, is not blocked by it.
 
     Returns:
         Every problem found, all at once.
@@ -702,16 +721,33 @@ def preflight(
                     )
                 )
         if will_run and executors is not None and stage.stage_id not in executors:
-            problems.append(
-                ConfigProblem(
-                    path=f"stages.{stage.stage_id}", message="no executor is registered for it"
-                )
-            )
+            failure = (composition_failures or {}).get(stage.stage_id)
+            problems.append(_missing_executor_problem(stage.stage_id, failure))
     return PreflightReport(
         problems=tuple(problems),
         stages=tuple(stage.stage_id for stage in execution.stages),
         reused=tuple(execution.reused),
     )
+
+
+def _missing_executor_problem(
+    stage_id: str, failure: CompositionError | ConfigurationError | None
+) -> ConfigProblem:
+    """Explain why a stage that will run has no executor.
+
+    Only a failure that names the component it failed on says something preflight's own
+    checks cannot: it replaces the generic problem, at that component. The others (an
+    incomplete selection, a missing module or secret, a disabled or unavailable stage) are
+    exactly what those checks already report, so repeating them would only duplicate them.
+    """
+    if isinstance(
+        failure, BackendConfigurationError | BackendRuntimeMissingError | ProviderConfigurationError
+    ):
+        return ConfigProblem(
+            path=f"components.{failure.component_id}",
+            message=f"no executor could be composed for stage {stage_id!r}: {failure}",
+        )
+    return ConfigProblem(path=f"stages.{stage_id}", message="no executor is registered for it")
 
 
 def with_source_identities(
@@ -898,6 +934,7 @@ def run_plan(
     redact: Callable[[str], str] | None = None,
     clock: Callable[[], str] | None = None,
     resume_from: RunSummary | None = None,
+    composition_failures: Mapping[str, CompositionError | ConfigurationError] | None = None,
 ) -> ExecutionRecord:
     """Execute a scoped plan in dependency order.
 
@@ -934,6 +971,8 @@ def run_plan(
         redact: Replaces secret values inside a string.
         clock: Returns event timestamps; defaults to the current UTC time.
         resume_from: The run this execution resumes; :func:`resume_plan` validates it.
+        composition_failures: Why a stage could not be composed, by stage, so a run blocked
+            for lack of that stage's executor reports the real cause; see :func:`preflight`.
 
     Returns:
         The execution record: order, exact inputs and outputs, decisions and reused
@@ -978,6 +1017,7 @@ def run_plan(
             module_available=module_available,
             provided_runtimes=provided_runtimes,
             reuse=reuse,
+            composition_failures=composition_failures,
         )
         if not report.ok:
             emitter.emit(

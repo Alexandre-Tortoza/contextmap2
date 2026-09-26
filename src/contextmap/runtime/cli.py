@@ -559,7 +559,8 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     plan = resolve_plan(effective)
     execution, resolved = _scope(session, effective, plan, targets)
     provider_overrides: list[str] = []
-    executors = _executors_for(session, effective, provider_overrides)
+    failures: dict[str, CompositionError | ConfigurationError] = {}
+    executors = _executors_for(session, effective, provider_overrides, failures)
     reuse = _reuse_policy(session)
     if reuse is not None:
         # O dry-run não passa executores ao preflight; a fonte de cada estágio-fonte já vai na
@@ -570,7 +571,14 @@ def _run(session: _Session, targets: Sequence[str] | None) -> int:
     assert workspace is not None  # exigido acima
     _dataset_directory(effective, workspace)  # recusa cedo um run sem dataset
     return _execute(
-        session, effective, execution, Path(workspace), reuse, executors, provider_overrides
+        session,
+        effective,
+        execution,
+        Path(workspace),
+        reuse,
+        executors,
+        provider_overrides,
+        failures,
     )
 
 
@@ -578,6 +586,7 @@ def _executors_for(
     session: _Session,
     effective: EffectiveConfig,
     provider_overrides: list[str] | None = None,
+    composition_failures: dict[str, CompositionError | ConfigurationError] | None = None,
 ) -> Mapping[str, StageExecutor]:
     """Merge the executors composed from ``effective`` with the ones the caller injected.
 
@@ -598,6 +607,8 @@ def _executors_for(
             where ``session.providers`` won over a ``resources.providers`` target the
             configuration also declared -- so ``_run`` can pass it into ``run_plan`` for a
             real run to record it, exactly as it happened, in the run's own trail.
+        composition_failures: When given, receives (by mutation) why each stage could not be
+            composed, by stage, so a real run blocked for lack of an executor reports the cause.
     """
     composed = compose_executors(
         effective,
@@ -605,6 +616,9 @@ def _executors_for(
         environ=session.environ,
         module_available=session.module_available,
         on_provider_override=None if provider_overrides is None else provider_overrides.append,
+        on_composition_failure=(
+            None if composition_failures is None else composition_failures.__setitem__
+        ),
     )
     return {**composed, **session.executors}
 
@@ -673,6 +687,7 @@ def _execute(
     reuse: ReusePolicy | None,
     executors: Mapping[str, StageExecutor],
     provider_overrides: Sequence[str] = (),
+    composition_failures: Mapping[str, CompositionError | ConfigurationError] | None = None,
 ) -> int:
     """Run for real, journaling every step of the lifecycle into a fresh run directory."""
     args = session.args
@@ -698,6 +713,7 @@ def _execute(
                 provider_overrides=provider_overrides,
                 journal=journal,
                 redact=secrets.redact,
+                composition_failures=composition_failures,
             )
         else:
             record = run_plan(
@@ -709,6 +725,7 @@ def _execute(
                 reuse=reuse,
                 journal=journal,
                 redact=secrets.redact,
+                composition_failures=composition_failures,
             )
     except PreflightError as error:
         return session.fail(

@@ -17,6 +17,7 @@ from runtime_worlds import World
 
 from contextmap.runtime import (
     ArtifactRef,
+    BackendConfigurationError,
     CancellationToken,
     EffectiveConfig,
     ExecutionEvent,
@@ -816,6 +817,34 @@ class TestResume:
             self._resume(tmp_path, world, policy, previous)
 
         assert "effective configuration" not in str(error.value)
+        assert world.runs == []
+
+    def test_a_resume_blocked_by_a_composition_failure_reports_its_cause(
+        self, tmp_path: Path
+    ) -> None:
+        world, policy, previous = self._failed_then_fixed(tmp_path)
+        _, execution = _scope(tmp_path)
+        executors = world.executors(execution.plan)
+        del executors["geometric_mapping"]  # o estágio que falhou precisa rodar de novo
+        failure = BackendConfigurationError(
+            "geometric_mapping.pose_lookup", "lookup-policy-v1", ["mode: unknown lookup mode"]
+        )
+
+        with pytest.raises(PreflightError) as error:
+            resume_plan(
+                previous.directory,
+                execution,
+                executors,
+                reuse=policy,
+                environ={},
+                module_available=_ready,
+                provided_runtimes=PROVIDED,
+                composition_failures={"geometric_mapping": failure},
+            )
+
+        assert [problem.path for problem in error.value.report.problems] == [
+            "components.geometric_mapping.pose_lookup"
+        ]
         assert world.runs == []
 
     def test_resuming_with_other_targets_is_refused(self, tmp_path: Path) -> None:

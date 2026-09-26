@@ -62,7 +62,7 @@ Problemas estruturais (ciclo, contrato incompatível, alvo desconhecido, seleç�
 
 - `warnings`: o que não bloqueia, como a ausência de workspace e cada `latest` que foi resolvido (com o artifact escolhido);
 - `predicted_reuse`, com uma política de reuso: o que seria reaproveitado ou recomputado, sem executar nada. O registro do run continua sendo a autoridade (a previsão é conservadora);
-- `missing_executors`: só os estágios que **rodariam** e não têm executor, contando tanto os compostos automaticamente da configuração (`compose_executors`, ver [`composition.md`](composition.md)) quanto os injetados na construção do `Runtime`; um estágio que certamente será reaproveitado não precisa dele.
+- `missing_executors`: só os estágios que **rodariam** e não têm executor, contando tanto os compostos automaticamente da configuração (`compose_executors`, ver [`composition.md`](composition.md)) quanto os injetados na construção do `Runtime`; um estágio que certamente será reaproveitado não precisa dele. Quando a composição falhou por um motivo que nomeia um componente (parâmetro recusado pelo backend, runtime de modelo ausente, alvo `resources.providers` inválido), `problems` traz esse motivo em `components.<capability>.<slot>` no lugar do genérico `stages.<id>: no executor is registered for it` (issue #602); o estágio continua em `missing_executors`, e um run bloqueado registra o mesmo problema.
 
 Estágio inexistente ou de capability ainda não implementada é **explícito**: `stages.context_map: the artifact capability is not implemented yet` (para um preset que declare um estágio assim); backend ou estágio desconhecido é recusado já na resolução.
 
