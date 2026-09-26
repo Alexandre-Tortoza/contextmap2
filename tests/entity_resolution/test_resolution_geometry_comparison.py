@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 from typing import Any
 
 import pytest
@@ -11,14 +12,22 @@ from resolution_entity_builders import entity_at, entity_over, lattice, scene_so
 
 from contextmap.entity_resolution import (
     GEOMETRY_COMPARISON_POLICY_ID,
+    ComparisonChannels,
     EvidenceStatus,
     GeometryComparisonPolicy,
     GeometryEvidence,
+    MatchEvidenceBuilder,
     SupportDistancePolicy,
     UnavailableReason,
     compare_geometry,
 )
-from contextmap.geometric_mapping import MapId
+from contextmap.geometric_mapping import (
+    GeometricMap,
+    GeometryPoint,
+    GeometryReference,
+    GeometrySource,
+    MapId,
+)
 from contextmap.semantic_mapping import (
     GeometryResolutionError,
     GeometrySummaryPolicy,
@@ -300,6 +309,59 @@ def test_support_distances_need_a_source_and_are_optional() -> None:
     assert statuses(with_distance)["support-proximity"] is EvidenceStatus.SUPPORTING
     with pytest.raises(ValueError, match="GeometrySource"):
         compare_geometry(first, second, policy)
+
+
+class CountingSource:
+    """Delegates to a source and counts how often each reference is resolved."""
+
+    def __init__(self, source: GeometrySource) -> None:
+        self._source = source
+        self.resolved: Counter[str] = Counter()
+
+    @property
+    def geometric_map(self) -> GeometricMap:
+        return self._source.geometric_map
+
+    def get(self, reference: GeometryReference) -> GeometryPoint:
+        self.resolved[reference.geometry_id] += 1
+        return self._source.get(reference)
+
+
+def test_an_entity_in_several_pairs_has_its_support_resolved_once_per_run() -> None:
+    # #599 (ER-05): como os canais de aparência e representação, a geometria é carregada uma vez.
+    scene = scene_source(
+        dict(
+            enumerate(
+                [point for x in range(4) for point in lattice((x * 0.02, 0, 0), 0.6 + x / 10)]
+            )
+        )
+    )
+    entities = [
+        entity_over(name, scene, range(27 * i, 27 * (i + 1))) for i, name in enumerate("abcd")
+    ]
+    counting = CountingSource(scene)
+    builder = MatchEvidenceBuilder(
+        ComparisonChannels(
+            geometry=GeometryComparisonPolicy(
+                min_shared_support_jaccard=0.5,
+                min_bounds_iou=0.5,
+                min_bounds_containment=0.9,
+                min_conflict_gap_m=0.5,
+                min_extent_ratio=0.3,
+                support_distance=SupportDistancePolicy(
+                    max_points_per_side=100, max_mean_distance_m=0.1
+                ),
+            ),
+            geometry_source=counting,  # type: ignore[arg-type]
+        )
+    )
+    first = entities[0]
+
+    evidence = [builder.build(first, other) for other in entities[1:]]
+
+    assert all(item.geometry is not None and item.geometry.measurement for item in evidence)
+    assert len(counting.resolved) == 4 * 27
+    assert set(counting.resolved.values()) == {1}
 
 
 def test_distant_supports_have_large_nearest_point_distances() -> None:
