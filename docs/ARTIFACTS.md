@@ -832,7 +832,7 @@ O `rename` atômico protege contra a morte do processo, não contra uma queda de
 3. o `rename` torna o run visível;
 4. o diretório pai é sincronizado.
 
-Depois de uma queda, o caminho final ou não existe ou contém o run completo.
+Depois de uma queda, o caminho final ou não existe ou contém o run completo. Os documentos JSON do runtime (`effective_config.json`, `plan.json`, `status.json`, `execution.json` e as entradas do índice de reuso) seguem a mesma regra: o conteúdo é sincronizado antes do `link`/`replace` que lhe dá o nome, e o diretório logo depois (dois `fsync` por documento, ~0,8 ms a mais no ambiente medido abaixo).
 
 O custo é um `fsync` por arquivo e por diretório do run, mais um para o pai; cada um espera o dispositivo de armazenamento, então cresce com o número de arquivos, não com o que a capability calcula. Medido no ambiente de desenvolvimento (ext4 sobre disco virtual), cada `fsync` custou entre 0,5 e 0,8 ms: um run de 5 arquivos pequenos passou de ~1 ms para ~6 ms, um de 200 arquivos pequenos de ~40 ms para ~150–170 ms, e um payload de 100 MiB ficou ~10% mais lento. Sincronizar um diretório exige abri-lo só para leitura, comportamento POSIX (a plataforma do projeto é Linux). Não há alternativa silenciosa: uma sincronização que falha levanta o erro, e um run cujos dados não chegaram ao disco não é publicado.
 
