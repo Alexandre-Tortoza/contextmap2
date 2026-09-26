@@ -180,6 +180,7 @@ Detalhes: [avaliação de Entity Resolution](entity_resolution.md).
 - `ablation_cells()`/`AblationMode` — a matriz de ablação (`one_at_a_time` ou `full_factorial`), determinística.
 - `validate_experiment_manifest()` — confere a seleção contra o reference set, recusa tuning no split held-out e valida as métricas contra o registro e as anotações disponíveis.
 - `run_experiment()`/`ExperimentRun`/`ArmExecutor` — executa cada arm por um executor injetado e emite um run manifest e um relatório por arm mais um `ComparisonManifest`; arms indisponíveis ou com resultado inconsistente ficam explícitos e tornam a comparação incompleta (`require_complete_comparison()`), sem fallback e sem score geral.
+- `DriverRun`/`measure_child_process()`/`ChildProcessMeasurement` — esqueleto comum dos drivers de experimento sobre dados reais: um número de run deriva o diretório de saída, a `location` e a identidade de configuração de cada artifact; os braços ficam retidos por padrão sob o `outputs/` do checkout, com `run_dir` relativo a ele; e um único runner mede o wall time e o pico de RSS de cada processo filho a partir de um processo de medição novo (`RUSAGE_CHILDREN`).
 
 ### QA das anotações e reprodutibilidade
 
@@ -221,7 +222,7 @@ pipeline principal.
 - [`point_representation.md`](point_representation.md) — braços, seções do relatório, variações controladas, comparação sem score e medição de amostra.
 - [`optional-techniques.md`](optional-techniques.md) — protocolos das técnicas opcionais, estratos, evidência por estrato, custos separados e decisão manter/adiar/mudar o default.
 - [`annotation-qa.md`](annotation-qa.md) — verificações do conteúdo das anotações por família, ambiguidade permissível, divergência entre anotadores, certificação e reprodutibilidade dos evaluators.
-- [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm e manifesto de comparação.
+- [`experiments.md`](experiments.md) — manifesto de experimento, regras de comparação controlada, ablações de backend/política/canais/DAG, execução por arm, manifesto de comparação, esqueleto dos drivers de experimento, retenção dos braços sob `outputs/` e medição por processo filho.
 - [`metrics.md`](metrics.md) — registro de métricas por estágio, envelope de relatório comum, validação contra o registro e adaptadores dos harnesses existentes.
 - [`ci-fixtures.md`](ci-fixtures.md) — subconjunto determinístico de fixtures para CI: conteúdo, casos, matriz de cobertura (com lacunas explícitas), regressão entre módulos e regras de versionamento.
 - [`end-to-end.md`](end-to-end.md) — cenário canônico congelado, perfil de backends, opções só por ablação, matriz de aceitação por estágio, relatório sem score global e regras de versionamento.

@@ -151,6 +151,12 @@ from contextmap.evaluation.evaluator_reproducibility import (
     compare_evaluation_reports,
     require_reproducible,
 )
+from contextmap.evaluation.experiment_driver import (
+    ChildProcessMeasurement,
+    DriverRun,
+    ExperimentDriverError,
+    measure_child_process,
+)
 from contextmap.evaluation.experiment_runner import (
     ARM_RUN_SCHEMA,
     COMPARISON_SCHEMA,
@@ -602,6 +608,7 @@ __all__ = [
     "AssociationReport",
     "CalibrationIdentity",
     "CertifiedReferenceSet",
+    "ChildProcessMeasurement",
     "CiFixtureSubset",
     "ComparisonArm",
     "ComparisonManifest",
@@ -618,6 +625,7 @@ __all__ = [
     "DisagreementRecord",
     "DisagreementSummary",
     "DistinctIdentityPair",
+    "DriverRun",
     "E2EScenario",
     "Effect",
     "EffectPolicy",
@@ -638,6 +646,7 @@ __all__ = [
     "ExpectedPoint",
     "ExpectedPointCheck",
     "ExperimentArm",
+    "ExperimentDriverError",
     "ExperimentError",
     "ExperimentManifest",
     "ExperimentPurpose",
@@ -955,6 +964,7 @@ __all__ = [
     "experiment_artifact_identity",
     "generate_ci_fixture_subset",
     "ground_truth_regions",
+    "measure_child_process",
     "noise_variation",
     "open_validated_reference_set",
     "protocol_metric_names",
