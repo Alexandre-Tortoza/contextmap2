@@ -84,6 +84,33 @@ def test_frame_range_start_beyond_length_raises(reader: SequenceArtifactReader) 
         resolve_selection(reader, FrameRangeSelection(start_frame_index=10, end_frame_index=12))
 
 
+@pytest.fixture
+def empty_reader(tmp_path: Path) -> SequenceArtifactReader:
+    SequenceArtifactWriter(
+        output_dir=tmp_path / "empty",
+        sequence_name="corridor-02",
+        artifact_id=SequenceArtifactId("sequence-empty"),
+    ).finalize()
+    return SequenceArtifactReader(tmp_path / "empty")
+
+
+def test_frame_range_start_beyond_an_empty_sequence_raises(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    with pytest.raises(SequenceSelectionError, match="out of range for 0 observations"):
+        resolve_selection(empty_reader, FrameRangeSelection(start_frame_index=3, end_frame_index=5))
+
+
+def test_frame_range_from_zero_over_an_empty_sequence_is_empty(
+    empty_reader: SequenceArtifactReader,
+) -> None:
+    result = resolve_selection(
+        empty_reader, FrameRangeSelection(start_frame_index=0, end_frame_index=10)
+    )
+
+    assert result.observations == ()
+
+
 def test_timestamp_range_selects_within_bounds(reader: SequenceArtifactReader) -> None:
     result = resolve_selection(
         reader, TimestampRangeSelection(clock_id="clock-a", start_seconds=1.0, end_seconds=3.0)

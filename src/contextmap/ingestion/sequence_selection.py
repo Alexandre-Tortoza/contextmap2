@@ -51,7 +51,10 @@ class FrameRangeSelection:
         start_frame_index: Inclusive lower bound (0-based position in the
             sequence's canonical index order, not a synchronized
             :class:`~contextmap.ingestion.synchronization.ProcessingObservation`
-            index, which is a separate, per-run concept).
+            index, which is a separate, per-run concept). A value at or
+            beyond the sequence's length is a :class:`SequenceSelectionError`
+            when resolved, empty sequences included; only ``0`` over an
+            empty sequence resolves, to an empty result.
         end_frame_index: Exclusive upper bound. Values beyond the
             sequence's length are clipped, not an error, so an
             open-ended "from N to the end" range can be written without
@@ -216,7 +219,9 @@ def _resolve_frame_range_offsets(
         total = position + 1
         if selection.start_frame_index <= position < selection.end_frame_index:
             offsets.append(entry.offset)
-    if total > 0 and selection.start_frame_index >= total:
+    # start=0 sobre uma sequência vazia é o único início "no fim" aceito: ele descreve a
+    # sequência inteira, que por acaso não tem nada. Qualquer outro start fora do intervalo é erro.
+    if selection.start_frame_index > 0 and selection.start_frame_index >= total:
         raise SequenceSelectionError(
             f"start_frame_index {selection.start_frame_index} is out of range "
             f"for {total} observations"
