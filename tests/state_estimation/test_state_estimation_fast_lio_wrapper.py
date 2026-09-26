@@ -5,6 +5,7 @@ protect is the exchange contract with the host runner and the mapping from the j
 FAST-LIO's parameters. Running the real FAST-LIO is a validation, not a unit test.
 """
 
+import importlib.util
 import json
 import math
 import sys
@@ -41,6 +42,13 @@ from contextmap.state_estimation.backends.fast_lio_wrapper import (
 
 MS = 1_000_000
 LIDAR_PARAMETERS: dict[str, Any] = {"preprocess/lidar_type": 2}
+
+# O runner do host escreve o bag de entrada do FAST-LIO, e escrever um bag ROS 1 exige o extra
+# ``ros1``. Só os dois testes do runner chegam lá; o resto do módulo roda na instalação base.
+_needs_rosbags = pytest.mark.skipif(
+    importlib.util.find_spec("rosbags") is None,
+    reason="writing the FAST-LIO input bag needs the ros1 extra",
+)
 
 
 def _record(parameters: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -465,6 +473,7 @@ def _host_job() -> FastLioJob:
     )
 
 
+@_needs_rosbags
 def test_the_host_runner_reads_what_the_wrapper_writes_for_the_job_it_wrote(
     tmp_path: Path,
 ) -> None:
@@ -483,6 +492,7 @@ def test_the_host_runner_reads_what_the_wrapper_writes_for_the_job_it_wrote(
     ]
 
 
+@_needs_rosbags
 def test_the_host_runner_classifies_a_silent_run_as_an_initialization_failure(
     tmp_path: Path,
 ) -> None:
