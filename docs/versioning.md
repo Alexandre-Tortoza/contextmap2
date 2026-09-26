@@ -22,6 +22,10 @@ Use:
 - `MINOR` para novas capabilities, mudanças mensuráveis de pipeline ou evolução compatível do artefato/schema durante a fase de validação;
 - `MAJOR` somente depois que existir um contrato externo estável e mudanças incompatíveis precisarem ser comunicadas formalmente.
 
+### Versões de schema entre releases
+
+O escopo congelado de uma release (ex.: [release-v0.1.0.md](release-v0.1.0.md)) registra as versões de schema que ela entregou, e esse registro não muda. Entre releases, o código pode mudar uma versão de schema desde que a transição (`<artifact> <versão da última release> → <versão nova>`) esteja em `[Não lançado]` do `CHANGELOG.md`, no mesmo change que a introduz; `tests/packaging/test_release_scope.py` recusa qualquer divergência sem esse registro. O leitor novo continua abrindo os artifacts da release congelada enquanto eles tiverem consumidor (o demo de `examples/`).
+
 ## Origem das releases
 
 Somente commits presentes em `main` podem receber tags de release.

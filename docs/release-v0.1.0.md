@@ -2,6 +2,8 @@
 
 > **Status: congelado** em 2026-09-25, contra o cenário de aceitação `solution-1-canonical` **1.0.5** e o relatório [`v0.1.0-release-contract-20260925`](../src/contextmap/evaluation/docs/validation/v0.1.0-release-contract-20260925.md). Depois deste congelamento, mudar qualquer versão de schema da tabela abaixo faz `tests/packaging/test_release_scope.py` falhar — de propósito: uma release não muda de contrato sem revisão explícita de escopo e de versão.
 
+> **Re-baseline (2026-09-26, milestone Audit Hardening):** esta tabela é o **registro** do que a v0.1.0 entregou e não muda mais. O código seguinte pode sair dela, mas só com a transição (`<artifact> <versão v0.1.0> → <versão nova>`) registrada em `[Não lançado]` do `CHANGELOG.md`; `test_release_scope.py` recusa qualquer divergência sem esse registro. Os artifacts congelados em `examples/v0.1.0` continuam legíveis pelo código atual (`test_release_examples.py`).
+
 ## Regra
 
 O v0.1.0 **empacota a Solution 1 validada**; não introduz capability científica nova. Um gate end-to-end obrigatório que falhe bloqueia a release, a menos que o escopo ou a versão sejam **revistos e revalidados**. Foi exatamente o que aconteceu aqui, e a seção 3 registra como.
