@@ -2,9 +2,10 @@
 
 ``test_boundaries.py`` lets the runtime import anything, because a composition root has to
 name concrete backends. These tests narrow that permission: the composition root may import
-capabilities, lazily; the ingestion application service and the stage executors may import the
-public root of the capabilities they run (and nothing below it, so never an adapter or a
-backend, and never eagerly from the package root); every other runtime module, meaning
+capabilities, lazily; the ingestion application service, the stage executors and the spatial
+foundation may import the public root of the capabilities they run or read (and nothing below
+it, so never an adapter or a backend, and never eagerly from the package root); every other
+runtime module, meaning
 configuration, DAG, reuse, selection, lifecycle and CLI code, can never grow a dependency on a
 capability or on a concrete backend.
 """
@@ -22,6 +23,12 @@ COMPOSITION = RUNTIME / "composition.py"
 # Módulos de aplicação que podem importar a raiz pública de uma capability, e só ela.
 PUBLIC_ROOT_IMPORTERS = {
     "ingestion_service.py": {"contextmap.ingestion"},
+    # A fundação espacial (#494) só lê os três artifacts pelos leitores públicos.
+    "foundation.py": {
+        "contextmap.geometric_mapping",
+        "contextmap.ingestion",
+        "contextmap.state_estimation",
+    },
     "executors.py": {
         "contextmap.artifact",
         "contextmap.entity_resolution",
