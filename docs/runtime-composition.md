@@ -383,12 +383,13 @@ CLI / TUI
 src/contextmap/runtime/
 ├── __init__.py            # contrato público
 ├── api.py                 # API pública de aplicação (`Runtime`)
-├── artifacts.py           # `ArtifactRef`, handle de um artifact de estágio
+├── artifacts.py           # `ArtifactRef` e `inventory_digest`, o hash de conteúdo de um artifact
 ├── catalog.py             # stages, pontos de variação, backends e o preset `canonical/1`
 ├── coercion.py            # parâmetros JSON -> configuração da própria capability
 ├── composition.py         # composition root: construção lazy das implementações
 ├── config.py              # configuração efetiva, digest, segredos e disponibilidade
 ├── errors.py              # falhas de composição e do DAG
+├── foundation.py          # fundação espacial: sequência, trajetória e mapa validados juntos
 ├── ingestion_service.py   # serviço público de ingestion
 ├── lifecycle.py           # estados, eventos, falhas, cancelamento e ambiente
 ├── pipeline.py            # plano, escopo, preflight e execução do DAG
@@ -499,7 +500,7 @@ acrescenta CR3 → revisão 3 → ContextBuild CB2 → M2   (CB1 e M1 nunca muda
 
 | Conceito | Owner | O que é | Persistência | Identidade |
 |---|---|---|---|---|
-| `SpatialFoundation` | runtime | valor que fixa as três refs (`ArtifactRef`) da fundação, validado pelos leitores públicos | **nenhum artifact próprio**: embutido nos registros de branch e de `ContextRun` | `SpatialFoundationId` = SHA-256 de `(contrato, content_hash)` das três refs |
+| `SpatialFoundation` | runtime | valor que fixa as três refs (`ArtifactRef`) da fundação, validado pelos leitores públicos | **nenhum artifact próprio**: embutido nos registros de branch e de `ContextRun` | `SpatialFoundationId` = SHA-256 do digest de inventário (`inventory_digest`) de cada um dos três artifacts, calculado pela própria fundação ao validá-los |
 | `ContextRun` | runtime | um run do runtime (`run-NNNN`) que executa os estágios de contexto (`visual_perception`, `sensor_association` e, quando habilitado, `point_representation`) sobre uma fundação e uma seleção | `context_run.json` imutável na raiz do run, publicado **só** quando o run conclui | `ContextRunId` = SHA-256 de `SpatialFoundationId`, `selection_id` e dos `(stage_id, contrato, content_hash)` das saídas, produzidas ou reutilizadas |
 | `ContextBranch` | runtime | fluxo lógico que acumula `ContextRun`s de **uma** fundação | `branches/<nome>/branch.json` (imutável: nome + fundação) e um registro imutável por acréscimo em `branches/<nome>/members/` | nome da branch (slug, único no dataset); a **revisão** é o número de membros |
 | `ContextBuild` | runtime | um run do runtime que materializa o mapa a partir de um conjunto congelado de `ContextRun`s | `context_build.json` imutável na raiz do run, escrito **antes** do primeiro estágio de jusante | `ContextBuildId` = SHA-256 de `SpatialFoundationId`, `ContextRunId`s em ordem canônica, digest do plano e `code_identity` |
@@ -520,9 +521,11 @@ Regras de identidade:
 1. o `sequence_artifact_id` do mapa é o da sequência, e o `state_estimation_run_id`/`trajectory_id` do mapa são os da run de State Estimation;
 2. o `map_frame` do mapa é o `reference_frame` da trajetória;
 3. o mapa foi construído sobre a **sequência inteira** (`selection_id` de `FullSequenceSelection`), a mesma restrição que o `ContextMapExecutor` já impõe;
-4. cada artifact passa em `verify_integrity()` e tem o `content_hash` da sua ref.
+4. cada ref nomeia o artifact que está no seu local (`artifact_id`), e cada artifact passa na checagem de inventário do próprio leitor; o índice espacial derivado do mapa não é recalculado.
 
-A fundação não copia geometria, trajetória nem calibração. Geometric Mapping continua podendo gerar mapas parciais para experimentos: eles só não servem de fundação.
+A identidade vem do conteúdo lido, não do `content_hash` que a ref traz: a `SequenceArtifact` tem hoje mais de uma fórmula de hash em uso, e uma sequência idêntica publicada por caminhos diferentes tem de dar a mesma fundação. A fundação não copia geometria, trajetória nem calibração. Geometric Mapping continua podendo gerar mapas parciais para experimentos: eles só não servem de fundação.
+
+Implementada em `runtime/foundation.py` (#494): `resolve_spatial_foundation(workspace, sequence=, state_estimation=, geometry=)` devolve `SpatialFoundation` ou levanta `SpatialFoundationError` com todos os problemas, cada um prefixado pelo papel (`sequence`, `state_estimation`, `geometry`). É o único módulo do runtime, fora da composition root, dos executores e do serviço de ingestion, que lê raízes de capability, e só pelos leitores públicos.
 
 ### Seleção de observações de uma `ContextRun`
 

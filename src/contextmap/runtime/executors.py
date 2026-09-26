@@ -78,7 +78,7 @@ from contextmap.ingestion import (
     selection_identity,
     validate_cross_source_clock_plausibility,
 )
-from contextmap.runtime.artifacts import ArtifactRef
+from contextmap.runtime.artifacts import ArtifactRef, inventory_digest
 from contextmap.runtime.catalog import (
     ASSOCIATION,
     CONTEXT_MAP,
@@ -199,22 +199,6 @@ __all__ = [
 
 class ExecutorError(ValueError):
     """Raised when a request cannot be served: no directory, or not exactly one run per input."""
-
-
-def inventory_digest(inventory: Sequence[object]) -> str:
-    """Return the content hash of an artifact: the digest of its contractual file inventory.
-
-    Args:
-        inventory: The ``file_inventory`` of a manifest; each entry has ``path`` and
-            ``content_hash``.
-
-    Returns:
-        ``sha256:`` of the canonical JSON of ``{path: content_hash}``. Two artifacts with the same
-        contractual files have the same digest, whatever their names, ids or timestamps.
-    """
-    files = {entry.path: entry.content_hash for entry in inventory}  # type: ignore[attr-defined]
-    text = json.dumps(files, sort_keys=True, separators=(",", ":"))
-    return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
 
 
 def _output(request: StageRequest) -> Path:

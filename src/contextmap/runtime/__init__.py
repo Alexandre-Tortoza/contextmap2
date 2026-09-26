@@ -83,6 +83,12 @@ from contextmap.runtime.errors import (
     StageExecutionError,
     StageUnavailableError,
 )
+from contextmap.runtime.foundation import (
+    SpatialFoundation,
+    SpatialFoundationError,
+    SpatialFoundationId,
+    resolve_spatial_foundation,
+)
 from contextmap.runtime.ingestion_service import (
     IngestionFailure,
     IngestionMetrics,
@@ -237,6 +243,9 @@ __all__ = [
     "RuntimeRunSummary",
     "RuntimeStatus",
     "SelectedRun",
+    "SpatialFoundation",
+    "SpatialFoundationError",
+    "SpatialFoundationId",
     "StageDeclaration",
     "StageExecutionError",
     "StageExecutor",
@@ -269,6 +278,7 @@ __all__ = [
     "resolve_provider",
     "resolve_secrets",
     "resolve_selections",
+    "resolve_spatial_foundation",
     "resume_plan",
     "run_plan",
     "write_effective_config",
