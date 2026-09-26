@@ -249,6 +249,54 @@ def test_a_pinhole_cannot_project_what_is_beside_or_behind_the_camera() -> None:
     np.testing.assert_allclose(result.depth_m, [-1.0, 0.0, 0.0, 1e-12, 1e-3])
 
 
+def test_a_distorted_pinhole_stops_where_the_distorted_radius_stops_growing() -> None:
+    # d(r (1 + k1 r^2))/dr = 1 + 3 k1 r^2 se anula em r = sqrt(1 / (-3 k1)), cerca de 47,5 graus.
+    k1 = -0.28
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (k1, 0.0, 0.0, 0.0, 0.0)))
+    )
+    limit_deg = math.degrees(math.atan(math.sqrt(1 / (-3 * k1))))
+
+    result = projection.project(_points(_at_angle(limit_deg - 1.0), _at_angle(limit_deg + 1.0)))
+
+    assert result.projectable.tolist() == [True, False]
+    assert np.isnan(result.pixels[1]).all()
+
+
+def test_a_point_beyond_the_fold_never_lands_on_the_principal_point() -> None:
+    """The audit's reproduction: past the fold the radius shrinks back to zero.
+
+    With ``k1 = -0.28`` alone, ``r (1 + k1 r^2)`` returns to zero at ``r = sqrt(1 / 0.28)``,
+    about 62.1 degrees off the axis, so the unguarded polynomial sent that point exactly to the
+    principal point, inside the image.
+    """
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.0, 0.0, 0.0, 0.0)))
+    )
+    folded_deg = math.degrees(math.atan(math.sqrt(1 / 0.28)))
+
+    result = projection.project(_points(_at_angle(folded_deg)))
+
+    assert not result.projectable[0]
+    assert np.isnan(result.pixels).all()
+    assert not projection.in_image(result.pixels)[0]
+
+
+def test_a_distorted_pinhole_gives_no_ray_beyond_its_fold() -> None:
+    """``unproject`` must stay inside the same domain ``project`` accepts.
+
+    With ``k2 > 0`` the distorted radius grows again past the fold, so a pixel beyond the
+    fold's peak has a preimage only on that outer branch; returning it would hand out a ray
+    that ``project`` refuses.
+    """
+    projection = camera_projection_for(
+        _entry(_pinhole_model(DistortionModel.PLUMB_BOB, (-0.28, 0.03, 0.0, 0.0, 0.0)))
+    )
+
+    with pytest.raises(ValueError, match="no viewing ray"):
+        projection.unproject(np.array([[CX + 0.9 * FX, CY]]))
+
+
 def test_a_fisheye_stops_where_the_radius_stops_growing_with_the_angle() -> None:
     # d(theta_d)/d(theta) = 1 + 3 k1 theta^2 se anula em theta = sqrt(1 / (-3 k1)).
     projection = camera_projection_for(_entry(_fisheye_model((-0.3, 0.0, 0.0, 0.0))))
