@@ -412,6 +412,7 @@ _VP = "visual_perception"
 _BACKENDS = "contextmap.visual_perception.backends"
 _REGION_DISCOVERY = "visual_perception.region_discovery"
 _GROUNDING = "visual_perception.region_grounding"
+_REFINEMENT = "visual_perception.region_refinement"
 _DENSE = "visual_perception.dense_features"
 _REGION_FEATURES = "visual_perception.region_features"
 _SEMANTIC = "visual_perception.semantic_interpretation"
@@ -472,7 +473,7 @@ _SCORING_LIMITATIONS = (
     "another scorer's values (#530 evaluates it)",
 )
 
-CAPABILITY_MATRIX_VERSION = "1.2.0"
+CAPABILITY_MATRIX_VERSION = "1.3.0"
 """Version of :data:`CAPABILITY_MATRIX`; a changed entry is a new version."""
 
 CAPABILITY_MATRIX = CapabilityMatrix(
@@ -515,22 +516,40 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             backend="SAM2",
             native_operation="promptable image segmentation from a box or points (image predictor)",
             role=Role.REGION_REFINEMENT,
-            adapter=None,
-            status=ImplementationStatus.PLANNED,
-            runtime=None,
-            input_evidence=("PreparedImage", "Region2D (box) from region grounding"),
-            output_evidence=("Region2D (mask) with contributor lineage",),
+            adapter=f"{_BACKENDS}.sam2.Sam2PromptRefinement",
+            status=ImplementationStatus.SUPPORTED,
+            runtime=RuntimeBinding(stage_id=_VP, component_id=_REFINEMENT, backend_id="sam2"),
+            input_evidence=(
+                "PreparedImage",
+                "RefinementPrompt (grounded Region2D box or GroundingPoint)",
+            ),
+            output_evidence=("Region2D (mask) with contributor lineage, or explicit rejection",),
             geometry=Geometry.MASK,
-            prompt_controls=(_planned("refinement_policy", 568),),
-            model_controls=(_planned("checkpoint", 568),),
-            provenance=("contributor proposal ids", "grounding and refinement provenance"),
-            limitations=("uses the proposal only as a segmentation prompt; infers no label",),
+            model_controls=_set(
+                "checkpoint",
+                "model_version",
+                "precision",
+                "mask_threshold",
+                "max_hole_area",
+                "max_sprinkle_area",
+            ),
+            provenance=(
+                "contributor_candidate_ids = (grounding proposal id,)",
+                "RefinementPrompt(grounding_request_id, output_index, grounding provenance)",
+                "BackendProvenance(sam2, checkpoint, configuration_fingerprint)",
+                "acceptance policy refinement-acceptance/1 and SAM2 predicted_iou (native)",
+            ),
+            limitations=(
+                "uses the proposal only as a segmentation prompt; infers no label",
+                "requires region grounding; an empty or off-prompt mask is an explicit "
+                "rejection, never a fallback to the box",
+                "single-mask output (multimask_output=False); predicted_iou is not a probability",
+                _SAM_PROVIDER,
+            ),
             upstream_roles=(Role.REGION_GROUNDING,),
             downstream_roles=_REGION_CONSUMERS,
             comparison_group="prompted_mask_refinement",
             metric_family=EvaluationStage.REGION_DISCOVERY,
-            status_reason="no refinement stage exists yet; the runtime identity is not decided",
-            issue=568,
         ),
         Capability(
             capability_id="sam2.video_tracking",
@@ -1330,10 +1349,11 @@ CAPABILITY_MATRIX = CapabilityMatrix(
             model_controls=_LA_MODEL,
             provenance=_GROUNDING_PROVENANCE,
             limitations=(
-                "a point never becomes a box: there is no canonical point contract, so points "
-                "reach no downstream stage",
+                "a point never becomes a box: there is no canonical point contract, so a point "
+                "reaches no downstream stage except as a SAM2 refinement prompt",
                 *_LA_LIMITATIONS[1:],
             ),
+            downstream_roles=(Role.REGION_REFINEMENT,),
             comparison_group="phrase_pointing.point",
             metric_family=EvaluationStage.REGION_DISCOVERY,
         ),
@@ -1485,33 +1505,31 @@ CAPABILITY_MATRIX = CapabilityMatrix(
         Composition(
             producer="locateanything.category_detection",
             consumer="sam2.box_prompt_refinement",
-            status=CompositionStatus.PLANNED,
+            status=CompositionStatus.SUPPORTED,
             note="grounded boxes become SAM2 box prompts with contributor lineage",
-            issue=568,
             comparison_group="category_conditioned_instance_masks",
             metric_family=EvaluationStage.REGION_DISCOVERY,
         ),
         Composition(
             producer="locateanything.phrase_grounding",
             consumer="sam2.box_prompt_refinement",
-            status=CompositionStatus.PLANNED,
+            status=CompositionStatus.SUPPORTED,
             note="phrase-grounded boxes become SAM2 box prompts with contributor lineage",
-            issue=568,
             comparison_group="phrase_conditioned_instance_masks",
             metric_family=EvaluationStage.REGION_DISCOVERY,
         ),
         Composition(
             producer="locateanything.pointing",
             consumer="sam2.box_prompt_refinement",
-            status=CompositionStatus.INCOMPATIBLE,
-            note="a point has no canonical contract and stays in the grounding stream",
+            status=CompositionStatus.SUPPORTED,
+            note="a grounded point is a SAM2 point prompt; the point itself stays in the "
+            "grounding stream and only the refined mask becomes a Region2D",
         ),
         Composition(
             producer="sam2.box_prompt_refinement",
             consumer="contextmap2.mask_membership_association",
-            status=CompositionStatus.PLANNED,
+            status=CompositionStatus.SUPPORTED,
             note="refined masks are ordinary mask-backed Region2D for membership",
-            issue=568,
             metric_family=EvaluationStage.SENSOR_ASSOCIATION,
         ),
         Composition(

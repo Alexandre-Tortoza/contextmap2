@@ -34,6 +34,11 @@ from contextmap.visual_perception.models import (
     SemanticScore,
     VisualFeature,
 )
+from contextmap.visual_perception.refinement import (
+    RegionRefinementCapabilities,
+    RegionRefinementExecution,
+    RegionRefinementRequest,
+)
 from contextmap.visual_perception.semantic_backend import SemanticInterpretationExecution
 from contextmap.visual_perception.semantic_requests import (
     SemanticInterpretationRequest,
@@ -99,6 +104,42 @@ class RegionGrounding(Protocol):
         Raises:
             GroundingRequestError: Before any inference, when the backend does not declare
                 the requested policy, task or geometry.
+        """
+        ...
+
+
+@runtime_checkable
+class RegionRefinement(Protocol):
+    """Capability port: refine grounding proposals into mask-backed regions.
+
+    A proposal is only a segmentation prompt: the refiner's mask becomes a separately
+    identified region whose contributor is the proposal, and the grounding evidence is
+    never mutated.
+    """
+
+    def backend_provenance(self) -> BackendProvenance:
+        """Report this refiner's identity and effective configuration.
+
+        Returns:
+            Provenance whose capability is ``"region_refinement"``.
+        """
+        ...
+
+    def capabilities(self) -> RegionRefinementCapabilities:
+        """Declare the prompt geometries this refiner accepts."""
+        ...
+
+    def refine(self, request: RegionRefinementRequest) -> RegionRefinementExecution:
+        """Refine every prompt of one request.
+
+        Args:
+            request: The prepared image, the prompts and the configuration fingerprint.
+
+        Returns:
+            One refined region or explicit rejection per prompt, with diagnostics.
+
+        Raises:
+            RefinementRequestError: Before any inference, for an unaccepted prompt geometry.
         """
         ...
 

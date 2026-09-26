@@ -69,6 +69,10 @@ _BACKEND_CONFIGURATION = {
         "contextmap.visual_perception.backends.locateanything.LocateAnythingConfig",
         {"query_set"},
     ),
+    ("visual_perception.region_refinement", "sam2"): (
+        "contextmap.visual_perception.backends.sam2.Sam2RefinementConfig",
+        set(),
+    ),
     ("visual_perception.dense_features", "dinov2"): (
         "contextmap.visual_perception.backends.dinov2.DinoV2Config",
         set(),
@@ -343,7 +347,10 @@ def test_capabilities_without_public_assets_stay_blocked_and_unselectable(
 
 REQUIRED_COMPOSITIONS = {
     ("locateanything.category_detection", "sam2.box_prompt_refinement"): (
-        CompositionStatus.PLANNED
+        CompositionStatus.SUPPORTED
+    ),
+    ("sam2.box_prompt_refinement", "contextmap2.mask_membership_association"): (
+        CompositionStatus.SUPPORTED
     ),
     ("locateanything.category_detection", "contextmap2.mask_membership_association"): (
         CompositionStatus.INCOMPATIBLE
@@ -423,9 +430,12 @@ def test_only_a_supported_composition_passes_the_pre_load_guard() -> None:
             "locateanything.category_detection", "contextmap2.mask_membership_association"
         )
     assert "NO_INLINE_MASK" in str(incompatible.value)
-    with pytest.raises(CapabilityMatrixError, match="#568"):
+    MATRIX.require_supported_composition(
+        "locateanything.category_detection", "sam2.box_prompt_refinement"
+    )
+    with pytest.raises(CapabilityMatrixError, match="#527"):
         MATRIX.require_supported_composition(
-            "locateanything.category_detection", "sam2.box_prompt_refinement"
+            "qwen.region_interpretation", "alphaclip.semantic_scoring"
         )
     with pytest.raises(CapabilityMatrixError, match="undeclared"):
         MATRIX.require_supported_composition(
@@ -509,7 +519,7 @@ def test_the_matrix_refuses_an_inconsistent_composition() -> None:
         note="n",
     )
     promoted = replace(
-        MATRIX.composition("locateanything.category_detection", "sam2.box_prompt_refinement"),
+        MATRIX.composition("dinov2.dense_patch_features", "contextmap2.dense_feature_sampling"),
         status=CompositionStatus.SUPPORTED,
         issue=None,
     )

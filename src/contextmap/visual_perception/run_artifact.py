@@ -66,6 +66,12 @@ from contextmap.visual_perception.models import (
     VisualFeature,
 )
 from contextmap.visual_perception.pipeline import decode_pipeline_preset, encode_pipeline_preset
+from contextmap.visual_perception.refinement import (
+    RegionRefinementExecution,
+    decode_region_refinement_execution,
+    encode_region_refinement_execution,
+    refinement_prompts_from,
+)
 from contextmap.visual_perception.semantic_audit import (
     SemanticDebugLevel,
     write_semantic_audit,
@@ -112,6 +118,7 @@ _SEMANTIC_DEBUG_ROOT = "debug/40-semantic-interpretation"
 _FEATURES_DIRNAME = "outputs/features"
 _GROUNDING_EXECUTIONS_FILENAME = "outputs/region-grounding.jsonl"
 _GROUNDING_RAW_DIRNAME = "outputs/region-grounding-raw"
+_REFINEMENT_EXECUTIONS_FILENAME = "outputs/region-refinement.jsonl"
 _MASKS_DIRNAME = "outputs/masks"
 
 
@@ -266,6 +273,8 @@ class PerceptionRunWriter:
         self._feature_diagnostics: list[FeatureExtractionDiagnostic] = []
         self._feature_previews: list[FeatureDiagnosticPreview] = []
         self._grounding_executions: list[RegionGroundingExecution] = []
+        self._refinement_executions: list[RegionRefinementExecution] = []
+        self._refinement_request_ids: set[str] = set()
         self._grounding_request_ids: set[str] = set()
         self._finalized = False
 
@@ -466,6 +475,42 @@ class PerceptionRunWriter:
         self._grounding_request_ids.add(request_id)
         self._grounding_executions.append(execution)
 
+    def add_region_refinement(self, execution: RegionRefinementExecution) -> None:
+        """Queue one grounding-to-mask refinement execution to be written by :meth:`finalize`.
+
+        The accepted refined regions must also be part of the owning result (see
+        :func:`~contextmap.visual_perception.refinement.with_refined_regions`): their masks
+        are persisted there, by :meth:`add_result`, in the compact mask store. This stream
+        (``outputs/region-refinement.jsonl``) keeps the prompts with their grounding lineage,
+        every outcome (region reference or explicit rejection), native scores and
+        diagnostics; it never inlines a mask, so the queued copy drops its pixels here.
+
+        Raises:
+            RunArtifactError: If called after :meth:`finalize`, or if this run already
+                carries an execution of the same request.
+        """
+        if self._finalized:
+            raise RunArtifactError("cannot add region refinement after finalize()")
+        request_id = str(execution.request_id)
+        if request_id in self._refinement_request_ids:
+            raise RunArtifactError(
+                f"duplicate refinement request in perception run: {request_id!r}"
+            )
+        self._refinement_request_ids.add(request_id)
+        # Os pixels chegam ao disco pelo resultado (add_result); reter a máscara aqui só
+        # duplicaria ~2,4 MB por região de 640x480 até o finalize().
+        self._refinement_executions.append(
+            replace(
+                execution,
+                outcomes=tuple(
+                    outcome
+                    if outcome.region is None
+                    else replace(outcome, region=replace(outcome.region, mask=None))
+                    for outcome in execution.outcomes
+                ),
+            )
+        )
+
     def add_feature_payload(
         self,
         feature: VisualFeature,
@@ -546,6 +591,7 @@ class PerceptionRunWriter:
             self._validate_failed_semantic_interpretations()
             self._validate_semantic_view_payloads()
             self._validate_region_grounding_materialization()
+            self._validate_region_refinement_lineage()
 
             self._ensure_staging()
             manifest = self._write_contents()
@@ -859,25 +905,98 @@ class PerceptionRunWriter:
     def _validate_region_grounding_materialization(self) -> None:
         """Require every grounding execution to belong to one result that holds its regions."""
         for execution in self._grounding_executions:
-            request = execution.request
-            matches = [
-                result
-                for result in self._results
-                if result.result_id == request.perception_result_id
-                and result.source_observation_id == request.source_observation_id
-            ]
-            if len(matches) != 1:
-                raise RunArtifactError(
-                    "grounding request does not resolve to exactly one result: "
-                    f"request_id={request.request_id!r}, matches={len(matches)}"
-                )
+            result = self._owning_result(execution.request, "grounding")
             missing = [
-                region.region_id for region in execution.regions if region not in matches[0].regions
+                region.region_id for region in execution.regions if region not in result.regions
             ]
             if missing:
                 raise RunArtifactError(
                     f"grounded regions were not materialized in their result: {missing!r}"
                 )
+
+    def _owning_result(self, request: Any, stream: str) -> PerceptionResult:
+        """Return the single result a grounding-stage request belongs to."""
+        matches = [
+            result
+            for result in self._results
+            if result.result_id == request.perception_result_id
+            and result.source_observation_id == request.source_observation_id
+        ]
+        if len(matches) != 1:
+            raise RunArtifactError(
+                f"{stream} request does not resolve to exactly one result: "
+                f"request_id={request.request_id!r}, matches={len(matches)}"
+            )
+        return matches[0]
+
+    def _validate_region_refinement_lineage(self) -> None:
+        """Require every refinement to name real grounding outputs and materialized regions.
+
+        Each prompt must be exactly the grounding output it names (same request, index and
+        geometry) of a grounding execution of this run, and each accepted refined region must
+        be in its result, carrying the mask that :meth:`add_result` persisted.
+        """
+        groundings = {str(item.request_id): item for item in self._grounding_executions}
+        for execution in self._refinement_executions:
+            result = self._owning_result(execution.request, "refinement")
+            for prompt in execution.request.prompts:
+                grounding = groundings.get(str(prompt.grounding_request_id))
+                if grounding is None:
+                    raise RunArtifactError(
+                        "refinement prompt names a grounding request this run did not persist: "
+                        f"{prompt.grounding_request_id!r}"
+                    )
+                expected = [
+                    candidate
+                    for candidate in refinement_prompts_from(grounding)
+                    if candidate.output_index == prompt.output_index
+                ]
+                if expected != [prompt]:
+                    raise RunArtifactError(
+                        "refinement prompt is not the grounding output it names: "
+                        f"{prompt.proposal_id!r}"
+                    )
+            persisted = {region.region_id: region for region in result.regions}
+            for region in execution.regions:
+                stored = persisted.get(region.region_id)
+                if (
+                    stored is None
+                    or stored.mask_reference is None
+                    or replace(stored, mask_reference=None) != replace(region, mask_reference=None)
+                ):
+                    raise RunArtifactError(
+                        "refined region was not materialized, with its mask, in its result: "
+                        f"{region.region_id!r}"
+                    )
+
+    def _write_region_refinement(self, file_entries: list[RunArtifactFileEntry]) -> None:
+        """Write the refinement stream, each refined region as persisted in its result."""
+        if not self._refinement_executions:
+            return
+        persisted = {
+            (result.source_observation_id, region.region_id): region
+            for result in self._results
+            for region in result.regions
+        }
+        records: list[str] = []
+        for execution in self._refinement_executions:
+            observation = execution.request.source_observation_id
+            with_references = replace(
+                execution,
+                outcomes=tuple(
+                    outcome
+                    if outcome.region is None
+                    else replace(outcome, region=persisted[(observation, outcome.region.region_id)])
+                    for outcome in execution.outcomes
+                ),
+            )
+            record = encode_region_refinement_execution(with_references)
+            records.append(f"{json.dumps(record, sort_keys=True)}\n")
+        content = "".join(records).encode("utf-8")
+        stream_path = self._tmp_dir / _REFINEMENT_EXECUTIONS_FILENAME
+        stream_path.parent.mkdir(parents=True, exist_ok=True)
+        stream_path.write_bytes(content)
+        file_entries.append(_file_entry(_REFINEMENT_EXECUTIONS_FILENAME, content))
 
     def _write_region_grounding(self, file_entries: list[RunArtifactFileEntry]) -> None:
         """Write the grounding stream and each raw response next to it, when there is any."""
@@ -933,6 +1052,7 @@ class PerceptionRunWriter:
 
         self._write_mask_index(file_entries)
         self._write_region_grounding(file_entries)
+        self._write_region_refinement(file_entries)
 
         results_content = "".join(
             f"{json.dumps(encode_perception_result(result), sort_keys=True)}\n"
@@ -1257,6 +1377,33 @@ class PerceptionRunReader:
                     yield decode_region_grounding_execution(record, raw_response=raw_response)
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     raise RunArtifactError(f"invalid region grounding record: {error}") from error
+
+    def iter_region_refinements(self) -> Iterator[RegionRefinementExecution]:
+        """Yield each persisted refinement execution.
+
+        Refined regions come back exactly as in :meth:`iter_results`: with
+        ``mask_reference`` set and pixels loadable through :meth:`mask_store`. Empty when the
+        run carries no refinement stream (refinement was not enabled).
+
+        Raises:
+            RunArtifactError: If a record is invalid.
+        """
+        stream_path = self._root / _REFINEMENT_EXECUTIONS_FILENAME
+        if not stream_path.is_file():
+            return
+        with stream_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    yield decode_region_refinement_execution(json.loads(stripped))
+                except (ValueError, KeyError, TypeError) as error:
+                    raise RunArtifactError(f"invalid region refinement record: {error}") from error
+
+    def list_region_refinements(self) -> list[RegionRefinementExecution]:
+        """Return every persisted refinement execution of this run."""
+        return list(self.iter_region_refinements())
 
     def list_region_groundings(self) -> list[RegionGroundingExecution]:
         """Return every persisted grounding execution of this run."""

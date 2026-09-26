@@ -93,6 +93,7 @@ from contextmap.runtime.catalog import (
 from contextmap.runtime.composition import (
     FeatureBuildScope,
     FeatureFactory,
+    RefinementFactory,
     RegionGroundingPlan,
 )
 from contextmap.runtime.pipeline import StageRequest
@@ -172,6 +173,9 @@ from contextmap.visual_perception import (
     RegionGroundingExecution,
     RegionGroundingRequest,
     RegionId,
+    RegionRefinement,
+    RegionRefinementExecution,
+    RegionRefinementRequest,
     SceneContext,
     SemanticClaim,
     SemanticEvidenceReference,
@@ -193,8 +197,10 @@ from contextmap.visual_perception import (
     materialize_scene_view,
     perception_result_id_for,
     prepare_image,
+    refinement_prompts_from,
     resolve_pipeline,
     with_grounded_regions,
+    with_refined_regions,
 )
 
 __all__ = [
@@ -1128,6 +1134,7 @@ class VisualPerceptionExecutor:
         semantic_interpreter: SemanticInterpreter,
         semantic_request_policy: SemanticRequestPolicy,
         region_grounding: RegionGroundingPlan | None = None,
+        region_refinement: RefinementFactory | None = None,
     ) -> None:
         """Bind the executor to the composed backends of the canonical preset.
 
@@ -1144,13 +1151,21 @@ class VisualPerceptionExecutor:
             semantic_request_policy: Prompt of each mode (#542), ordered views (#524) and
                 scene-context switch (#529) every semantic request follows (#544).
             region_grounding: Prompt-conditioned grounding backend and its queries, if composed.
+            region_refinement: Builds the refiner of grounding proposals, if composed; it
+                requires ``region_grounding``.
+
+        Raises:
+            ValueError: If refinement is given without grounding.
         """
+        if region_refinement is not None and region_grounding is None:
+            raise ValueError("region refinement needs region grounding: it refines its proposals")
         self._region_discovery = region_discovery
         self._dense_features = dense_features
         self._region_features = region_features
         self._semantic_interpreter = semantic_interpreter
         self._semantic_request_policy = semantic_request_policy
         self._region_grounding = region_grounding
+        self._region_refinement = region_refinement
 
     def execute(self, request: StageRequest) -> ArtifactRef:
         """Process every image observation of the ``sequence`` input and reference the run."""
@@ -1206,6 +1221,7 @@ class VisualPerceptionExecutor:
             grounding = (
                 None if self._region_grounding is None else self._region_grounding.factory(scratch)
             )
+            refiner = None if self._region_refinement is None else self._region_refinement(scratch)
             resolved = resolve_pipeline(
                 CANONICAL_PRESET_V1,
                 backend_factories={
@@ -1234,7 +1250,8 @@ class VisualPerceptionExecutor:
                     for stage in CANONICAL_PRESET_V1.stages
                     if stage.backend_id is not None
                 )
-                | (frozenset() if grounding is None else frozenset({"region_grounding"})),
+                | (frozenset() if grounding is None else frozenset({"region_grounding"}))
+                | (frozenset() if refiner is None else frozenset({"region_refinement"})),
                 pipeline_preset=CANONICAL_PRESET_V1,
                 configuration_digest=resolved.configuration_digest(),
             )
@@ -1262,13 +1279,20 @@ class VisualPerceptionExecutor:
                     scene_context_stage_id="scene_interpretation",
                 )
                 groundings: tuple[RegionGroundingExecution, ...] = ()
+                refinement: RegionRefinementExecution | None = None
                 if grounding is not None:
                     groundings = self._ground(grounding, prepared, result.result_id)
                     result = with_grounded_regions(result, groundings)
+                if refiner is not None:
+                    refinement = _refine(refiner, prepared, result.result_id, groundings)
+                    if refinement is not None:
+                        result = with_refined_regions(result, (refinement,))
                 writer.add_result(result)
                 writer.add_stage_outcomes(outcomes)
                 for execution in groundings:
                     writer.add_region_grounding(execution)
+                if refinement is not None:
+                    writer.add_region_refinement(refinement)
 
             manifest = writer.finalize()
         finally:
@@ -1300,6 +1324,36 @@ class VisualPerceptionExecutor:
             )
             for query in self._region_grounding.queries
         )
+
+
+def _refine(
+    refiner: RegionRefinement,
+    prepared: PreparedImage,
+    result_id: PerceptionResultId,
+    groundings: Sequence[RegionGroundingExecution],
+) -> RegionRefinementExecution | None:
+    """Refine every grounding proposal of one image in one request; ``None`` if there is none.
+
+    An image whose grounding answered no geometry has nothing to refine, so no request is
+    issued for it; every other image gets exactly one request, recorded as issued.
+    """
+    prompts = tuple(prompt for item in groundings for prompt in refinement_prompts_from(item))
+    if not prompts:
+        return None
+    fingerprint = refiner.backend_provenance().configuration_fingerprint
+    if not fingerprint:
+        raise ExecutorError(
+            "the region refinement backend reports no configuration fingerprint; its requests "
+            "could not be tied to the configuration that served them"
+        )
+    return refiner.refine(
+        RegionRefinementRequest(
+            perception_result_id=result_id,
+            image=prepared,
+            prompts=prompts,
+            configuration_fingerprint=fingerprint,
+        )
+    )
 
 
 class EntityResolutionExecutor:

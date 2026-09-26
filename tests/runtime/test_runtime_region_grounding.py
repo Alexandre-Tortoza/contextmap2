@@ -1,4 +1,4 @@
-"""LocateAnything region grounding selected, composed and executed from configuration (#569).
+"""Region grounding (#569) and its SAM2 refinement (#568), composed and executed from config.
 
 Grounding is an optional variation point of the ``visual_perception`` stage. Its queries
 are a reserved parameter group (``query_set``) that becomes one explicit request per image
@@ -299,12 +299,14 @@ class _FakeGrounding:
         )
 
 
-def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
-    tmp_path: Path,
-) -> None:
-    """Orchestration only: the grounding backend is a fake, everything else is real."""
-    pytest.importorskip("PIL")  # Pillow materializa a imagem preparada; não é dependência base.
+def _run_visual_perception(
+    tmp_path: Path, *, region_refinement: Any = None
+) -> tuple[Any, list[Path]]:
+    """Run the real executor over two frames with fake backends; return reader and roots.
 
+    Orchestration only: every backend is a fake, everything else (sequence, prepared-image
+    materialization, stage graph, persisted run) is real.
+    """
     from contextmap.ingestion import (
         FrameId,
         ImageEncoding,
@@ -430,6 +432,7 @@ def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
             views=SemanticViewPolicy(region_views=(VisualViewKind.TIGHT_CROP,)),
         ),
         region_grounding=RegionGroundingPlan(queries=queries, factory=factory),  # type: ignore[arg-type]
+        region_refinement=region_refinement,
     )
 
     workspace = tmp_path / "ws"
@@ -475,8 +478,16 @@ def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
     )
 
     executor.execute(request)
+    return PerceptionRunReader(output_dir), roots
 
-    reader = PerceptionRunReader(output_dir)
+
+def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("PIL")  # Pillow materializa a imagem preparada; não é dependência base.
+
+    reader, roots = _run_visual_perception(tmp_path)
+
     assert reader.verify_integrity() == []
     assert "region_grounding" in reader.manifest.enabled_capabilities
     assert len(roots) == 1  # um backend (e um carregamento de modelo) por run
@@ -491,3 +502,143 @@ def test_the_executor_turns_each_query_into_an_explicit_persisted_request(
     for result in reader.list_results():
         grounded = [r for r in result.regions if r.provenance.capability == "region_grounding"]
         assert len(grounded) == 2
+
+
+# --- refinement (#568) ------------------------------------------------------------------------
+
+REFINEMENT = "visual_perception.region_refinement"
+
+
+def _refined_document(**sam2: Any) -> dict[str, Any]:
+    document = _document()
+    document["components"]["visual_perception"]["region_refinement"] = {
+        "backend": "sam2",
+        "sam2": {"checkpoint": "sam2.1_hiera_large", "model_version": "2.1", **sam2},
+    }
+    return document
+
+
+class _FakePromptRuntime:
+    """Answers every prompt with a full-image mask, like a SAM2 that sees one object."""
+
+    def predict_prompts(self, **kwargs: Any) -> tuple[Any, ...]:
+        from contextmap.visual_perception.backends.sam2 import Sam2PromptedMask
+
+        pixels = kwargs["width"] * kwargs["height"]
+        return tuple(
+            Sam2PromptedMask(mask=(True,) * pixels, predicted_iou=0.9) for _ in kwargs["prompts"]
+        )
+
+
+def _refinement_providers(calls: list[Any] | None = None) -> dict[str, RuntimeProvider]:
+    def provide(config: Any, secrets: Any) -> object:
+        (calls if calls is not None else []).append(config)
+        return _FakePromptRuntime()
+
+    return _providers(**{REFINEMENT: provide})
+
+
+def test_refinement_is_optional_and_absent_unless_selected(tmp_path: Path) -> None:
+    assert _compose(tmp_path, _document()).region_refinement is None
+
+
+def test_sam2_refinement_is_selectable_with_a_provided_prompt_runtime(tmp_path: Path) -> None:
+    from contextmap.visual_perception.backends.sam2 import (
+        Sam2PromptRefinement,
+        Sam2RefinementConfig,
+    )
+
+    calls: list[Any] = []
+    composed = _compose(tmp_path, _refined_document(), providers=_refinement_providers(calls))
+
+    refiner = composed.region_refinement(tmp_path)
+
+    assert isinstance(refiner, Sam2PromptRefinement)
+    assert isinstance(calls[0], Sam2RefinementConfig)
+    assert calls[0].device == "cpu"
+    assert len(calls) == 1  # o provider é pedido uma vez na composição, não por run
+
+
+def test_refinement_needs_a_provided_sam2_runtime(tmp_path: Path) -> None:
+    from contextmap.runtime.errors import BackendRuntimeMissingError
+
+    with pytest.raises(BackendRuntimeMissingError):
+        _compose(tmp_path, _refined_document())
+
+
+def test_refinement_without_grounding_is_an_explicit_configuration_error(tmp_path: Path) -> None:
+    from contextmap.runtime import ConfigurationError
+
+    document = _refined_document()
+    del document["components"]["visual_perception"]["region_grounding"]
+
+    with pytest.raises(ConfigurationError, match="region_grounding"):
+        _compose(tmp_path, document, providers=_refinement_providers())
+
+
+def test_grounding_and_refinement_are_ablated_independently(tmp_path: Path) -> None:
+    grounding_only = _compose(tmp_path, _document())
+    refined = _compose(tmp_path, _refined_document(), providers=_refinement_providers())
+    other_refiner = _compose(
+        tmp_path, _refined_document(mask_threshold=0.5), providers=_refinement_providers()
+    )
+
+    def grounding_fingerprint(composed: Any) -> Any:
+        return composed.region_grounding.factory(tmp_path).backend_provenance()
+
+    assert grounding_fingerprint(grounding_only) == grounding_fingerprint(refined)
+    assert grounding_fingerprint(refined) == grounding_fingerprint(other_refiner)
+    assert (
+        refined.region_refinement(tmp_path).backend_provenance().configuration_fingerprint
+        != other_refiner.region_refinement(tmp_path).backend_provenance().configuration_fingerprint
+    )
+
+
+def test_compose_executors_wires_refinement_into_visual_perception(tmp_path: Path) -> None:
+    executors = compose_executors(
+        effective_from(tmp_path, _refined_document()),
+        providers=_refinement_providers(),
+        module_available=lambda _name: True,
+        environ={},
+    )
+
+    assert executors["visual_perception"]._region_refinement is not None  # type: ignore[attr-defined]
+
+
+def test_the_executor_refines_every_grounding_proposal_and_persists_it(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")  # Pillow materializa a imagem preparada; não é dependência base.
+    from contextmap.visual_perception.backends.sam2 import (
+        Sam2PromptRefinement,
+        Sam2RefinementConfig,
+    )
+
+    config = Sam2RefinementConfig(checkpoint="sam2.1_hiera_large")
+    roots: list[Path] = []
+
+    def refinement(prepared_image_root: Path) -> Sam2PromptRefinement:
+        roots.append(prepared_image_root)
+        return Sam2PromptRefinement(
+            config=config, runtime=_FakePromptRuntime(), prepared_image_root=prepared_image_root
+        )
+
+    reader, _ = _run_visual_perception(tmp_path, region_refinement=refinement)
+
+    assert reader.verify_integrity() == []
+    assert "region_refinement" in reader.manifest.enabled_capabilities
+    assert len(roots) == 1
+    refinements = reader.list_region_refinements()
+    assert len(refinements) == 2  # uma requisição por imagem, com todas as propostas dela
+    groundings = {str(item.request_id): item for item in reader.list_region_groundings()}
+    for execution in refinements:
+        assert len(execution.request.prompts) == 2
+        assert {str(p.grounding_request_id) for p in execution.request.prompts} <= set(groundings)
+    for result in reader.list_results():
+        capabilities = [region.provenance.capability for region in result.regions]
+        assert capabilities.count("region_grounding") == 2
+        refined = [r for r in result.regions if r.provenance.capability == "region_refinement"]
+        assert len(refined) == 2
+        for region in refined:
+            assert region.mask_reference is not None
+            assert (
+                reader.mask_store().load(result.source_observation_id, region.region_id).area == 4
+            )

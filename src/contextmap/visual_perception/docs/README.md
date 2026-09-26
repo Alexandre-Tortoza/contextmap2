@@ -29,7 +29,7 @@ flowchart LR
 
 O diagrama representa o fluxo do preset canônico atualmente implementado. Os ports continuam independentes da topologia: a ordem e as dependências são definidas pelo `PipelinePreset`, enquanto `service.py` apenas executa o grafo resolvido. Uma evidência produzida aqui permanece evidência de frame/run; ela não vira entidade 3D persistente nem crença fundida dentro deste módulo.
 
-Region Grounding é uma capacidade distinta de Region Discovery: responde a uma query explícita (texto livre ou conjunto ordenado de categorias, política versionada e geometria pedida) sobre uma imagem preparada. A query é entrada de cada `RegionGroundingRequest`, entra na identidade do request, é validada antes da inferência e é persistida com a execução; só saídas box viram `Region2D`, e pontos continuam evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md); o primeiro adapter, LocateAnything, está em [`locateanything.md`](locateanything.md).
+Region Grounding é uma capacidade distinta de Region Discovery: responde a uma query explícita (texto livre ou conjunto ordenado de categorias, política versionada e geometria pedida) sobre uma imagem preparada. A query é entrada de cada `RegionGroundingRequest`, entra na identidade do request, é validada antes da inferência e é persistida com a execução; só saídas box viram `Region2D`, e pontos continuam evidência nativa. Detalhes em [`region-grounding.md`](region-grounding.md); o primeiro adapter, LocateAnything, está em [`locateanything.md`](locateanything.md). Region Refinement usa cada proposta de grounding só como prompt de segmentação (SAM2) e produz uma `Region2D` nova, com máscara, cuja contribuidora é a proposta; máscaras vazias ou fora do prompt são rejeições explícitas. Detalhes em [`region-refinement.md`](region-refinement.md).
 
 Region Discovery possui implementação concreta de preparação opcional, full-frame/tiling, SAM2, SAM3, Florence-2, normalização geométrica, provenance, diagnostics e avaliação. O contrato downstream continua sendo o mesmo `Region2D`; detalhes ficam em [`region-discovery.md`](region-discovery.md).
 
@@ -74,7 +74,9 @@ temporariamente os estágios legados de cena/região até a construção de
 
 - `RegionGroundingRequest`, `GroundingQuery`, `GroundingQuerySet`, `GroundingQueryPolicy`, `RegionGroundingCapabilities`, `RegionGroundingExecution`, `GroundingOutput`, `GroundingPoint`, `RejectedGroundingOutput`, `GroundingDiagnostics` — grounding condicionado por prompt: request com identidade de conteúdo, validação de capacidade antes da inferência (`validate_grounding_query()`, `GroundingRequestError`), resposta bruta separada do parsing e `with_grounded_regions()` para anexar as regiões box ao resultado dono.
 
-- `RegionDiscovery`, `RegionGrounding`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticScore`.
+- `RefinementPrompt`, `RegionRefinementRequest`, `RegionRefinementCapabilities`, `RegionRefinementExecution`, `RefinementOutcome`, `RefinementRejectionReason`, `RefinementDiagnostics` — refinamento de propostas de grounding em regiões com máscara (`refinement_prompts_from()`, `refinement_outcome()`, `validate_refinement_request()`, `with_refined_regions()`).
+
+- `RegionDiscovery`, `RegionGrounding`, `RegionRefinement`, `FeatureExtractor`, `SemanticInterpreter`, `SemanticScorer` — ports (`Protocol`) que qualquer backend concreto implementa; `PreparedImage`, `SemanticScore`.
 
 - `execute_stage_graph()`/`assemble_perception_result()` — executor de grafo de estágios e montagem de `PerceptionResult`; `StageDefinition`, `StageOutcome`, `StageStatus`, `StageGraphError`.
 
@@ -89,7 +91,7 @@ temporariamente os estágios legados de cena/região até a construção de
 - `ClipVisualFeatureBackend` (interno a `backends/`) — adapter visual CLIP global/região com crop/contexto e transformação por feature auditáveis, sem text encoding ou scoring.
 - `AlphaClipRegionFeatureBackend` (interno a `backends/`) — adapter AlphaCLIP condicionado por máscara congelada, com transformação RGB/alpha e identidade de espaço próprias.
 
-- `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()`, `grounding_region_id_for()` — geradores de identidade determinística.
+- `perception_result_id_for()`, `region_id_for()`, `feature_id_for()`, `claim_id_for()`, `grounding_region_id_for()`, `grounding_point_id_for()`, `refined_region_id_for()` — geradores de identidade determinística.
 
 - `PerceptionRunWriter`/`PerceptionRunReader` — persistência local imutável de um run de percepção; inclui requests/executions semânticos, views content-addressed e resposta bruta auditável, e as execuções de grounding (`add_region_grounding()`/`list_region_groundings()`); `RunArtifactManifest`.
 - `FeatureStoreWriter`/`FeatureStoreReader` — persistência, indexação e carregamento sob demanda do payload numérico de um `VisualFeature` (`PerceptionRunWriter.add_feature_payload()`/`PerceptionRunReader.feature_store()`); `FeaturePayloadEntry`, `FeatureStoreError`, `FeaturePayloadIntegrityError`.
@@ -121,6 +123,7 @@ Visual Perception.
 
 - [`contracts.md`](contracts.md) — contratos de evidência, ownership, escopo de identidade e invariantes.
 - [`region-grounding.md`](region-grounding.md) — grounding condicionado por prompt: query, request, identidade, validação antes da inferência, execução, persistência e hooks de medição.
+- [`region-refinement.md`](region-refinement.md) — refinamento grounding → máscara: prompts com linhagem, política de aceitação, identidade, SAM2 com prompts, persistência e ablação.
 - [`locateanything.md`](locateanything.md) — adapter LocateAnything: políticas/templates upstream, gramática da resposta, rejeições explícitas, diagnósticos nativos e limites.
 - [`region-discovery.md`](region-discovery.md) — fluxo completo de Region Discovery, passes/tiling, adapters SAM2/SAM3/Florence-2, normalização, diagnostics, avaliação e invariantes.
 - [`feature-extraction.md`](feature-extraction.md) — visão integrada do core de Feature Extraction, contratos, payloads, sampling, pooling, diagnostics, enhancement opcional, avaliação e estado dos backends concretos.
