@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 
 import pytest
@@ -25,7 +26,7 @@ from contextmap.geometric_mapping.serialization import (
     encode_motion_correction_policy,
     encode_motion_correction_record,
 )
-from contextmap.ingestion import SourceObservationId
+from contextmap.ingestion import LidarObservation, SourceObservationId
 from contextmap.state_estimation import TrajectoryId
 
 MS = 1_000_000
@@ -53,6 +54,15 @@ def _corrected(**overrides: object) -> MotionCorrectionRecord:
     }
     values.update(overrides)
     return MotionCorrectionRecord(**values)  # type: ignore[arg-type]
+
+
+def _describing(scan: LidarObservation) -> MotionCorrectionRecord:
+    """A corrected record whose evidence names the scan's actual payload."""
+    return _corrected(evidence=_evidence(payload_hash=_payload_hash(scan)))
+
+
+def _payload_hash(scan: LidarObservation) -> str:
+    return f"sha256:{hashlib.sha256(scan.data).hexdigest()}"
 
 
 # --- The three states are explicit, and unknown is the default ---------------
@@ -180,18 +190,33 @@ def test_the_acquisition_interval_must_be_ordered_in_one_clock_and_complete(
 def test_a_record_must_agree_with_the_observation_it_describes() -> None:
     scan = make_scan(time_ns=50 * MS)
 
-    assert verify_motion_correction(_corrected(), scan) == []
+    assert verify_motion_correction(_describing(scan), scan) == []
 
     problems = verify_motion_correction(
-        _corrected(observation_id=SourceObservationId("other")), scan
+        dataclasses.replace(_describing(scan), observation_id=SourceObservationId("other")), scan
     )
     assert any("observation" in problem for problem in problems)
     late = make_scan(time_ns=500 * MS)
-    assert any("outside" in problem for problem in verify_motion_correction(_corrected(), late))
+    assert any(
+        "outside" in problem for problem in verify_motion_correction(_describing(late), late)
+    )
     other_clock = make_scan(time_ns=50 * MS, clock_id="another:clock")
     assert any(
-        "clock" in problem for problem in verify_motion_correction(_corrected(), other_clock)
+        "clock" in problem
+        for problem in verify_motion_correction(_describing(other_clock), other_clock)
     )
+
+
+def test_a_corrected_record_must_name_the_payload_the_scan_delivers() -> None:
+    # #595: a evidência amarra a correção a um payload; outro payload não é o corrigido.
+    scan = make_scan(time_ns=50 * MS)
+    declared = "sha256:" + "ab" * 32
+
+    problems = verify_motion_correction(_corrected(evidence=_evidence(payload_hash=declared)), scan)
+
+    assert len(problems) == 1
+    assert declared in problems[0]
+    assert _payload_hash(scan) in problems[0]
 
 
 # --- Policy for uncorrected scans ---------------------------------------------

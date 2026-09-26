@@ -436,7 +436,7 @@ def _corrected(scan: LidarObservation) -> MotionCorrectionRecord:
         evidence=MotionCorrectionEvidence(
             producer="dedicated-deskew",
             trajectory_id=TrajectoryId("run-0001--trajectory"),
-            payload_hash="sha256:" + "a" * 64,
+            payload_hash=f"sha256:{hashlib.sha256(scan.data).hexdigest()}",
         ),
     )
 
@@ -465,6 +465,24 @@ def test_a_declaration_that_disagrees_with_its_scan_is_rejected() -> None:
     plan = _assemble([scan], motion_correction={scan.observation_id: elsewhere})
 
     assert _rejected(plan) == {"scan-0000": InputRejectionReason.INCONSISTENT_MOTION_CORRECTION}
+
+
+def test_a_correction_whose_evidence_names_another_payload_is_rejected() -> None:
+    # #595: o hash da evidência precisa ser o do payload realmente entregue.
+    scan = make_scan("scan-0000", time_ns=0)
+    record = _corrected(scan)
+    assert record.evidence is not None
+    foreign = dataclasses.replace(
+        record,
+        evidence=dataclasses.replace(record.evidence, payload_hash="sha256:" + "a" * 64),
+    )
+
+    plan = _assemble(
+        [scan], policy=REJECT_UNKNOWN, motion_correction={scan.observation_id: foreign}
+    )
+
+    assert _rejected(plan) == {"scan-0000": InputRejectionReason.INCONSISTENT_MOTION_CORRECTION}
+    assert "sha256:" + "a" * 64 in plan.rejections[0].detail
 
 
 # --- Dataset independence ----------------------------------------------------
