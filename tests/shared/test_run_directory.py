@@ -1,4 +1,6 @@
+import errno
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,44 @@ from contextmap.shared import (
     check_file_inventory,
     file_entry,
 )
+
+_Identity = tuple[int, int]
+
+
+def _identity(path: Path) -> _Identity | None:
+    try:
+        status = path.stat()
+    except FileNotFoundError:
+        return None
+    return status.st_dev, status.st_ino
+
+
+class _SyncRecorder:
+    """Records every ``os.fsync`` together with what the published path was at that moment.
+
+    Identities are ``(device, inode)``: a rename keeps them, so a file synced in the temporary
+    directory is recognized under its published path.
+    """
+
+    def __init__(self, published: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._published = published
+        self._calls: list[tuple[_Identity, _Identity | None]] = []
+        real_fsync = os.fsync
+
+        def recording_fsync(descriptor: int) -> None:
+            status = os.fstat(descriptor)
+            self._calls.append(((status.st_dev, status.st_ino), _identity(published)))
+            real_fsync(descriptor)
+
+        monkeypatch.setattr(os, "fsync", recording_fsync)
+
+    def synced_before_publication(self, path: Path) -> bool:
+        target, published = _identity(path), _identity(self._published)
+        return any(synced == target and seen != published for synced, seen in self._calls)
+
+    def synced_after_publication(self, path: Path) -> bool:
+        target, published = _identity(path), _identity(self._published)
+        return any(synced == target and seen == published for synced, seen in self._calls)
 
 
 def test_file_entry_records_size_and_sha256() -> None:
@@ -105,6 +145,43 @@ def test_an_interrupted_write_never_looks_like_a_finished_run(tmp_path: Path) ->
     with pytest.raises(RuntimeError, match="boom"), AtomicRunDirectory(final_dir) as run:
         run.write_text("outputs/a.txt", "a")
         raise RuntimeError("boom")
+
+    assert not final_dir.exists()
+    assert not list(tmp_path.glob(".tmp-*"))
+
+
+def test_every_file_and_directory_reaches_the_disk_before_the_run_becomes_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sem fsync, uma queda de energia pode persistir o rename antes dos dados (#616).
+    final_dir = tmp_path / "runs" / "run-0001"
+    recorder = _SyncRecorder(final_dir, monkeypatch)
+
+    with AtomicRunDirectory(final_dir) as run:
+        run.write_bytes("outputs/nested/a.bin", b"abc")
+        with run.open_binary("outputs/b.bin") as handle:
+            handle.write(b"def")
+        run.write_text("debug/notes.txt", "human only", contractual=False)
+        run.publish(manifest={}, readme="# x\n")
+
+    published = [final_dir, *sorted(final_dir.rglob("*"))]
+    assert len(published) == 9
+    assert [path for path in published if not recorder.synced_before_publication(path)] == []
+    assert recorder.synced_after_publication(final_dir.parent)
+
+
+def test_a_run_whose_data_cannot_reach_the_disk_is_never_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_fsync(descriptor: int) -> None:
+        raise OSError(errno.EIO, "simulated I/O error")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+    final_dir = tmp_path / "run-0001"
+
+    with pytest.raises(OSError, match="simulated"), AtomicRunDirectory(final_dir) as run:
+        run.write_text("outputs/a.txt", "a")
+        run.publish(manifest={}, readme="# x\n")
 
     assert not final_dir.exists()
     assert not list(tmp_path.glob(".tmp-*"))
