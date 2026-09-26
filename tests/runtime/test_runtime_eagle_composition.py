@@ -6,16 +6,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from runtime_documents import CANONICAL_PROMPT_POLICY, effective_from, selected_document
+from runtime_documents import (
+    CANONICAL_PROMPT_POLICY,
+    TIGHT_CROP_VIEW_POLICY,
+    effective_from,
+    selected_document,
+)
 
 from contextmap.runtime.composition import (
     ComposedRuntime,
     RuntimeProvider,
-    SemanticRequestPrompt,
     compose,
 )
 from contextmap.runtime.errors import BackendConfigurationError, BackendRuntimeMissingError
-from contextmap.visual_perception import SemanticInterpretationMode
+from contextmap.visual_perception import SemanticModePrompt
 from contextmap.visual_perception.backends.eagle2_5 import (
     EagleSemanticConfig,
     EagleSemanticInterpreter,
@@ -49,6 +53,7 @@ def _eagle_document(**overrides: object) -> dict[str, Any]:
         "temperature": 0.0,
         "max_dynamic_tiles": 6,
         "prompt_policy": dict(CANONICAL_PROMPT_POLICY),
+        "view_policy": dict(TIGHT_CROP_VIEW_POLICY),
     }
     parameters.update(overrides)
     document = selected_document()
@@ -108,19 +113,21 @@ def test_requests_name_the_configured_prompt_policy(tmp_path: Path) -> None:
 
     composed = _compose(tmp_path, _eagle_document(prompt_policy=policy))
 
-    assert composed.semantic_prompts == {
-        SemanticInterpretationMode.SCENE: SemanticRequestPrompt(
-            template_id="scene/v1", output_schema="semantic-response/1"
-        ),
-        SemanticInterpretationMode.REGION: SemanticRequestPrompt(
-            template_id="region-abstention/v1", output_schema="semantic-response/1"
-        ),
-    }
+    request_policy = composed.semantic_request_policy
+    assert request_policy is not None
+    assert (request_policy.scene, request_policy.region) == (
+        SemanticModePrompt(template_id="scene/v1", output_schema="semantic-response/1"),
+        SemanticModePrompt(template_id="region-abstention/v1", output_schema="semantic-response/1"),
+    )
 
 
 @pytest.mark.parametrize(
     ("missing", "message"),
-    [("prompt_policy", "prompt_policy"), ("max_dynamic_tiles", "max_dynamic_tiles")],
+    [
+        ("prompt_policy", "prompt_policy"),
+        ("view_policy", "view_policy"),
+        ("max_dynamic_tiles", "max_dynamic_tiles"),
+    ],
 )
 def test_the_prompt_policy_and_the_visual_budget_are_never_defaulted(
     tmp_path: Path, missing: str, message: str
@@ -138,3 +145,17 @@ def test_without_a_runtime_provider_the_missing_eagle_runtime_is_reported(
 ) -> None:
     with pytest.raises(BackendRuntimeMissingError, match="EagleRuntime"):
         _compose(tmp_path, _eagle_document(), with_interpreter_runtime=False)
+
+
+def test_scene_context_conditioning_is_refused_because_eagle_does_not_accept_it(
+    tmp_path: Path,
+) -> None:
+    """#529: Eagle 2.5 declares accepts_scene_context=False, so the switch fails composition."""
+    policy = {
+        "scene": "scene/v1",
+        "region": "region-scene-context/v1",
+        "region_scene_context": True,
+    }
+
+    with pytest.raises(BackendConfigurationError, match="does not accept scene context"):
+        _compose(tmp_path, _eagle_document(prompt_policy=policy))

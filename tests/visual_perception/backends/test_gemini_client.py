@@ -237,6 +237,28 @@ def test_the_request_carries_the_views_then_the_prompt_and_the_generation_settin
     assert sdk.client_kwargs[0]["api_key"] == KEY
 
 
+def test_several_views_are_sent_in_the_declared_order_before_the_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#524: the provider receives the policy's views in order, then the prompt."""
+    sdk = FakeSdk()
+    sdk.install(monkeypatch)
+    client = _client(tmp_path)
+    payloads = {"masked": b"masked subject", "tight": b"tight crop", "context": b"context crop"}
+    views = []
+    for name, payload in payloads.items():
+        reference = f"outputs/semantic-views/{name}.png"
+        (tmp_path / reference).write_bytes(payload)
+        views.append(_visual_view(reference, payload))
+
+    client.generate(visual_views=tuple(views), prompt="canonical prompt", config=_config())
+
+    (call,) = sdk.models.calls
+    *images, text = call["contents"]
+    assert [image.data for image in images] == list(payloads.values())
+    assert text == "canonical prompt"
+
+
 def test_structured_output_and_thinking_are_only_requested_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

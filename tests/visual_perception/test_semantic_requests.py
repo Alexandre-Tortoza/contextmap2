@@ -4,17 +4,21 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    BackendProvenance,
     FeatureId,
     FeatureScope,
     PerceptionResultId,
     RegionId,
+    SceneContext,
     SemanticEvidenceReference,
     SemanticFeatureReference,
+    SemanticInferenceProvenance,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
     SemanticInterpreterCapabilities,
     SemanticRequestId,
     SemanticRequestMetadata,
+    SemanticViewConstruction,
     SemanticVisualView,
     VisualViewKind,
     decode_semantic_request,
@@ -36,6 +40,32 @@ def _view(kind: VisualViewKind = VisualViewKind.TIGHT_CROP) -> SemanticVisualVie
         region_id=None if kind is VisualViewKind.FULL_FRAME else REGION_ID,
         sha256="0" * 64,
     )
+
+
+def _scene_context(**overrides: object) -> SceneContext:
+    values: dict[str, object] = {
+        "source_observation_id": SOURCE_ID,
+        "perception_result_id": RESULT_ID,
+        "provenance": SemanticInferenceProvenance(
+            backend=BackendProvenance(
+                backend_id="fake",
+                capability="semantic_interpreter",
+                provider="fake",
+                model="fake",
+                version="1",
+            ),
+            task_identity="scene",
+            prompt_template_id="scene/v1",
+            output_schema_version="semantic-response/1",
+        ),
+        "scene_type": "warehouse",
+    }
+    values.update(overrides)
+    return SceneContext(**values)  # type: ignore[arg-type]
+
+
+def _context_reference(evidence_id: str = str(RESULT_ID)) -> SemanticEvidenceReference:
+    return SemanticEvidenceReference(evidence_type="scene_context", evidence_id=evidence_id)
 
 
 def _request(**overrides: object) -> SemanticInterpretationRequest:
@@ -77,6 +107,7 @@ def test_request_makes_scene_context_features_and_metadata_explicit() -> None:
         scene_context_reference=SemanticEvidenceReference(
             evidence_type="scene_context", evidence_id=str(RESULT_ID)
         ),
+        scene_context=_scene_context(),
         supporting_metadata=(SemanticRequestMetadata(name="camera", value="front"),),
     )
 
@@ -146,3 +177,140 @@ def test_capability_validation_rejects_evidence_a_backend_cannot_consume() -> No
         validate_semantic_request(feature_assisted, capabilities)
 
     validate_semantic_request(_request(), capabilities)
+
+
+def test_a_view_construction_record_round_trips_with_the_request() -> None:
+    """#524: how each view was cut from its source image is persisted with the request."""
+    view = SemanticVisualView(
+        view_id="view-0001",
+        kind=VisualViewKind.CONTEXTUAL_CROP,
+        payload_reference="outputs/semantic-views/region-0007-context.png",
+        source_observation_id=SOURCE_ID,
+        region_id=REGION_ID,
+        sha256="0" * 64,
+        construction=SemanticViewConstruction(
+            policy_fingerprint="sha256:policy",
+            source_image_sha256="1" * 64,
+            pixel_bounds=(0, 2, 40, 30),
+        ),
+    )
+    request = _request(visual_views=(view,))
+
+    encoded = encode_semantic_request(request)
+
+    assert encoded["visual_views"][0]["construction"] == {
+        "policy_fingerprint": "sha256:policy",
+        "source_image_sha256": "1" * 64,
+        "pixel_bounds": [0, 2, 40, 30],
+    }
+    assert decode_semantic_request(encoded) == request
+    assert encode_semantic_request(_request())["visual_views"][0]["construction"] is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"policy_fingerprint": " "}, "policy_fingerprint"),
+        ({"source_image_sha256": "xyz"}, "source_image_sha256"),
+        ({"pixel_bounds": (5, 0, 5, 3)}, "pixel_bounds"),
+        ({"pixel_bounds": (-1, 0, 5, 3)}, "pixel_bounds"),
+    ],
+)
+def test_a_view_construction_record_refuses_an_unusable_lineage(
+    changes: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "policy_fingerprint": "sha256:policy",
+        "source_image_sha256": "1" * 64,
+        "pixel_bounds": (0, 0, 4, 3),
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match=message):
+        SemanticViewConstruction(**values)  # type: ignore[arg-type]
+
+
+def test_capabilities_can_bound_the_number_of_views_a_request_carries() -> None:
+    capabilities = SemanticInterpreterCapabilities(
+        supported_modes=frozenset({SemanticInterpretationMode.REGION}),
+        supported_view_kinds=frozenset({VisualViewKind.TIGHT_CROP, VisualViewKind.MASKED_SUBJECT}),
+        accepts_visual_features=False,
+        accepts_scene_context=False,
+        max_visual_views=1,
+    )
+    masked = SemanticVisualView(
+        view_id="view-0002",
+        kind=VisualViewKind.MASKED_SUBJECT,
+        payload_reference="outputs/semantic-views/region-0007-masked.png",
+        source_observation_id=SOURCE_ID,
+        region_id=REGION_ID,
+        sha256="0" * 64,
+    )
+
+    validate_semantic_request(_request(), capabilities)
+    with pytest.raises(ValueError, match="at most 1 visual view"):
+        validate_semantic_request(_request(visual_views=(_view(), masked)), capabilities)
+    with pytest.raises(ValueError, match="max_visual_views"):
+        SemanticInterpreterCapabilities(
+            supported_modes=frozenset({SemanticInterpretationMode.REGION}),
+            supported_view_kinds=frozenset({VisualViewKind.TIGHT_CROP}),
+            accepts_visual_features=False,
+            accepts_scene_context=False,
+            max_visual_views=0,
+        )
+
+
+class TestSceneContextConditioning:
+    """#529: a region request carries the exact scene context it names, and nothing circular."""
+
+    def test_the_request_carries_the_named_scene_context_and_round_trips(self) -> None:
+        request = _request(
+            scene_context_reference=_context_reference(), scene_context=_scene_context()
+        )
+
+        encoded = encode_semantic_request(request)
+
+        assert encoded["scene_context"]["scene_type"] == "warehouse"
+        assert decode_semantic_request(encoded) == request
+        assert encode_semantic_request(_request())["scene_context"] is None
+
+    @pytest.mark.parametrize(
+        ("changes", "message"),
+        [
+            ({"scene_context_reference": _context_reference()}, "carries the scene context"),
+            ({"scene_context": _scene_context()}, "carries the scene context"),
+            (
+                {
+                    "scene_context_reference": _context_reference("run-0001--frame-0999"),
+                    "scene_context": _scene_context(),
+                },
+                "does not name",
+            ),
+            (
+                {
+                    "scene_context_reference": _context_reference("run-0001--frame-0125"),
+                    "scene_context": _scene_context(
+                        source_observation_id=SourceObservationId("frame-0125"),
+                        perception_result_id=PerceptionResultId("run-0001--frame-0125"),
+                    ),
+                },
+                "another observation",
+            ),
+        ],
+    )
+    def test_an_unresolved_or_foreign_scene_context_is_refused(
+        self, changes: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            _request(**changes)
+
+    def test_a_scene_request_can_never_be_conditioned_on_scene_context(self) -> None:
+        with pytest.raises(ValueError, match="circular"):
+            _request(
+                mode=SemanticInterpretationMode.SCENE,
+                region_id=None,
+                visual_views=(_view(VisualViewKind.FULL_FRAME),),
+                prompt_template_id="scene/v1",
+                scene_context_reference=_context_reference(),
+                scene_context=_scene_context(),
+            )

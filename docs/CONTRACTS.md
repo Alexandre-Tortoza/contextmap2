@@ -227,6 +227,7 @@ region_id?
 visual_views[]
 visual_features[]
 scene_context_reference?
+scene_context?
 supporting_metadata[]
 prompt_template_id
 requested_output_schema
@@ -234,14 +235,22 @@ configuration_fingerprint
 ```
 
 Cada `SemanticVisualView` possui `view_id`, kind, referência segura abaixo de
-`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem e região
-quando aplicável. O SHA-256 identifica os bytes exatos entregues ao modelo: os
+`outputs/semantic-views/`, SHA-256 obrigatório, observação de origem, região
+quando aplicável e, quando uma `SemanticViewPolicy` a construiu, o registro
+`construction` (fingerprint da política, SHA-256 da imagem de origem e janela de
+pixels usada). A política de views declara quais views um request de região
+carrega e em que ordem; nada além delas é acrescentado. O SHA-256 identifica os bytes exatos entregues ao modelo: os
 runtimes o verificam antes de abrir a imagem ou enviar bytes a um provider, e um
 payload divergente é falha explícita, não inferência sobre outra evidência.
 Features opcionais preservam `feature_id`,
 `embedding_space_id`, scope e região. Evidência não suportada por um backend é
 rejeitada pela declaração `SemanticInterpreterCapabilities`, em vez de ser
 descartada silenciosamente.
+
+`scene_context_reference` e `scene_context` vêm juntos: o request de região
+condicionado carrega exatamente o `SceneContext` que nomeia, da mesma observação,
+e um template que não renderiza contexto o recusa em vez de descartá-lo. Um
+request de cena nunca é condicionado a contexto de cena (#529).
 
 `prompt_template_id` é a política de prompt selecionada antes da inferência, não
 um rótulo: o interpretador renderiza exatamente essa política (um template do

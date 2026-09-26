@@ -8,14 +8,19 @@ import pytest
 
 from contextmap.ingestion import SourceObservationId
 from contextmap.visual_perception import (
+    SCENE_CONTEXT_RENDERING,
     SEMANTIC_PROMPT_TEMPLATES,
     BackendProvenance,
+    ClaimId,
     HypothesisRole,
     ParsedSemanticResponse,
     PerceptionResultId,
     RegionId,
     RenderedSemanticPrompt,
+    SceneContext,
+    SemanticClaim,
     SemanticConfidencePolicy,
+    SemanticEvidenceReference,
     SemanticInferenceProvenance,
     SemanticInterpretationMode,
     SemanticInterpretationRequest,
@@ -563,3 +568,113 @@ def test_an_omitted_confidence_is_still_refused_when_a_number_is_meaningful() ->
             _provenance(SemanticInterpretationMode.REGION),
             confidence_policy=SemanticConfidencePolicy.MEASURED,
         )
+
+
+def _scene_context(**fields: object) -> SceneContext:
+    values: dict[str, object] = {
+        "source_observation_id": SourceObservationId("frame-0124"),
+        "perception_result_id": PerceptionResultId("run-0001--frame-0124"),
+        "provenance": _provenance(SemanticInterpretationMode.SCENE),
+        "scene_type": "warehouse aisle",
+        "lighting": "artificial",
+    }
+    values.update(fields)
+    return SceneContext(**values)  # type: ignore[arg-type]
+
+
+def _conditioned(context: SceneContext | None) -> SemanticInterpretationRequest:
+    return replace(
+        _request(SemanticInterpretationMode.REGION),
+        prompt_template_id="region-scene-context/v1",
+        scene_context_reference=(
+            None
+            if context is None
+            else SemanticEvidenceReference(
+                evidence_type="scene_context", evidence_id=str(context.perception_result_id)
+            )
+        ),
+        scene_context=context,
+    )
+
+
+class TestSceneContextConditioning:
+    """#529: a prior scene hypothesis is rendered explicitly, deterministically and versioned."""
+
+    def test_the_selected_scene_context_is_rendered_as_a_prior_hypothesis(self) -> None:
+        template = SEMANTIC_PROMPT_TEMPLATES["region-scene-context/v1"]
+
+        rendered = _render(_conditioned(_scene_context()), template)
+
+        assert template.scene_context_instructions is not None
+        assert template.scene_context_instructions in rendered.text
+        assert '"scene_type":"warehouse aisle"' in rendered.text
+        assert '"lighting":"artificial"' in rendered.text
+        assert f"Scene context ({SCENE_CONTEXT_RENDERING}):" in rendered.text
+        assert rendered == _render(_conditioned(_scene_context()), template)
+
+    def test_the_scene_claims_are_rendered_without_any_confidence(self) -> None:
+        claim = SemanticClaim(
+            claim_id=ClaimId("run-0001--frame-0124--claim-0000"),
+            source_observation_id=SourceObservationId("frame-0124"),
+            perception_result_id=PerceptionResultId("run-0001--frame-0124"),
+            hypothesis="loading dock",
+            role=HypothesisRole.PRIMARY,
+            provenance=_provenance(SemanticInterpretationMode.SCENE),
+            confidence=0.9,
+        )
+
+        rendered = _render(
+            _conditioned(_scene_context(claims=(claim,))),
+            SEMANTIC_PROMPT_TEMPLATES["region-scene-context/v1"],
+        )
+
+        assert '"hypothesis":"loading dock"' in rendered.text
+        assert "0.9" not in rendered.text
+
+    def test_disabling_the_context_keeps_the_template_and_says_so_explicitly(self) -> None:
+        template = SEMANTIC_PROMPT_TEMPLATES["region-scene-context/v1"]
+
+        without = _render(_conditioned(None), template)
+        with_context = _render(_conditioned(_scene_context()), template)
+
+        assert f"Scene context ({SCENE_CONTEXT_RENDERING}): none" in without.text
+        assert template.scene_context_instructions is not None
+        assert template.scene_context_instructions not in without.text
+        assert without.template_id == with_context.template_id
+        assert without.fingerprint != with_context.fingerprint
+
+    def test_a_template_that_cannot_render_scene_context_refuses_one(self) -> None:
+        request = replace(_conditioned(_scene_context()), prompt_template_id="region/v1")
+
+        with pytest.raises(ValueError, match="does not render scene context"):
+            _render(request, SEMANTIC_PROMPT_TEMPLATES["region/v1"])
+
+    def test_the_canonical_region_policy_never_renders_a_scene_context_section(self) -> None:
+        rendered = _render(
+            _request(SemanticInterpretationMode.REGION), SEMANTIC_PROMPT_TEMPLATES["region/v1"]
+        )
+
+        assert "Scene context" not in rendered.text
+
+    def test_only_a_region_template_may_render_scene_context(self) -> None:
+        with pytest.raises(ValueError, match="scene"):
+            SemanticPromptTemplate(
+                template_id="scene/conditioned",
+                mode=SemanticInterpretationMode.SCENE,
+                output_schema_version="semantic-response/1",
+                instructions="Describe the scene.",
+                scene_context_instructions="Use the prior scene.",
+            )
+
+    def test_a_policy_conditions_region_requests_only_with_a_template_that_renders_it(
+        self,
+    ) -> None:
+        enabled = SemanticPromptPolicy(
+            scene="scene/v1", region="region-scene-context/v1", region_scene_context=True
+        )
+        disabled = SemanticPromptPolicy(scene="scene/v1", region="region-scene-context/v1")
+
+        assert enabled.region_scene_context
+        assert not disabled.region_scene_context
+        with pytest.raises(ValueError, match="does not render scene context"):
+            SemanticPromptPolicy(scene="scene/v1", region="region/v1", region_scene_context=True)

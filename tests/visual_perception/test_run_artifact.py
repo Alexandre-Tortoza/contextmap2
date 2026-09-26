@@ -323,6 +323,8 @@ def _abstained_semantic_execution() -> tuple[
             evidence_type="scene_context",
             evidence_id=str(scene_context.perception_result_id),
         ),
+        scene_context=scene_context,
+        prompt_template_id="region-scene-context/v1",
     )
     raw_response = json.dumps({"abstained": True, "claims": [], "scene_context": None})
     return (
@@ -338,7 +340,7 @@ def _abstained_semantic_execution() -> tuple[
             parsed=parse_semantic_response(
                 raw_response,
                 request,
-                provenance,
+                replace(provenance, prompt_template_id=request.prompt_template_id),
                 confidence_policy=SemanticConfidencePolicy.UNSCORED_ONLY,
             ),
         ),
@@ -1352,3 +1354,26 @@ def test_tracking_is_decided_by_the_manifest_not_by_the_file_on_disk(tmp_path: P
     reader = PerceptionRunReader(run_dir)
     with pytest.raises(RunArtifactError, match="inventoried"):
         reader.tracks_semantic_failures()
+
+
+def test_finalize_rejects_a_request_conditioned_on_another_scene_context_than_persisted(
+    tmp_path: Path,
+) -> None:
+    """#529: the scene context a prompt rendered must be the one the run persisted."""
+    execution, feature, scene_context = _abstained_semantic_execution()
+    result = _result(
+        "frame-0001",
+        "run-0001",
+        features=(feature,),
+        scene_context=replace(scene_context, scene_type="parking garage"),
+    )
+    writer = _write_run(tmp_path)
+    writer.add_result(result)
+    writer.add_feature_payload(
+        feature, SourceObservationId("frame-0001"), np.array([1.0, 2.0], dtype="float32")
+    )
+    writer.add_semantic_view_payload(execution.request.visual_views[0], _SEMANTIC_VIEW_PAYLOAD)
+    _add_semantic_outcome(writer, execution)
+
+    with pytest.raises(RunArtifactError, match="scene context the request carries"):
+        writer.finalize()

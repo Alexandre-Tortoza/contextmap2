@@ -517,6 +517,29 @@ def test_generation_sends_every_view_then_the_canonical_prompt(
     assert response.text == transformers.processor.decoded_text
 
 
+def test_several_views_reach_the_model_in_the_declared_order_before_the_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#524: a multi-view request is one message whose images keep the policy order."""
+    transformers, _ = _install(monkeypatch)
+    payloads = {"masked": b"masked subject", "tight": b"tight crop", "context": b"context crop"}
+    views = []
+    for name, payload in payloads.items():
+        reference = f"outputs/semantic-views/{name}.png"
+        (tmp_path / reference).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / reference).write_bytes(payload)
+        views.append(_visual_view(payload, reference=reference))
+    config = _config()
+
+    HuggingFaceQwenRuntime(config=config, view_root=tmp_path).generate(
+        visual_views=tuple(views), prompt="canonical prompt", config=config
+    )
+
+    (message,) = transformers.processor.messages
+    assert [part["type"] for part in message["content"]] == ["image", "image", "image", "text"]
+    assert [part["image"].payload for part in message["content"][:3]] == list(payloads.values())
+
+
 def test_zero_temperature_is_greedy_and_does_not_pass_sampling_parameters(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

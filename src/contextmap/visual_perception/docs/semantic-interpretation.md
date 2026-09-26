@@ -51,10 +51,75 @@ O construtor rejeita:
 - identidades vazias de prompt, schema ou configuração.
 
 `SemanticInterpreterCapabilities` declara modes e tipos de view suportados, se
-o backend aceita features/contexto e quais views são obrigatórias.
+o backend aceita features/contexto, quais views são obrigatórias e, quando
+existe, o número máximo de views por request (`max_visual_views`).
 `validate_semantic_request()` compara o request com essa declaração antes de
 qualquer chamada local ou remota. Evidência não suportada causa erro explícito;
 ela não é descartada silenciosamente.
+
+## Política de views de evidência (#524)
+
+`SemanticViewPolicy` é a política versionada que diz quais views um request de
+região carrega, em que ordem, e como cada uma é cortada da imagem preparada.
+`materialize_region_views()` e `materialize_scene_view()` a aplicam sobre os
+pixels RGB da imagem preparada e a região congelada, sem alterar a geometria da
+região. Uma ablação de views é só uma mudança de configuração: nenhum código de
+request é escrito à mão.
+
+- **Views declaradas, em ordem.** `region_views` é uma tupla ordenada e sem
+  repetição de `VisualViewKind`, com ao menos uma view presa à região
+  (`MASKED_SUBJECT`, `TIGHT_CROP` ou `CONTEXTUAL_CROP`). O request de região
+  carrega exatamente essas views, nessa ordem, e o runtime de Qwen/Gemini as
+  recebe nessa ordem antes do prompt. Nenhum frame inteiro é acrescentado sem
+  que a política o declare; quando declarado, o `FULL_FRAME` da região é a mesma
+  view (mesmo `view_id`, bytes e SHA-256) do request de cena do frame. O request
+  de cena carrega sempre exatamente um `FULL_FRAME`.
+- **Variantes.** Qualquer combinação válida é expressável; as do experimento
+  (#521) são `masked`, `tight`, `contextual`, `full+tight`, `masked+tight`,
+  `masked+contextual`, `tight+contextual`, `masked+tight+contextual` e
+  `full+masked+tight+contextual`.
+- **Recorte.** `TIGHT_CROP` e `MASKED_SUBJECT` cobrem a caixa da região
+  arredondada para fora (piso da borda mínima, teto da máxima) e limitada à
+  imagem. `CONTEXTUAL_CROP` expande a caixa por `context_margin_ratio` vezes a
+  largura (esquerda/direita) e a altura (cima/baixo) da própria caixa, com o
+  mesmo arredondamento; na borda da imagem o recorte é truncado, nunca
+  preenchido, então o sujeito pode ficar descentralizado.
+- **Máscara.** `MASKED_SUBJECT` mantém os pixels da máscara inline da região e
+  pinta o resto com `mask_fill_rgb`. Uma região só com caixa (sem máscara
+  inline) é recusada com erro explícito; a caixa nunca substitui a máscara em
+  silêncio.
+- **Contorno.** `context_boundary` (`rgb`, `width_px`) desenha, no recorte
+  contextual, um anel logo fora da caixa da região, sem pintar pixels do
+  sujeito; `None` não desenha nada.
+- **Parâmetros vivos.** Um parâmetro só existe para a view que ele molda:
+  `mask_fill_rgb` é obrigatório exatamente quando `MASKED_SUBJECT` é declarado,
+  `context_margin_ratio` exatamente quando `CONTEXTUAL_CROP` é declarado, e
+  `context_boundary` só é aceito com o recorte contextual. Assim duas políticas
+  que constroem as mesmas views têm a mesma identidade.
+- **Identidade.** `to_document()` registra todas as regras, inclusive as fixas
+  da versão `semantic-views/1` (arredondamento, sem redimensionamento — as views
+  mantêm a grade de pixels da imagem preparada; o orçamento de resolução do
+  modelo é de #526 — e codificação PNG RGB8, filtro 0, zlib 9), e
+  `fingerprint()` é o SHA-256 desse documento. Mudar qualquer regra fixa é uma
+  versão nova.
+- **Bytes e linhagem.** Cada view é um PNG determinístico: pixels, região e
+  política idênticos produzem bytes idênticos, identificados pelo `sha256` da
+  view. `SemanticVisualView.construction` (`SemanticViewConstruction`) registra
+  o fingerprint da política, o SHA-256 da imagem de origem e a janela de pixels
+  `(x_min, y_min, x_max, y_max)` usada; junto com `source_observation_id` e
+  `region_id`, isso reconstrói de onde cada byte veio. Esse registro é
+  persistido com o request e não entra no prompt renderizado.
+- **Preflight.** `check_view_policy_supported()` compara a política com as
+  capacidades do intérprete antes de qualquer inferência (tipos de view, número
+  máximo e views obrigatórias, só nos modos que o intérprete suporta). O
+  Florence-2 declara `max_visual_views=1` e só views que a região preenche, então
+  uma política com duas views, recorte contextual ou frame inteiro falha na
+  composição do runtime.
+- **Seleção por configuração.** O runtime lê a política do grupo reservado
+  obrigatório `view_policy` do backend semântico (ver
+  [composição do runtime](../../runtime/docs/composition.md#política-de-views-semânticas-524));
+  ela entra na configuração efetiva e na identidade do estágio
+  `visual_perception`.
 
 ## Integridade das views na inferência
 
@@ -203,6 +268,64 @@ schema e rejeitam números auto-relatados pelo VLM. Um backend que possua uma
 fonte realmente medida ou calibrada pode selecionar `MEASURED`, preservando um
 número finito em `[0, 1]` sem mudar o contrato canônico. O hash da resposta
 bruta é registrado separadamente dos outputs canônicos.
+
+## Condicionamento por contexto de cena (#529)
+
+Um request de região pode ser condicionado ao `SceneContext` que o request de cena
+da mesma observação produziu. O contexto continua sendo evidência/hipótese de uma
+inferência anterior, nunca truth.
+
+- **Contexto nomeado e carregado.** `scene_context_reference` nomeia o contexto e
+  `scene_context` carrega exatamente o `SceneContext` nomeado; os dois vêm juntos
+  ou nenhum vem. A referência precisa nomear o `perception_result_id` do contexto
+  carregado, e o contexto precisa ser da mesma observação do request. O run
+  artifact recusa, na finalização, um request cujo contexto carregado difira do
+  `SceneContext` persistido para aquele resultado: o contexto renderizado é o
+  contexto citado.
+- **Sem ciclo.** Um request de cena nunca é condicionado a contexto de cena, e só
+  um template de região pode renderizar contexto; a dependência é sempre
+  cena → região, nunca o contrário.
+- **Renderização versionada.** `region-scene-context/v1` tem as instruções de
+  `region/v1` mais `scene_context_instructions`. O prompt ganha uma seção
+  `Scene context (scene-context/1)`: as instruções de enquadramento ("hipótese
+  anterior, não truth; use só para desambiguar a região") seguidas do contexto em
+  JSON canônico (chaves ordenadas): os seis campos estruturados e, por claim,
+  hipótese, role, categoria, region kind e atributos. A confiança nunca é
+  renderizada. `region/v1` continua byte a byte igual: não tem seção de contexto.
+- **Desligável para uma ablação pareada.** `SemanticPromptPolicy.region_scene_context`
+  liga o condicionamento (exige um template de região que renderize contexto).
+  Desligado com o mesmo template, o request não carrega contexto e a seção diz
+  explicitamente que nenhum foi fornecido; os dois braços usam o mesmo template e
+  diferem só no insumo de contexto. Com `region/v1` não há contexto nenhum.
+- **Nunca descartado em silêncio.** Um template que não renderiza contexto recusa
+  um request que carrega um, antes da inferência.
+- **Adapters.** Qwen e Gemini declaram `accepts_scene_context=True` desde que esse
+  caminho existe e está testado; Florence-2 continua sem suporte (não aceita
+  `prompt_policy`, e sua declaração segue `False`). O runtime recusa, na
+  composição, `region_scene_context` para um intérprete que não aceita contexto.
+- **Runtime.** A bridge guarda só o `SceneContext` do frame corrente, produzido
+  pelo request de cena (que roda antes das regiões do mesmo frame na ordem
+  topológica determinística do preset). Se o frame não tem contexto (cena falhou,
+  abstenção ou não executada), cada request de região condicionado falha com erro
+  explícito em vez de seguir sem o contexto pedido.
+- **Avaliação.** O gancho com/sem contexto de `compare_evidence_variants()` roda
+  sobre execuções reais de Qwen e Gemini (runtimes/clients fake na CI): o canal
+  `scene_context` vem do request, e o template é o mesmo nos dois braços.
+
+## Política de request resolvida (#544)
+
+`SemanticRequestPolicy` reúne o que molda todos os requests semânticos de um run: o
+prompt de cada modo interpretado (`SemanticModePrompt`: `template_id` e schema de saída;
+um modo sem prompt não é interpretado e nunca recebe um padrão), a `SemanticViewPolicy`
+e o interruptor `region_scene_context`. `SemanticRequestPolicy.from_prompt_policy()` a
+resolve a partir da `SemanticPromptPolicy` e da política de views de um intérprete que
+segue instruções; o Florence-2 recebe o prompt nativo da task só no modo que ela serve.
+`to_document()` registra todas as escolhas (inclusive as regras das views) sob a versão
+`semantic-request-policy/1`, e `fingerprint()` é o SHA-256 desse documento: seleções
+equivalentes têm a mesma identidade, e mudar prompt, views, ordem das views ou contexto a
+muda. `check_request_policy_supported()` recusa, antes de qualquer inferência, uma política
+que o intérprete declara não consumir. O backend, o modelo e o orçamento visual continuam
+configuração do backend, fora da política.
 
 ## Materialização e persistência
 
@@ -487,7 +610,8 @@ algo que o modelo entenda. A decisão foi:
    (`<loc_0><loc_0><loc_999><loc_999>`), pois o request não carrega a caixa da
    região dentro de um frame completo ou de um crop contextual. Por isso só
    `TIGHT_CROP` e `MASKED_SUBJECT` são aceitos; qualquer outra view é rejeitada
-   antes do modelo, assim como requests com mais de uma view.
+   antes do modelo, assim como requests com mais de uma view (limite declarado em
+   `max_visual_views=1`, que o preflight da política de views também verifica).
 
 **Trade-offs aceitos.**
 
