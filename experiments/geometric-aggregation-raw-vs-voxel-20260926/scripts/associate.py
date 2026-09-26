@@ -157,6 +157,7 @@ def main() -> int:
             outcome = SensorAssociationService().run(request, sink=run)
             manifest = run.finalize(outcome, runtime_s=time.perf_counter() - started)
     reader = SensorAssociationRunReader(options.output_dir)
+    integrity = reader.verify_integrity()
     print(
         json.dumps(
             {
@@ -168,13 +169,13 @@ def main() -> int:
                 "rejected_frame_count": manifest.rejected_frame_count,
                 "observation_count": manifest.observation_count,
                 "wall_time_seconds": round(time.perf_counter() - started, 3),
-                "integrity_problems": reader.verify_integrity(),
+                "integrity_problems": integrity,
                 "run_dir": str(options.output_dir),
             },
             indent=1,
         )
     )
-    return 0
+    return 1 if integrity else 0
 
 
 if __name__ == "__main__":

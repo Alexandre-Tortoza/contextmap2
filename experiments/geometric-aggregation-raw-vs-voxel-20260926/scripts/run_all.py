@@ -24,6 +24,7 @@ import os
 import platform
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,51 @@ def _commit() -> dict[str, Any]:
         return result.stdout.strip()
 
     return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+
+
+class StepFailedError(Exception):
+    """Raised when a step failed or produced an invalid result; the run stops there."""
+
+    def __init__(self, failures: list[str]) -> None:
+        """Keep what failed, for the report."""
+        super().__init__("; ".join(failures))
+        self.failures = failures
+
+
+def step_failures(step: str, record: Mapping[str, Any]) -> list[str]:
+    """Say why a step's record is not valid evidence; empty when it is.
+
+    A step fails when it exited non-zero, left no report, or reported integrity or
+    chunking problems: a result that does not verify is never data for the report.
+    """
+    failures = []
+    if record.get("returncode") != 0:
+        failures.append(f"{step}: exited with status {record.get('returncode')}")
+    report = record.get("arm_report")
+    if not isinstance(report, Mapping):
+        failures.append(f"{step}: produced no report")
+        return failures
+    if report.get("integrity_problems"):
+        failures.append(f"{step}: integrity problems {report['integrity_problems']}")
+    chunking = report.get("chunking_check") or {}
+    if chunking.get("problems"):
+        failures.append(f"{step}: chunking changed the aggregation {chunking['problems']}")
+    return failures
+
+
+def _checked_step(
+    target: dict[str, Any], key: str, step: str, script: str, *arguments: str
+) -> None:
+    """Run a step, keep its record in ``target[key]`` and stop the run if it is invalid.
+
+    Raises:
+        StepFailedError: If :func:`step_failures` finds anything.
+    """
+    record = _step(script, *arguments)
+    target[key] = record
+    failures = step_failures(step, record)
+    if failures:
+        raise StepFailedError(failures)
 
 
 def _step(script: str, *arguments: str) -> dict[str, Any]:
@@ -119,16 +165,26 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=False)
     code = _commit()
     origin = [str(value) for value in options.origin]
-    arms: dict[str, dict[str, Any]] = {
-        "A": {
-            "cell_m": None,
-            "geometry": _step("arm.py", "A", str(root / "A"), "--raw-map", str(options.raw_map)),
-        }
-    }
-    for name, cell in zip(ARM_NAMES, options.cells, strict=False):
-        arms[name] = {
-            "cell_m": cell,
-            "geometry": _step(
+    arms: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    try:
+        arms["A"] = {"cell_m": None}
+        _checked_step(
+            arms["A"],
+            "geometry",
+            "arm.py A",
+            "arm.py",
+            "A",
+            str(root / "A"),
+            "--raw-map",
+            str(options.raw_map),
+        )
+        for name, cell in zip(ARM_NAMES, options.cells, strict=False):
+            arms[name] = {"cell_m": cell}
+            _checked_step(
+                arms[name],
+                "geometry",
+                f"arm.py {name}",
                 "arm.py",
                 name,
                 str(root / name),
@@ -140,47 +196,13 @@ def main() -> int:
                 *origin,
                 "--code-version",
                 code["commit"],
-            ),
-        }
-
-    if associating:
-        shared = [
-            "--raw-map",
-            str(options.raw_map),
-            "--sequence",
-            str(options.sequence),
-            "--trajectory",
-            str(options.trajectory),
-            "--perception",
-            str(options.perception),
-            "--window",
-            options.window,
-        ]
-        for name in arms:
-            extra = (
-                []
-                if name == "A"
-                else ["--voxel-aggregation", str(root / name / "voxel_aggregation")]
             )
-            arms[name]["association"] = _step(
-                "associate.py", name, str(root / name / "sensor_association"), *shared, *extra
-            )
-        for name in arms:
-            if name == "A":
-                continue
-            arms[name]["association_stability"] = _step(
-                "compare.py",
-                name,
-                str(root / name / "association-stability.json"),
-                "--raw-map",
-                str(options.raw_map),
-                "--voxel-aggregation",
-                str(root / name / "voxel_aggregation"),
-                "--raw-association",
-                str(root / "A" / "sensor_association"),
-                "--arm-association",
-                str(root / name / "sensor_association"),
-            )
+        if associating:
+            _associate_arms(root, arms, options)
+    except StepFailedError as error:
+        # Fail-fast: nada depois de um passo inválido roda, e o relatório diz que está incompleto.
+        failures = error.failures
+        print(f"FAILED: {failures}", file=sys.stderr, flush=True)
 
     report = {
         "experiment": "geometric-aggregation-raw-vs-voxel-20260926",
@@ -197,11 +219,66 @@ def main() -> int:
             "perception": str(options.perception),
             "window": options.window,
         },
+        "status": "failed" if failures else "complete",
+        "failures": failures,
         "arms": arms,
     }
     (root / "report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
-    print(f"report: {root / 'report.json'}")
-    return 0
+    print(f"report: {root / 'report.json'} ({report['status']})")
+    return 1 if failures else 0
+
+
+def _associate_arms(root: Path, arms: dict[str, dict[str, Any]], options: Any) -> None:
+    """Associate over every arm's geometry, then compare each derived arm with arm A.
+
+    Raises:
+        StepFailedError: At the first step that fails or does not verify.
+    """
+    shared = [
+        "--raw-map",
+        str(options.raw_map),
+        "--sequence",
+        str(options.sequence),
+        "--trajectory",
+        str(options.trajectory),
+        "--perception",
+        str(options.perception),
+        "--window",
+        options.window,
+    ]
+    for name in arms:
+        extra = (
+            [] if name == "A" else ["--voxel-aggregation", str(root / name / "voxel_aggregation")]
+        )
+        _checked_step(
+            arms[name],
+            "association",
+            f"associate.py {name}",
+            "associate.py",
+            name,
+            str(root / name / "sensor_association"),
+            *shared,
+            *extra,
+        )
+    for name in arms:
+        if name == "A":
+            continue
+        _checked_step(
+            arms[name],
+            "association_stability",
+            f"compare.py {name}",
+            "compare.py",
+            name,
+            str(root / name / "association-stability.json"),
+            "--raw-map",
+            str(options.raw_map),
+            "--voxel-aggregation",
+            str(root / name / "voxel_aggregation"),
+            "--raw-association",
+            str(root / "A" / "sensor_association"),
+            "--arm-association",
+            str(root / name / "sensor_association"),
+        )
 
 
 if __name__ == "__main__":

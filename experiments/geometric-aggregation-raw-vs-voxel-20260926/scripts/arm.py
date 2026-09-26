@@ -194,7 +194,9 @@ def main() -> int:
     text = json.dumps(report, indent=1, default=str)
     (options.output_dir / "arm-report.json").write_text(text + "\n", encoding="utf-8")
     print(text)
-    return 0
+    # Um braço que não verifica não é evidência: o relatório fica, mas o status diz que falhou.
+    invalid = report.get("integrity_problems") or report.get("chunking_check", {}).get("problems")
+    return 1 if invalid else 0
 
 
 if __name__ == "__main__":
