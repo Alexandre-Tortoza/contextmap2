@@ -767,39 +767,41 @@ def _unparsable_entities(*, resealed: bool) -> Callable[[World, Path], None]:
 
 
 # #600: relatórios gravados antes de o validador passar a ler cada tabela uma vez só; a ordem, os
-# resultados e os findings das verificações não podem mudar.
+# resultados e os findings das verificações não podem mudar. #601 regravou os digests quando o run
+# de Spatial Relations do mundo passou ao schema 0.2.0: só mudaram a identidade de conteúdo dele na
+# linhagem e o que dela deriva (identidade do mapa e hash de lineage.json); checks e findings, não.
 _RECORDED_REPORTS: dict[str, tuple[Callable[[World, Path], None], str]] = {
     "intact": (
         _untouched,
-        "acd95cdc9a6789687b852b37b4fb8803b3c50aabf649e3bb1a01975abdb0eb08",
+        "0e07c322c0d7e1613b4c768e293a0d546a43b219611795fe3e37541d18a36944",
     ),
     "entity-index-reversed": (
         _reversed_index("indexes/entity-index.jsonl"),
-        "46decf7297413e5e44a851b4cad66f87dbb29cecd0b9d8b9e09b3e61d1726241",
+        "be60d77c6a4258a33f1a9ecf6b0d2498bbd15eaad9e5cd338d4ebc55eb2c4525",
     ),
     "relation-index-reversed": (
         _reversed_index("indexes/relation-index.jsonl"),
-        "655eedbfae2123b08b6666997aa3deafbb33ef03213817937656b7dd433eeaae",
+        "fa8f094a4a0eebd4ab88c8d42063f9a7d28e4fafd7f878265e0712e3026d46ca",
     ),
     "entity-line-with-another-key": (
         _entity_line_with_another_key,
-        "5ae386a928e0a48b903d1fc3601216def380d74b921bf2cfa1525ba0e549ab0c",
+        "0461cda5c9098e1b09c8869e42ea20c58d27942fe13f56a015da51e981ca109e",
     ),
     "relation-with-an-unknown-subject": (
         _relation_with_an_unknown_subject,
-        "2cfd6be240d65dc7bc971999b225fc65a7dfa8fc12bbcbdac910276a41aa288d",
+        "98326fa405e288d074429fc1e0d3a8966501ff01c7c8dc7b0423e3ad5929c8a2",
     ),
     "stale-traversal-index": (
         _stale_traversal_index,
-        "2612e313645fdee9c76da03e5d5ee152b65a1407049b5b2ac774ca6ccf765961",
+        "852addcb1a214e5faad4c649146f33d1509604e08060c0d2042930a8303188c8",
     ),
     "unparsable-entities": (
         _unparsable_entities(resealed=False),
-        "62c44b8d952d8393b02a3693c002948bb3fd237ad12d790d117a21c617eb653d",
+        "94e24860ae83343a80f3e57a140d8cbb9718389239e79920113b641fddda2261",
     ),
     "unparsable-entities-resealed": (
         _unparsable_entities(resealed=True),
-        "0c8698f1e26b49aecfe88b7e8167aaf89a8a18be3e80c703f7ca6068a5199fe2",
+        "7e8950c44402926bdc8c46bfdb58553fc91081bfacbfa7dcc6f77a1252505671",
     ),
 }
 

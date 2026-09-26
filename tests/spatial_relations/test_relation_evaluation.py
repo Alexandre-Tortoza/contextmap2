@@ -10,6 +10,12 @@ from pathlib import Path
 import pytest
 from relation_builders import entity_ref
 from relation_run_fixture import LINEAGE, Run, build_run, write_run
+from relation_storeroom_fixture import (
+    Storeroom,
+    build_storeroom,
+    exclusion_ceiling,
+    multiset_digest,
+)
 
 from contextmap.entity_resolution import ResolvedEntityReference
 from contextmap.evaluation import (
@@ -35,6 +41,7 @@ from contextmap.evaluation import (
 from contextmap.evaluation.spatial_relations import _consistency
 from contextmap.ingestion import SourceObservationId
 from contextmap.spatial_relations import (
+    CandidateExclusionReason,
     RelationPredicate,
     RelationState,
     SpatialRelationsRunReader,
@@ -517,7 +524,7 @@ def test_the_report_names_the_run_the_resolution_the_policies_and_the_reference(
     assert report.policies["decision"]["id"] == manifest.policies["decision"]["policy_id"]
     assert report.reference_normalization == "casefold-exact/1"
     assert report.reference_relation_count == len(CORE)
-    assert (report.evaluator_id, report.evaluator_version) == ("spatial-relations-evaluator", "2")
+    assert (report.evaluator_id, report.evaluator_version) == ("spatial-relations-evaluator", "3")
     assert report.code_version == "abc123"
     assert report.configuration_digest().startswith("sha256:")
 
@@ -598,3 +605,134 @@ def test_no_annotated_population_is_not_applicable_and_never_zero(artifact: Path
     envelope = _envelope(artifact, _reference(EXTRA[3]))
     assert {item.status for item in envelope.quality_metrics} == {MetricStatus.NOT_APPLICABLE}
     assert all(item.strata == () for item in envelope.quality_metrics)
+
+
+# --- retrieval misses past the exclusion ceiling: a dense storeroom (#601) ---
+
+
+STOREROOM_RULES = (
+    *RULES,
+    PredicateRule(predicate="in front of", inverse="behind"),
+    PredicateRule(predicate="behind", inverse="in front of"),
+)
+STOREROOM_HELD = (
+    *((f"crate-{index}", "next to", f"crate-{index + 1}") for index in range(4)),
+    ("picture", "above", "sofa"),
+    ("sofa", "on top of", "floor"),
+    *((f"box-high-{index}", "above", f"box-low-{index}") for index in range(6)),
+    *((f"box-low-{index}", "on top of", "board-low") for index in range(6)),
+    *((f"box-high-{index}", "on top of", "board-high") for index in range(6)),
+    *((f"crate-{index}", "on top of", "floor") for index in range(5)),
+    # IN_FRONT_OF não é selecionado pela política: nunca há exclusão dele, listada ou não.
+    ("crate-4", "in front of", "crate-3"),
+)
+# O run sem teto explica cada falha de recuperação com a exclusão exata que a causou: os caixotes
+# a 0,7 m e 0,8 m (next to e a gêmea simétrica), o quadro acima do sofá (e o below implicado) e o
+# in front of de um predicado que não foi selecionado (e o behind implicado).
+STOREROOM_MISSES = (
+    ("excluded:beyond_proximity_radius", 4),
+    ("excluded:no_footprint_overlap", 2),
+    ("pair_not_enumerated_or_predicate_not_selected", 2),
+)
+
+
+@pytest.fixture(scope="module")
+def storeroom() -> Storeroom:
+    return build_storeroom()
+
+
+def _storeroom_report(
+    storeroom: Storeroom, directory: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int | None
+) -> SpatialRelationsEvaluationReport:
+    """Evaluate the storeroom written under ``ceiling`` (the production one when ``None``)."""
+    if ceiling is not None:
+        exclusion_ceiling(monkeypatch, ceiling)
+    write_run(dataclasses.replace(storeroom.run, candidates=storeroom.candidate_set()), directory)
+    reference = _reference(
+        *(
+            _relation(number, f"id-{subject}", predicate, f"id-{obj}", HOLDS)
+            for number, (subject, predicate, obj) in enumerate(STOREROOM_HELD, start=1)
+        ),
+        rules=STOREROOM_RULES,
+    )
+    identities = {entity: f"id-{name}" for name, entity in storeroom.references.items()}
+    return _evaluate(directory, reference, identities)
+
+
+def test_the_untruncated_storeroom_explains_every_retrieval_miss(
+    storeroom: Storeroom, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _storeroom_report(storeroom, tmp_path / "relations", monkeypatch, 10**9)
+    assert report.retrieval_misses == STOREROOM_MISSES
+    assert report.unlisted_exclusions == ()
+
+
+def test_the_exclusion_ceiling_keeps_every_storeroom_miss_explained(
+    storeroom: Storeroom, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # O critério primário da escolha do teto (candidates.md): sob o teto em vigor, nenhuma falha
+    # que o run sem teto explica com a exclusão listada vira excluded_unlisted.
+    report = _storeroom_report(storeroom, tmp_path / "relations", monkeypatch, None)
+    assert report.unlisted_exclusions
+    assert report.retrieval_misses == STOREROOM_MISSES
+
+
+# A matriz que escolheu o teto: o que o run explica sob cada candidato a teto.
+STOREROOM_MATRIX = {
+    8: (
+        ("excluded_unlisted:above", 2),
+        ("excluded_unlisted:next_to", 4),
+        ("pair_not_enumerated_or_predicate_not_selected", 2),
+    ),
+    16: (
+        ("excluded:beyond_proximity_radius", 2),
+        ("excluded_unlisted:above", 2),
+        ("excluded_unlisted:next_to", 2),
+        ("pair_not_enumerated_or_predicate_not_selected", 2),
+    ),
+    32: STOREROOM_MISSES,
+    64: STOREROOM_MISSES,
+}
+
+
+@pytest.mark.parametrize("ceiling", sorted(STOREROOM_MATRIX))
+def test_the_ceiling_matrix_of_the_storeroom(
+    storeroom: Storeroom, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int
+) -> None:
+    report = _storeroom_report(storeroom, tmp_path / "relations", monkeypatch, ceiling)
+    assert report.retrieval_misses == STOREROOM_MATRIX[ceiling]
+
+
+def test_a_miss_that_may_be_unlisted_is_told_apart_from_one_that_never_existed(
+    storeroom: Storeroom, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SR-01: sem teto não havia exclusão não listada; com ele, uma falha que pode estar entre as
+    # exclusões resumidas não pode ser dada como par que nunca foi enumerado.
+    exclusion_ceiling(monkeypatch, 10**9)
+    beyond = (P.NEXT_TO, CandidateExclusionReason.BEYOND_PROXIMITY_RADIUS)
+    group = [
+        item
+        for item in storeroom.candidate_set().exclusions
+        if (item.predicate, item.reason) == beyond
+    ]
+    report = _storeroom_report(storeroom, tmp_path / "relations", monkeypatch, 8)
+    misses = dict(report.retrieval_misses)
+
+    assert misses["excluded_unlisted:next_to"] == 4
+    assert misses["pair_not_enumerated_or_predicate_not_selected"] == 2
+    unlisted = {(item.predicate, item.reason): item for item in report.unlisted_exclusions}
+    assert (unlisted[beyond].count, unlisted[beyond].listed) == (len(group), 8)
+    assert unlisted[beyond].min_gap_m == min(item.bounds_gap_m for item in group)
+    assert unlisted[beyond].max_gap_m == max(item.bounds_gap_m for item in group)
+    assert unlisted[beyond].digest == multiset_digest(group)
+    record = report.to_dict()["unlisted_exclusions"]
+    assert set(record[0]) == {
+        "predicate",
+        "reason",
+        "count",
+        "listed",
+        "unlisted",
+        "min_gap_m",
+        "max_gap_m",
+        "digest",
+    }

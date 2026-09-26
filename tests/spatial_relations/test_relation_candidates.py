@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+import hashlib
+import json
+import random
+import weakref
+from collections import Counter
+from collections.abc import Iterable, Mapping
+from typing import ClassVar
 
 import pytest
 from relation_builders import entity_ref
+from relation_run_fixture import CANDIDATES as STOREROOM
 from relation_scene import Scene
+from relation_storeroom_fixture import exclusion_ceiling, multiset_digest, storeroom_scene
 
 from contextmap.entity_resolution import ResolvedEntityReference
 from contextmap.semantic_mapping import EntityGeometry
@@ -16,13 +24,17 @@ from contextmap.spatial_relations import (
     CANDIDATE_POLICY_ID,
     TAXONOMY_VERSION,
     AxisDirection,
+    CandidateExclusion,
     CandidateExclusionReason,
     CandidatePolicy,
     CandidateReason,
     FrameConventions,
     FrameRequirement,
     IncompatibleFrameError,
+    RelationCandidateSet,
     RelationPredicate,
+    candidates,
+    encode_candidate_set,
     generate_relation_candidates,
 )
 
@@ -394,6 +406,162 @@ def test_the_policy_fingerprint_follows_every_choice_and_ignores_listing_order()
         != _policy(RelationPredicate.NEXT_TO, RelationPredicate.ABOVE, proximity=0.6).fingerprint()
     )
     assert base.fingerprint().startswith("sha256:")
+
+
+ALL_EVALUATED = (
+    RelationPredicate.NEXT_TO,
+    RelationPredicate.INTERSECTS,
+    RelationPredicate.TOUCHING,
+    RelationPredicate.INSIDE,
+    RelationPredicate.ABOVE,
+    RelationPredicate.IN_FRONT_OF,
+    RelationPredicate.ON_TOP_OF,
+    RelationPredicate.LEANING_AGAINST,
+)
+
+
+def random_boxes(seed: int, count: int = 4) -> dict[ResolvedEntityReference, EntityGeometry]:
+    """``count`` boxes of random size scattered in a 4 m x 4 m x 2 m room."""
+    rng = random.Random(seed)
+    boxes: list[Box] = []
+    for _ in range(count):
+        size = (rng.uniform(0.2, 1.2), rng.uniform(0.2, 1.2), rng.uniform(0.2, 1.0))
+        low = (rng.uniform(0.0, 4.0), rng.uniform(0.0, 4.0), rng.uniform(0.0, 2.0))
+        boxes.append((low, (low[0] + size[0], low[1] + size[1], low[2] + size[2])))
+    return _entities(*boxes)
+
+
+def _largest_exclusion_group(result: RelationCandidateSet) -> int:
+    groups = Counter((item.predicate, item.reason) for item in result.exclusions)
+    return max(groups.values(), default=0)
+
+
+# #601 (SR-01): gravados antes do teto de exclusões, em cenas em que nenhum grupo
+# (predicado, razão) passa de oito exclusões, o menor teto considerado.
+RECORDED_CANDIDATE_SETS = {
+    1: "27cb21ee5ba422b3ec8296172ed184793ca7eeed90cdaacb4cc7897656206f31",
+    4: "6344a2bca0bb021dd62e9070bff09d05c90671930b288304b6062e8658c54b39",
+    5: "b348dc0452e9a6dbfd07435448c16b4c7bbfe9184afb3c4ab51eb712ce440333",
+    6: "fb914a114a2691050ae9fb7bb65d5db1831bf9f04091ceb61e69167309e79302",
+    7: "bb3033f9875fb1a721e1e79c0280ef0307d980b24ca4185799e707d09e14611b",
+}
+
+
+@pytest.mark.parametrize("seed", sorted(RECORDED_CANDIDATE_SETS))
+def test_candidate_sets_below_the_exclusion_ceiling_match_the_recorded_sets(seed: int) -> None:
+    result = generate_relation_candidates(
+        random_boxes(seed),
+        policy=_policy(*ALL_EVALUATED, proximity=0.5, directional=2.0),
+        conventions=CONVENTIONS,
+    )
+    records = json.dumps(encode_candidate_set(result), sort_keys=True).encode()
+    assert _largest_exclusion_group(result) <= 8
+    assert hashlib.sha256(records).hexdigest() == RECORDED_CANDIDATE_SETS[seed]
+
+
+# --- the exclusion ceiling (#601) ---
+
+
+def nearest_first(item: CandidateExclusion) -> tuple[float, str, str, str, str, str]:
+    """The documented listing order: gap, then subject, predicate and object."""
+    return (item.bounds_gap_m, *_sort_key(item))
+
+
+def by_group(
+    exclusions: Iterable[CandidateExclusion],
+) -> dict[tuple[RelationPredicate, CandidateExclusionReason], list[CandidateExclusion]]:
+    groups: dict[tuple[RelationPredicate, CandidateExclusionReason], list[CandidateExclusion]] = {}
+    for item in exclusions:
+        groups.setdefault((item.predicate, item.reason), []).append(item)
+    return groups
+
+
+def test_a_group_past_the_ceiling_lists_its_nearest_and_summarizes_all_of_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SR-01: toda exclusão de todo par enumerado ficava listada, sem teto.
+    _, _, entities = storeroom_scene()
+    exclusion_ceiling(monkeypatch, 10**9)
+    whole = generate_relation_candidates(entities, policy=STOREROOM, conventions=CONVENTIONS)
+    exclusion_ceiling(monkeypatch, 40)
+    capped = generate_relation_candidates(entities, policy=STOREROOM, conventions=CONVENTIONS)
+    groups = by_group(whole.exclusions)
+    large = {key: items for key, items in groups.items() if len(items) > 40}
+
+    assert large and len(large) < len(groups)
+    assert capped.exclusions == tuple(
+        item for item in whole.exclusions if (item.predicate, item.reason) not in large
+    )
+    assert capped.candidates == whole.candidates
+    summaries = {(item.predicate, item.reason): item for item in capped.exclusion_summaries}
+    assert list(summaries) == sorted(large, key=lambda key: (key[0].value, key[1].value))
+    for key, items in large.items():
+        summary = summaries[key]
+        gaps = [item.bounds_gap_m for item in items]
+        assert summary.count == len(items)
+        assert summary.nearest == tuple(sorted(items, key=nearest_first)[:40])
+        assert (summary.min_gap_m, summary.max_gap_m) == (min(gaps), max(gaps))
+        assert summary.digest == multiset_digest(items)
+        assert summary.digest == multiset_digest(reversed(items))
+
+
+class TrackedExclusion(CandidateExclusion):
+    """An exclusion whose lifetime a test can observe; records the peak alive at creation."""
+
+    alive: ClassVar[list[weakref.ref[CandidateExclusion]]] = []
+    peak: ClassVar[int] = 0
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        TrackedExclusion.alive.append(weakref.ref(self))
+        living = sum(ref() is not None for ref in TrackedExclusion.alive)
+        TrackedExclusion.peak = max(TrackedExclusion.peak, living)
+
+
+def test_the_exclusions_held_while_generating_stay_bounded_by_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SR-01: a geração retinha em memória toda exclusão até o fim.
+    _, _, entities = storeroom_scene()
+    exclusion_ceiling(monkeypatch, 10**9)
+    whole = generate_relation_candidates(entities, policy=STOREROOM, conventions=CONVENTIONS)
+    exclusion_ceiling(monkeypatch, 4)
+    monkeypatch.setattr(candidates, "CandidateExclusion", TrackedExclusion)
+    TrackedExclusion.alive, TrackedExclusion.peak = [], 0
+
+    generate_relation_candidates(entities, policy=STOREROOM, conventions=CONVENTIONS)
+
+    assert len(whole.exclusions) > 1000
+    # Cada grupo guarda no máximo o teto, mais a exclusão que acabou de ser criada.
+    assert TrackedExclusion.peak <= len(by_group(whole.exclusions)) * (4 + 1)
+
+
+def test_a_summary_must_describe_one_group_and_list_its_nearest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, entities = storeroom_scene()
+    exclusion_ceiling(monkeypatch, 4)
+    capped = generate_relation_candidates(entities, policy=STOREROOM, conventions=CONVENTIONS)
+    summary = capped.exclusion_summaries[0]
+    other = capped.exclusion_summaries[1].nearest[0]
+    invalid = {
+        "listed": {"count": len(summary.nearest)},
+        "some, not all": {"nearest": ()},
+        "predicate and reason": {"nearest": (*summary.nearest[:-1], other)},
+        "sorted": {"nearest": tuple(reversed(summary.nearest))},
+        "min_gap_m": {"min_gap_m": summary.min_gap_m + 1.0},
+        "max_gap_m": {"max_gap_m": summary.nearest[-1].bounds_gap_m - 0.001},
+        "digest": {"digest": summary.digest.replace("sha256-multiset:", "sha256:")},
+    }
+    for message, changes in invalid.items():
+        with pytest.raises(ValueError, match=message):
+            dataclasses.replace(summary, **changes)  # type: ignore[arg-type]
+    listed_again = (*capped.exclusions, summary.nearest[0])
+    with pytest.raises(ValueError, match="listed whole or summarized"):
+        dataclasses.replace(capped, exclusions=tuple(sorted(listed_again, key=_sort_key)))
+    twice = (capped.exclusion_summaries[0], capped.exclusion_summaries[0])
+    with pytest.raises(ValueError, match="exclusion_summaries"):
+        dataclasses.replace(capped, exclusion_summaries=twice)
 
 
 def test_candidate_presence_is_not_relation_evidence() -> None:

@@ -14,9 +14,24 @@ How it stays sub-quadratic: entities are ordered along the axis on which they ar
 and a sweep only pairs boxes whose gap along that axis is within the largest reach of the policy
 (sweep and prune), so a long corridor of entities costs work proportional to the pairs that are
 actually near each other. Pairs the sweep proves farther apart than every reach are not enumerated
-and are only counted. Every enumerated pair still records a candidate or an exclusion per evaluated
-predicate and direction, so the exclusion record grows with the pairs near each other: it is not
-bounded.
+and are only counted.
+
+How the exclusion record stays bounded: every enumerated pair yields a candidate or an exclusion
+per evaluated predicate and direction, so exclusions grow with the pairs near each other. They are
+grouped by predicate and reason, and a group is listed whole only while it holds at most
+``_MAX_LISTED_EXCLUSIONS`` records. A larger group lists only that many *nearest* exclusions, the
+smallest bounds gaps (ties broken by subject, predicate and object), and a
+:class:`CandidateExclusionSummary` keeps the count, the extreme gaps and a digest of all of them.
+Each group is kept bounded while the pairs are enumerated, never after the fact.
+
+The digest of a group is ``sha256-multiset:`` followed by the 64 hexadecimal digits of the sum,
+modulo ``2**256``, of the SHA-256 of every exclusion of the group, each encoded as compact JSON with
+sorted keys over exactly its ``subject_entity_ref``, ``predicate``, ``object_entity_ref``,
+``reason`` and ``bounds_gap_m`` (the persisted exclusion record without its ``record`` tag). A sum
+does not depend on the order the exclusions are found in, so it takes constant memory while pairs
+are enumerated in sweep order, and anyone holding the full list can recompute it in any order. It
+is weaker than a hash of the sorted list against collisions built on purpose; an exclusive-or
+would be weaker still, since equal records would cancel out.
 
 Every precondition is a *necessary* condition for the corresponding evaluator to *support* the
 relation, on the assumption that the reaches of the policy cover the distance tolerances of the
@@ -45,13 +60,16 @@ candidates: their relations are generated from the evaluated direction of their 
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from itertools import pairwise
+from typing import Any
 
-from contextmap.entity_resolution import ResolvedEntityReference
+from contextmap.entity_resolution import ResolvedEntityReference, encode_resolved_entity_reference
 from contextmap.geometric_mapping import MapId
 from contextmap.semantic_mapping import EntityGeometry
 from contextmap.spatial_relations._bounds import (
@@ -77,6 +95,19 @@ from contextmap.spatial_relations.taxonomy import (
 
 CANDIDATE_POLICY_ID = "bounds-neighborhood-candidates-v1"
 """Versioned identity of the candidate rules described in this module."""
+
+_MAX_LISTED_EXCLUSIONS = 32
+"""Most exclusions listed for one ``(predicate, reason)`` group; a larger group is summarized.
+
+A record limit, not a scientific threshold: it changes what the candidate set lists, never which
+pairs are candidates, so it is not part of :class:`CandidatePolicy` or its fingerprint. It is the
+smallest of 8, 16, 32 and 64 under which every retrieval miss of the annotated storeroom fixture
+keeps the exclusion that explains it without a ceiling (#601); the matrix and the rule are in
+``docs/candidates.md``, and ``tests/spatial_relations/test_relation_evaluation.py`` pins them.
+"""
+
+_EXCLUSION_DIGEST_PREFIX = "sha256-multiset:"
+_DIGEST_MODULUS = 2**256
 
 
 class CandidateReason(Enum):
@@ -248,6 +279,68 @@ class CandidateExclusion:
 
 
 @dataclass(frozen=True, kw_only=True)
+class CandidateExclusionSummary:
+    """The exclusions of one predicate and reason that were too many to list.
+
+    Only a group past the listing ceiling has a summary: a smaller group is listed whole in
+    :attr:`RelationCandidateSet.exclusions`.
+
+    Attributes:
+        predicate: The predicate that was ruled out.
+        reason: The precondition that failed.
+        count: Every exclusion of the group, listed or not.
+        min_gap_m: The smallest bounds gap of the group, in meters.
+        max_gap_m: The largest bounds gap of the group, in meters.
+        digest: ``sha256-multiset:`` digest of every exclusion of the group, independent of their
+            order (see the module docstring).
+        nearest: The listed exclusions of the group: those with the smallest bounds gaps, sorted
+            by gap and then by subject, predicate and object; fewer than ``count``.
+    """
+
+    predicate: RelationPredicate
+    reason: CandidateExclusionReason
+    count: int
+    min_gap_m: float
+    max_gap_m: float
+    digest: str
+    nearest: tuple[CandidateExclusion, ...]
+
+    def __post_init__(self) -> None:
+        """Validate that the summary describes one group and lists its nearest exclusions.
+
+        Raises:
+            ValueError: If no exclusion is listed or all of them are, a listed exclusion belongs
+                to another predicate or reason, the listed ones are not sorted nearest first and
+                unique, the gaps are not those of the listed ones' group, or the digest is not a
+                ``sha256-multiset:`` digest.
+        """
+        if not 0 < len(self.nearest) < self.count:
+            raise ValueError(
+                f"a summary lists some, not all, of its exclusions: {len(self.nearest)} listed "
+                f"of {self.count}"
+            )
+        if any(
+            (item.predicate, item.reason) != (self.predicate, self.reason) for item in self.nearest
+        ):
+            raise ValueError("every listed exclusion must have the summary's predicate and reason")
+        if any(
+            _nearest_first(left) >= _nearest_first(right) for left, right in pairwise(self.nearest)
+        ):
+            raise ValueError("nearest must be sorted by gap, subject, predicate, object and unique")
+        require_finite("max_gap_m", self.max_gap_m)
+        if self.min_gap_m != self.nearest[0].bounds_gap_m or (
+            self.max_gap_m < self.nearest[-1].bounds_gap_m
+        ):
+            raise ValueError(
+                "min_gap_m must be the gap of the nearest exclusion, and max_gap_m at least the "
+                "gap of the farthest listed one"
+            )
+        digits = self.digest.removeprefix(_EXCLUSION_DIGEST_PREFIX)
+        if digits == self.digest or len(digits) != 64 or digits.strip("0123456789abcdef"):
+            raise ValueError(f"digest must be {_EXCLUSION_DIGEST_PREFIX} and 64 hex digits")
+
+
+@dataclass(frozen=True, kw_only=True)
 class SkippedPredicate:
     """A selected predicate that the declared frame conventions cannot carry.
 
@@ -317,13 +410,16 @@ class RelationCandidateSet:
     Attributes:
         candidates: The directed pairs worth measuring, sorted by subject, predicate and object.
         exclusions: The enumerated pairs that were dropped, sorted the same way, each with the
-            first precondition that failed.
+            first precondition that failed: every exclusion of each ``(predicate, reason)`` group
+            within the listing ceiling.
         skipped_predicates: The selected predicates the frame conventions cannot carry, sorted by
             predicate.
         entity_count: The entities considered.
         pairs_not_enumerated: The unordered pairs the sweep proved farther apart than every reach.
             They are counted, not listed.
         provenance: The rules, configuration and frame behind the set.
+        exclusion_summaries: The ``(predicate, reason)`` groups past the listing ceiling, sorted
+            by predicate and reason, each with its count, gaps, digest and nearest exclusions.
     """
 
     candidates: tuple[RelationCandidate, ...]
@@ -332,22 +428,35 @@ class RelationCandidateSet:
     entity_count: int
     pairs_not_enumerated: int
     provenance: CandidateProvenance
+    exclusion_summaries: tuple[CandidateExclusionSummary, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate that the record is canonical and consistent.
 
         Raises:
             ValueError: If a collection is not sorted and unique, a pair is both a candidate and
-                an exclusion, or a count is negative or inconsistent.
+                an exclusion, a group is both listed whole and summarized, or a count is negative
+                or inconsistent.
         """
         require_canonical("candidates", self.candidates, _directed_key)
         require_canonical("exclusions", self.exclusions, _directed_key)
         require_canonical(
             "skipped_predicates", self.skipped_predicates, lambda i: (i.predicate.value,)
         )
-        if {_directed_key(item) for item in self.candidates} & {
-            _directed_key(item) for item in self.exclusions
-        }:
+        require_canonical(
+            "exclusion_summaries",
+            self.exclusion_summaries,
+            lambda item: (item.predicate.value, item.reason.value),
+        )
+        summarized = {(item.predicate, item.reason) for item in self.exclusion_summaries}
+        if any((item.predicate, item.reason) in summarized for item in self.exclusions):
+            raise ValueError("an exclusion group is either listed whole or summarized, not both")
+        excluded = [_directed_key(item) for item in self.exclusions] + [
+            _directed_key(item) for summary in self.exclusion_summaries for item in summary.nearest
+        ]
+        if len(set(excluded)) != len(excluded):
+            raise ValueError("a directed pair cannot be excluded twice")
+        if {_directed_key(item) for item in self.candidates} & set(excluded):
             raise ValueError("a directed pair cannot be both a candidate and an exclusion")
         if self.entity_count < 0 or self.pairs_not_enumerated < 0:
             raise ValueError("counts must not be negative")
@@ -396,7 +505,10 @@ def generate_relation_candidates(
             skipped.append(_skipped(predicate, requirement, conventions))
 
     candidates: list[RelationCandidate] = []
-    exclusions: list[CandidateExclusion] = []
+    groups: dict[tuple[RelationPredicate, CandidateExclusionReason], _ExclusionGroup] = {}
+    # A codificação de cada referência entra no digest de cada exclusão que a nomeia: calculá-la
+    # uma vez por entidade evita refazê-la a cada par.
+    encoded = [encode_resolved_entity_reference(reference) for reference in references]
     enumerated = 0
     reach = max(policy.proximity_radius_m, policy.directional_radius_m)
     for first, second in _neighbor_pairs(geometries, reach):
@@ -411,14 +523,16 @@ def generate_relation_candidates(
                     predicate, geometries[subject], geometries[obj], gap, policy, conventions
                 )
                 if isinstance(outcome, CandidateExclusionReason):
-                    exclusions.append(
-                        CandidateExclusion(
-                            subject_entity_ref=references[subject],
-                            predicate=predicate,
-                            object_entity_ref=references[obj],
-                            reason=outcome,
-                            bounds_gap_m=gap,
+                    group = groups.get((predicate, outcome))
+                    if group is None:
+                        group = groups[(predicate, outcome)] = _ExclusionGroup(
+                            predicate, outcome, _MAX_LISTED_EXCLUSIONS
                         )
+                    group.add(
+                        references[subject],
+                        references[obj],
+                        gap,
+                        _exclusion_record(encoded[subject], predicate, encoded[obj], outcome, gap),
                     )
                 else:
                     candidates.append(
@@ -430,10 +544,16 @@ def generate_relation_candidates(
                             bounds_gap_m=gap,
                         )
                     )
+    ordered = [groups[key] for key in sorted(groups, key=lambda key: (key[0].value, key[1].value))]
     count = len(references)
     return RelationCandidateSet(
         candidates=tuple(sorted(candidates, key=_directed_key)),
-        exclusions=tuple(sorted(exclusions, key=_directed_key)),
+        exclusions=tuple(
+            sorted(
+                (item for group in ordered if group.whole for item in group.nearest),
+                key=_directed_key,
+            )
+        ),
         skipped_predicates=tuple(skipped),
         entity_count=count,
         pairs_not_enumerated=count * (count - 1) // 2 - enumerated,
@@ -445,7 +565,136 @@ def generate_relation_candidates(
             geometric_map_id=geometries[0].geometric_map_id if geometries else None,
             frame_conventions_fingerprint=conventions.fingerprint(),
         ),
+        exclusion_summaries=tuple(group.summary() for group in ordered if not group.whole),
     )
+
+
+class _ExclusionGroup:
+    """The exclusions of one predicate and reason, held in bounded memory while pairs are swept.
+
+    Only the ``limit`` nearest exclusions are kept, with the count, the extreme gaps and the
+    running digest of all of them; the pairs are enumerated in sweep order, and none of these
+    depends on that order.
+    """
+
+    def __init__(
+        self, predicate: RelationPredicate, reason: CandidateExclusionReason, limit: int
+    ) -> None:
+        self._predicate = predicate
+        self._reason = reason
+        self._limit = limit
+        self._kept: list[tuple[tuple[float, str, str, str, str, str], CandidateExclusion]] = []
+        self._count = 0
+        self._min_gap_m = float("inf")
+        self._max_gap_m = float("-inf")
+        self._digest_sum = 0
+
+    @property
+    def whole(self) -> bool:
+        """Whether every exclusion of the group is kept, so it is listed rather than summarized."""
+        return self._count <= self._limit
+
+    @property
+    def nearest(self) -> tuple[CandidateExclusion, ...]:
+        """The kept exclusions, nearest first."""
+        return tuple(exclusion for _, exclusion in self._kept)
+
+    def add(
+        self,
+        subject: ResolvedEntityReference,
+        obj: ResolvedEntityReference,
+        gap_m: float,
+        record: Mapping[str, Any],
+    ) -> None:
+        """Count one exclusion of the group and keep it if it is among the nearest.
+
+        Args:
+            subject: The entity the statement would have been about.
+            obj: The entity it would have been related to.
+            gap_m: Their bounds gap, in meters.
+            record: The exclusion's canonical fields (:func:`exclusion_fields`), for the digest.
+        """
+        self._count += 1
+        self._min_gap_m = min(self._min_gap_m, gap_m)
+        self._max_gap_m = max(self._max_gap_m, gap_m)
+        self._digest_sum = (self._digest_sum + _record_hash(record)) % _DIGEST_MODULUS
+        key = (gap_m, *directed_key(subject, self._predicate, obj))
+        if len(self._kept) == self._limit and key > self._kept[-1][0]:
+            return
+        # As chaves são únicas no grupo (um par dirigido por predicado), então a tupla nunca
+        # chega a comparar as exclusões. Só a que fica é construída.
+        exclusion = CandidateExclusion(
+            subject_entity_ref=subject,
+            predicate=self._predicate,
+            object_entity_ref=obj,
+            reason=self._reason,
+            bounds_gap_m=gap_m,
+        )
+        bisect.insort(self._kept, (key, exclusion))
+        if len(self._kept) > self._limit:
+            self._kept.pop()
+
+    def summary(self) -> CandidateExclusionSummary:
+        """The summary of a group past the ceiling."""
+        return CandidateExclusionSummary(
+            predicate=self._predicate,
+            reason=self._reason,
+            count=self._count,
+            min_gap_m=self._min_gap_m,
+            max_gap_m=self._max_gap_m,
+            digest=f"{_EXCLUSION_DIGEST_PREFIX}{self._digest_sum:064x}",
+            nearest=self.nearest,
+        )
+
+
+def exclusion_fields(exclusion: CandidateExclusion) -> dict[str, Any]:
+    """Encode an exclusion as JSON-compatible fields: the persisted record and its digest input.
+
+    Args:
+        exclusion: The exclusion.
+
+    Returns:
+        Its ``subject_entity_ref``, ``predicate``, ``object_entity_ref``, ``reason`` and
+        ``bounds_gap_m``, with the references encoded by Entity Resolution.
+    """
+    return _exclusion_record(
+        encode_resolved_entity_reference(exclusion.subject_entity_ref),
+        exclusion.predicate,
+        encode_resolved_entity_reference(exclusion.object_entity_ref),
+        exclusion.reason,
+        exclusion.bounds_gap_m,
+    )
+
+
+def _exclusion_record(
+    subject: Mapping[str, Any],
+    predicate: RelationPredicate,
+    obj: Mapping[str, Any],
+    reason: CandidateExclusionReason,
+    gap_m: float,
+) -> dict[str, Any]:
+    """The fields of an exclusion record, from references already encoded."""
+    return {
+        "subject_entity_ref": subject,
+        "predicate": predicate.value,
+        "object_entity_ref": obj,
+        "reason": reason.value,
+        "bounds_gap_m": gap_m,
+    }
+
+
+def _record_hash(record: Mapping[str, Any]) -> int:
+    """The SHA-256 of an exclusion's canonical encoding, as an integer to add to a digest.
+
+    The encoding is compact JSON with sorted keys, the same the run artifact writes.
+    """
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest(), "big")
+
+
+def _nearest_first(exclusion: CandidateExclusion) -> tuple[float, str, str, str, str, str]:
+    """Order of the listed exclusions of a group: bounds gap, then subject, predicate, object."""
+    return (exclusion.bounds_gap_m, *_directed_key(exclusion))
 
 
 def _neighbor_pairs(geometries: list[EntityGeometry], reach: float) -> Iterator[tuple[int, int]]:

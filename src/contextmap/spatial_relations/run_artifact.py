@@ -98,8 +98,20 @@ from contextmap.spatial_relations.serialization import (
 )
 from contextmap.spatial_relations.taxonomy import TAXONOMY_VERSION
 
-SCHEMA_VERSION = "0.1.0"
-"""Spatial Relations run artifact schema version written and understood by this module."""
+SCHEMA_VERSION = "0.2.0"
+"""Spatial Relations run artifact schema version written by this module.
+
+``0.2.0`` caps the exclusions listed per ``(predicate, reason)`` group and summarizes the larger
+groups (``exclusion_summary`` records in ``relation-candidates.jsonl``); ``metrics/counts.json``
+counts every exclusion and adds ``unlisted_exclusions``.
+"""
+
+_READABLE_SCHEMA_VERSIONS = frozenset({"0.1.0", SCHEMA_VERSION})
+"""Schema versions the reader opens.
+
+A ``0.1.0`` run lists every exclusion, so it reads as a candidate set with no summarized group;
+the frozen ``examples/v0.1.0`` demo is one. Nothing else differs between the two layouts.
+"""
 
 SpatialRelationsRunId = NewType("SpatialRelationsRunId", str)
 """Identity of one Spatial Relations run, supplied by the caller."""
@@ -619,7 +631,8 @@ class SpatialRelationsRunReader:
 
         Raises:
             IncompleteRelationsRunArtifactError: If ``manifest.json`` is missing.
-            RelationsRunArtifactError: If the schema version is not understood.
+            RelationsRunArtifactError: If the schema version is neither ``0.1.0`` nor
+                ``0.2.0``.
         """
         self._root = run_dir
         self._manifest = _load_manifest(run_dir)
@@ -923,7 +936,11 @@ def _counts(
             for channel, statuses in sorted(by_channel_status.items())
         },
         "candidates": len(candidates.candidates),
-        "exclusions": len(candidates.exclusions),
+        "exclusions": len(candidates.exclusions)
+        + sum(item.count for item in candidates.exclusion_summaries),
+        "unlisted_exclusions": sum(
+            item.count - len(item.nearest) for item in candidates.exclusion_summaries
+        ),
         "skipped_predicates": len(candidates.skipped_predicates),
         "pairs_not_enumerated": candidates.pairs_not_enumerated,
         "entities_with_relations": len(index),
@@ -986,7 +1003,7 @@ def _load_manifest(run_dir: Path) -> SpatialRelationsRunManifest:
     if not manifest_path.is_file():
         raise IncompleteRelationsRunArtifactError(f"missing {_MANIFEST} in {run_dir}")
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if raw.get("schema_version") != SCHEMA_VERSION:
+    if raw.get("schema_version") not in _READABLE_SCHEMA_VERSIONS:
         raise RelationsRunArtifactError(
             f"unsupported run artifact schema_version: {raw.get('schema_version')!r}"
         )

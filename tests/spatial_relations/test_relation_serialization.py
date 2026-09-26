@@ -13,21 +13,27 @@ from relation_builders import (
     make_uncertainty,
     measured_geometry,
 )
+from relation_run_fixture import CANDIDATES, CONVENTIONS
+from relation_storeroom_fixture import exclusion_ceiling, storeroom_scene
 
 from contextmap.geometric_mapping import GeometryReference, geometry_id_for
 from contextmap.spatial_relations import (
     EvidenceCaveat,
     EvidenceCaveatKind,
     MeasuredGeometry,
+    RelationCandidateSet,
     RelationEvidenceChannel,
     RelationEvidenceStatus,
     RelationPredicate,
     RelationState,
     RelationUncertaintyKind,
+    decode_candidate_set,
     decode_relation,
     decode_relation_evidence,
+    encode_candidate_set,
     encode_relation,
     encode_relation_evidence,
+    generate_relation_candidates,
 )
 
 
@@ -163,3 +169,44 @@ def test_a_tampered_evidence_record_is_refused() -> None:
     record["status"] = "ambiguous"
     with pytest.raises(ValueError, match="caveat"):
         decode_relation_evidence(record)
+
+
+# --- candidate sets past the exclusion ceiling (#601) ---
+
+
+def _capped_storeroom(monkeypatch: pytest.MonkeyPatch) -> RelationCandidateSet:
+    _, _, entities = storeroom_scene()
+    exclusion_ceiling(monkeypatch, 4)
+    return generate_relation_candidates(entities, policy=CANDIDATES, conventions=CONVENTIONS)
+
+
+def test_a_candidate_set_with_summarized_exclusions_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SR-01: o registro de exclusões não tinha como carregar os grupos resumidos.
+    capped = _capped_storeroom(monkeypatch)
+    records = [_round_trip_json(row) for row in encode_candidate_set(capped)]
+
+    summaries = [row for row in records if row["record"] == "exclusion_summary"]
+    assert len(summaries) == len(capped.exclusion_summaries) > 0
+    assert set(summaries[0]) == {
+        "record",
+        "predicate",
+        "reason",
+        "count",
+        "min_gap_m",
+        "max_gap_m",
+        "digest",
+        "nearest",
+    }
+    assert decode_candidate_set(records) == capped
+
+
+def test_a_tampered_exclusion_summary_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    records = [
+        _round_trip_json(row) for row in encode_candidate_set(_capped_storeroom(monkeypatch))
+    ]
+    summary = next(row for row in records if row["record"] == "exclusion_summary")
+    summary["count"] = len(summary["nearest"])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="listed"):
+        decode_candidate_set(records)

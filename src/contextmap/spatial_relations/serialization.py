@@ -20,11 +20,13 @@ from contextmap.geometric_mapping import GeometryId, GeometryReference, MapId
 from contextmap.spatial_relations.candidates import (
     CandidateExclusion,
     CandidateExclusionReason,
+    CandidateExclusionSummary,
     CandidateProvenance,
     CandidateReason,
     RelationCandidate,
     RelationCandidateSet,
     SkippedPredicate,
+    exclusion_fields,
 )
 from contextmap.spatial_relations.decision import DecisionRule, EvidenceUse, RelationDecision
 from contextmap.spatial_relations.evidence import (
@@ -340,7 +342,9 @@ def encode_candidate_set(candidates: RelationCandidateSet) -> list[dict[str, Any
     """Encode a candidate set as records: one ``set`` record, then its members.
 
     The first record carries the counts and the provenance, so the set can be rebuilt from the
-    records alone; the others are one per candidate, exclusion and skipped predicate.
+    records alone; the others are one per candidate, listed exclusion, ``exclusion_summary`` of a
+    group past the listing ceiling (with its nearest exclusions, nearest first) and skipped
+    predicate. A set with no group past the ceiling has no summary record.
     """
     provenance = candidates.provenance
     rows: list[dict[str, Any]] = [
@@ -372,14 +376,18 @@ def encode_candidate_set(candidates: RelationCandidateSet) -> list[dict[str, Any
             }
         )
     for exclusion in candidates.exclusions:
+        rows.append({"record": "exclusion", **exclusion_fields(exclusion)})
+    for summary in candidates.exclusion_summaries:
         rows.append(
             {
-                "record": "exclusion",
-                **_encode_pair(
-                    exclusion.subject_entity_ref, exclusion.predicate, exclusion.object_entity_ref
-                ),
-                "reason": exclusion.reason.value,
-                "bounds_gap_m": exclusion.bounds_gap_m,
+                "record": "exclusion_summary",
+                "predicate": summary.predicate.value,
+                "reason": summary.reason.value,
+                "count": summary.count,
+                "min_gap_m": summary.min_gap_m,
+                "max_gap_m": summary.max_gap_m,
+                "digest": summary.digest,
+                "nearest": [exclusion_fields(item) for item in summary.nearest],
             }
         )
     for skipped in candidates.skipped_predicates:
@@ -408,6 +416,7 @@ def decode_candidate_set(rows: Sequence[Mapping[str, Any]]) -> RelationCandidate
     map_id = _field(provenance, "geometric_map_id")
     candidates: list[RelationCandidate] = []
     exclusions: list[CandidateExclusion] = []
+    summaries: list[CandidateExclusionSummary] = []
     skipped: list[SkippedPredicate] = []
     for row in rows:
         kind = _field(row, "record")
@@ -425,14 +434,17 @@ def decode_candidate_set(rows: Sequence[Mapping[str, Any]]) -> RelationCandidate
                 )
             )
         elif kind == "exclusion":
-            subject, predicate, obj = _decode_pair(row)
-            exclusions.append(
-                CandidateExclusion(
-                    subject_entity_ref=subject,
-                    predicate=predicate,
-                    object_entity_ref=obj,
+            exclusions.append(_decode_exclusion(row))
+        elif kind == "exclusion_summary":
+            summaries.append(
+                CandidateExclusionSummary(
+                    predicate=RelationPredicate(_field(row, "predicate")),
                     reason=CandidateExclusionReason(_field(row, "reason")),
-                    bounds_gap_m=float(_field(row, "bounds_gap_m")),
+                    count=_field(row, "count"),
+                    min_gap_m=float(_field(row, "min_gap_m")),
+                    max_gap_m=float(_field(row, "max_gap_m")),
+                    digest=_field(row, "digest"),
+                    nearest=tuple(_decode_exclusion(item) for item in _field(row, "nearest")),
                 )
             )
         elif kind == "skipped_predicate":
@@ -459,6 +471,18 @@ def decode_candidate_set(rows: Sequence[Mapping[str, Any]]) -> RelationCandidate
             geometric_map_id=None if map_id is None else MapId(map_id),
             frame_conventions_fingerprint=_field(provenance, "frame_conventions_fingerprint"),
         ),
+        exclusion_summaries=tuple(summaries),
+    )
+
+
+def _decode_exclusion(record: Mapping[str, Any]) -> CandidateExclusion:
+    subject, predicate, obj = _decode_pair(record)
+    return CandidateExclusion(
+        subject_entity_ref=subject,
+        predicate=predicate,
+        object_entity_ref=obj,
+        reason=CandidateExclusionReason(_field(record, "reason")),
+        bounds_gap_m=float(_field(record, "bounds_gap_m")),
     )
 
 
