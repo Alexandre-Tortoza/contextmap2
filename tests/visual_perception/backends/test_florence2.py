@@ -265,3 +265,23 @@ def test_official_florence2_runtime_rasterizes_parsed_polygons() -> None:
     assert sum(region.mask) == 6
     assert region.parsed_text == "requested geometry"
     assert dict(output.parsing_diagnostics)["polygon_count"] == 1
+
+
+def test_zero_florence2_detections_are_a_valid_empty_result() -> None:
+    # Regressão VPB-02: zero regiões é resultado legítimo de Region Discovery (#380), como
+    # no SAM2/SAM3, não resultado estruturalmente inválido.
+    runtime = TransformersFlorence2Runtime(
+        model=FlorenceModel(),
+        processor=FlorenceProcessor({"bboxes": [], "labels": []}),
+        image_loader=_materialized_image,
+    )
+    config = Florence2Config(checkpoint="florence-community/Florence-2-base", task="<OD>")
+
+    native = runtime.predict(_input(), config)
+    output = Florence2RegionDiscovery(config=config, runtime=runtime).discover_candidates(_input())
+
+    assert native.regions == ()
+    assert dict(native.parsing_diagnostics) == {"box_count": 0, "polygon_count": 0}
+    assert output.candidates == ()
+    assert output.diagnostics.proposal_count == 0
+    assert dict(output.diagnostics.metadata)["box_count"] == 0
