@@ -185,6 +185,17 @@ def test_explicit_ids_selection_rejects_empty_set() -> None:
         ExplicitIdsSelection(observation_ids=frozenset())
 
 
+def test_timestamp_range_rejects_a_zero_width_interval() -> None:
+    # [t, t) não contém nenhum instante: mesma regra de SourceWindow.
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=2.0)
+
+
+def test_timestamp_range_rejects_end_before_start() -> None:
+    with pytest.raises(ValueError, match="end_seconds must be > start_seconds"):
+        TimestampRangeSelection(clock_id="clock-a", start_seconds=2.0, end_seconds=1.0)
+
+
 def test_frame_range_rejects_end_before_start() -> None:
     with pytest.raises(ValueError, match="end_frame_index"):
         FrameRangeSelection(start_frame_index=5, end_frame_index=2)

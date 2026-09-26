@@ -89,7 +89,11 @@ class TimestampRangeSelection:
         start_seconds: Inclusive lower bound of normalized timestamp, in seconds. It is
             compared with the exact ``timestamp.total_nanoseconds()``, never with a float
             conversion of the timestamp.
-        end_seconds: Exclusive upper bound, compared the same way.
+        end_seconds: Exclusive upper bound, compared the same way. Must be
+            strictly greater than ``start_seconds``: ``[t, t)`` contains no
+            instant, so a zero-width range is rejected as invalid
+            configuration, the same rule as
+            :class:`~contextmap.ingestion.source_adapter.SourceWindow`.
     """
 
     clock_id: str
@@ -100,10 +104,11 @@ class TimestampRangeSelection:
         """Validate the range.
 
         Raises:
-            ValueError: If ``end_seconds`` is before ``start_seconds``.
+            ValueError: If ``end_seconds`` does not come strictly after
+                ``start_seconds``.
         """
-        if self.end_seconds < self.start_seconds:
-            raise ValueError("end_seconds must be >= start_seconds")
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be > start_seconds (a range must not be empty)")
 
 
 @dataclass(frozen=True, kw_only=True)
