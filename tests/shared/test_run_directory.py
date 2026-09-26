@@ -216,6 +216,26 @@ def test_a_written_file_can_be_read_back_before_publishing(tmp_path: Path) -> No
             run.written_path("outputs/other.bin")
 
 
+def test_the_inventory_is_known_before_publishing_and_is_the_one_published(
+    tmp_path: Path,
+) -> None:
+    # Um manifest cuja identidade cobre o inventário precisa dele antes de publicar (#600).
+    final_dir = tmp_path / "run-0001"
+
+    with AtomicRunDirectory(final_dir) as run:
+        run.write_bytes("outputs/b.txt", b"abc")
+        with run.open_binary("outputs/a.bin") as handle:
+            handle.write(b"def")
+            assert run.inventory() == (file_entry("outputs/b.txt", b"abc"),)
+        run.write_text("debug/notes.txt", "human only", contractual=False)
+        inventory = run.inventory()
+        run.publish(manifest={}, readme="# x\n")
+
+    assert inventory == (file_entry("outputs/a.bin", b"def"), file_entry("outputs/b.txt", b"abc"))
+    published = json.loads((final_dir / "manifest.json").read_text())["file_inventory"]
+    assert tuple(FileEntry(**item) for item in published) == inventory
+
+
 def test_publishing_while_a_stream_is_open_is_refused(tmp_path: Path) -> None:
     with (
         AtomicRunDirectory(tmp_path / "run-0001") as run,

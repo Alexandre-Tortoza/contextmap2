@@ -9,17 +9,19 @@ silently wrong record, and the authoritative lines are what a validator rebuilds
 Every line is a JSON object with a string ``key``; the rest of the object belongs to whoever
 writes the table. Lines are ASCII, with sorted keys and compact separators, so the same records
 always produce the same bytes and no line contains a raw newline. The module reads only the
-files it is given and never writes to them.
+files it is given and never writes to them; it writes a table only to the streams its caller
+opened for it.
 """
 
 from __future__ import annotations
 
+import io
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from contextmap.artifact.serialization.errors import (
     BrokenIndexError,
@@ -94,20 +96,28 @@ class EncodedTable:
     record_count: int
 
 
-def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
-    """Encode records as a table ordered by key, with its offset index.
+def write_record_table(
+    lines: Iterable[Mapping[str, Any]], *, payload: BinaryIO, index: BinaryIO
+) -> int:
+    """Write records as a table ordered by key, with its offset index, one line at a time.
 
-    The result depends only on the records, not on the order they arrive in.
+    The records are ordered first; then each line is encoded and written before the next one is,
+    so neither the payload nor the index is ever held whole in memory. The bytes depend only on
+    the records, not on the order they arrive in.
 
     Args:
         lines: JSON-safe mappings, each with a non-empty string ``key`` unique in the table.
+        payload: Where the lines go.
+        index: Where the offset index of those lines goes.
 
     Returns:
-        The payload and the index.
+        The number of records.
 
     Raises:
         RecordTableError: If a key is missing, empty or not a string, a key is duplicated
-            (nothing is dropped silently), or a record cannot be encoded as JSON.
+            (nothing is dropped silently), or a record cannot be encoded as JSON. The keys are
+            checked before anything is written; a record JSON cannot represent is found when its
+            line is encoded, after the lines before it were written.
     """
     keyed: list[tuple[str, Mapping[str, Any]]] = []
     for line in lines:
@@ -120,17 +130,39 @@ def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
         if previous == current:
             raise RecordTableError(f"duplicate key {current!r}")
 
-    payload = bytearray()
-    index = bytearray()
+    offset = 0
     for key, line in keyed:
         try:
             encoded = canonical_json_line(line)
         except RecordTableError as error:
             raise RecordTableError(f"record {key!r}: {error}") from error
-        index += canonical_json_line({"key": key, "length": len(encoded), "offset": len(payload)})
-        index += b"\n"
-        payload += encoded + b"\n"
-    return EncodedTable(payload=bytes(payload), index=bytes(index), record_count=len(keyed))
+        index.write(
+            canonical_json_line({"key": key, "length": len(encoded), "offset": offset}) + b"\n"
+        )
+        payload.write(encoded + b"\n")
+        offset += len(encoded) + 1
+    return len(keyed)
+
+
+def encode_record_table(lines: Iterable[Mapping[str, Any]]) -> EncodedTable:
+    """Encode records as a table ordered by key, with its offset index, in memory.
+
+    The same bytes :func:`write_record_table` writes, for a table small enough to hold whole.
+
+    Args:
+        lines: JSON-safe mappings, each with a non-empty string ``key`` unique in the table.
+
+    Returns:
+        The payload and the index.
+
+    Raises:
+        RecordTableError: As :func:`write_record_table`.
+    """
+    payload, index = io.BytesIO(), io.BytesIO()
+    record_count = write_record_table(lines, payload=payload, index=index)
+    return EncodedTable(
+        payload=payload.getvalue(), index=index.getvalue(), record_count=record_count
+    )
 
 
 def rebuild_index(payload: bytes) -> bytes:

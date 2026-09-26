@@ -66,7 +66,7 @@ from contextmap.artifact.serialization.manifest import (
 from contextmap.artifact.serialization.tables import RecordTable
 from contextmap.entity_resolution import EntityResolutionRunId, ResolvedEntityId
 from contextmap.ingestion import FrameId
-from contextmap.shared import check_file_inventory
+from contextmap.shared import AtomicRunDirectory, check_file_inventory
 from contextmap.spatial_relations import RelationId, RelationState, SpatialRelationsRunId
 
 
@@ -343,6 +343,40 @@ def test_the_writer_encodes_the_map_once(world: World, monkeypatch: pytest.Monke
     write_artifact(world, context_map=context_map)
 
     assert len(encoded) == 1
+
+
+def test_the_record_tables_are_streamed_and_only_the_small_documents_are_buffered(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #600 (ART-04): as tabelas crescem com o mapa; só os documentos pequenos cabem num bytes.
+    buffered: list[str] = []
+    streamed: list[str] = []
+    write_bytes = AtomicRunDirectory.write_bytes
+    open_binary = AtomicRunDirectory.open_binary
+
+    def recording_write_bytes(run: AtomicRunDirectory, path: str, *args: Any, **kw: Any) -> None:
+        buffered.append(path)
+        write_bytes(run, path, *args, **kw)
+
+    def recording_open_binary(run: AtomicRunDirectory, path: str, *args: Any, **kw: Any) -> Any:
+        streamed.append(path)
+        return open_binary(run, path, *args, **kw)
+
+    monkeypatch.setattr(AtomicRunDirectory, "write_bytes", recording_write_bytes)
+    monkeypatch.setattr(AtomicRunDirectory, "open_binary", recording_open_binary)
+
+    output_dir, manifest = write_artifact(world)
+
+    tables = {
+        "entities/entities.jsonl",
+        "indexes/entity-index.jsonl",
+        "relations/relations.jsonl",
+        "indexes/relation-index.jsonl",
+    }
+    assert set(streamed) == tables
+    assert not tables & set(buffered)
+    assert set(streamed) | set(buffered) == set(CONTRACTUAL_FILES)
+    assert check_file_inventory(output_dir, manifest.file_inventory) == []
 
 
 def test_a_different_map_has_a_different_identity(world: World) -> None:
